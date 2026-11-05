@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay
+  namespace: sandbox-system
+  labels: {app: relay}
+spec:
+  selector: {app: relay}
+  ports:
+    - name: guest
+      port: 8443
+      targetPort: 8443
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay
+  namespace: sandbox-system
+  labels: {app: relay}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: relay}
+  template:
+    metadata:
+      labels: {app: relay}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: relay
+          image: x402-sandbox/control:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "controller/dist/main.js"]
+          ports:
+            - containerPort: 8443
+          env:
+            - {name: ROLE, value: "relay"}
+            - {name: X402_RELAY_PORT, value: "8443"}
+            - {name: SERVICE_NAME, value: "relay"}
+            - name: RELAY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: relay-admin-token}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits: {cpu: "500m", memory: "256Mi", ephemeral-storage: "64Mi"}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8443}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: "32Mi"}

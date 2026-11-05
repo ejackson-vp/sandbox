@@ -1,0 +1,10 @@
+# Mode B on kind/minikube. Upstream CoCo docs: QEMU does not work with
+# kind/minikube; use kata-clh. Still a real VM with a separate kernel.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: x402-sandbox
+  annotations:
+    x402.io/confidential: "false"
+    x402.io/warning: "KATA VM (kata-clh): separate guest kernel, NO hardware attestation"
+handler: kata-clh

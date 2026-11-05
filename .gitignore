@@ -1,0 +1,7 @@
+node_modules/
+dist/
+guest/bin/
+.tmp-sandbox/
+*.log
+.DS_Store
+coverage/

@@ -1,0 +1,33 @@
+{
+  "name": "x402-confidential-sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pay-per-execution confidential sandbox service using x402 micropayments",
+  "workspaces": [
+    "shared",
+    "api",
+    "controller",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build -w @x402s/shared && npm run build -w @x402s/api && npm run build -w @x402s/controller && npm run build -w @x402s/cli",
+    "typecheck": "npm run build",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:security": "vitest run tests/security",
+    "clean": "rm -rf shared/dist api/dist controller/dist cli/dist"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.0"
+  }
+}

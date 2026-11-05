@@ -1,0 +1,10 @@
+# Mode B on a Linux host with KVM (bare metal or a VM with nested virt).
+# RuntimeClass name verified against the Confidential Containers quickstart.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: x402-sandbox
+  annotations:
+    x402.io/confidential: "false"
+    x402.io/warning: "KATA VM (kata-qemu-coco-dev): separate guest kernel, NO hardware attestation"
+handler: kata-qemu-coco-dev

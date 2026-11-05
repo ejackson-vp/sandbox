@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# Sandbox workload isolation
+#
+# Two policies: deny everything, then allow exactly two outbound destinations
+# (the relay and the egress proxy). There is deliberately:
+#   - no ingress rule of any kind (no inbound connections to sandbox pods)
+#   - no DNS egress (the sandbox resolves nothing; the proxy resolves for it)
+#   - no access to the API server, nodes, kubelet, metadata, or other Services
+#
+# Enforcement is provided by Cilium (a real NetworkPolicy CNI). The security
+# test suite proves packet-level behaviour; creating these objects is not
+# treated as proof.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: sandbox-workloads
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-relay-and-egress-proxy
+  namespace: sandbox-workloads
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    # Guest-initiated relay channel (WebSocket).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: sandbox-system
+          podSelector:
+            matchLabels:
+              app: relay
+      ports:
+        - protocol: TCP
+          port: 8443
+    # Controlled egress: the only path to the public internet.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: sandbox-system
+          podSelector:
+            matchLabels:
+              app: egress-proxy
+      ports:
+        - protocol: TCP
+          port: 3128

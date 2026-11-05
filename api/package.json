@@ -1,0 +1,19 @@
+{
+  "name": "@x402s/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@x402/core": "^2.30.0",
+    "@x402/evm": "^2.30.0",
+    "@x402s/shared": "*",
+    "express": "^5.3.0",
+    "viem": "^2.57.16",
+    "zod": "^4.6.6"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@x402s/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@x402/core": "^2.30.0",
+    "libsodium-wrappers": "^0.8.4",
+    "viem": "^2.57.16"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers": "^0.7.14"
+  }
+}

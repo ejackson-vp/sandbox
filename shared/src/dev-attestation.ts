@@ -1,0 +1,29 @@
+/**
+ * ---------------------------------------------------------------------------
+ *  INSECURE DEV ATTESTATION KEY
+ * ---------------------------------------------------------------------------
+ * This key pair exists ONLY to make the local kind workflow demonstrable. The
+ * private key is committed to the repository on purpose so that `make demo`
+ * works on a fresh machine. It provides ZERO confidentiality: anyone with this
+ * repository can forge "attestation evidence" that the development verifier
+ * accepts.
+ *
+ * The verifier rejects this key's evidence unless the caller passes an explicit
+ * `--allow-insecure-dev` / `ATTESTATION_MODE=dev` override, and every envelope
+ * it signs is labelled `insecureDevOnly: true`.
+ *
+ * The private half lives in deploy/kubernetes/10-dev-attestation-key.secret.yaml.
+ */
+export const DEV_ATTESTATION_KEY_ID = "x402-dev-attestation-key-INSECURE-DEV-ONLY";
+
+/** Ed25519 public key (raw 32 bytes, base64). */
+export const DEV_ATTESTATION_PUBLIC_KEY = "hfWzAO3JRsDHuoUXnf3Y9feHvt9iNtNAqTZGI70fS8E=";
+
+export const INSECURE_DEV_BANNER = [
+  "################################################################",
+  "#  ATTESTATION: INSECURE_DEV_ONLY                              #",
+  "#  No hardware root of trust. Evidence is signed by a key that #",
+  "#  is published in this repository and can be forged by anyone.#",
+  "#  Do NOT run untrusted code under this mode.                  #",
+  "################################################################",
+].join("\n");

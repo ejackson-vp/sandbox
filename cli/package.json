@@ -1,0 +1,19 @@
+{
+  "name": "@x402s/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "sandbox": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@x402/core": "^2.30.0",
+    "@x402/evm": "^2.30.0",
+    "@x402/fetch": "^2.30.0",
+    "@x402s/shared": "*",
+    "viem": "^2.57.16"
+  }
+}

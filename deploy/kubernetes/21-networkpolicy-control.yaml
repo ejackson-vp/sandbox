@@ -1,0 +1,180 @@
+# ---------------------------------------------------------------------------
+# Control-plane isolation
+# Every control-plane component is default-denied, then opened only for the
+# traffic it actually needs. The relay accepts guest connections from the
+# sandbox namespace; nothing else is reachable from there.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: sandbox-system
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# Public API: reachable via NodePort. Sandbox pods cannot reach it because
+# their egress policy has no rule for it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api
+  namespace: sandbox-system
+spec:
+  podSelector:
+    matchLabels: {app: api}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 3000
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app: controller}
+      ports:
+        - protocol: TCP
+          port: 3001
+    - to:
+        - podSelector:
+            matchLabels: {app: facilitator}
+      ports:
+        - protocol: TCP
+          port: 3002
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-controller
+  namespace: sandbox-system
+spec:
+  podSelector:
+    matchLabels: {app: controller}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: api}
+      ports:
+        - protocol: TCP
+          port: 3001
+  egress:
+    # Kubernetes API (in-cluster Service IP).
+    - to:
+        - ipBlock:
+            cidr: 10.96.0.1/32
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - podSelector:
+            matchLabels: {app: relay}
+      ports:
+        - protocol: TCP
+          port: 8443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# The relay is the only sandbox-reachable control-plane service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-relay
+  namespace: sandbox-system
+spec:
+  podSelector:
+    matchLabels: {app: relay}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: sandbox-workloads
+      ports:
+        - protocol: TCP
+          port: 8443
+    - from:
+        - podSelector:
+            matchLabels: {app: controller}
+      ports:
+        - protocol: TCP
+          port: 8443
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-proxy
+  namespace: sandbox-system
+spec:
+  podSelector:
+    matchLabels: {app: egress-proxy}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: sandbox-workloads
+      ports:
+        - protocol: TCP
+          port: 3128
+  egress:
+    # The proxy itself is the policy enforcement point for destinations.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-facilitator
+  namespace: sandbox-system
+spec:
+  podSelector:
+    matchLabels: {app: facilitator}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: api}
+      ports:
+        - protocol: TCP
+          port: 3002
+  egress: []

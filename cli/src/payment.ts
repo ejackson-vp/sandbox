@@ -1,0 +1,155 @@
+/**
+ * x402 payment client for the CLI.
+ *
+ * The buyer performs the protocol manually so the user can see the 402
+ * challenge, the price, and the settlement result. The actual payload creation
+ * and header encoding use the official @x402 packages.
+ */
+import { x402Client } from "@x402/core/client";
+import { x402HTTPClient } from "@x402/core/client";
+import { ExactEvmScheme } from "@x402/evm/exact/client";
+import {
+  MOCK_NETWORK,
+  MockExactClientScheme,
+  TESTNET_NETWORK,
+  formatUsd,
+  type CreateSandboxRequest,
+} from "@x402s/shared";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+
+export type PaymentMode = "mock" | "testnet";
+
+export interface PaidResponse {
+  response: Response;
+  priceUsd: string;
+  network: string;
+  mode: PaymentMode;
+  payer: string;
+  /** Set when the server rejected payment. */
+  paymentError?: string;
+}
+
+export interface Payer {
+  mode: PaymentMode;
+  createSandbox(apiUrl: string, body: CreateSandboxRequest): Promise<PaidResponse>;
+}
+
+function buildClient(mode: PaymentMode): { client: x402Client; address: string } {
+  if (mode === "mock") {
+    // Ephemeral wallet: mock payments have no economic value, so an unlinked
+    // identity is both sufficient and preferable.
+    const account = privateKeyToAccount(generatePrivateKey());
+    const client = x402Client.fromConfig({
+      schemes: [{ network: MOCK_NETWORK, client: new MockExactClientScheme(account) }],
+      spendControls: false,
+    });
+    return { client, address: account.address };
+  }
+
+  const pk = process.env.EVM_PRIVATE_KEY;
+  if (!pk || !/^0x[0-9a-fA-F]{64}$/.test(pk)) {
+    throw new Error("testnet payment mode requires EVM_PRIVATE_KEY (a funded Base Sepolia wallet)");
+  }
+  const account = privateKeyToAccount(pk as `0x${string}`);
+  const client = x402Client.fromConfig({
+    schemes: [{ network: TESTNET_NETWORK, client: new ExactEvmScheme(account) }],
+  });
+  return { client, address: account.address };
+}
+
+export function createPayer(mode: PaymentMode): Payer {
+  const { client, address } = buildClient(mode);
+  const httpClient = new x402HTTPClient(client);
+
+  return {
+    mode,
+    async createSandbox(apiUrl, body) {
+      const url = `${apiUrl.replace(/\/$/, "")}/v1/sandboxes`;
+      const headers = { "content-type": "application/json" };
+      const request = () =>
+        fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(120_000),
+        });
+
+      let response = await request();
+      if (response.status !== 402) {
+        return {
+          response,
+          priceUsd: "unknown",
+          network: mode === "mock" ? MOCK_NETWORK : TESTNET_NETWORK,
+          mode,
+          payer: address,
+        };
+      }
+
+      const requiredHeader = response.headers.get("payment-required");
+      if (!requiredHeader) {
+        return {
+          response,
+          priceUsd: "unknown",
+          network: "unknown",
+          mode,
+          payer: address,
+          paymentError: "server returned 402 without a PAYMENT-REQUIRED header",
+        };
+      }
+
+      let paymentRequired;
+      try {
+        paymentRequired = httpClient.getPaymentRequiredResponse((name) => response.headers.get(name) ?? undefined);
+      } catch (err) {
+        return {
+          response,
+          priceUsd: "unknown",
+          network: "unknown",
+          mode,
+          payer: address,
+          paymentError: `invalid payment requirements: ${(err as Error).message}`,
+        };
+      }
+
+      const requirement = paymentRequired.accepts[0];
+      if (!requirement) {
+        return {
+          response,
+          priceUsd: "unknown",
+          network: "unknown",
+          mode,
+          payer: address,
+          paymentError: "server advertised no payment options",
+        };
+      }
+
+      const payload = await client.createPaymentPayload(paymentRequired);
+      const paymentHeaders = httpClient.encodePaymentSignatureHeader(payload);
+      response = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, ...paymentHeaders },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(120_000),
+      });
+
+      let paymentError: string | undefined;
+      if (response.status === 402) {
+        try {
+          const bodyJson = (await response.clone().json()) as { error?: string };
+          paymentError = bodyJson.error ?? "payment_rejected";
+        } catch {
+          paymentError = "payment_rejected";
+        }
+      }
+
+      return {
+        response,
+        priceUsd: formatUsd(requirement.amount),
+        network: requirement.network,
+        mode,
+        payer: address,
+        ...(paymentError ? { paymentError } : {}),
+      };
+    },
+  };
+}

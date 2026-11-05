@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: controller-data
+  namespace: sandbox-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: controller
+  namespace: sandbox-system
+  labels: {app: controller}
+spec:
+  selector: {app: controller}
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller
+  namespace: sandbox-system
+  labels: {app: controller}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # single writer for SQLite
+  selector:
+    matchLabels: {app: controller}
+  template:
+    metadata:
+      labels: {app: controller}
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: sandbox-controller
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: controller
+          image: x402-sandbox/control:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "controller/dist/main.js"]
+          ports:
+            - containerPort: 3001
+          envFrom:
+            - configMapRef: {name: control-config}
+          env:
+            - {name: ROLE, value: "controller"}
+            - {name: X402_CONTROLLER_PORT, value: "3001"}
+            - {name: SERVICE_NAME, value: "controller"}
+            - {name: DB_PATH, value: "/data/controller.db"}
+            - {name: KUBERNETES_ENABLED, value: "true"}
+            - {name: RECONCILE_INTERVAL_MS, value: "250"}
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: admin-token}
+            - name: RELAY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: relay-admin-token}
+            - name: PROXY_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: proxy-token-secret}
+            - name: DEV_ATTESTATION_KEY
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: dev-attestation-key}
+            - name: DEV_ATTESTATION_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: dev-attestation-key-id}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "50m", memory: "96Mi"}
+            limits: {cpu: "500m", memory: "256Mi", ephemeral-storage: "64Mi"}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: data, mountPath: /data}
+          readinessProbe:
+            httpGet: {path: /internal/healthz, port: 3001}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: "64Mi"}
+        - name: data
+          persistentVolumeClaim:
+            claimName: controller-data

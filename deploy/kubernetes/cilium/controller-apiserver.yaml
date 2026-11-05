@@ -1,0 +1,24 @@
+# Cilium-specific: allow the controller to reach the kube-apiserver.
+#
+# Why this exists in addition to the standard NetworkPolicy: with Cilium and
+# kubeProxyReplacement=false, the in-cluster Service IP is DNAT'ed to a node IP
+# before egress policy evaluation, and Kubernetes `ipBlock` rules do not match
+# the `kube-apiserver`/`remote-node` identities. Cilium provides the
+# `kube-apiserver` entity for exactly this case.
+#
+# This policy is only applied when Cilium is the CNI (see deploy/kind/apply.sh).
+# It never applies to sandbox workloads.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-controller-kube-apiserver
+  namespace: sandbox-system
+spec:
+  endpointSelector:
+    matchLabels: {app: controller}
+  egress:
+    - toEntities: ["kube-apiserver"]
+      toPorts:
+        - ports:
+            - {port: "443", protocol: TCP}
+            - {port: "6443", protocol: TCP}

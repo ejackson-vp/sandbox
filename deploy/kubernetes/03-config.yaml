@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: control-config
+  namespace: sandbox-system
+data:
+  # --- payments -----------------------------------------------------------
+  PAYMENT_MODE: "mock"
+  NETWORK: "mock:local"
+  PRICE_USD: "$0.01"
+  PAY_TO: "0x0000000000000000000000000000000000000402"
+  FACILITATOR_URL: "http://facilitator.sandbox-system.svc.cluster.local:3002"
+  ALLOW_INSECURE_DEV: "true"
+
+  # --- api ----------------------------------------------------------------
+  PUBLIC_BASE_URL: "http://localhost:8080"
+  CAPABILITY_TTL_SECONDS: "900"
+
+  # --- controller ---------------------------------------------------------
+  CONTROLLER_URL: "http://controller.sandbox-system.svc.cluster.local:3001"
+  RELAY_URL: "http://relay.sandbox-system.svc.cluster.local:8443"
+  RELAY_SERVICE_NAME: "relay"
+  PROXY_SERVICE_NAME: "egress-proxy"
+  SANDBOX_NAMESPACE: "sandbox-workloads"
+  CONTROL_NAMESPACE: "sandbox-system"
+
+  # --- execution environment ---------------------------------------------
+  # DEV: ordinary containers. See docs/security-guarantees.md.
+  EXECUTION_MODE: "dev"
+  RUNTIME_CLASS: "x402-sandbox"
+  GUEST_IMAGE: "x402-sandbox/guest:dev"
+  GUEST_IMAGE_DIGEST: "sha256:dev-unpinned-image"
+  PROVISIONING_TIMEOUT_MS: "90000"
+  EXECUTION_GRACE_MS: "3000"
+  RESULT_TTL_MS: "120000"
+
+  # --- egress proxy -------------------------------------------------------
+  EGRESS_ALLOWED_PORTS: "443"
+  # Sandbox cluster CIDRs and node networks are denied even if they resolve.
+  EGRESS_DENIED_CIDRS: "10.244.0.0/16,10.96.0.0/12,172.20.0.0/16,169.254.0.0/16"

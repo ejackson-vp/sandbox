@@ -1,0 +1,30 @@
+# Single control-plane image for api / controller / relay / egress-proxy /
+# mock facilitator. Different Deployments run different entrypoints so that
+# NetworkPolicy can separate them.
+FROM node:24-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY shared/package.json shared/package.json
+COPY api/package.json api/package.json
+COPY controller/package.json controller/package.json
+COPY cli/package.json cli/package.json
+RUN npm ci --no-audit --no-fund
+COPY shared shared
+COPY api api
+COPY controller controller
+COPY cli cli
+RUN npm run build
+
+FROM node:24-alpine
+ENV NODE_ENV=production \
+    HOME=/tmp \
+    SERVICE_NAME=control-plane
+WORKDIR /app
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/shared ./shared
+COPY --from=build /app/api ./api
+COPY --from=build /app/controller ./controller
+COPY --from=build /app/package.json ./package.json
+USER 1000:1000
+EXPOSE 3000 3001 3002 3128 8443
+CMD ["node", "api/dist/main.js"]

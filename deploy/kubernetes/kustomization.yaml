@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - 00-namespaces.yaml
+  - 01-runtimeclass.yaml
+  - 02-secrets-dev.yaml
+  - 03-config.yaml
+  - 04-rbac.yaml
+  - 10-api.yaml
+  - 11-controller.yaml
+  - 12-relay.yaml
+  - 13-egress-proxy.yaml
+  - 14-facilitator.yaml
+  - 20-networkpolicy-sandbox.yaml
+  - 21-networkpolicy-control.yaml

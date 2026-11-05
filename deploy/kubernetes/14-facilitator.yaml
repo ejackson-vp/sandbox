@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: facilitator-data
+  namespace: sandbox-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: facilitator
+  namespace: sandbox-system
+  labels: {app: facilitator}
+spec:
+  selector: {app: facilitator}
+  ports:
+    - name: http
+      port: 3002
+      targetPort: 3002
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: facilitator
+  namespace: sandbox-system
+  labels: {app: facilitator}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: facilitator}
+  template:
+    metadata:
+      labels: {app: facilitator}
+      annotations:
+        x402.io/warning: "MOCK FACILITATOR: no chain, no funds, no economic security"
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: facilitator
+          image: x402-sandbox/control:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "api/dist/mock-facilitator-main.js"]
+          ports:
+            - containerPort: 3002
+          env:
+            - {name: PORT, value: "3002"}
+            - {name: MOCK_DB_PATH, value: "/data/facilitator.db"}
+            - {name: SERVICE_NAME, value: "mock-facilitator"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits: {cpu: "500m", memory: "256Mi", ephemeral-storage: "64Mi"}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: data, mountPath: /data}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 3002}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: "32Mi"}
+        - name: data
+          persistentVolumeClaim:
+            claimName: facilitator-data
