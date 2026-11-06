@@ -8,7 +8,7 @@
  * KUBERNETES_ENABLED=true.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Provisioner, SandboxPodSpec, WarmPodInfo, WarmPodSpec } from "./k8s.js";
@@ -182,6 +182,11 @@ export class LocalProvisioner implements Provisioner {
 
   async nodeAvailable(): Promise<boolean> {
     return true;
+  }
+
+  async workspacePvcExists(pvcName: string): Promise<boolean> {
+    const sessionId = pvcName.replace(/^local-ws-/, "sbx_");
+    return existsSync(join(this.workRoot, sessionId, "workspace"));
   }
 
   async getPod(podName: string): Promise<{

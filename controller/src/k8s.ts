@@ -87,6 +87,8 @@ export interface Provisioner {
   } | null>;
   /** True when the node exists, is ready, and is not cordoned. */
   nodeAvailable(nodeName: string): Promise<boolean>;
+  /** True when the per-session workspace PVC still exists. */
+  workspacePvcExists(pvcName: string): Promise<boolean>;
   listSandboxPods(): Promise<Array<{ name: string; sessionId: string; createdAt: number; phase: string }>>;
   listWarmPods(): Promise<WarmPodInfo[]>;
   /** Relabel a warm pod as a claimed sandbox (or update its session id). */
@@ -539,6 +541,16 @@ export class KubeProvisioner implements Provisioner {
     }
   }
 
+  async workspacePvcExists(pvcName: string): Promise<boolean> {
+    try {
+      await this.core.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace: this.namespace });
+      return true;
+    } catch (err) {
+      if ((err as { code?: number }).code === 404) return false;
+      throw err;
+    }
+  }
+
   async listSandboxPods(): Promise<Array<{ name: string; sessionId: string; createdAt: number; phase: string }>> {
     const res = await this.core.listNamespacedPod({
       namespace: this.namespace,
@@ -619,6 +631,9 @@ export class NullProvisioner implements Provisioner {
   }
   async nodeAvailable(): Promise<boolean> {
     return true;
+  }
+  async workspacePvcExists(): Promise<false> {
+    return false;
   }
   async listSandboxPods(): Promise<[]> {
     return [];

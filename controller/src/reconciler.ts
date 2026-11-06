@@ -278,6 +278,11 @@ export class Reconciler {
       if (!workspacePvc) {
         workspacePvc = await this.deps.provisioner.createWorkspacePvc(session.id, session.limits.diskMiB);
         this.deps.store.setWorkspacePvc(session.id, workspacePvc);
+      } else if (!(await this.deps.provisioner.workspacePvcExists(workspacePvc).catch(() => false))) {
+        // A stale name from a failed attempt; create a fresh PVC rather than
+        // leaving the first pod Pending forever.
+        workspacePvc = await this.deps.provisioner.createWorkspacePvc(session.id, session.limits.diskMiB);
+        this.deps.store.setWorkspacePvc(session.id, workspacePvc);
       }
     } else if (await this.tryWarmClaim(session, relayAddr, proxyAddr, provisionBeginAt)) {
       return;
@@ -425,6 +430,17 @@ export class Reconciler {
     }
     if (!session.workspacePvc) {
       throw new LifecycleError("not_resumable", "session has no persistent workspace", 409);
+    }
+    if (!(await this.deps.provisioner.workspacePvcExists(session.workspacePvc).catch(() => false))) {
+      this.deps.store.requestTermination(id, "failure:checkpoint_missing", {
+        code: "checkpoint_missing",
+        message: "the checkpoint workspace no longer exists",
+      });
+      throw new LifecycleError(
+        "resume_unavailable",
+        "the checkpoint workspace no longer exists; the session cannot be resumed",
+        409,
+      );
     }
     if (this.deps.cfg.pinCheckpointNode && session.nodeName) {
       const available = await this.deps.provisioner.nodeAvailable(session.nodeName).catch(() => false);

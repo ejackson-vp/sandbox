@@ -76,6 +76,19 @@ Production consequence: **a checkpoint cannot survive its node.** For node
 failure tolerance use RWX/network storage or a real snapshot/restore; the
 local-path checkpoint is a single-node feature.
 
+## Fault behaviour
+
+- **Workspace deleted while suspended:** resume checks the PVC exists, marks the
+  session `FAILED` with `checkpoint_missing` and returns `409 resume_unavailable`.
+  It does not create a pod against a missing volume.
+- **Controller restart while suspended:** the session is in SQLite and the PVC is
+  untouched; the restarted controller resumes it and the workspace is intact.
+- **Relay restart while suspended:** covered by the lifecycle soak; resume
+  registers a fresh relay entry.
+- **Node cordoned/gone:** `409 resume_unavailable` (see portability above).
+
+`make demo-faults` exercises the missing-PVC and controller-restart cases.
+
 ## Security properties
 
 - **Workspace at rest:** suspendable sessions use a PVC, not a memory-backed
