@@ -197,6 +197,7 @@ relay.
 | Leave a server running after the lease | Services are process groups; `stop`, suspend, terminate and lease end call `shutdownAll`, which stops them. On Linux `Pdeathsig` is a backstop. |
 | Cross-session access to a service | Services live inside one guest/network namespace; no other session can reach them; the relay entry is capability-bound. |
 | Stream exhaustion | Max 4 streams, 64 MiB per stream, 64 KiB chunks, 60 s idle; close/shutdown cancels the request. |
+| WebSocket escape/exhaustion | Loopback-only, declared port, no proxy, 4 MiB message, 64 MiB total, 60 s idle, max 4 sockets; close/shutdown closes them. |
 
 ## 3. Risk summary
 

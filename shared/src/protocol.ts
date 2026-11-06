@@ -331,6 +331,30 @@ export interface HttpStreamCloseOperation extends OperationBase {
   streamId: string;
 }
 
+export interface WsOpenOperation extends OperationBase {
+  op: "ws.open";
+  port: number;
+  path: string;
+  headers?: Record<string, string>;
+}
+
+export interface WsReadOperation extends OperationBase {
+  op: "ws.read";
+  streamId: string;
+}
+
+export interface WsSendOperation extends OperationBase {
+  op: "ws.send";
+  streamId: string;
+  bodyBase64: string;
+  binary?: boolean;
+}
+
+export interface WsCloseOperation extends OperationBase {
+  op: "ws.close";
+  streamId: string;
+}
+
 export interface ServiceInfo {
   name: string;
   port: number;
@@ -354,7 +378,11 @@ export type GuestRequest =
   | HttpRequestOperation
   | HttpStreamOpenOperation
   | HttpStreamReadOperation
-  | HttpStreamCloseOperation;
+  | HttpStreamCloseOperation
+  | WsOpenOperation
+  | WsReadOperation
+  | WsSendOperation
+  | WsCloseOperation;
 
 export interface FileEntry {
   /** Workspace-relative path. */
@@ -472,6 +500,34 @@ export interface HttpStreamCloseResult extends ResultBase {
   streamId: string;
 }
 
+export interface WsOpenResult extends ResultBase {
+  ok: true;
+  op: "ws.open";
+  streamId: string;
+  status: number;
+}
+
+export interface WsReadResult extends ResultBase {
+  ok: true;
+  op: "ws.read";
+  chunkBase64?: string;
+  binary?: boolean;
+  pending?: boolean;
+  done?: boolean;
+}
+
+export interface WsSendResult extends ResultBase {
+  ok: true;
+  op: "ws.send";
+  streamId: string;
+}
+
+export interface WsCloseResult extends ResultBase {
+  ok: true;
+  op: "ws.close";
+  streamId: string;
+}
+
 export type GuestResult =
   | ExecResult
   | FilePutResult
@@ -485,6 +541,10 @@ export type GuestResult =
   | HttpStreamOpenResult
   | HttpStreamReadResult
   | HttpStreamCloseResult
+  | WsOpenResult
+  | WsReadResult
+  | WsSendResult
+  | WsCloseResult
   | OperationError;
 
 /* ------------------------------------------------------------------ */

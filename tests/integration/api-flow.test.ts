@@ -6,7 +6,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import http from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -557,6 +557,34 @@ describe("streaming HTTP data plane", () => {
     expect(text).toContain("tick 4");
     await stream.close();
     await client.stopService(handle, "sse");
+    await client.destroy(handle);
+  }, 180_000);
+});
+
+describe("WebSocket data plane", () => {
+  it("echoes a message through the relay", async () => {
+    const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
+    await client.waitForReady(handle);
+    await client.putFile(handle, {
+      path: "ws-echo-server.js",
+      data: readFileSync(join(process.cwd(), "scripts/ws-echo-server.js")),
+    });
+    await client.startService(handle, {
+      name: "ws",
+      command: ["node", "ws-echo-server.js"],
+      port: 18084,
+    });
+    const ws = await client.openWebSocket(handle, { port: 18084, path: "/" });
+    await ws.send("hello-ws");
+    let reply = "";
+    for (let i = 0; i < 50 && !reply; i++) {
+      const part = await ws.read();
+      if (part.data) reply = part.data.toString();
+      if (part.done) break;
+    }
+    expect(reply).toBe("hello-ws");
+    await ws.close();
+    await client.stopService(handle, "ws");
     await client.destroy(handle);
   }, 180_000);
 });

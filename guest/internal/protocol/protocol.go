@@ -28,6 +28,7 @@ type Request struct {
 	Headers    map[string]string `json:"headers"`
 	BodyBase64 string            `json:"bodyBase64"`
 	StreamID   string            `json:"streamId"`
+	Binary     bool              `json:"binary,omitempty"`
 }
 
 type OpError struct {
@@ -87,6 +88,7 @@ type Result struct {
 	ChunkBase64   string            `json:"chunkBase64,omitempty"`
 	Pending       bool              `json:"pending,omitempty"`
 	Done          bool              `json:"done,omitempty"`
+	Binary        bool              `json:"binary,omitempty"`
 }
 
 type ServiceInfo struct {
@@ -114,6 +116,10 @@ const (
 	OpHTTPOpen     = "http.stream.open"
 	OpHTTPRead     = "http.stream.read"
 	OpHTTPClose    = "http.stream.close"
+	OpWSOpen       = "ws.open"
+	OpWSRead       = "ws.read"
+	OpWSSend       = "ws.send"
+	OpWSClose      = "ws.close"
 )
 
 func ErrorResult(req *Request, code, message string) *Result {

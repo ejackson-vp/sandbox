@@ -732,6 +732,18 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   app.post("/v1/sessions/:id/http/stream/close", rejectPlaintextBodies, (req, res) =>
     runOperation(req, res, "http"),
   );
+  app.post("/v1/sessions/:id/ws/open", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "ws"),
+  );
+  app.post("/v1/sessions/:id/ws/read", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "ws"),
+  );
+  app.post("/v1/sessions/:id/ws/send", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "ws"),
+  );
+  app.post("/v1/sessions/:id/ws/close", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "ws"),
+  );
 
   app.put("/v1/sessions/:id/files", rejectPlaintextBodies, (req, res) => runOperation(req, res, "file.put"));
 

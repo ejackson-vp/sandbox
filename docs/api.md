@@ -223,6 +223,10 @@ POST /v1/sessions/{id}/http            # http.request envelope
 POST /v1/sessions/{id}/http/stream     # http.stream.open envelope
 POST /v1/sessions/{id}/http/stream/read  # http.stream.read envelope
 POST /v1/sessions/{id}/http/stream/close # http.stream.close envelope
+POST /v1/sessions/{id}/ws/open         # ws.open envelope
+POST /v1/sessions/{id}/ws/read         # ws.read envelope
+POST /v1/sessions/{id}/ws/send         # ws.send envelope
+POST /v1/sessions/{id}/ws/close        # ws.close envelope
 ```
 
 All four use the same `{requestId, envelope, timeoutMs?, waitMs?}` body as
@@ -234,7 +238,9 @@ by a running service; there is no inbound pod networking. See
 Common errors: `service_not_found`, `service_exists`, `port_in_use`,
 `service_not_listening`, `too_many_services`, `service_unavailable`,
 `invalid_port`, `invalid_method`, `http_error`, `too_many_streams`,
-`stream_not_found`, `stream_idle`, `stream_error`, `stream_too_large`.
+`stream_not_found`, `stream_idle`, `stream_error`, `stream_too_large`,
+`ws_not_found`, `ws_idle`, `ws_error`, `too_many_ws`, `ws_too_large`,
+`message_too_large`, `ws_write_failed`.
 
 ## Requests (reconnect / cancel)
 

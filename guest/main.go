@@ -215,12 +215,13 @@ func runSession(cfg sessionConfig) error {
 		},
 		// The guest's own lease view starts at hello; the controller enforces the
 		// authoritative deadline independently and shuts the supervisor down.
-		lease:    time.Now().Add(time.Duration(cfg.LeaseSeconds)*time.Second + 2*time.Second),
-		inflight: map[string]context.CancelFunc{},
-		slots:    make(chan struct{}, 1),
-		services: map[string]*runner.Service{},
-		streams:  map[string]*httpStream{},
-		maxFile:  cfg.MaxFileBytes,
+		lease:      time.Now().Add(time.Duration(cfg.LeaseSeconds)*time.Second + 2*time.Second),
+		inflight:   map[string]context.CancelFunc{},
+		slots:      make(chan struct{}, 1),
+		services:   map[string]*runner.Service{},
+		streams:    map[string]*httpStream{},
+		websockets: map[string]*wsStream{},
+		maxFile:    cfg.MaxFileBytes,
 	}
 	logEvent("guest_ready", map[string]any{"sessionId": cfg.SessionID, "leaseDeadline": sup.lease.UTC().Format(time.RFC3339)})
 	return sup.serve(ctx)
@@ -361,6 +362,8 @@ type supervisor struct {
 	services map[string]*runner.Service
 	// Streaming HTTP responses opened by the customer.
 	streams map[string]*httpStream
+	// Bidirectional WebSocket streams opened by the customer.
+	websockets map[string]*wsStream
 }
 
 func (s *supervisor) serve(ctx context.Context) error {
@@ -406,6 +409,7 @@ func (s *supervisor) cancel(id string) {
 }
 
 func (s *supervisor) shutdownAll() {
+	s.stopAllWS()
 	s.stopAllStreams()
 	s.stopAllServices()
 	s.mu.Lock()
@@ -496,6 +500,14 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 		result = s.readStream(req)
 	case protocol.OpHTTPClose:
 		result = s.closeStreamRequest(req)
+	case protocol.OpWSOpen:
+		result = s.openWS(ctx, req)
+	case protocol.OpWSRead:
+		result = s.readWS(req)
+	case protocol.OpWSSend:
+		result = s.sendWS(ctx, req)
+	case protocol.OpWSClose:
+		result = s.closeWSRequest(req)
 	default:
 		result = protocol.ErrorResult(req, "unsupported_operation", "unknown operation")
 	}

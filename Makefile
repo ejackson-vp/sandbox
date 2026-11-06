@@ -28,6 +28,7 @@ help:
 	@echo "  make demo-faults   missing PVC + controller restart while suspended"
 	@echo "  make demo-http     start a local server and fetch it through the relay"
 	@echo "  make demo-sse      stream SSE chunks through the relay"
+	@echo "  make demo-ws       WebSocket echo through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
 	@echo "  make benchmark-smoke / benchmark-startup / benchmark-startup-pool"
@@ -100,6 +101,9 @@ demo-http:
 
 demo-sse:
 	npx tsx scripts/sse-demo.ts
+
+demo-ws:
+	npx tsx scripts/ws-demo.ts
 
 cli:
 	npm run build -w @x402s/shared

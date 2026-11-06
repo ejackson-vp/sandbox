@@ -35,6 +35,14 @@ import {
   type HttpStreamOpenResult,
   type HttpStreamReadOperation,
   type HttpStreamReadResult,
+  type WsCloseOperation,
+  type WsCloseResult,
+  type WsOpenOperation,
+  type WsOpenResult,
+  type WsReadOperation,
+  type WsReadResult,
+  type WsSendOperation,
+  type WsSendResult,
   type OperationError,
   type ServiceInfo,
   type ServiceListOperation,
@@ -152,6 +160,20 @@ export interface HttpStream {
   status: number;
   headers: Record<string, string>;
   read(): Promise<{ chunk?: Buffer; done: boolean }>;
+  close(): Promise<void>;
+}
+
+export interface OpenWebSocketOptions {
+  port: number;
+  path: string;
+  headers?: Record<string, string>;
+}
+
+export interface WebSocketStream {
+  streamId: string;
+  status: number;
+  read(): Promise<{ data?: Buffer; binary: boolean; done: boolean }>;
+  send(data: Buffer | Uint8Array | string, opts?: { binary?: boolean }): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -625,6 +647,122 @@ export class SandboxClient {
         );
         if (!result.ok) {
           throw new SandboxError(result.error?.code ?? "stream_close_failed", result.error?.message ?? "stream close failed", undefined, requestId);
+        }
+      },
+    };
+  }
+
+  /** Open a bidirectional WebSocket to a loopback service, polled over the relay. */
+  async openWebSocket(handle: SessionHandle, opts: OpenWebSocketOptions): Promise<WebSocketStream> {
+    const self = this;
+    const openId = randomBytes(16).toString("hex");
+    const openOperation: WsOpenOperation = {
+      v: 2,
+      sessionId: handle.sessionId,
+      clientNonce: handle.clientNonce,
+      requestId: openId,
+      op: "ws.open",
+      port: opts.port,
+      path: opts.path,
+      ...(opts.headers ? { headers: opts.headers } : {}),
+    };
+    const opened = await self.run<WsOpenResult | OperationError>(
+      handle,
+      openOperation,
+      openId,
+      0,
+      30_000,
+      undefined,
+      "ws/open",
+    );
+    if (!opened.ok) {
+      throw new SandboxError(opened.error?.code ?? "ws_open_failed", opened.error?.message ?? "websocket open failed", undefined, openId);
+    }
+    const streamId = opened.streamId;
+    return {
+      streamId,
+      status: opened.status,
+      async read(): Promise<{ data?: Buffer; binary: boolean; done: boolean }> {
+        for (;;) {
+          const requestId = randomBytes(16).toString("hex");
+          const operation: WsReadOperation = {
+            v: 2,
+            sessionId: handle.sessionId,
+            clientNonce: handle.clientNonce,
+            requestId,
+            op: "ws.read",
+            streamId,
+          };
+          const result = await self.run<WsReadResult | OperationError>(
+            handle,
+            operation,
+            requestId,
+            0,
+            10_000,
+            undefined,
+            "ws/read",
+          );
+          if (!result.ok) {
+            throw new SandboxError(result.error?.code ?? "ws_read_failed", result.error?.message ?? "websocket read failed", undefined, requestId);
+          }
+          if (result.pending) {
+            await sleep(100);
+            continue;
+          }
+          return {
+            ...(result.chunkBase64 ? { data: Buffer.from(result.chunkBase64, "base64") } : {}),
+            binary: Boolean(result.binary),
+            done: Boolean(result.done),
+          };
+        }
+      },
+      async send(data: Buffer | Uint8Array | string, opts?: { binary?: boolean }): Promise<void> {
+        const requestId = randomBytes(16).toString("hex");
+        const buf = Buffer.from(typeof data === "string" ? Buffer.from(data) : data);
+        const operation: WsSendOperation = {
+          v: 2,
+          sessionId: handle.sessionId,
+          clientNonce: handle.clientNonce,
+          requestId,
+          op: "ws.send",
+          streamId,
+          bodyBase64: buf.toString("base64"),
+          ...(opts?.binary ? { binary: true } : {}),
+        };
+        const result = await self.run<WsSendResult | OperationError>(
+          handle,
+          operation,
+          requestId,
+          0,
+          10_000,
+          undefined,
+          "ws/send",
+        );
+        if (!result.ok) {
+          throw new SandboxError(result.error?.code ?? "ws_send_failed", result.error?.message ?? "websocket send failed", undefined, requestId);
+        }
+      },
+      async close(): Promise<void> {
+        const requestId = randomBytes(16).toString("hex");
+        const operation: WsCloseOperation = {
+          v: 2,
+          sessionId: handle.sessionId,
+          clientNonce: handle.clientNonce,
+          requestId,
+          op: "ws.close",
+          streamId,
+        };
+        const result = await self.run<WsCloseResult | OperationError>(
+          handle,
+          operation,
+          requestId,
+          0,
+          10_000,
+          undefined,
+          "ws/close",
+        );
+        if (!result.ok) {
+          throw new SandboxError(result.error?.code ?? "ws_close_failed", result.error?.message ?? "websocket close failed", undefined, requestId);
         }
       },
     };

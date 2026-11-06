@@ -1,7 +1,7 @@
 # Local services and HTTP data plane
 
-Status: implemented in dev/local and on the kind cluster. Request/response and
-SSE/chunked streaming are supported; WebSocket streaming is the next step.
+Status: implemented in dev/local and on the kind cluster. Request/response,
+SSE/chunked streaming, and a polled bidirectional WebSocket are supported.
 
 ## Why
 
@@ -29,6 +29,10 @@ only through the relay and only on a port the customer declared.
 | `POST /v1/sessions/{id}/http/stream` | `http.stream.open` | Open a streaming response |
 | `POST /v1/sessions/{id}/http/stream/read` | `http.stream.read` | Read the next chunk (or `pending`) |
 | `POST /v1/sessions/{id}/http/stream/close` | `http.stream.close` | Close and reap the stream |
+| `POST /v1/sessions/{id}/ws/open` | `ws.open` | Open a loopback WebSocket |
+| `POST /v1/sessions/{id}/ws/read` | `ws.read` | Read the next message (or `pending`) |
+| `POST /v1/sessions/{id}/ws/send` | `ws.send` | Send a text/binary message |
+| `POST /v1/sessions/{id}/ws/close` | `ws.close` | Close the WebSocket |
 
 All four take the same body as `/exec`:
 
@@ -90,8 +94,30 @@ sandbox http <id> 8080 /events --stream
 they arrive.
 
 Streaming limits: max 4 streams, 64 MiB total per stream, 64 KiB chunks, 60 s
-idle timeout, one operation at a time. WebSocket (bidirectional) needs a relay
-data-channel design and is not implemented yet.
+idle timeout, one operation at a time.
+
+## WebSocket
+
+WebSocket is supported with the same **polled** model: the guest maintains the
+loopback WebSocket and buffers incoming messages; `ws.read` drains one message
+or returns `pending`, and `ws.send` writes a text/binary frame. This is
+bidirectional but not a true push channel — expect ~100 ms polling latency and
+no streaming backpressure beyond the 8-message buffer.
+
+```ts
+const ws = await client.openWebSocket(handle, { port: 8080, path: "/socket" });
+await ws.send("hello");
+const { data } = await ws.read();
+await ws.close();
+```
+
+`make demo-ws` runs a dependency-free Node echo server inside the sandbox and
+round-trips a message through the relay.
+
+Limits: max 4 WebSockets, 4 MiB per message, 64 MiB total, 60 s idle. The
+WebSocket client is loopback-only (`127.0.0.1:<port>`), uses no proxy, disables
+compression, and sets an `Origin` for the local service. Services and sockets do
+not survive suspend; restart them after resume.
 
 ## Limits
 
@@ -151,7 +177,7 @@ it through the relay, list it, stop it, destroy the session.
 |---|---|---|
 | Ingress | relay-mediated, no pod ingress | per-VM HTTPS endpoint |
 | Auth | session capability | JWE token |
-| Protocols | HTTP request/response + SSE/chunked; WebSocket later | HTTP/2, gRPC, WebSockets |
+| Protocols | HTTP request/response, SSE/chunked, polled WebSocket | HTTP/2, gRPC, WebSockets |
 | Host control | loopback only, declared port | app endpoint on a port |
 | State on suspend | services stop | memory/process state restored |
 
