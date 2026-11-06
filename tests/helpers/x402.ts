@@ -55,11 +55,11 @@ export async function signChallenge(challenge: PaymentChallenge): Promise<string
   return value;
 }
 
-export async function createSandboxPayment(
+export async function createSessionPayment(
   apiUrl: string,
   body: unknown,
 ): Promise<{ header: string; challenge: PaymentChallenge }> {
-  const { challenge } = await requestChallenge(`${apiUrl}/v1/sandboxes`, body);
+  const { challenge } = await requestChallenge(`${apiUrl}/v1/sessions`, body);
   const header = await signChallenge(challenge);
   return { header, challenge };
 }

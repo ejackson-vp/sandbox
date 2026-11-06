@@ -1,185 +1,169 @@
 # Threat model
 
-This document is deliberately blunt about what each mode does and does not
-protect against. "Mitigated" below means *implemented and tested in this
-repository*; "designed" means the interface exists but the production back end
-is not implemented.
+Blunt, per-mode analysis of what is and is not mitigated. "Mitigated" means
+implemented **and** covered by tests in this repository.
 
 ## 1. Assets
 
-| Asset | Confidentiality requirement |
+| Asset | Requirement |
 | --- | --- |
-| Customer source code | Never visible to the provider's control plane, logs, storage or operators |
-| Customer output / results | Same |
-| Customer result-decryption key | Only on the customer device |
-| Payment authorization | Single-use, bound to amount/recipient/network |
-| Session capability | Unforgeable, short-lived, single-session |
-| Guest→client result channel | Confidential and authenticated |
-| Infrastructure credentials | Never reachable from customer code |
+| Commands, file names/contents, stdout/stderr | never visible to the control plane, logs, storage or operators |
+| Client private key | only on the customer device |
+| Session capability | unforgeable, session-scoped, time-limited |
+| Payment authorization | single-use, bound to amount/recipient/network/tier |
+| Guest keys / relay token | not exposed to customer code |
+| Infrastructure credentials | never reachable from the sandbox |
+| Workspace data | confined to one session, destroyed at termination |
 
-## 2. Adversaries and mitigations
+## 2. Adversaries
 
 ### A. Malicious customer running arbitrary code
 
-Capabilities: full control of the Python program, all CPU/memory of the sandbox,
-the ability to open sockets, fork, and read its own environment.
-
-| Threat | Mode A (dev pod) | Mode B (Kata VM) | Mode C (hardware TEE) |
+| Threat | Dev (Mode A) | Kata (Mode B) | Future TEE |
 | --- | --- | --- | --- |
-| Escape to host / node | Container + seccomp + no caps + PSS restricted; **host kernel shared** → not a security boundary for hostile code | VM boundary (Kata), separate guest kernel | VM boundary + memory encryption + integrity |
-| Read provider credentials | No SA token, no hostPath, no service-link env, bootstrap secrets deleted before payload arrives; same UID as guest so `/proc/1/mem` is the residual risk (mitigated by yama + short lifetime) | Same, plus guest kernel isolation | Same, plus hardware isolation |
-| Reach Kubernetes API / other pods / metadata | NetworkPolicy default-deny; tested at packet level | Same | Same |
-| Reach internal services | Only relay + proxy pod IPs are allowed | Same | Same |
-| Exfiltrate via DNS | No DNS at all (`dnsPolicy: None`, black-hole resolver) | Same | Same |
-| Reach the internet directly | Proxy-only; direct egress blocked | Same | Same |
-| Abuse the proxy to reach private IPs | Proxy resolves + validates every IP, denies private/metadata/ULA/link-local/cluster, pins the IP it validated | Same | Same |
-| Fork bomb / resource exhaustion | CPU/memory/ephemeral-storage limits, `pod-max-pids=1024`, 60 s deadline | Same | Same |
-| Persist data | Memory-backed `emptyDir` only, pod deleted at completion, no snapshots | Same + VM discarded | Same |
-| Read another customer's data | Separate pod/VM, separate keys, separate relay session, no shared volumes | Same | Same + memory encryption |
+| Escape to host | Container + seccomp + no caps + PSS restricted, but **shared kernel** → not a boundary | VM boundary | VM + memory encryption |
+| Read supervisor keys | `PR_SET_DUMPABLE=0` blocks ptrace/`/proc/mem`; bootstrap file deleted; env scrubbed. Root on the node can still read memory | Guest kernel isolation | Hardware isolation |
+| Reach Kubernetes API / nodes / metadata / other pods | Default-deny; only relay + proxy pods allowed; packet-tested | Same | Same |
+| Direct internet | Proxy-only; direct egress blocked | Same | Same |
+| Proxy SSRF (private IPs, rebinding, IPv6, metadata) | Proxy resolves + validates every IP, pins the validated IP, denies private/metadata/ULA/link-local/cluster/mapped forms | Same | Same |
+| Exfiltrate via DNS | No usable DNS (`dnsPolicy: None`, black-hole resolver, policy deny) | Same | Same |
+| Persist data / leave processes | Workspace is memory `emptyDir`; process group killed per command; pod deleted at termination; no PVC/hostPath | Same | Same |
+| Fork bomb / disk exhaustion | CPU/memory limits, `pod-max-pids`, `RLIMIT_NPROC`, disk quota, per-file cap, per-command timeout, lease cap | Same | Same |
+| Archive traversal / symlink escape | Path canonicalisation, symlink-parent rejection, `O_NOFOLLOW`, tar entry validation | Same | Same |
+| Read another session's data | Separate pod, keys, relay entry, capability; no shared volumes | Same | Same + memory encryption |
+| Guess/replay another capability | 256-bit random-ish HMAC, SHA-256 stored, scoped by session, TTL, constant-time compare | Same | Same |
+| Replay a request id | Controller maps `(session, requestId)` to one execution; retries return the cached result | Same | Same |
+| Abuse the relay as a tunnel | Relay only understands `request/cancel/shutdown` + opaque response; no arbitrary forwarding | Same | Same |
 
-**Not mitigated in any mode:** a customer can always consume the resource they
-paid for, and can always run code that is malicious *inside* its own sandbox.
+**Not mitigated:** the customer can always consume the resource they paid for,
+and can run code that is malicious inside its own sandbox.
 
-### B. Compromised sandbox guest
+### B. Compromised guest supervisor
 
-If the guest runtime is compromised (e.g. an RCE in the Python interpreter or the
-Go binary):
-
-- It can read the plaintext of **its own** customer's code and result (it already
-  can; that is its job).
-- It cannot read other customers' keys: each guest has a fresh X25519 keypair and
-  a per-session relay token; the relay refuses a second connection.
-- It cannot reach the control plane: no RBAC, no API route, no network path.
-- It cannot impersonate a guest for another session: evidence is bound to
-  session id + client nonce + client key, and the customer verifies it.
-- In Mode A it may be able to influence the host (shared kernel); this is why
-  Mode A is explicitly not for hostile code.
+- Can read the plaintext of **its own** session (it must decrypt to execute).
+- Cannot read other sessions: per-session key pair, per-session relay token,
+  one connection per session, evidence bound to session/nonce/client key.
+- Cannot reach the control plane: no RBAC, no route, no proxy credential for
+  internal destinations.
+- In dev mode it may influence the host (shared kernel); that is why dev is not
+  for hostile code.
 
 ### C. One customer attacking another
 
-- Distinct pods/VMs, distinct keys and relay sessions, default-deny ingress **and**
-  egress between sandbox pods (tested: pod A cannot reach pod B on any port).
-- Relay enforces one live connection per session and binds frames to the session.
-- Capabilities are hashed, session-scoped and time-limited; cross-session use
-  returns 404 (tested).
-- No shared volumes, no shared process namespace, no shared service account.
+- Distinct pods, keys, relay entries; default-deny between sandbox pods (tested
+  packet-level: peer pod unreachable on any port).
+- Capability hashed, session-scoped, TTL; cross-session use returns 404 (tested).
+- No shared volumes, no shared SA, no host namespaces.
 
 ### D. Compromised Kubernetes API or worker node
 
 | Threat | Result |
 | --- | --- |
-| Read pod specs/env | No plaintext: only ciphertext envelopes ever transit the API; the guest token and dev key live in a 0400 file that is deleted before execution |
-| Read pod logs | Guest logs contain counts and error codes only (tested by grepping for markers) |
-| Exec into a sandbox | Would give access to the guest's memory in Modes A/B. **This is a real limitation**; Mode C relies on hardware isolation + guest policy, and even then a node admin can deny service |
-| Delete pods | Availability only; the controller converges and the session fails closed |
-| Read the controller DB | Ciphertext metadata + capability hashes only |
-| Read the relay memory | Ciphertext only |
-
-A compromised **node in Mode A/B** can read guest memory, including plaintext
-code, if it can attach to the process. Nothing in this repository prevents that;
-only Mode C's hardware isolation does (and even then, side channels remain).
+| Read pod specs/env | no plaintext: only ciphertext; relay token lives in a deleted 0400 file; relay URL has no token |
+| Read pod logs | counts, operation names, exit codes only (marker test) |
+| Exec into a sandbox | dev/Kata: gives access to guest memory — **real limitation**; TEE: hardware boundary |
+| Delete pods | availability only; session fails closed, cleanup converges |
+| Read controller DB | metadata + capability hashes, no plaintext |
+| Read relay memory | ciphertext + sizes |
+| Forge session state | cannot without the admin token and NetworkPolicy path |
 
 ### E. Malicious cloud infrastructure administrator
 
-- Mode A/B: can read memory, can snapshot the node, can drop traffic. Treated as
-  trusted.
-- Mode C: SEV-SNP/TDX remove the hypervisor/host from the TCB for
-  confidentiality and integrity of guest memory. Remaining risks: availability,
-  side channels, and mis-issued attestation policy.
-- The design intentionally keeps the **control plane** outside the TCB for
-  plaintext: even a fully compromised API/controller/relay never has a key that
-  can decrypt customer code.
+- Dev/Kata: can read memory and snapshot the node. Trusted by construction.
+- Future TEE: SEV-SNP/TDX remove the host from the confidentiality/integrity
+  TCB; availability, side channels and policy mistakes remain.
+- The **control plane** is outside the plaintext TCB even in dev: it never holds
+  a decryption key.
 
-### F. Payment replay / double spend
+### F. Payment replay, double charge, lost entitlement
 
-- Facilitator nonce store is the authority: `INSERT` with UNIQUE constraint;
-  concurrent duplicates lose.
-- Controller: `payments.payment_key` PK and `sessions.payment_key` UNIQUE, inside
-  `BEGIN IMMEDIATE`.
-- Tests: sequential replay, 6-way concurrent replay, settlement failure, and a
-  cluster-level replay test.
-- In mock mode there is no economic security at all: anyone can generate a
-  wallet and sign. Testnet mode uses the real facilitator and on-chain nonce
-  semantics.
+| Threat | Handling |
+| --- | --- |
+| Same payment used twice | facilitator nonce store + `payment_intents` PK + `payments` PK + `sessions.payment_key` UNIQUE; replay returns the same session (200) |
+| Concurrent duplicates | intent `claimed` → `409 in_progress`; exactly one session (tested 6-way) |
+| Settled but API crashed before entitlement | durable intent + facilitator settlement lookup completes it on retry (tested) |
+| Reused settlement with a different spec | intent stores `spec_hash`; mismatch → 409, no session |
+| On-chain/testnet recovery | no lookup contract → `409 reconciliation_pending`; never charges twice, never fabricates an entitlement |
+| Refunds | not implemented (see production-readiness) |
 
 ### G. Denial of service / resource exhaustion
 
-- Per-pod CPU/memory/ephemeral-storage limits, PID cap, 60 s cap, provisioning
-  timeout, per-IP token buckets on the API, relay session cap and frame size cap,
-  proxy per-session connection cap and idle timeout.
-- An attacker can still buy all available capacity (that is the business model)
-  and can make the provider pay for failed attestations; there is no refund
-  mechanism in the prototype.
-- Orphan reaping and `activeDeadlineSeconds` ensure workloads cannot outlive
-  their entitlement indefinitely, even if the controller crashes.
+- Per-pod CPU/memory/ephemeral limits, PID caps, disk quota, per-command timeout,
+  lease cap, provisioning timeout, API rate limits, relay session/pending/frame
+  caps, proxy connection caps.
+- An attacker can still buy all capacity (business model) and can burn paid time.
+- Orphan reaping and `activeDeadlineSeconds` prevent indefinite workloads.
 
-### H. SSRF / egress-policy bypass
+### H. SSRF / egress bypass
 
-| Bypass attempt | Handling |
+| Attempt | Handling |
 | --- | --- |
-| Direct socket to private IP | NetworkPolicy denies everything except relay/proxy |
-| DNS name resolving to 127.0.0.1 / 10.x | Proxy validates every resolved address and connects to the validated IP |
-| Rebinding between check and connect | Single resolution, connect by IP literal |
-| `::ffff:127.0.0.1` | Classified by embedded IPv4 |
-| IPv6 ULA / link-local / NAT64 / 6to4 / Teredo | Denied |
-| Port hopping (22, 6379, 8080…) | Only 443 is allowed |
-| Proxy as a general tunnel | It is a CONNECT proxy with destination policy, not a network bridge; no raw forwarding |
-| Using another session's proxy token | HMAC includes the session id; token is time-limited |
-
-Egress remains a **policy** boundary: if the proxy is compromised, the sandbox
-gains the proxy's network position. The proxy is therefore kept minimal and has
-no credentials.
+| Direct private IP | NetworkPolicy denies all but relay/proxy |
+| Hostname → 127.0.0.1 / 10.x | proxy validates every resolved address, connects to the validated IP |
+| DNS rebinding | single resolution, connect by IP literal |
+| `::ffff:127.0.0.1` | classified by embedded IPv4 |
+| IPv6 ULA/link-local/NAT64/6to4/Teredo | denied |
+| Port hopping | only 443 |
+| Proxy as a general tunnel | destination-policed CONNECT, no raw forwarding |
+| Another session's proxy token | HMAC bound to session id, TTL |
+| Package managers | must be proxy-aware (`HTTPS_PROXY` is set for the child); direct registry access is blocked by design |
 
 ### I. Malicious workload images
 
-Customers cannot specify an image, command, args, or PodSpec. The controller
-builds the pod from a fixed template and a single operator-configured image
-(`GUEST_IMAGE`). A production deployment should pin `GUEST_IMAGE` by digest and
-enforce it with an admission policy (Kyverno/sigstore) — noted in
-`production-readiness.md`.
+Customers cannot choose an image, command, PodSpec, annotations or runtime
+class. The controller builds the pod from a fixed template and one
+operator-configured image. Production should pin by digest and enforce it with
+admission control.
 
 ### J. Attestation replay or substitution
 
-- Evidence is bound to `sessionId`, `clientNonce` (customer random), guest public
-  key, and customer public key, and has a 120 s validity window.
-- A different session's evidence fails `session_mismatch`; a replayed envelope in
-  the same session is refused by the relay's single-connection rule.
-- Simulated evidence is marked `insecureDevOnly` and rejected unless the caller
-  opted in; `confidential` mode rejects it unconditionally.
-- Hardware evidence is **never** accepted on the strength of a signature: it must
-  go through the (unimplemented) hardware verifier, which currently fails closed.
+- Evidence binds session id, client nonce, guest key, client key, measurement and
+  validity window (lease + 5 min).
+- Different session → `session_mismatch`; replayed connection → relay refuses a
+  second guest; stale evidence → `stale`/`expired`.
+- Simulated evidence rejected unless explicitly opted in; confidential mode
+  rejects it unconditionally; hardware evidence must go through the (absent)
+  verifier → fails closed.
 
 ### K. Snapshot or plaintext leakage via logging/storage
 
-- Plaintext exists only in: the customer process (CLI), the guest process memory,
-  and the Python child process. It is never sent to the API.
-- Logs redact envelopes, tokens, code, stdout/stderr; tests assert that unique
-  code/output markers never appear in any control-plane or pod log.
-- SQLite stores session metadata only. The relay stores ciphertext with a TTL.
-- No persistent volumes are mounted into sandbox pods; the workspace is a
-  memory-backed `emptyDir`, removed with the pod.
-- The controller's request logger never logs bodies or headers.
+- Plaintext exists only in the customer process, the supervisor memory and the
+  child process.
+- Logs redact envelopes, tokens, file contents, commands; a marker test asserts
+  code/output never appear in any control-plane or pod log.
+- SQLite stores metadata only. Relay stores ciphertext with a 5-minute TTL.
+- Workspace is memory-backed and deleted with the pod.
+- The controller never logs bodies or headers.
 
-### L. Side channels and limits of confidential computing
+### L. New session-specific races
 
-Even with SEV-SNP/TDX: cache/timing side channels, memory-access-pattern leakage,
-hypervisor-coordinated denial of service, attestation-policy mistakes and
-firmware/microcode vulnerabilities remain. Confidential computing protects data
-**in use** from the host; it is not a proof of correct execution, and this system
-does not attempt verifiable computation. (It is **not** "zero knowledge"; see
-`security-guarantees.md`.)
+| Race | Handling |
+| --- | --- |
+| Two execs at once | atomic single-operation claim → one runs, one gets `409 busy` |
+| Retry after network loss | same `requestId` returns the cached encrypted result |
+| Cancel vs completion | cancel is best-effort; whichever response arrives is bound to the request id; duplicates are idempotent |
+| Lease expiry during a command | guest watchdog cancels; controller deletes the pod regardless |
+| File write vs lease expiry | guest checks the lease before dispatch; pod deletion ends any in-flight I/O |
+| Destroy during an operation | controller sends shutdown, deletes the pod; the operation fails and the session finalises |
 
-## 3. Risk matrix summary
+### M. Side channels
 
-| Risk | Mode A | Mode B | Mode C |
+Even with future TEEs: cache/timing side channels, access-pattern leakage,
+hypervisor-coordinated DoS, attestation-policy mistakes and firmware issues
+remain. Confidential computing protects data in use; it is not verifiable
+computation and this system is **not** "zero knowledge".
+
+## 3. Risk summary
+
+| Risk | Dev | Kata | Future TEE |
 | --- | --- | --- | --- |
-| Provider control plane reads code | Mitigated | Mitigated | Mitigated |
-| Provider storage/logs read code | Mitigated | Mitigated | Mitigated |
-| Host admin reads guest memory | **Not mitigated** | **Not mitigated** | Mitigated (hardware) |
-| Host admin tampers with execution | Not mitigated | Not mitigated | Mitigated (integrity) |
+| Control plane reads commands/files/output | Mitigated | Mitigated | Mitigated |
+| Storage/logs read plaintext | Mitigated | Mitigated | Mitigated |
+| Host admin reads guest memory | Not mitigated | Not mitigated | Mitigated |
+| Host admin tampers with execution | Not mitigated | Not mitigated | Mitigated |
 | Customer↔customer isolation | Mitigated (network + process) | Mitigated (network + VM) | Mitigated (network + VM + memory) |
-| Escape via kernel exploit | Not mitigated (shared kernel) | Mitigated (VM boundary) | Mitigated |
-| Payment replay | Mitigated | Mitigated | Mitigated |
-| Fake attestation accepted | Mitigated (labelled + opt-in only) | Mitigated (labelled + opt-in only) | Fail-closed (verifier absent) |
-| Snapshot/resume | No such feature | No such feature | No such feature |
-| Side channels | N/A (no claim) | N/A (no claim) | **Residual** |
+| Kernel escape | Not mitigated | Mitigated (VM) | Mitigated |
+| Payment replay / double charge | Mitigated | Mitigated | Mitigated |
+| Fake attestation accepted | Mitigated (labelled + opt-in) | Mitigated | Fail-closed until implemented |
+| Filesystem escape | Mitigated | Mitigated | Mitigated |
+| Side channels | N/A (no claim) | N/A (no claim) | Residual |

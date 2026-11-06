@@ -1,3 +1,9 @@
+import {
+  loadPlatformLimits,
+  loadTiers,
+  type PlatformLimits,
+  type TierTable,
+} from "@x402s/shared";
 import { KubeProvisioner, NullProvisioner, type Provisioner } from "./k8s.js";
 import { LocalProvisioner } from "./local-provisioner.js";
 import { RelayClient } from "./relay-client.js";
@@ -39,17 +45,20 @@ export interface ControllerConfig {
   relayBaseUrl: string;
   relayServiceName: string;
   proxyServiceName: string;
+  workspaceDir: string;
   provisioningTimeoutMs: number;
-  executionGraceMs: number;
-  resultTtlMs: number;
+  leaseGraceMs: number;
+  shutdownGraceMs: number;
   reconcileIntervalMs: number;
   maxPodAgeMs: number;
-  relayResultWaitMs: number;
+  relayResponseWaitMs: number;
   allowedPorts: number[];
   allowedHostSuffixes: string[];
   deniedCidrs: string[];
   devAttestationKey: string;
   devAttestationKeyId: string;
+  tiers: TierTable;
+  platformLimits: PlatformLimits;
 }
 
 /**
@@ -112,12 +121,13 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     relayBaseUrl: env.RELAY_URL ?? "http://127.0.0.1:8443",
     relayServiceName: env.RELAY_SERVICE_NAME ?? "relay",
     proxyServiceName: env.PROXY_SERVICE_NAME ?? "egress-proxy",
+    workspaceDir: env.WORKSPACE_DIR ?? "/workspace",
     provisioningTimeoutMs: int(env.PROVISIONING_TIMEOUT_MS, 90_000, 10_000, 600_000),
-    executionGraceMs: int(env.EXECUTION_GRACE_MS, 3_000, 0, 60_000),
-    resultTtlMs: int(env.RESULT_TTL_MS, 120_000, 10_000, 900_000),
+    leaseGraceMs: int(env.LEASE_GRACE_MS, 2_000, 0, 60_000),
+    shutdownGraceMs: int(env.SHUTDOWN_GRACE_MS, 2_000, 0, 30_000),
     reconcileIntervalMs: int(env.RECONCILE_INTERVAL_MS, 250, 50, 10_000),
-    maxPodAgeMs: int(env.MAX_POD_AGE_MS, 900_000, 120_000, 3_600_000),
-    relayResultWaitMs: int(env.RELAY_RESULT_WAIT_MS, 20_000, 0, 60_000),
+    maxPodAgeMs: int(env.MAX_POD_AGE_MS, 3_600_000, 120_000, 7_200_000),
+    relayResponseWaitMs: int(env.RELAY_RESPONSE_WAIT_MS, 25_000, 0, 120_000),
     allowedPorts: (env.EGRESS_ALLOWED_PORTS ?? "443").split(",").map((p) => Number(p.trim())).filter((n) => Number.isInteger(n)),
     allowedHostSuffixes: (env.EGRESS_ALLOWED_HOST_SUFFIXES ?? "")
       .split(",")
@@ -129,6 +139,8 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
       .filter(Boolean),
     devAttestationKey: env.DEV_ATTESTATION_KEY ?? "",
     devAttestationKeyId: env.DEV_ATTESTATION_KEY_ID ?? "",
+    tiers: loadTiers(env),
+    platformLimits: loadPlatformLimits(env),
   };
 }
 
@@ -154,5 +166,5 @@ export function makeRelayClient(cfg: ControllerConfig): RelayClient {
 }
 
 export function proxyTokenFor(cfg: ControllerConfig, sessionId: string): string {
-  return mintProxyToken(cfg.proxyTokenSecret, sessionId, 20 * 60_000);
+  return mintProxyToken(cfg.proxyTokenSecret, sessionId, 60 * 60_000);
 }

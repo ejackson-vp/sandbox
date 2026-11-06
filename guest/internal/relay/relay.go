@@ -4,22 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 )
 
-// ExecuteMessage is the only command the relay can deliver.
-type ExecuteMessage struct {
+// Frame is the relay's control-plane envelope. Exactly one of the fields is
+// meaningful per type:
+//
+//	inbound:  request {id,envelope,deadlineMs} | cancel {id} | shutdown {reason}
+type Frame struct {
 	Type       string `json:"type"`
+	ID         string `json:"id"`
 	Envelope   string `json:"envelope"`
 	DeadlineMs int64  `json:"deadlineMs"`
+	Reason     string `json:"reason"`
 }
 
-// Client is a guest-initiated relay connection. The sandbox accepts no inbound
-// connections; everything here is outbound.
 type Client struct {
 	conn *websocket.Conn
+	mu   sync.Mutex
 }
 
 // Dial connects with bounded retries (the relay may still be starting).
@@ -34,7 +39,7 @@ func Dial(ctx context.Context, url string, maxWait time.Duration) (*Client, erro
 		})
 		cancel()
 		if err == nil {
-			conn.SetReadLimit(2 * 1024 * 1024)
+			conn.SetReadLimit(24 * 1024 * 1024)
 			return &Client{conn: conn}, nil
 		}
 		lastErr = err
@@ -50,23 +55,32 @@ func Dial(ctx context.Context, url string, maxWait time.Duration) (*Client, erro
 	return nil, fmt.Errorf("relay connection failed: %w", lastErr)
 }
 
-func (c *Client) Send(ctx context.Context, v any) error {
+func (c *Client) send(ctx context.Context, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.conn.Write(writeCtx, websocket.MessageText, data)
 }
 
 func (c *Client) SendHello(ctx context.Context, evidence map[string]any) error {
-	return c.Send(ctx, map[string]any{"type": "hello", "evidence": evidence})
+	return c.send(ctx, map[string]any{"type": "hello", "evidence": evidence})
 }
 
-// AwaitExecute blocks until the operator delivers the sealed payload or the
-// context expires.
-func (c *Client) AwaitExecute(ctx context.Context) (*ExecuteMessage, error) {
+func (c *Client) SendResponse(ctx context.Context, id, envelope string) error {
+	return c.send(ctx, map[string]any{"type": "response", "id": id, "envelope": envelope})
+}
+
+func (c *Client) SendError(ctx context.Context, id, code, message string) error {
+	return c.send(ctx, map[string]any{"type": "error", "id": id, "code": code, "message": message})
+}
+
+// Read returns the next control frame.
+func (c *Client) Read(ctx context.Context) (*Frame, error) {
 	for {
 		typ, data, err := c.conn.Read(ctx)
 		if err != nil {
@@ -75,30 +89,15 @@ func (c *Client) AwaitExecute(ctx context.Context) (*ExecuteMessage, error) {
 		if typ != websocket.MessageText {
 			continue
 		}
-		var msg ExecuteMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return nil, fmt.Errorf("invalid relay message: %w", err)
+		var frame Frame
+		if err := json.Unmarshal(data, &frame); err != nil {
+			return nil, fmt.Errorf("invalid relay frame: %w", err)
 		}
-		if msg.Type != "execute" {
-			continue
+		if frame.Type == "" {
+			return nil, fmt.Errorf("relay frame missing type")
 		}
-		if msg.Envelope == "" {
-			return nil, fmt.Errorf("empty envelope")
-		}
-		return &msg, nil
+		return &frame, nil
 	}
-}
-
-func (c *Client) SendResult(ctx context.Context, envelope string) error {
-	return c.Send(ctx, map[string]any{
-		"type":     "result",
-		"envelope": envelope,
-		"resultId": fmt.Sprintf("%d", time.Now().UnixNano()),
-	})
-}
-
-func (c *Client) SendError(ctx context.Context, code, message string) error {
-	return c.Send(ctx, map[string]any{"type": "error", "code": code, "message": message})
 }
 
 func (c *Client) Close() {

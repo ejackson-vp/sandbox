@@ -1,13 +1,20 @@
 /**
- * Single-writer persistence for entitlements and session lifecycle.
+ * Single-writer persistence for entitlements, sessions and operations.
  *
- * SQLite (WAL) is used deliberately: this prototype must survive controller
- * restarts without orphaning pods, and payment redemption must be atomic. In
+ * SQLite (WAL) is deliberate for the prototype: payment redemption and session
+ * creation must be atomic, and the reconciler must survive restarts. In
  * production this becomes Postgres/DynamoDB with the same invariants
- * (`payment_key` UNIQUE, conditional state transitions).
+ * (UNIQUE payment key, conditional transitions, UNIQUE (session, request)).
+ *
+ * Schema changes are destructive in this prototype: bump SCHEMA_VERSION and the
+ * database is recreated (session state is disposable by design).
  */
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import type { SandboxState } from "@x402s/shared";
+import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared";
+
+export type { SessionState };
+
+const SCHEMA_VERSION = 2;
 
 export interface PaymentRecord {
   paymentKey: string;
@@ -27,14 +34,17 @@ export interface SessionRecord {
   capabilityExpiresAt: number;
   clientPublicKey: string;
   clientNonce: string;
+  tier: SessionTier;
   durationSeconds: number;
-  state: SandboxState;
+  limits: SessionLimits;
+  state: SessionState;
   createdAt: number;
   paidAt: number | null;
   readyAt: number | null;
-  executionDeadlineAt: number | null;
-  completedAt: number | null;
+  leaseExpiresAt: number | null;
+  terminatingAt: number | null;
   destroyedAt: number | null;
+  terminationReason: string | null;
   failureCode: string | null;
   failureMessage: string | null;
   attestationJson: string | null;
@@ -44,11 +54,30 @@ export interface SessionRecord {
   runtimeClass: string | null;
   executionMode: string | null;
   relayTokenHash: string | null;
-  execStartedAt: number | null;
-  execAccepted: number;
-  resultFetchedAt: number | null;
+  activeRequestId: string | null;
   relayPurgedAt: number | null;
   destroyRequested: number;
+  updatedAt: number;
+}
+
+export interface ExecRequestRecord {
+  id: string;
+  sessionId: string;
+  op: string;
+  state: "pending" | "done" | "error" | "abandoned";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type IntentStatus = "claimed" | "settled" | "failed";
+
+export interface PaymentIntentRecord {
+  paymentKey: string;
+  status: IntentStatus;
+  sessionId: string | null;
+  specHash: string;
+  reason: string | null;
+  createdAt: number;
   updatedAt: number;
 }
 
@@ -59,13 +88,26 @@ export class PaymentAlreadyRedeemedError extends Error {
   }
 }
 
+export type ClaimOperationResult =
+  | { ok: true; requestId: string }
+  | { ok: false; code: "busy" | "not_usable" | "lease_expired" | "duplicate"; state: SessionState; requestId?: string };
+
+export type IntentClaimResult =
+  | { status: "claimed"; recovered: boolean }
+  | { status: "settled"; sessionId: string }
+  | { status: "in_progress" }
+  | { status: "failed"; reason: string | null }
+  | { status: "mismatch" };
+
 const SESSION_COLUMNS = `
   id, capability_hash, capability_expires_at, client_public_key, client_nonce,
-  duration_seconds, state, created_at, paid_at, ready_at, execution_deadline_at,
-  completed_at, destroyed_at, failure_code, failure_message, attestation_json,
-  guest_public_key, payment_key, pod_name, runtime_class, execution_mode,
-  relay_token_hash, exec_started_at, exec_accepted, result_fetched_at,
-  relay_purged_at, destroy_requested, updated_at
+  tier, duration_seconds, cpu_millis, memory_mib, disk_mib, max_output_bytes,
+  max_file_bytes, max_command_seconds, max_processes,
+  state, created_at, paid_at, ready_at, lease_expires_at, terminating_at,
+  destroyed_at, termination_reason, failure_code, failure_message,
+  attestation_json, guest_public_key, payment_key, pod_name, runtime_class,
+  execution_mode, relay_token_hash, active_request_id, relay_purged_at,
+  destroy_requested, updated_at
 `;
 
 interface RawSession {
@@ -74,14 +116,23 @@ interface RawSession {
   capability_expires_at: number;
   client_public_key: string;
   client_nonce: string;
+  tier: string;
   duration_seconds: number;
+  cpu_millis: number;
+  memory_mib: number;
+  disk_mib: number;
+  max_output_bytes: number;
+  max_file_bytes: number;
+  max_command_seconds: number;
+  max_processes: number;
   state: string;
   created_at: number;
   paid_at: number | null;
   ready_at: number | null;
-  execution_deadline_at: number | null;
-  completed_at: number | null;
+  lease_expires_at: number | null;
+  terminating_at: number | null;
   destroyed_at: number | null;
+  termination_reason: string | null;
   failure_code: string | null;
   failure_message: string | null;
   attestation_json: string | null;
@@ -91,9 +142,7 @@ interface RawSession {
   runtime_class: string | null;
   execution_mode: string | null;
   relay_token_hash: string | null;
-  exec_started_at: number | null;
-  exec_accepted: number;
-  result_fetched_at: number | null;
+  active_request_id: string | null;
   relay_purged_at: number | null;
   destroy_requested: number;
   updated_at: number;
@@ -106,14 +155,25 @@ function mapSession(r: RawSession): SessionRecord {
     capabilityExpiresAt: r.capability_expires_at,
     clientPublicKey: r.client_public_key,
     clientNonce: r.client_nonce,
+    tier: r.tier as SessionTier,
     durationSeconds: r.duration_seconds,
-    state: r.state as SandboxState,
+    limits: {
+      cpuMillis: r.cpu_millis,
+      memoryMiB: r.memory_mib,
+      diskMiB: r.disk_mib,
+      maxOutputBytes: r.max_output_bytes,
+      maxFileBytes: r.max_file_bytes,
+      maxCommandSeconds: r.max_command_seconds,
+      maxProcesses: r.max_processes,
+    },
+    state: r.state as SessionState,
     createdAt: r.created_at,
     paidAt: r.paid_at,
     readyAt: r.ready_at,
-    executionDeadlineAt: r.execution_deadline_at,
-    completedAt: r.completed_at,
+    leaseExpiresAt: r.lease_expires_at,
+    terminatingAt: r.terminating_at,
     destroyedAt: r.destroyed_at,
+    terminationReason: r.termination_reason,
     failureCode: r.failure_code,
     failureMessage: r.failure_message,
     attestationJson: r.attestation_json,
@@ -123,12 +183,22 @@ function mapSession(r: RawSession): SessionRecord {
     runtimeClass: r.runtime_class,
     executionMode: r.execution_mode,
     relayTokenHash: r.relay_token_hash,
-    execStartedAt: r.exec_started_at,
-    execAccepted: r.exec_accepted,
-    resultFetchedAt: r.result_fetched_at,
+    activeRequestId: r.active_request_id,
     relayPurgedAt: r.relay_purged_at,
     destroyRequested: r.destroy_requested,
     updatedAt: r.updated_at,
+  };
+}
+
+function mapIntent(r: Record<string, unknown>): PaymentIntentRecord {
+  return {
+    paymentKey: r.payment_key as string,
+    status: r.status as IntentStatus,
+    sessionId: (r.session_id as string | null) ?? null,
+    specHash: (r.spec_hash as string) ?? "",
+    reason: (r.reason as string | null) ?? null,
+    createdAt: r.created_at as number,
+    updatedAt: r.updated_at as number,
   };
 }
 
@@ -141,6 +211,18 @@ export class Store {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA synchronous = FULL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
+
+    const version = (this.db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined)
+      ?.user_version ?? 0;
+    if (version !== SCHEMA_VERSION) {
+      this.db.exec(`
+        DROP TABLE IF EXISTS exec_requests;
+        DROP TABLE IF EXISTS sessions;
+        DROP TABLE IF EXISTS payment_intents;
+        DROP TABLE IF EXISTS payments;
+      `);
+    }
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS payments (
         payment_key TEXT PRIMARY KEY,
@@ -154,20 +236,38 @@ export class Store {
         mode TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS payment_intents (
+        payment_key TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        session_id TEXT,
+        spec_hash TEXT NOT NULL,
+        reason TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         capability_hash TEXT NOT NULL,
         capability_expires_at INTEGER NOT NULL,
         client_public_key TEXT NOT NULL,
         client_nonce TEXT NOT NULL,
+        tier TEXT NOT NULL,
         duration_seconds INTEGER NOT NULL,
+        cpu_millis INTEGER NOT NULL,
+        memory_mib INTEGER NOT NULL,
+        disk_mib INTEGER NOT NULL,
+        max_output_bytes INTEGER NOT NULL,
+        max_file_bytes INTEGER NOT NULL,
+        max_command_seconds INTEGER NOT NULL,
+        max_processes INTEGER NOT NULL,
         state TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         paid_at INTEGER,
         ready_at INTEGER,
-        execution_deadline_at INTEGER,
-        completed_at INTEGER,
+        lease_expires_at INTEGER,
+        terminating_at INTEGER,
         destroyed_at INTEGER,
+        termination_reason TEXT,
         failure_code TEXT,
         failure_message TEXT,
         attestation_json TEXT,
@@ -177,16 +277,24 @@ export class Store {
         runtime_class TEXT,
         execution_mode TEXT,
         relay_token_hash TEXT,
-        exec_started_at INTEGER,
-        exec_accepted INTEGER NOT NULL DEFAULT 0,
-        result_fetched_at INTEGER,
+        active_request_id TEXT,
         relay_purged_at INTEGER,
         destroy_requested INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS exec_requests (
+        id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        op TEXT NOT NULL,
+        state TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, id)
+      );
       CREATE INDEX IF NOT EXISTS sessions_state ON sessions(state);
-      DELETE FROM sessions WHERE state IN ('DESTROYED','EXPIRED','FAILED') AND created_at < (strftime('%s','now') * 1000 - 86400000);
+      CREATE INDEX IF NOT EXISTS exec_requests_session ON exec_requests(session_id);
     `);
+    this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 
     this.stmts = {
       insertPayment: this.db.prepare(
@@ -196,56 +304,73 @@ export class Store {
       insertSession: this.db.prepare(
         `INSERT INTO sessions (
            id, capability_hash, capability_expires_at, client_public_key, client_nonce,
-           duration_seconds, state, created_at, paid_at, payment_key, runtime_class,
-           execution_mode, relay_token_hash, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           tier, duration_seconds, cpu_millis, memory_mib, disk_mib, max_output_bytes,
+           max_file_bytes, max_command_seconds, max_processes,
+           state, created_at, paid_at, payment_key, runtime_class, execution_mode,
+           relay_token_hash, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ),
       getSession: this.db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = ?`),
       getPayment: this.db.prepare("SELECT * FROM payments WHERE payment_key = ?"),
-      listNonTerminal: this.db.prepare(
-        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('PAID','PROVISIONING','READY','RUNNING','COMPLETED','EXPIRED','FAILED')`,
+      getIntent: this.db.prepare("SELECT * FROM payment_intents WHERE payment_key = ?"),
+      insertIntent: this.db.prepare(
+        `INSERT INTO payment_intents (payment_key, status, session_id, spec_hash, reason, created_at, updated_at)
+         VALUES (?, 'claimed', NULL, ?, NULL, ?, ?)`,
       ),
-      setPod: this.db.prepare(
-        "UPDATE sessions SET pod_name = ?, state = ?, updated_at = ? WHERE id = ? AND state = ?",
+      reclaimIntent: this.db.prepare(
+        "UPDATE payment_intents SET status='claimed', reason=NULL, updated_at=? WHERE payment_key=?",
+      ),
+      settleIntent: this.db.prepare(
+        "UPDATE payment_intents SET status='settled', session_id=?, updated_at=? WHERE payment_key=?",
+      ),
+      failIntent: this.db.prepare(
+        "UPDATE payment_intents SET status='failed', reason=?, updated_at=? WHERE payment_key=?",
+      ),
+      listNonTerminal: this.db.prepare(
+        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('PAID','PROVISIONING','READY','ACTIVE','TERMINATING')`,
+      ),
+      listTerminalWithPod: this.db.prepare(
+        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('EXPIRED','FAILED','DESTROYED') AND pod_name IS NOT NULL`,
+      ),
+      setProvisioning: this.db.prepare(
+        "UPDATE sessions SET pod_name = ?, state = 'PROVISIONING', updated_at = ? WHERE id = ? AND state = 'PAID'",
       ),
       setRelayToken: this.db.prepare("UPDATE sessions SET relay_token_hash = ?, updated_at = ? WHERE id = ?"),
       setReady: this.db.prepare(
-        `UPDATE sessions SET state='READY', ready_at=?, execution_deadline_at=?, attestation_json=?,
+        `UPDATE sessions SET state='READY', ready_at=?, lease_expires_at=?, attestation_json=?,
            guest_public_key=?, updated_at=? WHERE id=? AND state='PROVISIONING'`,
       ),
-      claimExecution: this.db.prepare(
-        `UPDATE sessions SET state='RUNNING', exec_started_at=?, exec_accepted=1, updated_at=?
-         WHERE id=? AND state='READY' AND exec_accepted=0`,
+      requestTermination: this.db.prepare(
+        `UPDATE sessions SET state='TERMINATING', terminating_at=?, termination_reason=?, updated_at=?
+         WHERE id=? AND state IN ('PAID','PROVISIONING','READY','ACTIVE')`,
       ),
-      releaseExecution: this.db.prepare(
-        `UPDATE sessions SET state='READY', exec_started_at=NULL, exec_accepted=0, updated_at=?
-         WHERE id=? AND state='RUNNING' AND completed_at IS NULL`,
+      setFailure: this.db.prepare(
+        "UPDATE sessions SET failure_code = ?, failure_message = ?, updated_at = ? WHERE id = ?",
       ),
-      complete: this.db.prepare(
-        `UPDATE sessions SET state='COMPLETED', completed_at=?, updated_at=?
-         WHERE id=? AND state IN ('RUNNING','READY')`,
-      ),
-      destroy: this.db.prepare(
-        `UPDATE sessions SET state='DESTROYED', destroyed_at=?, updated_at=?
-         WHERE id=? AND state='COMPLETED'`,
-      ),
-      fail: this.db.prepare(
-        `UPDATE sessions SET state='FAILED', failure_code=?, failure_message=?, destroyed_at=?, updated_at=?
-         WHERE id=? AND state IN ('PAID','PROVISIONING','READY','RUNNING')`,
-      ),
-      expire: this.db.prepare(
-        `UPDATE sessions SET state='EXPIRED', failure_code=?, failure_message=?, destroyed_at=?, updated_at=?
-         WHERE id=? AND state IN ('PAID','PROVISIONING','READY','RUNNING')`,
-      ),
-      noteDestroyed: this.db.prepare(
-        "UPDATE sessions SET destroyed_at = COALESCE(destroyed_at, ?), updated_at = ? WHERE id = ?",
+      finalize: this.db.prepare(
+        `UPDATE sessions SET state=?, destroyed_at=?, active_request_id=NULL, updated_at=?
+         WHERE id=? AND state='TERMINATING'`,
       ),
       requestDestroy: this.db.prepare(
-        "UPDATE sessions SET destroy_requested = 1, updated_at = ? WHERE id = ? AND state NOT IN ('FAILED','EXPIRED')",
+        "UPDATE sessions SET destroy_requested = 1, updated_at = ? WHERE id = ? AND state NOT IN ('EXPIRED','FAILED','DESTROYED')",
       ),
-      markResultFetched: this.db.prepare("UPDATE sessions SET result_fetched_at = ?, updated_at = ? WHERE id = ?"),
       markRelayPurged: this.db.prepare("UPDATE sessions SET relay_purged_at = ?, updated_at = ? WHERE id = ?"),
       clearPod: this.db.prepare("UPDATE sessions SET pod_name = NULL, updated_at = ? WHERE id = ?"),
+      clearActive: this.db.prepare(
+        "UPDATE sessions SET active_request_id = NULL, updated_at = ? WHERE id = ? AND active_request_id = ?",
+      ),
+      countSessions: this.db.prepare("SELECT COUNT(*) AS n FROM sessions"),
+      countPayments: this.db.prepare("SELECT COUNT(*) AS n FROM payments"),
+      insertRequest: this.db.prepare(
+        "INSERT INTO exec_requests (id, session_id, op, state, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?)",
+      ),
+      getRequest: this.db.prepare("SELECT * FROM exec_requests WHERE session_id = ? AND id = ?"),
+      finishRequest: this.db.prepare(
+        "UPDATE exec_requests SET state = ?, updated_at = ? WHERE session_id = ? AND id = ?",
+      ),
+      listPendingRequests: this.db.prepare(
+        "SELECT * FROM exec_requests WHERE session_id = ? AND state = 'pending'",
+      ),
     };
   }
 
@@ -253,11 +378,60 @@ export class Store {
     this.db.close();
   }
 
+  /* ---------------- payment intents (outbox) ---------------- */
+
+  claimPaymentIntent(paymentKey: string, specHashValue: string, staleMs: number): IntentClaimResult {
+    const now = Date.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const raw = this.stmts.getIntent!.get(paymentKey) as Record<string, unknown> | undefined;
+      if (raw) {
+        const intent = mapIntent(raw);
+        if (intent.specHash !== specHashValue) {
+          this.db.exec("COMMIT");
+          return { status: "mismatch" };
+        }
+        if (intent.status === "settled" && intent.sessionId) {
+          this.db.exec("COMMIT");
+          return { status: "settled", sessionId: intent.sessionId };
+        }
+        if (intent.status === "failed") {
+          this.db.exec("COMMIT");
+          return { status: "failed", reason: intent.reason };
+        }
+        // claimed: either in flight or stale after a crash
+        if (now - intent.updatedAt < staleMs) {
+          this.db.exec("COMMIT");
+          return { status: "in_progress" };
+        }
+        this.stmts.reclaimIntent!.run(now, paymentKey);
+        this.db.exec("COMMIT");
+        return { status: "claimed", recovered: true };
+      }
+      this.stmts.insertIntent!.run(paymentKey, specHashValue, now, now);
+      this.db.exec("COMMIT");
+      return { status: "claimed", recovered: false };
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  getPaymentIntent(paymentKey: string): PaymentIntentRecord | null {
+    const raw = this.stmts.getIntent!.get(paymentKey) as Record<string, unknown> | undefined;
+    return raw ? mapIntent(raw) : null;
+  }
+
+  failPaymentIntent(paymentKey: string, reason: string): void {
+    this.stmts.failIntent!.run(reason.slice(0, 500), Date.now(), paymentKey);
+  }
+
   /**
-   * Atomically redeem a payment and create its single session.
-   * Throws PaymentAlreadyRedeemedError on any duplicate (including concurrent).
+   * Atomically: record the payment, create the session, and mark the intent
+   * settled. A crash before this leaves the intent `claimed`, which the API
+   * resolves by asking the facilitator whether settlement happened.
    */
-  createEntitlement(payment: PaymentRecord, session: SessionRecord): void {
+  completeEntitlement(paymentKey: string, payment: PaymentRecord, session: SessionRecord): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.stmts.insertPayment!.run(
@@ -278,7 +452,15 @@ export class Store {
         session.capabilityExpiresAt,
         session.clientPublicKey,
         session.clientNonce,
+        session.tier,
         session.durationSeconds,
+        session.limits.cpuMillis,
+        session.limits.memoryMiB,
+        session.limits.diskMiB,
+        session.limits.maxOutputBytes,
+        session.limits.maxFileBytes,
+        session.limits.maxCommandSeconds,
+        session.limits.maxProcesses,
         session.state,
         session.createdAt,
         session.paidAt,
@@ -288,16 +470,19 @@ export class Store {
         session.relayTokenHash,
         session.updatedAt,
       );
+      this.stmts.settleIntent!.run(session.id, Date.now(), paymentKey);
       this.db.exec("COMMIT");
     } catch (err) {
       this.db.exec("ROLLBACK");
       const msg = (err as Error).message;
       if (msg.includes("UNIQUE") || msg.includes("PRIMARY KEY")) {
-        throw new PaymentAlreadyRedeemedError(payment.paymentKey);
+        throw new PaymentAlreadyRedeemedError(paymentKey);
       }
       throw err;
     }
   }
+
+  /* ---------------- sessions ---------------- */
 
   getSession(id: string): SessionRecord | null {
     const row = this.stmts.getSession!.get(id) as RawSession | undefined;
@@ -320,75 +505,66 @@ export class Store {
     };
   }
 
-  /** Diagnostics/tests only: total session rows. */
-  countSessions(): number {
-    const row = this.db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number } | undefined;
-    return row?.n ?? 0;
-  }
-
-  countPayments(): number {
-    const row = this.db.prepare("SELECT COUNT(*) AS n FROM payments").get() as { n: number } | undefined;
-    return row?.n ?? 0;
-  }
-
   listNonTerminal(): SessionRecord[] {
     return (this.stmts.listNonTerminal!.all() as unknown as RawSession[]).map(mapSession);
   }
 
+  listTerminalWithPod(): SessionRecord[] {
+    return (this.stmts.listTerminalWithPod!.all() as unknown as RawSession[]).map(mapSession);
+  }
+
+  countSessions(): number {
+    return ((this.stmts.countSessions!.get() as { n: number } | undefined)?.n ?? 0);
+  }
+
+  countPayments(): number {
+    return ((this.stmts.countPayments!.get() as { n: number } | undefined)?.n ?? 0);
+  }
+
   setProvisioning(id: string, podName: string): boolean {
-    const now = Date.now();
-    return this.stmts.setPod!.run(podName, "PROVISIONING", now, id, "PAID").changes > 0;
+    return this.stmts.setProvisioning!.run(podName, Date.now(), id).changes > 0;
   }
 
   setRelayToken(id: string, tokenHash: string): void {
     this.stmts.setRelayToken!.run(tokenHash, Date.now(), id);
   }
 
-  setReady(id: string, readyAt: number, deadlineAt: number, attestationJson: string, guestPublicKey: string): boolean {
+  setReady(
+    id: string,
+    readyAt: number,
+    leaseExpiresAt: number,
+    attestationJson: string,
+    guestPublicKey: string,
+  ): boolean {
     return (
-      this.stmts.setReady!.run(readyAt, deadlineAt, attestationJson, guestPublicKey, Date.now(), id).changes > 0
+      this.stmts.setReady!.run(readyAt, leaseExpiresAt, attestationJson, guestPublicKey, Date.now(), id).changes > 0
     );
   }
 
-  claimExecution(id: string): boolean {
+  requestTermination(id: string, reason: string, failure?: { code: string; message: string }): boolean {
     const now = Date.now();
-    return this.stmts.claimExecution!.run(now, now, id).changes > 0;
+    const changed = this.stmts.requestTermination!.run(now, reason, now, id).changes > 0;
+    if (changed && failure) {
+      this.stmts.setFailure!.run(failure.code, failure.message, now, id);
+    }
+    return changed;
   }
 
-  releaseExecution(id: string): void {
-    this.stmts.releaseExecution!.run(Date.now(), id);
-  }
-
-  markCompleted(id: string): boolean {
-    const now = Date.now();
-    return this.stmts.complete!.run(now, now, id).changes > 0;
-  }
-
-  markDestroyed(id: string): boolean {
-    const now = Date.now();
-    return this.stmts.destroy!.run(now, now, id).changes > 0;
-  }
-
-  markFailed(id: string, code: string, message: string): boolean {
-    const now = Date.now();
-    return this.stmts.fail!.run(code, message, now, now, id).changes > 0;
-  }
-
-  markExpired(id: string, code: string, message: string): boolean {
-    const now = Date.now();
-    return this.stmts.expire!.run(code, message, now, now, id).changes > 0;
-  }
-
-  noteDestroyed(id: string): void {
-    this.stmts.noteDestroyed!.run(Date.now(), Date.now(), id);
+  /** Terminal state is derived from the termination reason. */
+  finalizeTermination(id: string): SessionState | null {
+    const session = this.getSession(id);
+    if (!session || session.state !== "TERMINATING") return null;
+    const reason = session.terminationReason ?? "";
+    let final: SessionState = "DESTROYED";
+    if (reason.startsWith("lease_expired")) final = "EXPIRED";
+    else if (reason.startsWith("failure") || reason.startsWith("pod_")) final = "FAILED";
+    else if (reason.startsWith("client_destroy")) final = "DESTROYED";
+    this.stmts.finalize!.run(final, Date.now(), Date.now(), id);
+    return final;
   }
 
   requestDestroy(id: string): void {
     this.stmts.requestDestroy!.run(Date.now(), id);
-  }
-
-  markResultFetched(id: string): void {
-    this.stmts.markResultFetched!.run(Date.now(), Date.now(), id);
   }
 
   markRelayPurged(id: string): void {
@@ -397,5 +573,88 @@ export class Store {
 
   clearPod(id: string): void {
     this.stmts.clearPod!.run(Date.now(), id);
+  }
+
+  /* ---------------- operations ---------------- */
+
+  /**
+   * Atomically claim the single operation slot for a session.
+   * Request id doubles as the idempotency key.
+   */
+  claimOperation(sessionId: string, requestId: string, op: string): ClaimOperationResult {
+    const now = Date.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const session = this.getSession(sessionId);
+      if (!session) {
+        this.db.exec("COMMIT");
+        return { ok: false, code: "not_usable", state: "FAILED" };
+      }
+      if (session.state !== "READY" && session.state !== "ACTIVE") {
+        this.db.exec("COMMIT");
+        return { ok: false, code: "not_usable", state: session.state };
+      }
+      if (session.leaseExpiresAt !== null && now >= session.leaseExpiresAt) {
+        this.db.exec("COMMIT");
+        return { ok: false, code: "lease_expired", state: session.state };
+      }
+      const existing = this.stmts.getRequest!.get(sessionId, requestId) as
+        | { state: string }
+        | undefined;
+      if (existing) {
+        this.db.exec("COMMIT");
+        return { ok: false, code: "duplicate", state: session.state, requestId };
+      }
+      if (session.activeRequestId) {
+        this.db.exec("COMMIT");
+        return { ok: false, code: "busy", state: session.state, requestId: session.activeRequestId };
+      }
+      this.stmts.insertRequest!.run(requestId, sessionId, op, now, now);
+      this.db
+        .prepare("UPDATE sessions SET active_request_id = ?, state = CASE WHEN state='READY' THEN 'ACTIVE' ELSE state END, updated_at = ? WHERE id = ?")
+        .run(requestId, now, sessionId);
+      this.db.exec("COMMIT");
+      return { ok: true, requestId };
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  finishOperation(sessionId: string, requestId: string, outcome: "done" | "error" | "abandoned"): void {
+    const now = Date.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.stmts.finishRequest!.run(outcome, now, sessionId, requestId);
+      this.stmts.clearActive!.run(now, sessionId, requestId);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  getExecRequest(sessionId: string, requestId: string): ExecRequestRecord | null {
+    const row = this.stmts.getRequest!.get(sessionId, requestId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      id: row.id as string,
+      sessionId: row.session_id as string,
+      op: row.op as string,
+      state: row.state as ExecRequestRecord["state"],
+      createdAt: row.created_at as number,
+      updatedAt: row.updated_at as number,
+    };
+  }
+
+  listPendingRequests(sessionId: string): ExecRequestRecord[] {
+    return (this.stmts.listPendingRequests!.all(sessionId) as unknown as Array<Record<string, unknown>>).map((row) => ({
+      id: row.id as string,
+      sessionId: row.session_id as string,
+      op: row.op as string,
+      state: row.state as ExecRequestRecord["state"],
+      createdAt: row.created_at as number,
+      updatedAt: row.updated_at as number,
+    }));
   }
 }

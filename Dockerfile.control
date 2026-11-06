@@ -5,11 +5,13 @@ FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY shared/package.json shared/package.json
+COPY sdk/package.json sdk/package.json
 COPY api/package.json api/package.json
 COPY controller/package.json controller/package.json
 COPY cli/package.json cli/package.json
 RUN npm ci --no-audit --no-fund
 COPY shared shared
+COPY sdk sdk
 COPY api api
 COPY controller controller
 COPY cli cli
@@ -22,6 +24,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/shared ./shared
+COPY --from=build /app/sdk ./sdk
 COPY --from=build /app/api ./api
 COPY --from=build /app/controller ./controller
 COPY --from=build /app/package.json ./package.json

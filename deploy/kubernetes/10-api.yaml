@@ -55,6 +55,9 @@ spec:
             - name: CONTROLLER_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: admin-token}
+            - name: CAPABILITY_SECRET
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: capability-secret}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

@@ -2,51 +2,79 @@
  * Public x402-protected API.
  *
  * Invariants enforced here:
- *  - No accounts, no API keys, no cookies. Access to a purchased sandbox uses a
- *    short-lived possession capability whose SHA-256 hash is all the server keeps.
- *  - Plaintext customer code is never accepted: the only execution field is an
- *    opaque sealed-box `envelope`.
- *  - One settled payment creates at most one entitlement (facilitator nonce +
- *    controller-side unique payment key).
- *  - The API never logs bodies or payment payloads.
+ *  - no accounts, no API keys, no cookies; access to a purchased session uses a
+ *    short-lived possession capability whose SHA-256 hash is all the server keeps,
+ *  - plaintext commands and file contents are never accepted: the only payload
+ *    field is an opaque sealed-box `envelope`,
+ *  - one settled payment creates at most one session (facilitator nonce +
+ *    durable payment intent + UNIQUE payment key),
+ *  - the API never logs bodies, headers or payment payloads.
  */
 import express, { type NextFunction, type Request, type Response } from "express";
-import { createHash, randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
-import type { Network } from "@x402/core/types";
+import type { Network, PaymentRequirements } from "@x402/core/types";
 import { decodePaymentSignatureHeader, encodePaymentRequiredHeader } from "@x402/core/http";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import {
-  MAX_DURATION_SECONDS,
+  MAX_LEASE_SECONDS,
   MOCK_NETWORK,
   MockExactServerScheme,
   PAYMENT_VERSION,
   formatUsd,
   paymentKey,
+  resolveSessionSpec,
   safeEqualHex,
   sha256Hex,
-  type CreateSandboxRequest,
-  type SandboxStatus,
-  type SandboxState,
+  specHash,
+  type CreateSessionRequest,
+  type CreateSessionResponse,
+  type SessionStatus,
+  type SessionLimits,
+  type SessionSpec,
 } from "@x402s/shared";
 import { loadConfig, type ApiConfig } from "./config.js";
 import { ControllerClient, ControllerError, type SessionView } from "./controller-client.js";
+import { HttpSettlementLookup, UnsupportedSettlementLookup, type SettlementLookup } from "./settlement-lookup.js";
 import { log } from "./log.js";
 
 const createSchema = z.object({
-  durationSeconds: z.number().int().min(1).max(MAX_DURATION_SECONDS),
+  tier: z.enum(["short", "standard", "extended", "long", "custom"]).optional(),
+  durationSeconds: z.number().int().min(1).max(MAX_LEASE_SECONDS).optional(),
+  cpuMillis: z.number().int().positive().optional(),
+  memoryMiB: z.number().int().positive().optional(),
+  diskMiB: z.number().int().positive().optional(),
   clientPublicKey: z.string().min(40).max(64),
   clientNonce: z.string().min(40).max(64),
-  language: z.literal("python3"),
 });
 
-const executeSchema = z.object({
-  envelope: z.string().min(1).max(1_500_000),
+const requestIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/);
+
+const operationSchema = z.object({
+  requestId: requestIdSchema,
+  envelope: z.string().min(1).max(16 * 1024 * 1024),
+  timeoutMs: z.number().int().min(100).max(3_600_000).optional(),
+  waitMs: z.number().int().min(0).max(120_000).optional(),
 });
 
-/** Fields that must never be accepted as normal JSON: they imply plaintext. */
-const FORBIDDEN_FIELDS = ["code", "source", "script", "stdout", "stderr", "plaintext"];
+/** Fields that must never be accepted as JSON: they imply plaintext. */
+const FORBIDDEN_FIELDS = [
+  "code",
+  "source",
+  "script",
+  "command",
+  "args",
+  "argv",
+  "env",
+  "cwd",
+  "stdin",
+  "stdout",
+  "stderr",
+  "content",
+  "data",
+  "plaintext",
+];
 
 function rejectPlaintextBodies(req: Request, res: Response, next: NextFunction): void {
   const body = req.body;
@@ -56,7 +84,7 @@ function rejectPlaintextBodies(req: Request, res: Response, next: NextFunction):
         res.status(400).json({
           error: "plaintext_not_accepted",
           message:
-            "this endpoint only accepts ciphertext; encrypt your payload for the attested guest key",
+            "this endpoint only accepts ciphertext; encrypt your operation for the attested guest key",
           field,
         });
         return;
@@ -64,23 +92,6 @@ function rejectPlaintextBodies(req: Request, res: Response, next: NextFunction):
     }
   }
   next();
-}
-
-async function retry<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  let lastErr: unknown;
-  let delay = 250;
-  while (Date.now() < deadline) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      log.warn("dependency_not_ready", { dependency: label, error: (err as Error).message });
-      await new Promise((r) => setTimeout(r, delay));
-      delay = Math.min(delay * 2, 5000);
-    }
-  }
-  throw new Error(`${label} did not become available: ${(lastErr as Error)?.message ?? "timeout"}`);
 }
 
 class RateLimiter {
@@ -106,11 +117,30 @@ class RateLimiter {
   }
 }
 
+async function retry<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let lastErr: unknown;
+  let delay = 250;
+  while (Date.now() < deadline) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      log.warn("dependency_not_ready", { dependency: label, error: (err as Error).message });
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 5000);
+    }
+  }
+  throw new Error(`${label} did not become available: ${(lastErr as Error)?.message ?? "timeout"}`);
+}
+
 export interface ApiDeps {
   config: ApiConfig;
   controller: ControllerClient;
   /** Injectable for tests: bypasses HTTP facilitator setup. */
   resourceServer?: x402ResourceServer;
+  /** Injectable for tests. */
+  settlementLookup?: SettlementLookup;
 }
 
 export async function createApp(deps: ApiDeps): Promise<express.Express> {
@@ -118,6 +148,12 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", false);
+
+  const settlementLookup: SettlementLookup =
+    deps.settlementLookup ??
+    (config.paymentMode === "mock"
+      ? new HttpSettlementLookup(config.facilitatorUrl)
+      : new UnsupportedSettlementLookup());
 
   const resourceServer =
     deps.resourceServer ??
@@ -134,33 +170,41 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
       resourceServer.register("eip155:84532", new ExactEvmScheme());
     }
   }
-  // The facilitator may still be starting when the API comes up (rolling
-  // deploy). Retry rather than crash-looping.
   await retry(
     () => resourceServer.initialize(),
     Number(process.env.FACILITATOR_INIT_TIMEOUT_MS ?? 60_000),
     "facilitator initialization",
   );
 
-  const built = await resourceServer.buildPaymentRequirements({
-    scheme: "exact",
-    network: config.network as Network,
-    payTo: config.payTo,
-    price: config.priceUsd,
-    maxTimeoutSeconds: 300,
-  });
-  const requirement = built[0];
-  if (!requirement) throw new Error("failed to build payment requirements");
-
   const resourceInfo = {
-    url: `${config.publicBaseUrl}/v1/sandboxes`,
-    description: "One confidential sandbox execution session, up to 60 seconds",
+    url: `${config.publicBaseUrl}/v1/sessions`,
+    description: "A temporary Linux sandbox session purchased with x402",
     mimeType: "application/json",
-    serviceName: "x402 confidential sandbox",
+    serviceName: "x402 sandbox sessions",
+  };
+
+  // Payment requirements are built per price (tiers have different prices).
+  const requirementCache = new Map<string, PaymentRequirements>();
+  const requirementFor = async (priceUsd: string, spec: SessionSpec): Promise<PaymentRequirements> => {
+    const key = `${priceUsd}|${spec.tier}|${spec.durationSeconds}`;
+    const cached = requirementCache.get(key);
+    if (cached) return cached;
+    const built = await resourceServer.buildPaymentRequirements({
+      scheme: "exact",
+      network: config.network as Network,
+      payTo: config.payTo,
+      price: priceUsd,
+      maxTimeoutSeconds: 300,
+      extra: { tier: spec.tier, durationSeconds: spec.durationSeconds },
+    });
+    const requirement = built[0];
+    if (!requirement) throw new Error("failed to build payment requirements");
+    requirementCache.set(key, requirement);
+    return requirement;
   };
 
   const createLimiter = new RateLimiter(30, 1);
-  const readLimiter = new RateLimiter(240, 20);
+  const readLimiter = new RateLimiter(600, 40);
 
   app.use(express.json({ limit: config.maxBodyBytes }));
   app.use((req, res, next) => {
@@ -178,17 +222,65 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     next();
   });
 
-  const payment402 = async (res: Response, error: string) => {
-    const required = await resourceServer.createPaymentRequiredResponse(
-      [requirement],
-      resourceInfo,
-      error,
-    );
+  const payment402 = async (res: Response, requirement: PaymentRequirements, error: string) => {
+    const required = await resourceServer.createPaymentRequiredResponse([requirement], resourceInfo, error);
     res
       .status(402)
       .setHeader("PAYMENT-REQUIRED", encodePaymentRequiredHeader(required))
       .json({ ...required, error });
   };
+
+  const capabilityFor = (key: string): string =>
+    createHmac("sha256", config.capabilitySecret).update(`x402-capability:${key}`).digest("base64url");
+
+  const toStatus = (s: SessionView): SessionStatus => ({
+    sessionId: s.sessionId,
+    state: s.state,
+    tier: s.tier,
+    durationSeconds: s.durationSeconds,
+    limits: s.limits,
+    createdAt: new Date(s.createdAt).toISOString(),
+    ...(s.paidAt ? { paidAt: new Date(s.paidAt).toISOString() } : {}),
+    ...(s.readyAt ? { readyAt: new Date(s.readyAt).toISOString() } : {}),
+    ...(s.leaseExpiresAt ? { leaseExpiresAt: new Date(s.leaseExpiresAt).toISOString() } : {}),
+    remainingSeconds: s.remainingSeconds,
+    ...(s.terminatingAt ? { terminatingAt: new Date(s.terminatingAt).toISOString() } : {}),
+    ...(s.destroyedAt ? { destroyedAt: new Date(s.destroyedAt).toISOString() } : {}),
+    clientNonce: s.clientNonce,
+    ...(s.guestPublicKey ? { guestPublicKey: s.guestPublicKey } : {}),
+    ...(s.attestation ? { attestation: s.attestation } : {}),
+    ...(s.failureCode ? { failure: { code: s.failureCode, message: s.failureMessage ?? s.failureCode } } : {}),
+    ...(s.runtimeClass ? { runtimeClass: s.runtimeClass } : {}),
+    ...(s.executionMode ? { executionMode: s.executionMode } : {}),
+    busy: s.busy,
+    payment: {
+      mode: s.payment.mode,
+      network: s.payment.network,
+      scheme: s.payment.scheme,
+      asset: s.payment.asset,
+      amount: s.payment.amount,
+      priceUsd: formatUsd(s.payment.amount),
+      payTo: s.payment.payTo,
+      ...(s.payment.payer ? { payer: s.payment.payer } : {}),
+      ...(s.payment.transaction ? { transaction: s.payment.transaction } : {}),
+    },
+  });
+
+  const createResponseFrom = (
+    session: SessionView,
+    capability: string,
+    limits: SessionLimits,
+  ): CreateSessionResponse => ({
+    sessionId: session.sessionId,
+    capability,
+    state: session.state,
+    tier: session.tier,
+    durationSeconds: session.durationSeconds,
+    limits,
+    capabilityExpiresAt: new Date(session.capabilityExpiresAt).toISOString(),
+    clientNonce: session.clientNonce,
+    payment: toStatus(session).payment,
+  });
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, paymentMode: config.paymentMode, network: config.network });
@@ -196,169 +288,258 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
 
   app.get("/v1/pricing", (_req, res) => {
     res.json({
-      priceUsd: config.priceUsd,
-      amount: requirement.amount,
-      asset: requirement.asset,
-      network: requirement.network,
-      scheme: requirement.scheme,
-      payTo: config.payTo,
-      maxDurationSeconds: MAX_DURATION_SECONDS,
       paymentMode: config.paymentMode,
+      network: config.network,
+      scheme: "exact",
+      asset: config.paymentMode === "mock" ? "mock:usdc" : "USDC",
+      payTo: config.payTo,
+      tiers: Object.fromEntries(
+        Object.entries(config.tiers).map(([name, t]) => [
+          name,
+          {
+            durationSeconds: t.durationSeconds,
+            priceUsd: t.priceUsd,
+            cpuMillis: t.cpuMillis,
+            memoryMiB: t.memoryMiB,
+            diskMiB: t.diskMiB,
+          },
+        ]),
+      ),
+      customSessions: {
+        allowed: config.platformLimits.allowCustom,
+        maxLeaseSeconds: config.platformLimits.maxLeaseSeconds,
+        maxCpuMillis: config.platformLimits.maxCpuMillis,
+        maxMemoryMiB: config.platformLimits.maxMemoryMiB,
+        maxDiskMiB: config.platformLimits.maxDiskMiB,
+        maxCommandSeconds: config.platformLimits.maxCommandSeconds,
+        maxFileBytes: config.platformLimits.maxFileBytes,
+        maxOutputBytes: config.platformLimits.maxOutputBytes,
+      },
     });
   });
 
   /* ---------------------------------------------------------------- */
-  /* Create sandbox (x402 protected)                                   */
+  /* Create session (x402 protected)                                   */
   /* ---------------------------------------------------------------- */
-  app.post(
-    "/v1/sandboxes",
-    rejectPlaintextBodies,
-    async (req: Request, res: Response): Promise<void> => {
-      const ip = req.ip ?? "unknown";
-      if (!createLimiter.take(ip)) {
-        res.status(429).json({ error: "rate_limited" });
-        return;
-      }
+  app.post("/v1/sessions", rejectPlaintextBodies, async (req: Request, res: Response): Promise<void> => {
+    if (!createLimiter.take(req.ip ?? "unknown")) {
+      res.status(429).json({ error: "rate_limited" });
+      return;
+    }
+    const parsed = createSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      return;
+    }
+    const body: CreateSessionRequest = parsed.data;
+    const resolution = resolveSessionSpec(body, config.tiers, config.platformLimits);
+    if (!resolution.ok) {
+      res.status(400).json({ error: resolution.code, message: resolution.message });
+      return;
+    }
+    const { spec, priceUsd } = resolution;
+    const requirement = await requirementFor(priceUsd, spec);
+    const specDigest = specHash(spec);
 
-      const parsed = createSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
-        return;
-      }
-      const body: CreateSandboxRequest = parsed.data;
+    const header = req.header("PAYMENT-SIGNATURE") ?? req.header("X-PAYMENT");
+    if (!header) {
+      await payment402(res, requirement, "payment_required");
+      return;
+    }
 
-      const header = req.header("PAYMENT-SIGNATURE") ?? req.header("X-PAYMENT");
-      if (!header) {
-        await payment402(res, "payment_required");
-        return;
-      }
+    let payload;
+    try {
+      payload = decodePaymentSignatureHeader(header);
+    } catch {
+      await payment402(res, requirement, "malformed_payment_header");
+      return;
+    }
+    if (payload.x402Version !== PAYMENT_VERSION) {
+      await payment402(res, requirement, "unsupported_x402_version");
+      return;
+    }
+    if (payload.accepted?.network !== config.network || payload.accepted?.amount !== requirement.amount) {
+      await payment402(res, requirement, "payment_requirements_mismatch");
+      return;
+    }
 
-      let payload;
-      try {
-        payload = decodePaymentSignatureHeader(header);
-      } catch {
-        await payment402(res, "malformed_payment_header");
-        return;
-      }
-      if (payload.x402Version !== PAYMENT_VERSION) {
-        await payment402(res, "unsupported_x402_version");
-        return;
-      }
-      if (payload.accepted?.network !== config.network || payload.accepted?.amount !== requirement.amount) {
-        await payment402(res, "payment_requirements_mismatch");
-        return;
-      }
+    const key = paymentKey(payload);
+    const capability = capabilityFor(key);
+    const capabilityHash = sha256Hex(capability);
 
-      // 1) Verify (cryptographic + business checks, no state change).
-      let verify;
-      try {
-        verify = await resourceServer.verifyPayment(payload, requirement);
-      } catch (err) {
-        log.warn("payment_verify_error", { error: (err as Error).message });
-        await payment402(res, "payment_verify_failed");
+    const claim = await controller.claimIntent(key, specDigest, config.intentStaleMs);
+    if (claim.status === "in_progress") {
+      res.status(409).json({ error: "payment_in_progress", message: "this payment is already being processed" });
+      return;
+    }
+    if (claim.status === "failed") {
+      await payment402(res, requirement, `payment_intent_failed:${claim.reason ?? "unknown"}`);
+      return;
+    }
+    if (claim.status === "mismatch") {
+      res.status(409).json({ error: "spec_mismatch", message: "this payment was made for a different session spec" });
+      return;
+    }
+    if (claim.status === "settled") {
+      const session = await controller.getSession(claim.sessionId).catch(() => null);
+      if (!session) {
+        res.status(409).json({ error: "entitlement_missing", sessionId: claim.sessionId });
         return;
       }
-      if (!verify.isValid) {
-        await payment402(res, `payment_invalid:${verify.invalidReason ?? "unknown"}`);
-        return;
-      }
+      log.info("payment_idempotent_replay", { sessionId: claim.sessionId, paymentKeyPrefix: key.slice(0, 12) });
+      res.status(200).json(createResponseFrom(session, capability, session.limits));
+      return;
+    }
 
-      // 1b) Pre-flight: never charge a customer when the control plane cannot
-      //     provision. This narrows (but cannot eliminate) the settle-without-
-      //     entitlement window; production needs a settlement outbox.
-      try {
-        const health = await controller.healthz();
-        if (!health.ok) throw new Error("controller unhealthy");
-      } catch {
-        res.status(503).json({ error: "provisioning_unavailable", message: "try again later; no payment was taken" });
-        return;
-      }
-
-      // 2) Settle. The facilitator (or the chain) enforces single-use nonces, so
-      //    concurrent duplicates cannot both settle.
-      let settle;
-      try {
-        settle = await resourceServer.settlePayment(payload, requirement);
-      } catch (err) {
-        log.warn("payment_settle_error", { error: (err as Error).message });
-        await payment402(res, "payment_settle_failed");
-        return;
-      }
-      if (!settle.success) {
-        await payment402(res, `payment_settlement_rejected:${settle.errorReason ?? "unknown"}`);
-        return;
-      }
-
-      // 3) Atomically create the entitlement. Payment key is UNIQUE.
-      const capability = randomBytes(32).toString("base64url");
-      const capabilityHash = sha256Hex(capability);
+    const complete = async (settled: {
+      payer?: string;
+      transaction?: string;
+    }): Promise<boolean> => {
       const sessionId = `sbx_${randomBytes(12).toString("hex")}`;
-      const capabilityExpiresAt = Date.now() + config.capabilityTtlSeconds * 1000;
-
-      let entitlement;
+      // The capability outlives the lease by a small grace window so a client
+      // can still read the final status / fetch a late result.
+      const capabilityExpiresAt = Date.now() + (spec.durationSeconds + config.capabilityTtlSeconds) * 1000;
       try {
-        entitlement = await controller.createEntitlement({
+        await controller.completeIntent(key, {
           sessionId,
           capabilityHash,
           capabilityExpiresAt,
-          durationSeconds: body.durationSeconds,
+          spec,
           clientPublicKey: body.clientPublicKey,
           clientNonce: body.clientNonce,
           payment: {
-            paymentKey: paymentKey(payload),
+            paymentKey: key,
             network: requirement.network,
             scheme: requirement.scheme,
             asset: requirement.asset,
             amount: requirement.amount,
             payTo: requirement.payTo,
-            payer: settle.payer,
-            transaction: settle.transaction,
+            payer: settled.payer,
+            transaction: settled.transaction,
             mode: config.paymentMode,
           },
         });
       } catch (err) {
+        // A concurrent/recovered completion may have won the race. The
+        // capability is derived from the same payment, so return that session.
         if (err instanceof ControllerError && err.status === 409) {
-          // Payment was already redeemed (or is being redeemed concurrently).
-          res.status(409).json({
-            error: "payment_already_redeemed",
-            message: "this payment has already funded a sandbox; one payment buys one execution",
-          });
-          return;
+          const detail = err.detail as { sessionId?: string } | undefined;
+          if (detail?.sessionId) {
+            const existing = await controller.getSession(detail.sessionId).catch(() => null);
+            if (existing) {
+              res.status(200).json(createResponseFrom(existing, capability, existing.limits));
+              return true;
+            }
+          }
         }
         log.error("entitlement_creation_failed", { error: (err as Error).message });
-        res.status(503).json({ error: "provisioning_unavailable" });
-        return;
+        res.status(503).json({ error: "provisioning_unavailable", message: "payment settled; contact support with your receipt" });
+        return false;
       }
-
-      log.info("sandbox_created", {
-        sandboxId: sessionId,
-        paymentKeyPrefix: paymentKey(payload).slice(0, 12),
-        payer: settle.payer,
-        durationSeconds: body.durationSeconds,
-        state: entitlement.state,
+      log.info("session_created", {
+        sessionId,
+        tier: spec.tier,
+        durationSeconds: spec.durationSeconds,
+        paymentKeyPrefix: key.slice(0, 12),
+        payer: settled.payer,
       });
+      const session = await controller.getSession(sessionId).catch(() => null);
+      if (session) {
+        res.status(201).json(createResponseFrom(session, capability, spec.limits));
+      } else {
+        res.status(201).json({
+          sessionId,
+          capability,
+          state: "PAID",
+          tier: spec.tier,
+          durationSeconds: spec.durationSeconds,
+          limits: spec.limits,
+          capabilityExpiresAt: new Date(capabilityExpiresAt).toISOString(),
+          clientNonce: body.clientNonce,
+          payment: {
+            mode: config.paymentMode,
+            network: requirement.network,
+            scheme: requirement.scheme,
+            asset: requirement.asset,
+            amount: requirement.amount,
+            priceUsd: formatUsd(requirement.amount),
+            payTo: requirement.payTo,
+            payer: settled.payer,
+            transaction: settled.transaction,
+          },
+        } satisfies CreateSessionResponse);
+      }
+      return true;
+    };
 
-      res.status(201).json({
-        sandboxId: sessionId,
-        capability,
-        state: entitlement.state,
-        durationSeconds: body.durationSeconds,
-        capabilityExpiresAt: new Date(capabilityExpiresAt).toISOString(),
-        clientNonce: body.clientNonce,
-        payment: {
-          mode: config.paymentMode,
-          network: requirement.network,
-          scheme: requirement.scheme,
-          asset: requirement.asset,
-          amount: requirement.amount,
-          priceUsd: formatUsd(requirement.amount),
-          payTo: requirement.payTo,
-          payer: settle.payer,
-          transaction: settle.transaction,
-        },
-      });
-    },
-  );
+    // Recovery path: a previous attempt may have settled before crashing.
+    if (claim.recovered) {
+      try {
+        const existing = await settlementLookup.lookup(key);
+        if (existing) {
+          log.warn("payment_recovered_from_settlement", { paymentKeyPrefix: key.slice(0, 12) });
+          await complete({ payer: existing.payer, transaction: existing.transaction });
+          return;
+        }
+      } catch (err) {
+        log.warn("settlement_lookup_failed", { error: (err as Error).message });
+      }
+    }
+
+    let verify;
+    try {
+      verify = await resourceServer.verifyPayment(payload, requirement);
+    } catch (err) {
+      log.warn("payment_verify_error", { error: (err as Error).message });
+      await payment402(res, requirement, "payment_verify_failed");
+      return;
+    }
+    if (!verify.isValid) {
+      await payment402(res, requirement, `payment_invalid:${verify.invalidReason ?? "unknown"}`);
+      return;
+    }
+
+    try {
+      const health = await controller.healthz();
+      if (!health.ok) throw new Error("controller unhealthy");
+    } catch {
+      await controller.failIntent(key, "control_plane_unavailable").catch(() => undefined);
+      res.status(503).json({ error: "provisioning_unavailable", message: "try again later; no payment was taken" });
+      return;
+    }
+
+    let settle;
+    try {
+      settle = await resourceServer.settlePayment(payload, requirement);
+    } catch (err) {
+      log.warn("payment_settle_error", { error: (err as Error).message });
+      await controller.failIntent(key, "settle_error").catch(() => undefined);
+      await payment402(res, requirement, "payment_settle_failed");
+      return;
+    }
+
+    if (!settle.success) {
+      // A nonce conflict may mean an earlier attempt settled but crashed before
+      // the entitlement was durable. Recover instead of charging twice.
+      if (settle.errorReason === "nonce_already_used" && settlementLookup.supported) {
+        try {
+          const existing = await settlementLookup.lookup(key);
+          if (existing) {
+            log.warn("payment_recovered_after_nonce_conflict", { paymentKeyPrefix: key.slice(0, 12) });
+            await complete({ payer: existing.payer, transaction: existing.transaction });
+            return;
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+      await controller.failIntent(key, settle.errorReason ?? "settlement_rejected").catch(() => undefined);
+      await payment402(res, requirement, `payment_settlement_rejected:${settle.errorReason ?? "unknown"}`);
+      return;
+    }
+
+    await complete({ payer: settle.payer, transaction: settle.transaction });
+  });
 
   /* ---------------------------------------------------------------- */
   /* Capability-protected endpoints                                    */
@@ -379,7 +560,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
       session = await controller.getSession(id);
     } catch (err) {
       if (err instanceof ControllerError && err.status === 404) {
-        res.status(404).json({ error: "sandbox_not_found" });
+        res.status(404).json({ error: "session_not_found" });
         return null;
       }
       log.error("session_lookup_failed", { error: (err as Error).message });
@@ -388,8 +569,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     }
     const presented = sha256Hex(capability);
     if (!safeEqualHex(presented, session.capabilityHash)) {
-      // Same response for "wrong capability" and "unknown session": no oracle.
-      res.status(404).json({ error: "sandbox_not_found" });
+      res.status(404).json({ error: "session_not_found" });
       return null;
     }
     if (Date.now() > session.capabilityExpiresAt) {
@@ -399,103 +579,139 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     return session;
   };
 
-  const toStatus = (s: SessionView): SandboxStatus => ({
-    sandboxId: s.sessionId,
-    state: s.state as SandboxState,
-    durationSeconds: s.durationSeconds,
-    createdAt: new Date(s.createdAt).toISOString(),
-    ...(s.paidAt ? { paidAt: new Date(s.paidAt).toISOString() } : {}),
-    ...(s.readyAt ? { readyAt: new Date(s.readyAt).toISOString() } : {}),
-    ...(s.executionDeadlineAt
-      ? { executionDeadline: new Date(s.executionDeadlineAt).toISOString() }
-      : {}),
-    ...(s.completedAt ? { completedAt: new Date(s.completedAt).toISOString() } : {}),
-    ...(s.destroyedAt ? { destroyedAt: new Date(s.destroyedAt).toISOString() } : {}),
-    clientNonce: s.clientNonce,
-    ...(s.guestPublicKey ? { guestPublicKey: s.guestPublicKey } : {}),
-    ...(s.attestation ? { attestation: s.attestation as SandboxStatus["attestation"] } : {}),
-    ...(s.failureCode
-      ? { failure: { code: s.failureCode, message: s.failureMessage ?? s.failureCode } }
-      : {}),
-    ...(s.runtimeClass ? { runtimeClass: s.runtimeClass } : {}),
-    ...(s.executionMode ? { executionMode: s.executionMode } : {}),
-    payment: {
-      mode: s.payment.mode,
-      network: s.payment.network,
-      scheme: s.payment.scheme,
-      asset: s.payment.asset,
-      amount: s.payment.amount,
-      priceUsd: formatUsd(s.payment.amount),
-      payTo: s.payment.payTo,
-      ...(s.payment.payer ? { payer: s.payment.payer } : {}),
-      ...(s.payment.transaction ? { transaction: s.payment.transaction } : {}),
-    },
-  });
-
-  app.get("/v1/sandboxes/:id", async (req, res) => {
+  app.get("/v1/sessions/:id", async (req, res) => {
     const session = await authorize(req, res);
     if (!session) return;
     res.json(toStatus(session));
   });
 
-  app.post("/v1/sandboxes/:id/execute", rejectPlaintextBodies, async (req, res) => {
+  /** Shared by exec and file operations: the API only sees ciphertext. */
+  const runOperation = async (req: Request, res: Response, opHint: string): Promise<void> => {
     const session = await authorize(req, res);
     if (!session) return;
-    const parsed = executeSchema.safeParse(req.body);
+    const parsed = operationSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
       return;
     }
-    if (session.state === "COMPLETED" || session.state === "DESTROYED") {
-      res.status(409).json({ error: "session_finished", state: session.state });
-      return;
-    }
-    if (session.state === "EXPIRED" || session.state === "FAILED") {
-      res.status(410).json({ error: "session_no_longer_usable", state: session.state });
-      return;
-    }
-    if (session.state !== "READY" && session.state !== "RUNNING") {
-      res.status(409).json({ error: "not_ready", state: session.state });
-      return;
-    }
     try {
-      const out = await controller.execute(session.sessionId, parsed.data.envelope);
-      log.info("execution_submitted", {
-        sandboxId: session.sessionId,
-        envelopeBytes: Buffer.from(parsed.data.envelope, "base64").length,
+      const waitMs =
+        parsed.data.waitMs ??
+        Math.min(
+          120_000,
+          (parsed.data.timeoutMs ?? config.platformLimits.maxCommandSeconds * 1000) + 5_000,
+        );
+      const out = await controller.operation(session.sessionId, {
+        requestId: parsed.data.requestId,
+        envelope: parsed.data.envelope,
+        op: opHint,
+        waitMs,
       });
-      res.status(202).json(out);
-    } catch (err) {
-      if (err instanceof ControllerError) {
-        res.status(err.status).json({ error: err.code, message: err.message });
+      if (out.pending) {
+        res.status(202).json({ state: out.state, requestId: out.requestId, pending: true });
         return;
       }
-      log.error("execute_failed", { error: (err as Error).message });
+      res.json({ state: out.state, requestId: out.requestId, envelope: out.envelope });
+    } catch (err) {
+      if (err instanceof ControllerError) {
+        const code = err.code;
+        const status = code === "lease_expired" ? 410 : err.status;
+        res.status(status).json({ error: code, message: err.message });
+        return;
+      }
+      log.error("operation_failed", { error: (err as Error).message });
       res.status(503).json({ error: "control_plane_unavailable" });
     }
-  });
+  };
 
-  app.get("/v1/sandboxes/:id/result", async (req, res) => {
+  app.post("/v1/sessions/:id/exec", rejectPlaintextBodies, (req, res) => runOperation(req, res, "exec"));
+
+  app.put("/v1/sessions/:id/files", rejectPlaintextBodies, (req, res) => runOperation(req, res, "file.put"));
+
+  // Download/list/stat: the request (path and options) is inside the encrypted
+  // envelope too, so the API never learns what is being read.
+  app.get("/v1/sessions/:id/files", async (req, res) => {
     const session = await authorize(req, res);
     if (!session) return;
+    const raw = req.query.request;
+    const requestId = typeof req.query.requestId === "string" ? req.query.requestId : "";
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > 2 * 1024 * 1024) {
+      res.status(400).json({ error: "request_envelope_required" });
+      return;
+    }
+    if (!requestIdSchema.safeParse(requestId).success) {
+      res.status(400).json({ error: "invalid_request_id" });
+      return;
+    }
+    const envelope = raw.includes("-") || raw.includes("_") ? Buffer.from(raw, "base64url").toString("base64") : raw;
     try {
-      const out = await controller.result(session.sessionId);
-      if (out.envelope) {
-        res.json({ state: out.state, envelope: out.envelope });
+      const out = await controller.operation(session.sessionId, {
+        requestId,
+        envelope,
+        op: "file.get",
+        waitMs: 60_000,
+      });
+      if (out.pending) {
+        res.status(202).json({ state: out.state, requestId: out.requestId, pending: true });
         return;
       }
-      res.status(202).json({ state: out.state });
+      res.json({ state: out.state, requestId: out.requestId, envelope: out.envelope });
+    } catch (err) {
+      if (err instanceof ControllerError) {
+        res.status(err.status === 410 ? 410 : err.status).json({ error: err.code, message: err.message });
+        return;
+      }
+      log.error("file_get_failed", { error: (err as Error).message });
+      res.status(503).json({ error: "control_plane_unavailable" });
+    }
+  });
+
+  app.get("/v1/sessions/:id/requests/:requestId", async (req, res) => {
+    const session = await authorize(req, res);
+    if (!session) return;
+    const requestId = String(req.params.requestId ?? "");
+    if (!requestIdSchema.safeParse(requestId).success) {
+      res.status(400).json({ error: "invalid_request_id" });
+      return;
+    }
+    const waitMs = Math.min(120_000, Number(req.query.waitMs) || 20_000);
+    try {
+      const out = await controller.getOperation(session.sessionId, requestId, waitMs);
+      if (out.pending) {
+        res.status(202).json({ state: out.state, requestId, pending: true });
+        return;
+      }
+      res.json({ state: out.state, requestId, envelope: out.envelope });
     } catch (err) {
       if (err instanceof ControllerError) {
         res.status(err.status).json({ error: err.code, message: err.message });
         return;
       }
-      log.error("result_fetch_failed", { error: (err as Error).message });
       res.status(503).json({ error: "control_plane_unavailable" });
     }
   });
 
-  app.delete("/v1/sandboxes/:id", async (req, res) => {
+  app.delete("/v1/sessions/:id/requests/:requestId", async (req, res) => {
+    const session = await authorize(req, res);
+    if (!session) return;
+    const requestId = String(req.params.requestId ?? "");
+    if (!requestIdSchema.safeParse(requestId).success) {
+      res.status(400).json({ error: "invalid_request_id" });
+      return;
+    }
+    try {
+      await controller.cancelOperation(session.sessionId, requestId);
+      res.status(202).json({ ok: true, requestId });
+    } catch (err) {
+      if (err instanceof ControllerError) {
+        res.status(err.status).json({ error: err.code, message: err.message });
+        return;
+      }
+      res.status(503).json({ error: "control_plane_unavailable" });
+    }
+  });
+
+  app.delete("/v1/sessions/:id", async (req, res) => {
     const session = await authorize(req, res);
     if (!session) return;
     try {

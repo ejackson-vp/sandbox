@@ -1,19 +1,18 @@
 /**
- * x402 payment client for the CLI.
+ * x402 payment client for the SDK.
  *
- * The buyer performs the protocol manually so the user can see the 402
- * challenge, the price, and the settlement result. The actual payload creation
- * and header encoding use the official @x402 packages.
+ * The buyer performs the protocol manually so callers can surface the 402
+ * challenge, price and settlement result. Payload creation and header encoding
+ * use the official @x402 packages.
  */
-import { x402Client } from "@x402/core/client";
-import { x402HTTPClient } from "@x402/core/client";
+import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import {
   MOCK_NETWORK,
   MockExactClientScheme,
   TESTNET_NETWORK,
   formatUsd,
-  type CreateSandboxRequest,
+  type CreateSessionRequest,
 } from "@x402s/shared";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
@@ -25,19 +24,17 @@ export interface PaidResponse {
   network: string;
   mode: PaymentMode;
   payer: string;
-  /** Set when the server rejected payment. */
   paymentError?: string;
 }
 
 export interface Payer {
   mode: PaymentMode;
-  createSandbox(apiUrl: string, body: CreateSandboxRequest): Promise<PaidResponse>;
+  createSession(apiUrl: string, body: CreateSessionRequest): Promise<PaidResponse>;
 }
 
 function buildClient(mode: PaymentMode): { client: x402Client; address: string } {
   if (mode === "mock") {
-    // Ephemeral wallet: mock payments have no economic value, so an unlinked
-    // identity is both sufficient and preferable.
+    // Ephemeral wallet: mock payments have no economic value.
     const account = privateKeyToAccount(generatePrivateKey());
     const client = x402Client.fromConfig({
       schemes: [{ network: MOCK_NETWORK, client: new MockExactClientScheme(account) }],
@@ -63,8 +60,8 @@ export function createPayer(mode: PaymentMode): Payer {
 
   return {
     mode,
-    async createSandbox(apiUrl, body) {
-      const url = `${apiUrl.replace(/\/$/, "")}/v1/sandboxes`;
+    async createSession(apiUrl, body) {
+      const url = `${apiUrl.replace(/\/$/, "")}/v1/sessions`;
       const headers = { "content-type": "application/json" };
       const request = () =>
         fetch(url, {

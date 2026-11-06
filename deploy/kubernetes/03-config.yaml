@@ -14,7 +14,7 @@ data:
 
   # --- api ----------------------------------------------------------------
   PUBLIC_BASE_URL: "http://localhost:8080"
-  CAPABILITY_TTL_SECONDS: "900"
+  CAPABILITY_GRACE_SECONDS: "900"
 
   # --- controller ---------------------------------------------------------
   CONTROLLER_URL: "http://controller.sandbox-system.svc.cluster.local:3001"
@@ -31,8 +31,16 @@ data:
   GUEST_IMAGE: "x402-sandbox/guest:dev"
   GUEST_IMAGE_DIGEST: "sha256:dev-unpinned-image"
   PROVISIONING_TIMEOUT_MS: "90000"
-  EXECUTION_GRACE_MS: "3000"
-  RESULT_TTL_MS: "120000"
+  LEASE_GRACE_MS: "2000"
+  SHUTDOWN_GRACE_MS: "2000"
+  MAX_LEASE_SECONDS: "1800"
+  ALLOW_CUSTOM_DURATIONS: "true"
+  MAX_CPU_MILLIS: "4000"
+  MAX_MEMORY_MIB: "8192"
+  MAX_DISK_MIB: "8192"
+  MAX_COMMAND_SECONDS: "300"
+  MAX_OUTPUT_BYTES: "262144"
+  MAX_FILE_BYTES: "8388608"
 
   # --- egress proxy -------------------------------------------------------
   EGRESS_ALLOWED_PORTS: "443"

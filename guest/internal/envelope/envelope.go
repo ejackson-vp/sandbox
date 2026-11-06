@@ -14,7 +14,8 @@ import (
 	"golang.org/x/crypto/nacl/box"
 )
 
-const MaxEnvelopeBytes = 1024 * 1024
+// Must stay below the relay frame cap (24 MiB) after base64 expansion.
+const MaxEnvelopeBytes = 18 * 1024 * 1024
 
 // KeyPair is an ephemeral X25519 key pair.
 type KeyPair struct {

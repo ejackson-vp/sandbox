@@ -1,27 +1,42 @@
 /**
  * Session relay.
  *
- * The relay is a dumb, encrypted-blob message switch between one customer and
- * one guest. It:
- *   - accepts guest-initiated WebSocket connections only (so sandbox pods need
- *     no inbound networking at all),
+ * A dumb, encrypted RPC switch between one customer and one guest:
+ *   - accepts guest-initiated WebSocket connections only (sandbox pods need no
+ *     inbound networking at all),
  *   - never parses or decrypts `envelope` contents,
- *   - cannot proxy arbitrary traffic: the only frames it understands are
- *     hello / result / error, and it only forwards opaque envelopes,
- *   - binds exactly one live connection per session and refuses a second.
+ *   - correlates opaque request/response envelopes by id, with a bounded cache,
+ *   - forwards cancellation and shutdown notices,
+ *   - binds exactly one live connection per session.
  *
- * It is reachable from sandbox pods on one port, and its admin surface is
+ * It is reachable from sandbox pods on one port; its admin surface is
  * restricted to the controller by NetworkPolicy + shared token.
  */
 import http from "node:http";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { AttestationEnvelope, GuestToRelay, RelayExecuteMessage, RelaySessionState } from "@x402s/shared";
+import type {
+  AttestationEnvelope,
+  GuestToRelay,
+  RelayCancelMessage,
+  RelayRequestMessage,
+  RelaySessionState,
+  RelayShutdownMessage,
+} from "@x402s/shared";
 import { log } from "./log.js";
 import { constantTimeEqual, sha256Hex } from "./tokens.js";
 
-const MAX_FRAME_BYTES = 2 * 1024 * 1024;
+/** A single frame cap. Sealed file payloads are base64-in-JSON. */
+const MAX_FRAME_BYTES = 24 * 1024 * 1024;
 const HELLO_TIMEOUT_MS = 15_000;
+const MAX_PENDING = 8;
+const MAX_CACHED_RESPONSES = 64;
+const RESPONSE_TTL_MS = 5 * 60_000;
+
+interface CachedResponse {
+  envelope: string;
+  at: number;
+}
 
 interface Entry {
   sessionId: string;
@@ -30,10 +45,9 @@ interface Entry {
   ws: WebSocket | null;
   connectedAt: number | null;
   hello: AttestationEnvelope | null;
-  result: string | null;
-  error: { code: string; message: string } | null;
-  resultWaiters: Array<(value: { envelope: string } | null) => void>;
-  deliveredAt: number | null;
+  pending: Map<string, { at: number; waiter?: (v: { envelope: string } | { error: string } | null) => void }>;
+  responses: Map<string, CachedResponse>;
+  lastError: { code: string; message: string } | null;
 }
 
 export interface RelayServer {
@@ -46,19 +60,18 @@ export interface RelayServer {
 
 export interface RelayOptions {
   adminToken: string;
-  /** How long to keep a completed result for the client to fetch. */
-  resultTtlMs?: number;
   maxSessions?: number;
+  responseTtlMs?: number;
 }
 
 export function createRelay(opts: RelayOptions): RelayServer {
   const entries = new Map<string, Entry>();
-  const resultTtlMs = opts.resultTtlMs ?? 120_000;
   const maxSessions = opts.maxSessions ?? 2000;
+  const responseTtlMs = opts.responseTtlMs ?? RESPONSE_TTL_MS;
 
   const app = express();
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "3mb" }));
+  app.use(express.json({ limit: "32mb" }));
 
   const requireAdmin = (req: Request, res: Response, next: NextFunction): void => {
     const token = req.header("x-internal-token") ?? "";
@@ -73,6 +86,18 @@ export function createRelay(opts: RelayOptions): RelayServer {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
 
   const getEntry = (id: string): Entry | undefined => entries.get(id);
+
+  const pruneResponses = (entry: Entry): void => {
+    const now = Date.now();
+    for (const [id, value] of entry.responses) {
+      if (now - value.at > responseTtlMs) entry.responses.delete(id);
+    }
+    while (entry.responses.size > MAX_CACHED_RESPONSES) {
+      const oldest = entry.responses.keys().next().value;
+      if (oldest === undefined) break;
+      entry.responses.delete(oldest);
+    }
+  };
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, sessions: entries.size });
@@ -96,14 +121,13 @@ export function createRelay(opts: RelayOptions): RelayServer {
     entries.set(sessionId, {
       sessionId,
       tokenHash,
-      expiresAt: Date.now() + (Number(ttlMs) || 900_000),
+      expiresAt: Date.now() + (Number(ttlMs) || 3_600_000),
       ws: null,
       connectedAt: null,
       hello: null,
-      result: null,
-      error: null,
-      resultWaiters: existing?.resultWaiters ?? [],
-      deliveredAt: null,
+      pending: existing?.pending ?? new Map(),
+      responses: existing?.responses ?? new Map(),
+      lastError: null,
     });
     res.status(201).json({ ok: true });
   });
@@ -111,81 +135,142 @@ export function createRelay(opts: RelayOptions): RelayServer {
   app.get("/internal/:sessionId/state", requireAdmin, (req, res) => {
     const entry = getEntry(String(req.params.sessionId ?? ""));
     if (!entry) {
-      res.json({ registered: false, connected: false, resultAvailable: false } satisfies RelaySessionState);
+      res.json({ registered: false, connected: false, pending: 0 } satisfies RelaySessionState);
       return;
     }
     const state: RelaySessionState = {
       registered: true,
       connected: Boolean(entry.ws && entry.ws.readyState === 1),
-      resultAvailable: entry.result !== null,
+      pending: entry.pending.size,
       ...(entry.hello ? { attestation: entry.hello } : {}),
-      ...(entry.error ? { error: entry.error.message } : {}),
+      ...(entry.lastError ? { error: entry.lastError.message } : {}),
     };
     res.json(state);
   });
 
-  app.post("/internal/:sessionId/deliver", requireAdmin, (req: Request, res: Response) => {
+  app.post("/internal/:sessionId/request", requireAdmin, (req: Request, res: Response) => {
     const entry = getEntry(String(req.params.sessionId ?? ""));
     if (!entry) {
       res.status(404).json({ error: "session_not_registered" });
       return;
     }
-    const { envelope, deadlineMs } = req.body ?? {};
+    const { id, envelope, deadlineMs } = req.body ?? {};
+    if (typeof id !== "string" || id.length < 8 || id.length > 128) {
+      res.status(400).json({ error: "invalid_request_id" });
+      return;
+    }
     if (typeof envelope !== "string" || envelope.length === 0 || envelope.length > MAX_FRAME_BYTES) {
       res.status(400).json({ error: "invalid_envelope" });
+      return;
+    }
+    if (entry.pending.has(id)) {
+      // Idempotent retry of an in-flight request.
+      res.status(202).json({ ok: true, pending: true });
+      return;
+    }
+    if (entry.pending.size >= MAX_PENDING) {
+      res.status(429).json({ error: "too_many_pending_requests" });
       return;
     }
     if (!entry.ws || entry.ws.readyState !== 1) {
       res.status(409).json({ error: "guest_not_connected" });
       return;
     }
-    if (entry.deliveredAt) {
-      res.status(409).json({ error: "already_delivered" });
-      return;
-    }
-    const msg: RelayExecuteMessage = {
-      type: "execute",
+    const msg: RelayRequestMessage = {
+      type: "request",
+      id,
       envelope,
-      deadlineMs: Number(deadlineMs) || Date.now(),
+      deadlineMs: Number(deadlineMs) || Date.now() + 60_000,
     };
+    entry.pending.set(id, { at: Date.now() });
     entry.ws.send(JSON.stringify(msg));
-    entry.deliveredAt = Date.now();
-    log.info("relay_delivered", { sessionId: entry.sessionId, envelopeBytes: envelope.length });
+    log.info("relay_request_forwarded", {
+      sessionId: entry.sessionId,
+      requestId: id,
+      envelopeBytes: envelope.length,
+    });
     res.status(202).json({ ok: true });
   });
 
-  app.get("/internal/:sessionId/result", requireAdmin, async (req: Request, res: Response) => {
+  app.post("/internal/:sessionId/cancel", requireAdmin, (req: Request, res: Response) => {
     const entry = getEntry(String(req.params.sessionId ?? ""));
     if (!entry) {
       res.status(404).json({ error: "session_not_registered" });
       return;
     }
-    if (entry.result) {
-      res.json({ envelope: entry.result });
+    const { id } = req.body ?? {};
+    if (typeof id !== "string") {
+      res.status(400).json({ error: "invalid_request_id" });
       return;
     }
-    if (entry.error) {
-      res.status(200).json({ envelope: null, error: entry.error });
+    if (!entry.ws || entry.ws.readyState !== 1) {
+      res.status(409).json({ error: "guest_not_connected" });
       return;
     }
-    if (!entry.ws && !entry.deliveredAt) {
-      res.status(200).json({ envelope: null });
-      return;
-    }
+    const msg: RelayCancelMessage = { type: "cancel", id };
+    entry.ws.send(JSON.stringify(msg));
+    log.info("relay_cancel_forwarded", { sessionId: entry.sessionId, requestId: id });
+    res.status(202).json({ ok: true });
+  });
 
-    const timeoutMs = Math.min(20_000, Number(req.query.waitMs) || 20_000);
-    const value = await new Promise<{ envelope: string } | null>((resolve) => {
+  app.post("/internal/:sessionId/shutdown", requireAdmin, (req: Request, res: Response) => {
+    const entry = getEntry(String(req.params.sessionId ?? ""));
+    if (!entry) {
+      res.status(404).json({ error: "session_not_registered" });
+      return;
+    }
+    const msg: RelayShutdownMessage = { type: "shutdown", reason: String(req.body?.reason ?? "lease ended") };
+    try {
+      if (entry.ws && entry.ws.readyState === 1) entry.ws.send(JSON.stringify(msg));
+    } catch {
+      /* the pod is going away anyway */
+    }
+    log.info("relay_shutdown_forwarded", { sessionId: entry.sessionId });
+    res.status(202).json({ ok: true });
+  });
+
+  app.get("/internal/:sessionId/response/:requestId", requireAdmin, async (req: Request, res: Response) => {
+    const entry = getEntry(String(req.params.sessionId ?? ""));
+    if (!entry) {
+      res.status(404).json({ error: "session_not_registered" });
+      return;
+    }
+    const id = String(req.params.requestId ?? "");
+    pruneResponses(entry);
+    const cached = entry.responses.get(id);
+    if (cached) {
+      res.json({ envelope: cached.envelope });
+      return;
+    }
+    if (!entry.pending.has(id)) {
+      res.status(202).json({ pending: false });
+      return;
+    }
+    const timeoutMs = Math.min(120_000, Number(req.query.waitMs) || 20_000);
+    const value = await new Promise<{ envelope: string } | { error: string } | null>((resolve) => {
+      const pending = entry.pending.get(id);
+      if (!pending) {
+        resolve(null);
+        return;
+      }
       const timer = setTimeout(() => {
-        entry.resultWaiters = entry.resultWaiters.filter((w) => w !== waiter);
+        pending.waiter = undefined;
         resolve(null);
       }, timeoutMs);
-      const waiter = (v: { envelope: string } | null) => {
+      pending.waiter = (v) => {
         clearTimeout(timer);
         resolve(v);
       };
-      entry.resultWaiters.push(waiter);
     });
-    res.json({ envelope: value?.envelope ?? null });
+    if (value && "envelope" in value) {
+      res.json({ envelope: value.envelope });
+      return;
+    }
+    if (value && "error" in value) {
+      res.status(409).json({ error: "guest_error", message: value.error });
+      return;
+    }
+    res.status(202).json({ pending: entry.pending.has(id) });
   });
 
   app.delete("/internal/:sessionId", requireAdmin, (req, res) => {
@@ -199,8 +284,8 @@ export function createRelay(opts: RelayOptions): RelayServer {
     } catch {
       /* ignore */
     }
-    for (const waiter of entry.resultWaiters) waiter(null);
-    entry.resultWaiters = [];
+    for (const pending of entry.pending.values()) pending.waiter?.({ error: "session destroyed" });
+    entry.pending.clear();
     entries.delete(entry.sessionId);
     log.info("relay_session_purged", { sessionId: entry.sessionId });
     res.json({ ok: true });
@@ -242,6 +327,12 @@ export function createRelay(opts: RelayOptions): RelayServer {
       handleGuestConnection(entry, ws);
     });
   });
+
+  function resolvePending(entry: Entry, id: string, value: { envelope: string }): void {
+    const pending = entry.pending.get(id);
+    entry.pending.delete(id);
+    if (pending?.waiter) pending.waiter(value);
+  }
 
   function handleGuestConnection(entry: Entry, ws: WebSocket): void {
     entry.ws = ws;
@@ -292,33 +383,34 @@ export function createRelay(opts: RelayOptions): RelayServer {
           });
           break;
         }
-        case "result": {
-          if (typeof msg.envelope !== "string" || msg.envelope.length > MAX_FRAME_BYTES) {
-            ws.close(1009, "bad result");
+        case "response": {
+          if (typeof msg.id !== "string" || typeof msg.envelope !== "string" || msg.envelope.length > MAX_FRAME_BYTES) {
+            ws.close(1009, "bad response");
             return;
           }
-          entry.result = msg.envelope;
-          entry.error = null;
-          log.info("relay_result_received", { sessionId: entry.sessionId, envelopeBytes: msg.envelope.length });
-          const waiters = entry.resultWaiters;
-          entry.resultWaiters = [];
-          for (const w of waiters) w({ envelope: msg.envelope });
-          // Results are encrypted to the customer key; drop them after TTL.
-          setTimeout(() => {
-            const current = getEntry(entry.sessionId);
-            if (current && current.result === msg.envelope) {
-              current.result = null;
-              log.info("relay_result_expired", { sessionId: entry.sessionId });
-            }
-          }, resultTtlMs).unref();
+          entry.responses.set(msg.id, { envelope: msg.envelope, at: Date.now() });
+          pruneResponses(entry);
+          entry.lastError = null;
+          resolvePending(entry, msg.id, { envelope: msg.envelope });
+          log.info("relay_response_received", {
+            sessionId: entry.sessionId,
+            requestId: msg.id,
+            envelopeBytes: msg.envelope.length,
+          });
           break;
         }
         case "error": {
-          entry.error = { code: String(msg.code ?? "guest_error"), message: String(msg.message ?? "") };
-          log.warn("relay_guest_error", { sessionId: entry.sessionId, errorCode: entry.error.code });
-          const waiters = entry.resultWaiters;
-          entry.resultWaiters = [];
-          for (const w of waiters) w(null);
+          entry.lastError = { code: String(msg.code ?? "guest_error"), message: String(msg.message ?? "") };
+          log.warn("relay_guest_error", {
+            sessionId: entry.sessionId,
+            errorCode: entry.lastError.code,
+            requestId: msg.id,
+          });
+          if (typeof msg.id === "string") {
+            const pending = entry.pending.get(msg.id);
+            entry.pending.delete(msg.id);
+            pending?.waiter?.({ error: entry.lastError.message || entry.lastError.code });
+          }
           break;
         }
         default:
@@ -330,6 +422,10 @@ export function createRelay(opts: RelayOptions): RelayServer {
       clearInterval(ping);
       clearTimeout(helloTimer);
       if (entry.ws === ws) entry.ws = null;
+      for (const pending of entry.pending.values()) {
+        pending.waiter?.({ error: "guest disconnected" });
+      }
+      entry.pending.clear();
       log.info("relay_guest_disconnected", { sessionId: entry.sessionId });
     });
     ws.on("error", () => {

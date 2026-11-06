@@ -1,92 +1,112 @@
 # Production readiness
 
-This is a working local proof of concept. This document lists every gap between
-it and a production service, ordered by risk, with the concrete next step.
+This is a working local proof of concept of a general-purpose leased sandbox.
+Below is every gap between it and a production service, ordered by risk, with the
+concrete next step.
 
 ## 1. Blocking gaps
 
 | # | Gap | Why it matters | Next step |
 | --- | --- | --- | --- |
-| 1 | **No hardware attestation** | Mode A/B evidence is signed by a published dev key; nothing is hardware-rooted | Implement `verifyHardwareEvidence` + guest AA integration (Mode C) and run on SNP/TDX hardware |
-| 2 | **Shared host kernel in Mode A** | Container escapes are possible for hostile code | Run Mode B (Kata) minimum, Mode C for confidentiality |
-| 3 | **SQLite single-writer** | No HA: one controller, one node's PVC | Postgres/DynamoDB with conditional writes; keep the same UNIQUE payment key invariant |
-| 4 | **Relay is a single pod with in-memory state** | Relay restart loses pending ciphertext; no HA | Redis/NATS with per-session queues; still ciphertext-only |
-| 5 | **Mock payments only in the demo** | No economic security locally | Testnet path exists; add reconciliation + on-chain receipt verification before mainnet |
-| 6 | **No image admission control** | A compromised controller could run an arbitrary image | Pin `GUEST_IMAGE` by digest + Kyverno/sigstore policy + CoCo encrypted images |
-| 7 | **Secrets in the repo (dev)** | Dev attestation key, admin tokens, proxy secret | External secret manager; remove the dev key entirely in Mode C |
+| 1 | **No hardware attestation** | dev/Kata evidence is signed by a published key | implement the TEE verifier + guest attestation-agent integration (Mode C) |
+| 2 | **Shared host kernel in dev mode** | container escape is possible for hostile code | require Kata (Mode B) minimum; validate before launch |
+| 3 | **SQLite single writer** | one controller, one node's PVC, no HA | Postgres/DynamoDB with conditional writes; keep UNIQUE payment key and conditional transitions |
+| 4 | **Relay is a single in-memory pod** | restart loses pending ciphertext and sessions in flight | Redis/NATS with per-session queues and TTLs (ciphertext only) |
+| 5 | **Settlement recovery is mock-only** | only the mock facilitator exposes a settlement lookup | add on-chain/testnet reconciliation (nonce used ⇒ settled) or facilitator webhooks; until then the API fails closed with `409 reconciliation_pending` |
+| 6 | **No refunds** | a settled payment whose provisioning fails is not returned | define policy: automatic refund job or credit; requires a settlement ledger |
+| 7 | **Image not pinned by digest** | a compromised controller could run another image | pin `GUEST_IMAGE` by digest + Kyverno/sigstore admission; CoCo encrypted images for Mode C |
+| 8 | **Secrets in the repo (dev)** | dev attestation key, admin/capability/proxy secrets | external secret manager; remove the dev key entirely in production |
 
 ## 2. Security hardening backlog
 
-- **Guest policy in Mode C** (`deploy/confidential/agent-policy.rego`) is written
-  but not wired into pod creation. Add `io.katacontainers.config.agent.policy`
-  / initdata injection in `controller/src/k8s.ts` and verify the policy hash.
 - **Per-session mTLS** between API and controller instead of a shared bearer
   token (NetworkPolicy is the only other control).
-- **Relay authentication**: the guest token is a bearer capability; bind it to
-  the pod identity as well (e.g. a projected token with a short TTL).
-- **Rate limiting** is in-memory per API replica. Move to a shared limiter.
-- **Audit log** of payment → session → outcome, with a hash chain.
-- **Seccomp profile**: `RuntimeDefault` only. Ship a custom profile for python3.
-- **Read-only `/proc`**: consider masking `/proc/kcore`, `/proc/keys`.
-- **Drop the client's IP** from logs entirely (currently retained in the default
-  HTTP access log for rate limiting; document retention).
-- **Resource quotas** per namespace and a hard cap on concurrent sandboxes.
-- **Egress allowlist by hostname** is available (`EGRESS_ALLOWED_HOST_SUFFIXES`)
-  but disabled; production should enable it to reduce abuse.
+- **Capability derivation trade-off**: capabilities are HMAC(payment key) so a
+  retried request can recover them. A leaked `PAYMENT-SIGNATURE` after settlement
+  could recover the capability. Mitigation options: short capability TTL (already
+  lease+15 min), encrypting the capability at rest for recovery instead of
+  deriving it, or one-time recovery tokens. Document and decide before launch.
+- **Evidence validity window** is lease + 5 min so a CLI can re-attach mid-lease.
+  If you require very fresh evidence, store the verified guest key client-side and
+  skip re-attestation after the first verification.
+- **Relay authentication**: bind the guest token to a projected pod identity in
+  addition to the bearer token.
+- **Seccomp profile**: `RuntimeDefault`; ship a custom profile for the toolchain.
+- **Egress allowlist by hostname** (`EGRESS_ALLOWED_HOST_SUFFIXES`) is available
+  but disabled; enable it for abuse reduction.
+- **Package installs**: document proxy-aware commands (`pip --proxy`,
+  `npm config set proxy`, `git -c http.proxy=…`); consider a caching proxy.
+- **Audit log** of payment → session → operation counts → outcome, hash-chained.
+- **Rate limiting** is per-replica in memory; move to a shared limiter.
+- **Workspace race**: path validation is TOCTOU-safe for the customer's own
+  session only (single tenant). A second process could race the check; the
+  workspace is single-customer, so the impact is self-inflicted.
 
 ## 3. Reliability / operations
 
-- Controller HA with leader election (or a single-writer queue) — the current
-  design is deliberately single-writer.
-- Persist relay sessions so a relay restart does not fail paid sessions (or
-  refund/fail them cleanly).
-- Add a settlement outbox: today a crash between `settle` and entitlement insert
-  can charge without an entitlement. Mitigation: idempotent settle keyed by the
-  payment key + reconciliation against the facilitator's settlement records.
-- Metrics: payment outcomes, provisioning latency, execution duration, timeouts,
-  reaper actions, proxy denials (by reason), relay capacity.
-- Alerts: controller down, relay down, provisioning timeout rate, proxy deny
-  spike, PVC full, orphan pods present.
-- Load test: 100 concurrent sandboxes, measure provisioning p95 and relay
-  fan-out.
+- Controller HA with leader election or a single-writer queue (deliberately
+  single-writer today).
+- Persist relay state so a relay restart does not fail paid sessions (or fail and
+  refund them cleanly).
+- Metrics: sessions created/expired/failed, provisioning latency, operation
+  latency, timeouts, cancelled operations, relay pending, proxy denials by reason,
+  reaper actions, orphan pods, intent recovery count.
+- Alerts: controller/relay/API down, provisioning timeout rate, settlement
+  failures, `reconciliation_pending` > 0, PVC full, pods without a live session.
+- Load test: 100+ concurrent sessions; measure reconcile p95, relay fan-out, API
+  latency for 8 MiB uploads.
+- Backup/restore of the SQLite metadata (sessions are disposable; payment records
+  are not).
 
-## 4. Payments
+## 4. Session product policy
 
-- Testnet mode uses `https://x402.org/facilitator` and Base Sepolia
-  (`eip155:84532`). Verify with a funded wallet:
+- **Maximum lease**: 30 minutes by default (hard ceiling 1 h). Longer leases
+  increase the blast radius and idle cost; decide deliberately.
+- **Idle expiry**: currently a session burns its lease even if unused. Consider
+  reducing the tier price or adding a short grace window.
+- **Operation concurrency**: one foreground operation per sandbox. If customers
+  need parallelism, add a second slot with explicit filesystem semantics rather
+  than silently interleaving.
+- **Background processes** are killed at command end; document this
+  (`nohup`/daemons do not survive).
+- **Abuse**: arbitrary code execution requires a content/abuse policy, takedown
+  process and per-payer controls. The capability model is anonymous by design;
+  payment is the only identity.
+
+## 5. Payments
+
+- Testnet: `PAYMENT_MODE=testnet`, `EVM_PRIVATE_KEY`, official
+  `https://x402.org/facilitator`, network `eip155:84532`. Verify with a funded
+  wallet:
   ```bash
-  EVM_PRIVATE_KEY=0x... ./cli/dist/index.js run examples/hello.py \
+  EVM_PRIVATE_KEY=0x… ./cli/dist/index.js create --tier short \
     --payment-mode testnet --allow-insecure-dev --api-url https://api.example
   ```
-- Before mainnet: use a production facilitator (e.g. CDP), pin the network id,
-  add settlement reconciliation, refunds for failed provisioning, and a spend
-  cap per payer address.
-- Mainnet is intentionally rejected at startup (`api/src/config.ts`).
+- Before mainnet: production facilitator, pinned network id, settlement
+  reconciliation, refunds for failed provisioning, per-payer spend caps,
+  and a documented incident path for double-charge disputes.
+- Mainnet is rejected at startup (`api/src/config.ts`).
 
-## 5. Compliance / abuse
+## 6. Isolated production target (Kata)
 
-- Content policy enforcement for arbitrary code execution.
-- Per-payer and per-IP abuse controls (the capability model is anonymous by
-  design; payment is the only identity).
-- Data retention: session metadata is kept 24 h; ciphertext is dropped after the
-  result TTL. Confirm against local law (this is a data-processing service).
-- Terms of service, export controls, and a takedown process.
+- Deploy on Linux hosts with KVM, install the CoCo chart, use
+  `kata-qemu-coco-dev` (or `kata-clh` on kind).
+- Re-run `make security-test` against the Kata deployment and record:
+  guest kernel differs from host, no hostPath/host namespaces, network isolation
+  unchanged, attestation labelled as non-hardware.
+- Do **not** advertise provider-blind execution: Kata gives VM isolation, not
+  hardware-rooted confidentiality.
 
-## 6. Definition of "production confidential"
+## 7. Definition of "production confidential"
 
-You may claim hardware-backed confidentiality only when all of the following are
-true and evidenced:
+Only when all of the following are evidenced:
 
-1. Sandboxes run under `kata-qemu-snp` or `kata-qemu-tdx` on real TEE hardware.
-2. The guest obtains evidence from the TEE (not a key it holds).
-3. The customer verifies that evidence through an independent verifier
-   (Trustee AS or `snpguest`/`tdx-quote-check`) **and** checks the measurement
-   allowlist.
-4. The verifier rejects simulated evidence, stale evidence, wrong `report_data`,
-   and TCB levels below policy.
-5. KBS releases any image/secret key only to an attested guest with the expected
-   measurement.
-6. A negative test demonstrates that a modified image fails attestation.
+1. `kata-qemu-snp`/`kata-qemu-tdx` on real TEE hardware.
+2. Evidence comes from the TEE, bound to the session key and nonce.
+3. The client verifies it through an independent verifier and checks measurements.
+4. Simulated, stale, wrong-`report_data` and downgraded evidence are rejected.
+5. KBS releases image/secret keys only to an attested guest.
+6. A negative test shows a modified image fails attestation.
 
-Until then, the honest description is: *"encrypted in transit and opaque to the
-provider's control plane; execution is not hardware-confidential."*
+Until then the honest description is: *encrypted in transit and opaque to the
+provider's control plane; execution is not hardware-confidential.*

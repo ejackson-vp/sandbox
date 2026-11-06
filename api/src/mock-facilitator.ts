@@ -20,6 +20,7 @@ import { HTTPFacilitatorClient } from "@x402/core/server";
 import {
   MockExactFacilitatorScheme,
   MOCK_NETWORK,
+  sha256Hex,
   type MockNonceStore,
 } from "@x402s/shared";
 import { log } from "./log.js";
@@ -136,6 +137,30 @@ export async function createMockFacilitator(opts: MockFacilitatorOptions = {}): 
       transaction: result.transaction,
     });
     res.status(200).json(result);
+  });
+
+  // Settlement lookup: lets the API recover the crash window between settlement
+  // and durable entitlement creation without charging twice. Mock-only: a
+  // production facilitator exposes no such contract.
+  app.get("/settlements/:paymentKey", (req, res) => {
+    const key = String(req.params.paymentKey ?? "");
+    if (!/^[0-9a-f]{64}$/.test(key)) {
+      res.status(400).json({ error: "invalid_payment_key" });
+      return;
+    }
+    const row = db
+      .prepare("SELECT payer, amount FROM mock_nonces WHERE payment_key = ?")
+      .get(key) as { payer: string; amount: string } | undefined;
+    if (!row) {
+      res.status(404).json({ settled: false });
+      return;
+    }
+    res.json({
+      settled: true,
+      transaction: `mock:${sha256Hex(key).slice(0, 32)}`,
+      payer: row.payer,
+      amount: row.amount,
+    });
   });
 
   if (opts.allowControl ?? true) {

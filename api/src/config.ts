@@ -4,7 +4,13 @@
  * There is no path to mainnet: a mainnet network id is rejected at startup even
  * if every other flag is set. Testnet is opt-in and documented.
  */
-import { MOCK_NETWORK } from "@x402s/shared";
+import {
+  MOCK_NETWORK,
+  loadPlatformLimits,
+  loadTiers,
+  type PlatformLimits,
+  type TierTable,
+} from "@x402s/shared";
 
 export type PaymentMode = "mock" | "testnet";
 
@@ -33,11 +39,15 @@ export interface ApiConfig {
   facilitatorUrl: string;
   controllerUrl: string;
   controllerAdminToken: string;
+  capabilitySecret: string;
   capabilityTtlSeconds: number;
   maxBodyBytes: number;
   allowInsecureDev: boolean;
   publicBaseUrl: string;
   requestTimeoutMs: number;
+  intentStaleMs: number;
+  tiers: TierTable;
+  platformLimits: PlatformLimits;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
@@ -69,8 +79,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     (paymentMode === "mock" ? "http://127.0.0.1:3002" : "https://x402.org/facilitator");
 
   const payTo =
-    env.PAY_TO ??
-    (paymentMode === "mock" ? "0x0000000000000000000000000000000000000402" : "");
+    env.PAY_TO ?? (paymentMode === "mock" ? "0x0000000000000000000000000000000000000402" : "");
   if (!/^0x[0-9a-fA-F]{40}$/.test(payTo)) {
     throw new Error("PAY_TO must be a 20-byte EVM address");
   }
@@ -78,19 +87,30 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     throw new Error("PAY_TO must be a real receiving address in testnet mode");
   }
 
+  const controllerAdminToken = env.CONTROLLER_ADMIN_TOKEN ?? env.ADMIN_TOKEN ?? "";
+  const capabilitySecret = env.CAPABILITY_SECRET ?? controllerAdminToken;
+  if (capabilitySecret.length < 16) {
+    throw new Error("CAPABILITY_SECRET (or CONTROLLER_ADMIN_TOKEN) must be at least 16 characters");
+  }
+
   return {
     port: int(env.PORT, 3000, 1, 65535),
     paymentMode,
     network: requestedNetwork,
-    priceUsd: env.PRICE_USD ?? "$0.01",
+    // Default price is used only for the pricing endpoint when no tier is given.
+    priceUsd: env.PRICE_USD ?? "$0.05",
     payTo,
     facilitatorUrl,
     controllerUrl: env.CONTROLLER_URL ?? "http://127.0.0.1:3001",
-    controllerAdminToken: env.CONTROLLER_ADMIN_TOKEN ?? "",
-    capabilityTtlSeconds: int(env.CAPABILITY_TTL_SECONDS, 900, 60, 3600),
-    maxBodyBytes: int(env.MAX_BODY_BYTES, 2 * 1024 * 1024, 1024, 8 * 1024 * 1024),
+    controllerAdminToken,
+    capabilitySecret,
+    capabilityTtlSeconds: int(env.CAPABILITY_GRACE_SECONDS ?? env.CAPABILITY_TTL_SECONDS, 900, 60, 7200),
+    maxBodyBytes: int(env.MAX_BODY_BYTES, 32 * 1024 * 1024, 1024, 64 * 1024 * 1024),
     allowInsecureDev,
     publicBaseUrl: env.PUBLIC_BASE_URL ?? `http://localhost:${env.PORT ?? "3000"}`,
-    requestTimeoutMs: int(env.REQUEST_TIMEOUT_MS, 120_000, 1000, 600_000),
+    requestTimeoutMs: int(env.REQUEST_TIMEOUT_MS, 180_000, 1000, 600_000),
+    intentStaleMs: int(env.PAYMENT_INTENT_STALE_MS, 30_000, 1000, 600_000),
+    tiers: loadTiers(env),
+    platformLimits: loadPlatformLimits(env),
   };
 }

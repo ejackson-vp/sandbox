@@ -2,15 +2,18 @@
  * Kubernetes provisioner.
  *
  * The controller is the only component allowed to create sandbox pods. It never
- * accepts a customer-supplied PodSpec: the pod template is fixed here, uses a
- * mandatory RuntimeClass, and is labelled with the session id for reaping.
+ * accepts a customer-supplied PodSpec: the template is fixed here, uses a
+ * mandatory RuntimeClass, mirrors the purchased resource limits into real
+ * Kubernetes limits, and labels the pod with the session id for reaping.
  */
 import * as k8s from "@kubernetes/client-node";
+import type { SessionLimits } from "@x402s/shared";
 import { log } from "./log.js";
 
 export interface SandboxPodSpec {
   sessionId: string;
-  durationSeconds: number;
+  leaseSeconds: number;
+  limits: SessionLimits;
   clientPublicKey: string;
   clientNonce: string;
   guestToken: string;
@@ -23,7 +26,7 @@ export interface SandboxPodSpec {
   imageDigest: string;
   runtimeClass: string;
   executionMode: "dev" | "kata" | "confidential";
-  guestMeasurementPolicy?: string;
+  workspaceDir: string;
 }
 
 export interface Provisioner {
@@ -36,6 +39,9 @@ export interface Provisioner {
 
 const LABEL_APP = "app.kubernetes.io/name";
 const LABEL_SESSION = "x402.io/session";
+
+/** Tools baked into the trusted guest image. */
+export const GUEST_TOOLS = ["python3", "node", "bash", "tar", "curl", "git"];
 
 export class KubeProvisioner implements Provisioner {
   private readonly core: k8s.CoreV1Api;
@@ -55,15 +61,37 @@ export class KubeProvisioner implements Provisioner {
     const devMode = spec.executionMode !== "confidential";
     const annotations: Record<string, string> = {
       "x402.io/mode": spec.executionMode,
-      "x402.io/duration-seconds": String(spec.durationSeconds),
+      "x402.io/lease-seconds": String(spec.leaseSeconds),
+      "x402.io/cpu-millis": String(spec.limits.cpuMillis),
+      "x402.io/memory-mib": String(spec.limits.memoryMiB),
+      "x402.io/disk-mib": String(spec.limits.diskMiB),
     };
     if (devMode) {
-      // Loud, machine-checkable marker so nobody mistakes this for confidential.
       annotations["x402.io/confidential"] = "false";
       annotations["x402.io/warning"] = "NON-CONFIDENTIAL: simulated attestation only";
     } else {
       annotations["x402.io/confidential"] = "true";
     }
+
+    const guestEnv = [
+      { name: "SESSION_ID", value: spec.sessionId },
+      { name: "RELAY_URL", value: spec.relayUrl },
+      { name: "CLIENT_PUBLIC_KEY", value: spec.clientPublicKey },
+      { name: "CLIENT_NONCE", value: spec.clientNonce },
+      { name: "LEASE_SECONDS", value: String(spec.leaseSeconds) },
+      { name: "EXECUTION_MODE", value: spec.executionMode },
+      { name: "GUEST_IMAGE_REF", value: spec.image },
+      { name: "GUEST_IMAGE_DIGEST", value: spec.imageDigest },
+      { name: "RUNTIME_CLASS", value: spec.runtimeClass },
+      { name: "EGRESS_PROXY_URL", value: spec.proxyUrl },
+      { name: "WORKSPACE_DIR", value: spec.workspaceDir },
+      { name: "MAX_OUTPUT_BYTES", value: String(spec.limits.maxOutputBytes) },
+      { name: "MAX_FILE_BYTES", value: String(spec.limits.maxFileBytes) },
+      { name: "MAX_DISK_MIB", value: String(spec.limits.diskMiB) },
+      { name: "MAX_COMMAND_SECONDS", value: String(spec.limits.maxCommandSeconds) },
+      { name: "MAX_PROCESSES", value: String(spec.limits.maxProcesses) },
+      { name: "GUEST_TOOLS", value: GUEST_TOOLS.join(",") },
+    ];
 
     const pod: k8s.V1Pod = {
       metadata: {
@@ -85,15 +113,14 @@ export class KubeProvisioner implements Provisioner {
         hostPID: false,
         hostIPC: false,
         // Deliberately no usable DNS: the only nameserver is loopback, where
-        // nothing listens. Customers reach the public internet only through the
-        // egress proxy, which resolves names itself. NetworkPolicy also denies
-        // all DNS traffic as defence in depth.
+        // nothing listens. Customers reach the public internet through the
+        // egress proxy, which resolves names itself.
         dnsPolicy: "None",
         dnsConfig: { nameservers: ["127.0.0.1"], searches: [], options: [] },
         nodeSelector: { "x402.io/sandbox-pool": "true" },
         tolerations: [{ key: "x402.io/sandbox", operator: "Exists", effect: "NoSchedule" }],
-        // Backstop only: the controller has an independent, shorter deadline.
-        activeDeadlineSeconds: Math.ceil(spec.durationSeconds + 150),
+        // Backstop only: the controller enforces the lease independently.
+        activeDeadlineSeconds: Math.ceil(spec.leaseSeconds + spec.limits.maxCommandSeconds + 300),
         securityContext: {
           runAsNonRoot: true,
           runAsUser: 65532,
@@ -114,6 +141,7 @@ export class KubeProvisioner implements Provisioner {
             env: [
               { name: "GUEST_TOKEN", value: spec.guestToken },
               { name: "PROXY_TOKEN", value: spec.proxyToken },
+              { name: "WORKSPACE_DIR", value: spec.workspaceDir },
               ...(devMode
                 ? [
                     { name: "DEV_ATTESTATION_KEY", value: process.env.DEV_ATTESTATION_KEY ?? "" },
@@ -130,7 +158,10 @@ export class KubeProvisioner implements Provisioner {
               capabilities: { drop: ["ALL"] },
             },
             resources: { limits: { cpu: "100m", memory: "64Mi", "ephemeral-storage": "8Mi" } },
-            volumeMounts: [{ name: "workspace", mountPath: "/run/x402" }],
+            volumeMounts: [
+              { name: "runtime", mountPath: "/run/x402" },
+              { name: "workspace", mountPath: spec.workspaceDir },
+            ],
           },
         ],
         containers: [
@@ -139,19 +170,7 @@ export class KubeProvisioner implements Provisioner {
             image: spec.image,
             imagePullPolicy: "IfNotPresent",
             command: ["/usr/local/bin/x402-guest", "run"],
-            env: [
-              { name: "SESSION_ID", value: spec.sessionId },
-              { name: "RELAY_URL", value: spec.relayUrl },
-              { name: "CLIENT_PUBLIC_KEY", value: spec.clientPublicKey },
-              { name: "CLIENT_NONCE", value: spec.clientNonce },
-              { name: "EXEC_DURATION_SECONDS", value: String(spec.durationSeconds) },
-              { name: "EXECUTION_MODE", value: spec.executionMode },
-              { name: "GUEST_IMAGE_REF", value: spec.image },
-              { name: "GUEST_IMAGE_DIGEST", value: spec.imageDigest },
-              { name: "RUNTIME_CLASS", value: spec.runtimeClass },
-              { name: "EGRESS_PROXY_URL", value: spec.proxyUrl },
-              { name: "MAX_OUTPUT_BYTES", value: "65536" },
-            ],
+            env: guestEnv,
             securityContext: {
               allowPrivilegeEscalation: false,
               privileged: false,
@@ -161,28 +180,48 @@ export class KubeProvisioner implements Provisioner {
               capabilities: { drop: ["ALL"] },
             },
             resources: {
-              requests: { cpu: "100m", memory: "128Mi", "ephemeral-storage": "16Mi" },
-              limits: { cpu: "500m", memory: "512Mi", "ephemeral-storage": "64Mi" },
+              requests: {
+                cpu: `${Math.max(50, Math.floor(spec.limits.cpuMillis / 4))}m`,
+                memory: `${Math.max(64, Math.floor(spec.limits.memoryMiB / 4))}Mi`,
+                "ephemeral-storage": "16Mi",
+              },
+              limits: {
+                cpu: `${spec.limits.cpuMillis}m`,
+                memory: `${spec.limits.memoryMiB}Mi`,
+                "ephemeral-storage": `${spec.limits.diskMiB + 64}Mi`,
+              },
             },
             volumeMounts: [
-              { name: "workspace", mountPath: "/run/x402" },
+              { name: "runtime", mountPath: "/run/x402" },
+              { name: "workspace", mountPath: spec.workspaceDir },
               { name: "tmp", mountPath: "/tmp" },
             ],
           },
         ],
         volumes: [
-          { name: "workspace", emptyDir: { medium: "Memory", sizeLimit: "32Mi" } },
-          { name: "tmp", emptyDir: { medium: "Memory", sizeLimit: "32Mi" } },
+          {
+            name: "workspace",
+            emptyDir: { medium: "Memory", sizeLimit: `${spec.limits.diskMiB + 32}Mi` },
+          },
+          // Bootstrap credentials live outside the customer workspace and are
+          // deleted by the guest before any operation runs.
+          { name: "runtime", emptyDir: { medium: "Memory", sizeLimit: "8Mi" } },
+          { name: "tmp", emptyDir: { medium: "Memory", sizeLimit: "64Mi" } },
         ],
       },
     };
 
     try {
       await this.core.createNamespacedPod({ namespace: this.namespace, body: pod });
-      log.info("sandbox_pod_created", { podName, sessionId: spec.sessionId, runtimeClass: spec.runtimeClass });
+      log.info("sandbox_pod_created", {
+        podName,
+        sessionId: spec.sessionId,
+        runtimeClass: spec.runtimeClass,
+        cpuMillis: spec.limits.cpuMillis,
+        memoryMiB: spec.limits.memoryMiB,
+      });
     } catch (err) {
-      const status = (err as { code?: number }).code;
-      if (status === 409) {
+      if ((err as { code?: number }).code === 409) {
         log.info("sandbox_pod_exists", { podName });
       } else {
         throw err;
@@ -196,8 +235,7 @@ export class KubeProvisioner implements Provisioner {
       await this.core.deleteNamespacedPod({ name: podName, namespace: this.namespace, gracePeriodSeconds });
       log.info("sandbox_pod_deleted", { podName });
     } catch (err) {
-      const status = (err as { code?: number }).code;
-      if (status === 404) return;
+      if ((err as { code?: number }).code === 404) return;
       throw err;
     }
   }

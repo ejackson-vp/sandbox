@@ -12,15 +12,17 @@ KUBECTL      := kubectl --context $(CONTEXT)
 .PHONY: help up down build deploy demo demo-agent demo-timeout test test-unit test-integration security-test security-network guest guest-load logs clean fmt images
 
 help:
-	@echo "x402 confidential sandbox"
+	@echo "x402 sandbox sessions"
 	@echo ""
 	@echo "  make up             create kind cluster + Cilium + build images + deploy"
 	@echo "  make build          build container images and the Go guest"
 	@echo "  make deploy         load images into kind and apply manifests"
 	@echo "  make demo           full paid workflow with a mock payment"
 	@echo "  make demo-agent     same purchase driven by the x402 client SDK"
-	@echo "  make demo-timeout   demonstrate the 60s execution deadline"
-	@echo "  make test           unit + integration tests (no cluster required)"
+	@echo "  make demo-session   full multi-command session workflow"
+	@echo "  make demo-expire    demonstrate lease expiration and cleanup"
+	@echo "  make demo-timeout   demonstrate the per-command timeout"
+	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
 	@echo "  make logs           tail control-plane logs"
 	@echo "  make down           delete the kind cluster"
@@ -54,16 +56,23 @@ deploy:
 demo: cli
 	@echo "==> waiting for the API"
 	@for i in $$(seq 1 60); do curl -fsS $(API_URL)/healthz >/dev/null 2>&1 && break; sleep 1; done
-	node cli/dist/index.js run examples/hello.py --duration 60 --allow-insecure-dev --payment-mode mock --api-url $(API_URL)
+	node cli/dist/index.js run examples/hello.py --duration 5m --allow-insecure-dev --payment-mode mock --api-url $(API_URL)
 
 demo-agent: cli
-	node cli/dist/index.js agent-demo examples/hello.py --duration 60 --allow-insecure-dev --payment-mode mock --api-url $(API_URL)
+	node cli/dist/index.js agent-demo examples/hello.py --duration 5m --allow-insecure-dev --payment-mode mock --api-url $(API_URL)
 
 demo-timeout: cli
-	-node cli/dist/index.js run examples/forever.py --duration 3 --allow-insecure-dev --payment-mode mock --api-url $(API_URL)
+	-./scripts/demo-timeout.sh
+
+demo-session: cli
+	./scripts/demo-session.sh
+
+demo-expire: cli
+	./scripts/demo-expire.sh
 
 cli:
 	npm run build -w @x402s/shared
+	npm run build -w @x402s/sdk
 	npm run build -w @x402s/cli
 
 fmt:

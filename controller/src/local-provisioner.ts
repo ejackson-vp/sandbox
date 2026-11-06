@@ -3,23 +3,24 @@
  *
  * Runs the real guest binary as a child process instead of a pod. Used by
  * `make dev-local` and the integration test suite; it exercises every control
- * plane path (relay, attestation, deadlines, reconciliation, cleanup) but does
+ * plane path (lease, relay RPC, attestation, filesystem, deadlines) but does
  * NOT provide Kubernetes isolation. It is never selected when
  * KUBERNETES_ENABLED=true.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Provisioner, SandboxPodSpec } from "./k8s.js";
+import { GUEST_TOOLS } from "./k8s.js";
 
 interface LocalPod {
   name: string;
   sessionId: string;
-  spec: SandboxPodSpec;
   proc: ChildProcess;
   createdAt: number;
   phase: string;
+  workDir: string;
   stderr: string;
 }
 
@@ -44,7 +45,8 @@ export class LocalProvisioner implements Provisioner {
   async createPod(spec: SandboxPodSpec): Promise<{ podName: string }> {
     const podName = `local-${spec.sessionId}`;
     const workDir = join(this.workRoot, spec.sessionId);
-    mkdirSync(workDir, { recursive: true });
+    const workspace = join(workDir, "workspace");
+    mkdirSync(workspace, { recursive: true });
 
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
@@ -53,12 +55,18 @@ export class LocalProvisioner implements Provisioner {
       GUEST_TOKEN: spec.guestToken,
       CLIENT_PUBLIC_KEY: spec.clientPublicKey,
       CLIENT_NONCE: spec.clientNonce,
-      EXEC_DURATION_SECONDS: String(spec.durationSeconds),
+      LEASE_SECONDS: String(spec.leaseSeconds),
       EXECUTION_MODE: spec.executionMode,
       RUNTIME_CLASS: spec.runtimeClass,
       GUEST_IMAGE_DIGEST: spec.imageDigest,
-      MAX_OUTPUT_BYTES: "65536",
+      WORKSPACE_DIR: workspace,
       X402_SANDBOX_DIR: workDir,
+      MAX_OUTPUT_BYTES: String(spec.limits.maxOutputBytes),
+      MAX_FILE_BYTES: String(spec.limits.maxFileBytes),
+      MAX_DISK_MIB: String(spec.limits.diskMiB),
+      MAX_COMMAND_SECONDS: String(spec.limits.maxCommandSeconds),
+      MAX_PROCESSES: String(spec.limits.maxProcesses),
+      GUEST_TOOLS: GUEST_TOOLS.join(","),
       DEV_ATTESTATION_KEY: process.env.DEV_ATTESTATION_KEY ?? "",
       DEV_ATTESTATION_KEY_ID: process.env.DEV_ATTESTATION_KEY_ID ?? "",
       EGRESS_PROXY_URL: `http://${this.opts.proxyHost}:${this.opts.proxyPort}`,
@@ -70,15 +78,15 @@ export class LocalProvisioner implements Provisioner {
     const pod: LocalPod = {
       name: podName,
       sessionId: spec.sessionId,
-      spec,
       proc,
       createdAt: Date.now(),
       phase: "Running",
+      workDir,
       stderr: "",
     };
     proc.stderr?.on("data", (chunk: Buffer) => {
-      // Keep a bounded tail for diagnostics only; guest logs never contain
-      // customer code or output.
+      // Bounded tail for diagnostics only; guest logs never contain customer
+      // code, file contents or output.
       pod.stderr = (pod.stderr + chunk.toString()).slice(-4096);
     });
     proc.on("exit", () => {
@@ -94,6 +102,7 @@ export class LocalProvisioner implements Provisioner {
     if (pod.proc.exitCode === null) pod.proc.kill("SIGKILL");
     pod.phase = "Succeeded";
     this.pods.delete(podName);
+    rmSync(pod.workDir, { recursive: true, force: true });
   }
 
   async getPod(podName: string): Promise<{ phase: string; deleted: boolean } | null> {

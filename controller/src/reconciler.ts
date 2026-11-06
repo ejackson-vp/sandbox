@@ -1,16 +1,15 @@
 /**
- * Reconciliation loop: the only component that mutates sandbox state.
+ * Reconciliation loop: the only component that mutates session state.
  *
- * Responsibilities
- *  - PAID -> PROVISIONING: register the session at the relay, mint an ephemeral
- *    guest token + proxy token, create the pod.
- *  - PROVISIONING -> READY: wait for the guest's hello (evidence bound to this
- *    session and the customer nonce). The execution window starts HERE.
- *  - READY/RUNNING -> COMPLETED: pick up the encrypted result from the relay.
- *  - independent deadline enforcement (guest watchdog is not trusted).
- *  - teardown: delete pods, purge relay state, drop ephemeral data.
- *  - orphan sweep: delete pods whose session is unknown or terminal, and pods
- *    older than MAX_POD_AGE, including after a controller crash/restart.
+ *  PAID          -> register relay session + create pod
+ *  PROVISIONING  -> READY when the guest hello (with evidence) arrives; the
+ *                   immutable lease deadline is set here (ready + duration)
+ *  READY/ACTIVE  -> TERMINATING on lease expiry or client destroy
+ *  TERMINATING   -> ask the guest to stop, delete the pod, purge relay state,
+ *                   then finalise as EXPIRED / DESTROYED / FAILED
+ *
+ * Deadline enforcement never depends on the untrusted guest cooperating: the
+ * controller's clock decides, and pod deletion is the backstop.
  */
 import type { RelaySessionState } from "@x402s/shared";
 import type { ControllerConfig } from "./config.js";
@@ -53,13 +52,11 @@ export class Reconciler {
     this.timer = null;
   }
 
-  /** One reconciliation pass. Exposed for tests and crash-recovery debugging. */
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
-      const sessions = this.deps.store.listNonTerminal();
-      for (const session of sessions) {
+      for (const session of this.deps.store.listNonTerminal()) {
         try {
           await this.reconcileSession(session);
         } catch (err) {
@@ -69,6 +66,11 @@ export class Reconciler {
             error: (err as Error).message,
           });
         }
+      }
+      for (const session of this.deps.store.listTerminalWithPod()) {
+        if (!session.podName) continue;
+        await this.deps.provisioner.deletePod(session.podName, 0).catch(() => undefined);
+        this.deps.store.clearPod(session.id);
       }
       await this.sweepOrphanPods();
     } catch (err) {
@@ -87,15 +89,11 @@ export class Reconciler {
         await this.awaitReady(session);
         break;
       case "READY":
-      case "RUNNING":
-        await this.enforceDeadline(session);
+      case "ACTIVE":
+        await this.enforceLease(session);
         break;
-      case "COMPLETED":
-        await this.finishCompleted(session);
-        break;
-      case "EXPIRED":
-      case "FAILED":
-        await this.teardown(session);
+      case "TERMINATING":
+        await this.terminate(session);
         break;
       default:
         break;
@@ -111,33 +109,35 @@ export class Reconciler {
     const relayAddr = await this.serviceAddress(this.deps.cfg.relayServiceName);
     const proxyAddr = await this.serviceAddress(this.deps.cfg.proxyServiceName);
     if (!relayAddr || !proxyAddr) {
-      // Retry on the next tick; do not fail fast, services may still be coming up.
-      log.warn("sandbox_services_unavailable", { sessionId: session.id, relay: Boolean(relayAddr), proxy: Boolean(proxyAddr) });
+      log.warn("sandbox_services_unavailable", {
+        sessionId: session.id,
+        relay: Boolean(relayAddr),
+        proxy: Boolean(proxyAddr),
+      });
       return;
     }
 
     const guestToken = newOpaqueToken(32);
     const tokenHash = sha256Hex(guestToken);
+    const ttlMs =
+      this.deps.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
     try {
-      await this.deps.relay.register(session.id, tokenHash, 15 * 60_000);
+      await this.deps.relay.register(session.id, tokenHash, ttlMs);
     } catch (err) {
-      const status = (err as { status?: number }).status;
-      if (status !== 409) {
+      if ((err as { status?: number }).status !== 409) {
         log.warn("relay_register_failed", { sessionId: session.id, error: (err as Error).message });
         return;
       }
     }
     this.deps.store.setRelayToken(session.id, tokenHash);
 
-    // The guest token is NOT placed in the URL or the main container env: the
-    // bootstrap init container writes it to a 0400 file that the guest reads and
-    // deletes before any customer payload arrives.
     const relayUrl = `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(session.id)}`;
     const proxyUrl = `http://${proxyAddr.host}:${proxyAddr.port}`;
 
     const { podName } = await this.deps.provisioner.createPod({
       sessionId: session.id,
-      durationSeconds: session.durationSeconds,
+      leaseSeconds: session.durationSeconds,
+      limits: session.limits,
       clientPublicKey: session.clientPublicKey,
       clientNonce: session.clientNonce,
       guestToken,
@@ -150,35 +150,47 @@ export class Reconciler {
       imageDigest: this.deps.cfg.guestImageDigest,
       runtimeClass: this.deps.cfg.runtimeClass,
       executionMode: this.deps.cfg.executionMode,
+      workspaceDir: this.deps.cfg.workspaceDir,
     });
 
-    const moved = this.deps.store.setProvisioning(session.id, podName);
-    objectNoop(moved);
-    log.info("sandbox_provisioning", { sessionId: session.id, podName, runtimeClass: this.deps.cfg.runtimeClass });
+    this.deps.store.setProvisioning(session.id, podName);
+    log.info("sandbox_provisioning", {
+      sessionId: session.id,
+      podName,
+      runtimeClass: this.deps.cfg.runtimeClass,
+      tier: session.tier,
+      leaseSeconds: session.durationSeconds,
+    });
   }
 
   private async awaitReady(session: SessionRecord): Promise<void> {
-    const age = this.now() - session.createdAt;
+    const age = this.now() - (session.paidAt ?? session.createdAt);
     if (age > this.deps.cfg.provisioningTimeoutMs) {
-      this.deps.store.markFailed(session.id, "provisioning_timeout", "sandbox did not become ready in time");
+      this.deps.store.requestTermination(session.id, "failure:provisioning_timeout", {
+        code: "provisioning_timeout",
+        message: "sandbox did not become ready in time",
+      });
       log.warn("sandbox_provisioning_timeout", { sessionId: session.id, ageMs: age });
       return;
     }
 
-    // Re-register if the relay restarted and lost in-memory state.
     if (session.relayTokenHash) {
       try {
         const state = await this.deps.relay.state(session.id);
         if (!state.registered) {
-          await this.deps.relay.register(session.id, session.relayTokenHash, 15 * 60_000);
+          await this.deps.relay.register(
+            session.id,
+            session.relayTokenHash,
+            this.deps.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 300_000,
+          );
         }
         if (state.connected && state.attestation) {
           const readyAt = this.now();
-          const deadline = readyAt + session.durationSeconds * 1000;
+          const leaseExpiresAt = readyAt + session.durationSeconds * 1000;
           const ok = this.deps.store.setReady(
             session.id,
             readyAt,
-            deadline,
+            leaseExpiresAt,
             JSON.stringify(state.attestation),
             state.attestation.guestPublicKey,
           );
@@ -187,7 +199,7 @@ export class Reconciler {
               sessionId: session.id,
               evidenceType: state.attestation.evidenceType,
               insecureDevOnly: state.attestation.insecureDevOnly,
-              executionDeadline: new Date(deadline).toISOString(),
+              leaseExpiresAt: new Date(leaseExpiresAt).toISOString(),
             });
           }
         }
@@ -196,96 +208,57 @@ export class Reconciler {
       }
     }
 
-    // Pod-level failures: a pod that will never start should fail the session
-    // instead of burning the provisioning budget.
     if (session.podName) {
       const pod = await this.deps.provisioner.getPod(session.podName).catch(() => null);
       if (pod && (pod.phase === "Failed" || pod.phase === "Succeeded")) {
-        this.deps.store.markFailed(session.id, "pod_terminated", `pod reached phase ${pod.phase}`);
+        this.deps.store.requestTermination(session.id, "failure:pod_terminated", {
+          code: "pod_terminated",
+          message: `pod reached phase ${pod.phase}`,
+        });
       }
     }
   }
 
-  private async enforceDeadline(session: SessionRecord): Promise<void> {
-    const deadline = session.executionDeadlineAt;
-    if (!deadline) return;
-
+  private async enforceLease(session: SessionRecord): Promise<void> {
     if (session.destroyRequested) {
-      this.deps.store.markFailed(session.id, "cancelled_by_client", "sandbox destroyed at customer request");
+      this.deps.store.requestTermination(session.id, "client_destroy");
       return;
     }
-
+    const deadline = session.leaseExpiresAt;
+    if (deadline === null) return;
     const now = this.now();
-    if (now > deadline + this.deps.cfg.executionGraceMs) {
-      const code = session.state === "RUNNING" ? "execution_timeout" : "execution_window_elapsed";
-      this.deps.store.markExpired(session.id, code, "execution window ended; sandbox terminated");
-      log.warn("sandbox_expired", { sessionId: session.id, state: session.state, overrunMs: now - deadline });
-      return;
-    }
-
-    // Pick up a guest result proactively so the CLI sees COMPLETED promptly.
-    if (session.state === "RUNNING") {
-      try {
-        const state = await this.deps.relay.state(session.id);
-        if (state.resultAvailable) {
-          this.deps.store.markCompleted(session.id);
-          log.info("sandbox_completed", { sessionId: session.id });
-        }
-        if (state.error && !state.resultAvailable) {
-          this.deps.store.markFailed(session.id, "guest_error", state.error);
-        }
-      } catch {
-        /* relay hiccup: retry next tick */
-      }
+    if (now > deadline + this.deps.cfg.leaseGraceMs) {
+      this.deps.store.requestTermination(session.id, "lease_expired");
+      log.warn("sandbox_lease_expired", { sessionId: session.id, state: session.state, overrunMs: now - deadline });
     }
   }
 
-  private async finishCompleted(session: SessionRecord): Promise<void> {
-    // Execution state is discarded as soon as it completes: delete the pod now.
-    if (session.podName) {
-      const pod = await this.deps.provisioner.getPod(session.podName).catch(() => null);
-      if (pod) {
-        await this.deps.provisioner.deletePod(session.podName, 0).catch(() => undefined);
-      } else {
-        this.deps.store.clearPod(session.id);
-      }
-    }
-
-    if (session.destroyRequested) {
-      await this.purgeRelay(session);
-      this.deps.store.markDestroyed(session.id);
-      return;
-    }
-
-    const completedAt = session.completedAt ?? this.now();
-    const fetched = session.resultFetchedAt !== null;
-    const expired = this.now() > completedAt + this.deps.cfg.resultTtlMs;
-    if (fetched || expired) {
-      await this.purgeRelay(session);
-      this.deps.store.markDestroyed(session.id);
-      log.info("sandbox_destroyed", { sessionId: session.id, reason: fetched ? "result_fetched" : "result_ttl" });
-    }
-  }
-
-  private async teardown(session: SessionRecord): Promise<void> {
-    if (session.podName) {
-      const pod = await this.deps.provisioner.getPod(session.podName).catch(() => null);
-      if (pod) {
-        await this.deps.provisioner.deletePod(session.podName, 0).catch(() => undefined);
-      }
-    }
-    await this.purgeRelay(session);
-    this.deps.store.noteDestroyed(session.id);
-  }
-
-  private async purgeRelay(session: SessionRecord): Promise<void> {
-    if (session.relayPurgedAt !== null) return;
+  private async terminate(session: SessionRecord): Promise<void> {
+    // Ask the guest to stop so it can kill descendants before the pod goes away.
     try {
-      await this.deps.relay.purge(session.id);
-      this.deps.store.markRelayPurged(session.id);
-    } catch (err) {
-      log.warn("relay_purge_failed", { sessionId: session.id, error: (err as Error).message });
+      await this.deps.relay.shutdown(session.id, session.terminationReason ?? "terminated");
+    } catch {
+      /* relay may already be gone */
     }
+
+    if (session.podName) {
+      await this.deps.provisioner.deletePod(session.podName, 1).catch(() => undefined);
+      this.deps.store.clearPod(session.id);
+    }
+    if (session.relayPurgedAt === null) {
+      try {
+        await this.deps.relay.purge(session.id);
+        this.deps.store.markRelayPurged(session.id);
+      } catch (err) {
+        log.warn("relay_purge_failed", { sessionId: session.id, error: (err as Error).message });
+      }
+    }
+    const finalState = this.deps.store.finalizeTermination(session.id);
+    log.info("sandbox_destroyed", {
+      sessionId: session.id,
+      state: finalState ?? "unknown",
+      reason: session.terminationReason ?? "unknown",
+    });
   }
 
   /** Delete pods that no session owns, or that outlived every possible deadline. */
@@ -299,23 +272,25 @@ export class Reconciler {
     const now = this.now();
     for (const pod of pods) {
       const session = pod.sessionId ? this.deps.store.getSession(pod.sessionId) : null;
-      const orphan = !session || ["DESTROYED", "EXPIRED", "FAILED", "COMPLETED"].includes(session.state);
+      const terminal =
+        !session || ["DESTROYED", "EXPIRED", "FAILED", "TERMINATING"].includes(session.state);
       const tooOld = pod.createdAt > 0 && now - pod.createdAt > this.deps.cfg.maxPodAgeMs;
-      if (orphan || tooOld) {
+      if (terminal || tooOld) {
         await this.deps.provisioner.deletePod(pod.name, 0).catch(() => undefined);
         log.warn("orphan_pod_reaped", {
           podName: pod.name,
           sessionId: pod.sessionId || undefined,
-          reason: orphan ? "no_live_session" : "max_age",
+          reason: terminal ? "no_live_session" : "max_age",
         });
-        if (session && !["DESTROYED", "EXPIRED", "FAILED", "COMPLETED"].includes(session.state)) {
-          this.deps.store.markFailed(session.id, "reaped", "sandbox exceeded maximum age");
+        if (session && session.state !== "TERMINATING") {
+          this.deps.store.requestTermination(session.id, "failure:reaped", {
+            code: "reaped",
+            message: "sandbox exceeded the maximum pod age",
+          });
         }
       }
     }
   }
 }
 
-function objectNoop(_v: unknown): void {
-  /* keeps intentional ignored return values explicit */
-}
+export type { RelaySessionState };

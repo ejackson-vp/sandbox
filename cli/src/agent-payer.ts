@@ -1,16 +1,13 @@
 /**
- * Agent purchase path.
- *
- * This is the "an agent can buy and invoke the sandbox" demonstration: the
- * whole payment handshake is handled by @x402/fetch's wrapFetchWithPayment,
- * exactly as an autonomous agent would do it.
+ * Agent purchase path: the whole payment handshake is handled by
+ * @x402/fetch's wrapFetchWithPayment, exactly as an autonomous agent would do.
  */
 import { x402Client } from "@x402/core/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { MOCK_NETWORK, MockExactClientScheme, TESTNET_NETWORK, formatUsd } from "@x402s/shared";
+import type { Payer, PaymentMode } from "@x402s/sdk";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import type { Payer, PaymentMode } from "./payment.js";
 
 export async function createAgentPayer(
   mode: PaymentMode,
@@ -41,27 +38,25 @@ export async function createAgentPayer(
 
   const fetchWithPayment = wrapFetchWithPayment(fetch, client);
 
-  // Price is fetched only for display; the SDK reads the real 402 challenge.
   let priceUsd = "unknown";
   let network: string = mode === "mock" ? MOCK_NETWORK : TESTNET_NETWORK;
   try {
     const pricing = (await (await fetch(`${apiUrl}/v1/pricing`)).json()) as {
-      priceUsd?: string;
-      amount?: string;
+      tiers?: Record<string, { priceUsd?: string }>;
       network?: string;
     };
-    priceUsd = pricing.priceUsd ?? (pricing.amount ? formatUsd(pricing.amount) : "unknown");
+    priceUsd = pricing.tiers?.standard?.priceUsd ?? formatUsd("50000");
     network = pricing.network ?? network;
   } catch {
-    /* non-fatal: display only */
+    /* display only */
   }
 
   return {
     mode,
-    async createSandbox(baseUrl, body) {
-      log("discovered price: " + priceUsd);
+    async createSession(baseUrl, body) {
+      log(`discovered price: ${priceUsd}`);
       log("signing x402 payment and retrying request");
-      const response = await fetchWithPayment(`${baseUrl}/v1/sandboxes`, {
+      const response = await fetchWithPayment(`${baseUrl}/v1/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),

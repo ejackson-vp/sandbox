@@ -6,6 +6,7 @@
   "description": "Pay-per-execution confidential sandbox service using x402 micropayments",
   "workspaces": [
     "shared",
+    "sdk",
     "api",
     "controller",
     "cli"
@@ -14,13 +15,13 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "npm run build -w @x402s/shared && npm run build -w @x402s/api && npm run build -w @x402s/controller && npm run build -w @x402s/cli",
+    "build": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && npm run build -w @x402s/api && npm run build -w @x402s/controller && npm run build -w @x402s/cli",
     "typecheck": "npm run build",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:security": "vitest run tests/security",
-    "clean": "rm -rf shared/dist api/dist controller/dist cli/dist"
+    "clean": "rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

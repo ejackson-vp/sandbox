@@ -27,6 +27,9 @@ type Config struct {
 	ImageDigest     string
 	DevKeyID        string
 	DevKeySeedB64   string
+	Tools           []string
+	// LeaseSeconds extends the evidence validity to cover the purchased lease.
+	LeaseSeconds int64
 }
 
 // GuestMeasurement hashes the running executable. In a real confidential
@@ -88,7 +91,7 @@ func BuildEvidence(cfg Config) (map[string]any, error) {
 		"clientNonce":     cfg.ClientNonce,
 		"bootNonce":       bootNonce,
 		"issuedAt":        now.UnixMilli(),
-		"expiresAt":       now.Add(120 * time.Second).UnixMilli(),
+		"expiresAt":       now.Add(time.Duration(cfg.LeaseSeconds)*time.Second + 300*time.Second).UnixMilli(),
 		"report":          "",
 		"claims": map[string]any{
 			"guestMeasurement":    measurement,
@@ -97,6 +100,7 @@ func BuildEvidence(cfg Config) (map[string]any, error) {
 			"kernelRelease":       KernelRelease(),
 			"hardwareBacked":      false,
 			"guestPolicyEnforced": false,
+			"tools":               cfg.Tools,
 		},
 	}
 
