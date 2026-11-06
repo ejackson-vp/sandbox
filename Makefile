@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up down build deploy demo demo-agent demo-timeout demo-capacity demo-placement test test-unit test-integration security-test security-network guest guest-load logs clean fmt images benchmark-capacity benchmark-multinode
+.PHONY: help up down build deploy demo demo-agent demo-timeout demo-capacity demo-placement demo-python demo-browser demo-http-basic test-workloads test test-unit test-integration security-test security-network guest guest-load logs clean fmt images benchmark-capacity benchmark-multinode
 
 help:
 	@echo "x402 sandbox sessions"
@@ -27,7 +27,8 @@ help:
 	@echo "  make demo-lifecycle checkpoint a session, resume it, verify the workspace"
 	@echo "  make demo-portability prove a node-pinned checkpoint fails fast when cordoned"
 	@echo "  make demo-faults   missing PVC + controller restart while suspended"
-	@echo "  make demo-http     start a local server and fetch it through the relay"
+	@echo "  make demo-http     Node HTTP/SSE/WebSocket workload"
+	@echo "  make demo-http-basic minimal Python server through the relay"
 	@echo "  make demo-sse      stream SSE chunks through the relay"
 	@echo "  make demo-ws       WebSocket echo through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
@@ -103,8 +104,20 @@ demo-portability:
 demo-faults:
 	npx tsx scripts/lifecycle-faults.ts
 
-demo-http:
+demo-http-basic:
 	npx tsx scripts/http-demo.ts
+
+demo-http:
+	npx tsx examples/node-http-service/workload.ts
+
+demo-python:
+	npx tsx examples/python-data-processing/workload.ts
+
+demo-browser:
+	npx tsx examples/browser-automation/workload.ts
+
+test-workloads:
+	npx vitest run tests/workloads tests/compatibility
 
 demo-sse:
 	npx tsx scripts/sse-demo.ts

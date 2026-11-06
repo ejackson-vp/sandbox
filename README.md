@@ -29,10 +29,14 @@ make demo-placement # two-worker least-allocated placement (make up-2w)
 make benchmark-multinode # two-worker burst (make up-2w; shared Docker VM)
 make demo-portability # cordon the checkpoint node; prove resume fails fast
 make demo-faults    # delete a suspended PVC; restart the controller mid-suspend
-make demo-http      # run a server in the sandbox and fetch it via the relay
+make demo-http      # Node HTTP/SSE/WebSocket workload
+make demo-python    # Python pandas data-processing workload
+make demo-browser   # Playwright/Chromium compatibility probe
+make demo-http-basic # minimal Python HTTP server through the relay
 make demo-sse       # stream server-sent events through the relay
 make demo-ws        # WebSocket echo through the relay
 make test           # unit + local integration tests
+make test-workloads # workload fixtures and compatibility probes
 make security-test  # packet-level isolation + lifecycle tests on the cluster
 make down
 ```
@@ -57,8 +61,9 @@ Sandbox: destroyed
 no sandbox pods remain
 ```
 
-HTTP: `make demo-http` starts a server in the sandbox and fetches it through the
-relay; see [docs/http.md](docs/http.md).
+HTTP: `make demo-http` runs the Node HTTP/SSE/WebSocket workload;
+`make demo-http-basic` is the minimal Python server walkthrough in
+[docs/http.md](docs/http.md).
 
 Lifecycle: `make demo-lifecycle` exercises the suspend/resume contract; see
 [docs/lifecycle.md](docs/lifecycle.md) for the state machine, security caveats
@@ -191,6 +196,10 @@ Run: `make test` and `make security-test` (after `make up`).
 
 - [docs/status-2026-11-06.md](docs/status-2026-11-06.md)
 - [docs/code-size-audit.md](docs/code-size-audit.md)
+- [docs/quickstart.md](docs/quickstart.md)
+- [docs/workload-compatibility.md](docs/workload-compatibility.md)
+- [docs/developer-experience-review.md](docs/developer-experience-review.md)
+- [docs/milestone-5-results.md](docs/milestone-5-results.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)
 - [docs/cli.md](docs/cli.md)

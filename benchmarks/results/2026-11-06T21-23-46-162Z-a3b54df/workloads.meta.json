@@ -1,0 +1,11 @@
+{
+  "runId": "2026-11-06T21-23-46-162Z-a3b54df",
+  "scenario": "workloads",
+  "finishedAt": "2026-11-06T21:24:14.901Z",
+  "notes": [
+    "2026-11-06T21:23:46.178Z start workloads; host=Darwin 27.2.0/arm64 docker=14cpu/7.7GiB kvm=false",
+    "2026-11-06T21:23:47.933Z workload session sbx_900c4f7575447f93f2f8c7de ready in 1.75s",
+    "2026-11-06T21:24:14.901Z cleanup: swept 1 leftover sandbox pod(s)"
+  ],
+  "exitCode": 0
+}

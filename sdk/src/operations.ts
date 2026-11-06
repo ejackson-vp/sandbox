@@ -17,6 +17,7 @@ import type {
   OperationError,
 } from "@x402s/shared";
 import type { ClientRuntime } from "./runtime.js";
+import { SandboxError } from "./types.js";
 import type { ExecOptions, FilePutOptions, SessionHandle } from "./types.js";
 
 export class OperationService {
@@ -40,6 +41,13 @@ export class OperationService {
   }
 
   async putFile(handle: SessionHandle, opts: FilePutOptions): Promise<FilePutResult | OperationError> {
+    const maxFileBytes = handle.status?.limits.maxFileBytes ?? 8 * 1024 * 1024;
+    if (opts.data.byteLength > maxFileBytes) {
+      throw new SandboxError(
+        "file_too_large",
+        `file is ${opts.data.byteLength} bytes; this session allows ${maxFileBytes} bytes per upload`,
+      );
+    }
     const requestId = opts.requestId ?? randomBytes(16).toString("hex");
     const operation: FilePutOperation = {
       v: 2,

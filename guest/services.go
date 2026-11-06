@@ -43,12 +43,18 @@ func (s *supervisor) startService(ctx context.Context, req *protocol.Request) *p
 		s.mu.Unlock()
 		return protocol.ErrorResult(req, "too_many_services", fmt.Sprintf("at most %d services", maxServices))
 	}
-	if _, exists := s.services[name]; exists {
-		s.mu.Unlock()
-		return protocol.ErrorResult(req, "service_exists", "a service with that name already exists")
+	if existing, exists := s.services[name]; exists {
+		if existing.Running() {
+			s.mu.Unlock()
+			return protocol.ErrorResult(req, "service_exists", "a service with that name already exists")
+		}
+		// A crashed service keeps its registry entry until someone notices.
+		// Replacing a dead entry lets the customer restart the same name without
+		// a separate stop round trip.
+		delete(s.services, name)
 	}
 	for _, existing := range s.services {
-		if existing.Port == req.Port {
+		if existing.Running() && existing.Port == req.Port {
 			s.mu.Unlock()
 			return protocol.ErrorResult(req, "port_in_use", "another service already declares that port")
 		}

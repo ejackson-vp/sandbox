@@ -1,0 +1,9 @@
+{
+  "name": "x402-node-workload",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

@@ -168,7 +168,7 @@ sandbox http <id> 8080 /
 sandbox stop-service <id> web
 ```
 
-`make demo-http` exercises the whole path on kind: start a Python server, fetch
+`make demo-http-basic` exercises the whole path on kind: start a Python server, fetch
 it through the relay, list it, stop it, destroy the session.
 
 ## Comparison

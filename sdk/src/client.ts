@@ -7,6 +7,7 @@ import { ClientRuntime } from "./runtime.js";
 import { SessionService } from "./session.js";
 import { OperationService } from "./operations.js";
 import { DataPlane } from "./data-plane.js";
+import { Sandbox } from "./sandbox.js";
 import type { StoredSession } from "./session-store.js";
 import type {
   CreateOptions,
@@ -38,6 +39,16 @@ export class SandboxClient {
 
   createSession(opts: CreateOptions = {}): Promise<SessionHandle> {
     return this.sessions.create(opts);
+  }
+
+  /**
+   * Create a sandbox and wait until it is READY. This is the recommended
+   * application-facing entry point.
+   */
+  async create(opts: CreateOptions = {}): Promise<Sandbox> {
+    const handle = await this.createSession(opts);
+    await this.waitForReady(handle);
+    return new Sandbox(this, handle);
   }
 
   attach(sessionId: string): SessionHandle {

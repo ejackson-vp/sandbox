@@ -17,8 +17,12 @@ export class SessionService {
   async create(opts: CreateOptions = {}): Promise<SessionHandle> {
     const keys = await generateBoxKeyPair();
     const clientNonce = toBase64(await generateNonce());
+    const customResources =
+      opts.tier === undefined &&
+      [opts.cpuMillis, opts.memoryMiB, opts.diskMiB, opts.baselineCpuMillis, opts.baselineMemoryMiB]
+        .some((value) => value !== undefined);
     const body: CreateSessionRequest = {
-      ...(opts.tier ? { tier: opts.tier } : {}),
+      ...(opts.tier ? { tier: opts.tier } : customResources ? { tier: "custom" as const } : {}),
       ...(opts.durationSeconds === undefined ? {} : { durationSeconds: opts.durationSeconds }),
       ...(opts.cpuMillis === undefined ? {} : { cpuMillis: opts.cpuMillis }),
       ...(opts.memoryMiB === undefined ? {} : { memoryMiB: opts.memoryMiB }),
