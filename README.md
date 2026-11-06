@@ -184,6 +184,7 @@ Run: `make test` and `make security-test` (after `make up`).
 
 ## Documentation
 
+- [docs/status-2026-11-06.md](docs/status-2026-11-06.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)
 - [docs/cli.md](docs/cli.md)
