@@ -17,7 +17,7 @@ payments; synthetic data only. No security control was relaxed.
 | Cancellation | Yes | `transfer.cancel` removes staging |
 | Directory archive streaming | **Yes** | 80-file synthetic tree round trip; upload extracts to a temporary directory; destination must not already exist |
 | Resume after guest/relay restart | **No** | fails explicitly; no distributed storage |
-| 1 MiB chunk | **No** | sealed envelope cap is 1 MiB; chunk cap is 512 KiB |
+| 1 MiB chunk | **Yes** | requires the 2 MiB sealed-envelope budget; default remains 512 KiB |
 
 The Milestone 5 Python workload was upgraded to a **102.45 MiB, 6,000,000-row
 CSV** and completed end to end:
@@ -111,8 +111,8 @@ Caveats:
   memory.
 - The session capability authorizes transfers like any other operation; there
   is no separate transfer capability.
-- A 1 MiB chunk cannot fit the existing 1 MiB sealed-envelope limit, so the
-  streaming chunk cap is 512 KiB.
+- The sealed-envelope budget is now 2 MiB to support an optional 1 MiB chunk;
+  the default remains 512 KiB. This increases per-operation memory by ~1 MiB.
 
 ## E. SDK experience
 
@@ -139,8 +139,8 @@ legacy 8 MiB file limit.
 
 Measured limits:
 
-- 512 KiB chunk is best of the tested sizes; 64 KiB loses to round-trip
-  overhead, 1 MiB is blocked by the envelope cap.
+- 512 KiB is the default; 1 MiB improves 32 MiB upload/download to 16.93/19.06
+  MiB/s, but needs the 2 MiB envelope budget. 64 KiB loses to round-trip overhead.
 - Throughput plateaus at ~16 MiB/s up / ~19 MiB/s down. Each chunk is one
   controller→relay→guest→relay→API round trip; window is 1.
 - API read limiter was raised from 600/40 to 2400/200 burst/refill to avoid
@@ -158,8 +158,7 @@ Measured limits:
 - No resume after guest/relay restart; no durable staging metadata.
 - No transfer-specific capability or byte-level controller metrics
   (`bytes_total`, `inflight_bytes`, `staging_bytes` are not emitted).
-- 1 MiB chunks need a larger sealed-envelope budget or a different chunk
-  container.
+- 1 MiB chunks increase envelope memory; they are opt-in, not the default.
 - 256 MiB works as an opt-in stress; local tmpfs memory is the practical limit.
 - Source-mutation detection is per read; no test with a deliberately changing
   source.
@@ -168,9 +167,10 @@ Measured limits:
 
 The single most valuable next experiment is **bounded pipelining**: allow a
 small in-flight window (2–4 chunks) with batched ACKs, while keeping per-session
-byte and memory caps. The 512 KiB round-trip plateau is the measured bottleneck;
-64 KiB is worse, and 1 MiB needs an envelope change. Pipelining addresses the
-observed limit without increasing the global envelope size.
+byte and memory caps. The one-chunk round trip is the measured bottleneck:
+64 KiB is worse, 512 KiB is the default, and 1 MiB improves 32 MiB throughput
+only modestly while costing a 2 MiB envelope. Pipelining addresses the
+round-trip limit without another global memory increase.
 
 Do not add distributed storage, Firecracker/Kata, autoscaling or a new queue to
 solve this.

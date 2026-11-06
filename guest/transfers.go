@@ -21,7 +21,7 @@ import (
 
 const (
 	transferTTL        = 10 * time.Minute
-	maxTransferChunk   = 4 * 1024 * 1024
+	maxTransferChunk   = 1024 * 1024
 	maxConcurrentXfers = 4
 	transferStagingDir = ".tmp/xfers"
 	transferIDPattern  = `^[A-Za-z0-9_-]{8,64}$`

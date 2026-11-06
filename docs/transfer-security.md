@@ -56,3 +56,5 @@ opaque envelopes and transfer operation counts.
   session capability can still authorize transfers, as with any other operation.
 - No plaintext paths or content are logged; transfer logs contain only ids,
   direction, byte counts and state.
+- The sealed-envelope budget is 2 MiB so an opt-in 1 MiB chunk fits. This is a
+  bounded per-operation allocation, not an unbounded file buffer.

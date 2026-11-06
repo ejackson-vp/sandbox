@@ -66,7 +66,10 @@ describe("real SQLite reservation concurrency", () => {
     const workers = Array.from({ length: 8 }, (_, i) => {
       const child = fork(WORKER, [], {
         execArgv: ["--import", "tsx"],
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        if (process.env.DEBUG_WORKERS) process.stderr.write(`[worker] ${chunk}`);
       });
       children.push(child);
       child.send({
@@ -84,6 +87,8 @@ describe("real SQLite reservation concurrency", () => {
     const results = workers.map((child) => waitFor(child, "result"));
     for (const child of workers) child.send({ type: "go" });
     const settled = await Promise.all(results);
+    const errors = settled.filter((r) => r.error);
+    if (errors.length) throw new Error(`worker errors: ${JSON.stringify(errors)}`);
     expect(settled.filter((r) => r.admitted === true)).toHaveLength(1);
     expect(settled.filter((r) => r.admitted === false)).toHaveLength(7);
   }, 30_000);

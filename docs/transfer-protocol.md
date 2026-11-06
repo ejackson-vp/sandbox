@@ -75,7 +75,7 @@ file. Concurrent uploads to the same path are rejected with `path_busy`.
 |---|---:|
 | Legacy per-message file | 8 MiB |
 | Streaming transfer | 256 MiB (`MAX_TRANSFER_BYTES`) |
-| Chunk size | 64 KiB–512 KiB; SDK default 512 KiB |
+| Chunk size | 64 KiB–1 MiB; SDK default 512 KiB; 1 MiB requires the 2 MiB envelope budget |
 | Concurrent transfers per session | 4 |
 | Staging TTL | 10 minutes |
 | Workspace disk | session `diskMiB` (default 256 MiB) |

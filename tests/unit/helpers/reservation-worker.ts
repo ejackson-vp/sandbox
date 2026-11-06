@@ -27,6 +27,8 @@ process.on("message", (message: Init) => {
         ttlMs: 60_000,
       });
       process.send?.({ type: "result", admitted: result.admitted });
+    } catch (err) {
+      process.send?.({ type: "result", error: (err as Error).message });
     } finally {
       store.close();
       process.exit(0);

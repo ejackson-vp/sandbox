@@ -26,7 +26,7 @@ export interface BoxKeyPair {
 export const KEY_BYTES = 32;
 export const NONCE_BYTES = 32;
 /** Hard cap on ciphertext we accept over the wire (1 MiB). */
-export const MAX_ENVELOPE_BYTES = 1024 * 1024;
+export const MAX_ENVELOPE_BYTES = 2 * 1024 * 1024;
 
 export async function generateBoxKeyPair(): Promise<BoxKeyPair> {
   await initCrypto();

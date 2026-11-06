@@ -15,7 +15,7 @@ const sizes = (process.env.SIZES ?? "1K,1M,8M,32M,100M").split(",").map((v) => {
   if (!m) throw new Error(`invalid size ${v}`);
   return Number(m[1]) * (m[2] === "M" ? MiB : 1024);
 });
-const chunkSizes = (process.env.CHUNKS ?? "65536,262144,524288").split(",").map(Number);
+const chunkSizes = (process.env.CHUNKS ?? "262144,524288,1048576").split(",").map(Number);
 
 function fileDigest(path: string): Promise<string> {
   return new Promise((resolve, reject) => {

@@ -18,7 +18,7 @@ import { SandboxError, type SessionHandle } from "./types.js";
 
 export const DEFAULT_CHUNK_SIZE = 512 * 1024;
 const MIN_CHUNK = 64 * 1024;
-const MAX_CHUNK = 512 * 1024;
+const MAX_CHUNK = 1024 * 1024;
 
 export interface TransferProgress {
   transferId: string;

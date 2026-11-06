@@ -24,11 +24,12 @@ Throughput plateaus around 16 MiB/s up and 19 MiB/s down.
 |---:|---:|---:|---:|---|
 | 64 KiB | 6.86 | 7.40 | 512 | too much round-trip overhead |
 | 256 KiB | 13.43 | 14.91 | 128 | good middle ground |
-| 512 KiB | **16.28** | **18.36** | 64 | best measured; envelope-safe |
+| 512 KiB | **16.28** | **18.36** | 64 | default |
+| 1 MiB | 16.93 | 19.06 | 32 | opt-in; requires 2 MiB envelope |
 
-A 1 MiB chunk is not usable with the existing 1 MiB sealed-envelope cap; the
-streaming protocol caps chunks at 512 KiB rather than raising the global
-envelope limit.
+The sealed-envelope budget is 2 MiB, allowing an optional 1 MiB chunk. The
+default remains 512 KiB: 1 MiB costs about 1 MiB more per in-flight operation
+and improves 32 MiB throughput only modestly.
 
 ## Memory
 
