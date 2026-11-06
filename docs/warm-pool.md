@@ -3,6 +3,13 @@
 Status: **implemented and measured in dev mode on the local kind rig.** Not
 enabled by default; not available in confidential mode (fail-closed).
 
+> **Position:** this pool is a development stand-in for snapshot restore, not a
+> scaling strategy. It is deliberately simpler than FES: fixed size, claim-once,
+> no reuse, no autoscaler, no Redis pool state. Do not add warm-VM reuse or
+> autoscaling. On a KVM host the fast path should be a Firecracker snapshot
+> restore per session; at that point this module should be deleted, not
+> extended. See [aws-microvms-comparison.md](aws-microvms-comparison.md).
+
 ## Why
 
 Warm start was dominated by container startup: in the 100-sample baseline,

@@ -3,7 +3,8 @@
 Status: **implemented in dev/local and on the kind cluster.** This is a
 filesystem checkpoint, not a Firecracker memory snapshot. The contract is
 inspired by AWS Lambda MicroVMs; the storage and isolation model is deliberately
-different.
+different. See [aws-microvms-comparison.md](aws-microvms-comparison.md) for the
+full comparison and what we would borrow next.
 
 ## Contract
 
