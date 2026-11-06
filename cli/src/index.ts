@@ -43,7 +43,7 @@ Usage:
   sandbox serve <session-id> --name web --port 8080 -- python3 -m http.server 8080
   sandbox services <session-id>
   sandbox stop-service <session-id> <name>
-  sandbox http <session-id> <port> <path> [--method GET] [--body text]
+  sandbox http <session-id> <port> <path> [--method GET] [--body text] [--stream]
   sandbox destroy <session-id>
   sandbox run <file>            # create + upload + exec + destroy (convenience)
   sandbox agent-demo <file>     # same, purchased through @x402/fetch
@@ -139,6 +139,7 @@ async function main(): Promise<number> {
       port: { type: "string" },
       method: { type: "string" },
       body: { type: "string" },
+      stream: { type: "boolean", default: false },
       "max-lifetime": { type: "string" },
       timeout: { type: "string" },
       env: { type: "string", multiple: true },
@@ -470,12 +471,25 @@ async function main(): Promise<number> {
       const id = requireArg(positionals[1], "session id");
       const port = Number(requireArg(positionals[2], "port"));
       const path = positionals[3] ?? "/";
-      const response = await client.http(attach(id), {
+      const handle = attach(id);
+      const request = {
         port,
         path,
         method: String(values.method ?? "GET"),
         ...(values.body !== undefined ? { body: String(values.body) } : {}),
-      });
+      };
+      if (values.stream) {
+        const stream = await client.openHttpStream(handle, request);
+        let done = false;
+        while (!done) {
+          const part = await stream.read();
+          if (part.chunk) process.stdout.write(part.chunk);
+          done = part.done;
+        }
+        await stream.close();
+        return 0;
+      }
+      const response = await client.http(handle, request);
       if (json) {
         process.stdout.write(
           JSON.stringify(

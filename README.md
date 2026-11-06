@@ -27,6 +27,7 @@ make demo-lifecycle # checkpoint a session, resume it, verify the workspace
 make demo-portability # cordon the checkpoint node; prove resume fails fast
 make demo-faults    # delete a suspended PVC; restart the controller mid-suspend
 make demo-http      # run a server in the sandbox and fetch it via the relay
+make demo-sse       # stream server-sent events through the relay
 make test           # unit + local integration tests
 make security-test  # packet-level isolation + lifecycle tests on the cluster
 make down

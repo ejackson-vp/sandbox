@@ -312,6 +312,25 @@ export interface HttpRequestOperation extends OperationBase {
   timeoutMs?: number;
 }
 
+export interface HttpStreamOpenOperation extends OperationBase {
+  op: "http.stream.open";
+  port: number;
+  method: string;
+  path: string;
+  headers?: Record<string, string>;
+  bodyBase64?: string;
+}
+
+export interface HttpStreamReadOperation extends OperationBase {
+  op: "http.stream.read";
+  streamId: string;
+}
+
+export interface HttpStreamCloseOperation extends OperationBase {
+  op: "http.stream.close";
+  streamId: string;
+}
+
 export interface ServiceInfo {
   name: string;
   port: number;
@@ -332,7 +351,10 @@ export type GuestRequest =
   | ServiceStartOperation
   | ServiceStopOperation
   | ServiceListOperation
-  | HttpRequestOperation;
+  | HttpRequestOperation
+  | HttpStreamOpenOperation
+  | HttpStreamReadOperation
+  | HttpStreamCloseOperation;
 
 export interface FileEntry {
   /** Workspace-relative path. */
@@ -428,6 +450,28 @@ export interface HttpResponseResult extends ResultBase {
   truncated: boolean;
 }
 
+export interface HttpStreamOpenResult extends ResultBase {
+  ok: true;
+  op: "http.stream.open";
+  streamId: string;
+  status: number;
+  headers: Record<string, string>;
+}
+
+export interface HttpStreamReadResult extends ResultBase {
+  ok: true;
+  op: "http.stream.read";
+  chunkBase64?: string;
+  pending?: boolean;
+  done?: boolean;
+}
+
+export interface HttpStreamCloseResult extends ResultBase {
+  ok: true;
+  op: "http.stream.close";
+  streamId: string;
+}
+
 export type GuestResult =
   | ExecResult
   | FilePutResult
@@ -438,6 +482,9 @@ export type GuestResult =
   | ServiceListResult
   | ServiceStopResult
   | HttpResponseResult
+  | HttpStreamOpenResult
+  | HttpStreamReadResult
+  | HttpStreamCloseResult
   | OperationError;
 
 /* ------------------------------------------------------------------ */

@@ -29,6 +29,12 @@ import {
   type GuestResult,
   type HttpRequestOperation,
   type HttpResponseResult,
+  type HttpStreamCloseOperation,
+  type HttpStreamCloseResult,
+  type HttpStreamOpenOperation,
+  type HttpStreamOpenResult,
+  type HttpStreamReadOperation,
+  type HttpStreamReadResult,
   type OperationError,
   type ServiceInfo,
   type ServiceListOperation,
@@ -131,6 +137,22 @@ export interface HttpResponse {
   headers: Record<string, string>;
   body: Buffer;
   truncated: boolean;
+}
+
+export interface OpenHttpStreamOptions {
+  port: number;
+  method?: string;
+  path?: string;
+  headers?: Record<string, string>;
+  body?: Buffer | Uint8Array | string;
+}
+
+export interface HttpStream {
+  streamId: string;
+  status: number;
+  headers: Record<string, string>;
+  read(): Promise<{ chunk?: Buffer; done: boolean }>;
+  close(): Promise<void>;
 }
 
 export interface ExecOptions {
@@ -504,6 +526,107 @@ export class SandboxClient {
       headers: result.headers,
       body: Buffer.from(result.bodyBase64, "base64"),
       truncated: result.truncated,
+    };
+  }
+
+  /**
+   * Open a streaming HTTP response (SSE/chunked) through the relay. The stream
+   * is polled with short sealed operations, so it does not hold the session's
+   * operation slot while waiting.
+   */
+  async openHttpStream(handle: SessionHandle, opts: OpenHttpStreamOptions): Promise<HttpStream> {
+    const self = this;
+    const body =
+      opts.body === undefined
+        ? undefined
+        : Buffer.from(typeof opts.body === "string" ? Buffer.from(opts.body) : opts.body);
+    const openId = randomBytes(16).toString("hex");
+    const openOperation: HttpStreamOpenOperation = {
+      v: 2,
+      sessionId: handle.sessionId,
+      clientNonce: handle.clientNonce,
+      requestId: openId,
+      op: "http.stream.open",
+      port: opts.port,
+      method: (opts.method ?? "GET").toUpperCase(),
+      path: opts.path ?? "/",
+      ...(opts.headers ? { headers: opts.headers } : {}),
+      ...(body ? { bodyBase64: body.toString("base64") } : {}),
+    };
+    const opened = await self.run<HttpStreamOpenResult | OperationError>(
+      handle,
+      openOperation,
+      openId,
+      0,
+      30_000,
+      undefined,
+      "http/stream",
+    );
+    if (!opened.ok) {
+      throw new SandboxError(opened.error?.code ?? "stream_open_failed", opened.error?.message ?? "stream open failed", undefined, openId);
+    }
+    const streamId = opened.streamId;
+
+    return {
+      streamId,
+      status: opened.status,
+      headers: opened.headers,
+      async read(): Promise<{ chunk?: Buffer; done: boolean }> {
+        for (;;) {
+          const requestId = randomBytes(16).toString("hex");
+          const operation: HttpStreamReadOperation = {
+            v: 2,
+            sessionId: handle.sessionId,
+            clientNonce: handle.clientNonce,
+            requestId,
+            op: "http.stream.read",
+            streamId,
+          };
+          const result = await self.run<HttpStreamReadResult | OperationError>(
+            handle,
+            operation,
+            requestId,
+            0,
+            10_000,
+            undefined,
+            "http/stream/read",
+          );
+          if (!result.ok) {
+            throw new SandboxError(result.error?.code ?? "stream_read_failed", result.error?.message ?? "stream read failed", undefined, requestId);
+          }
+          if (result.pending) {
+            await sleep(100);
+            continue;
+          }
+          return {
+            ...(result.chunkBase64 ? { chunk: Buffer.from(result.chunkBase64, "base64") } : {}),
+            done: Boolean(result.done),
+          };
+        }
+      },
+      async close(): Promise<void> {
+        const requestId = randomBytes(16).toString("hex");
+        const operation: HttpStreamCloseOperation = {
+          v: 2,
+          sessionId: handle.sessionId,
+          clientNonce: handle.clientNonce,
+          requestId,
+          op: "http.stream.close",
+          streamId,
+        };
+        const result = await self.run<HttpStreamCloseResult | OperationError>(
+          handle,
+          operation,
+          requestId,
+          0,
+          10_000,
+          undefined,
+          "http/stream/close",
+        );
+        if (!result.ok) {
+          throw new SandboxError(result.error?.code ?? "stream_close_failed", result.error?.message ?? "stream close failed", undefined, requestId);
+        }
+      },
     };
   }
 

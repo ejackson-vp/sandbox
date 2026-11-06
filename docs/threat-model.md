@@ -196,6 +196,7 @@ relay.
 | Leak service output/body to the control plane | The command, headers, body and response travel inside the sealed envelope; the API/controller only see ciphertext. |
 | Leave a server running after the lease | Services are process groups; `stop`, suspend, terminate and lease end call `shutdownAll`, which stops them. On Linux `Pdeathsig` is a backstop. |
 | Cross-session access to a service | Services live inside one guest/network namespace; no other session can reach them; the relay entry is capability-bound. |
+| Stream exhaustion | Max 4 streams, 64 MiB per stream, 64 KiB chunks, 60 s idle; close/shutdown cancels the request. |
 
 ## 3. Risk summary
 

@@ -723,6 +723,15 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   app.post("/v1/sessions/:id/http", rejectPlaintextBodies, (req, res) =>
     runOperation(req, res, "http"),
   );
+  app.post("/v1/sessions/:id/http/stream", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "http"),
+  );
+  app.post("/v1/sessions/:id/http/stream/read", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "http"),
+  );
+  app.post("/v1/sessions/:id/http/stream/close", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "http"),
+  );
 
   app.put("/v1/sessions/:id/files", rejectPlaintextBodies, (req, res) => runOperation(req, res, "file.put"));
 

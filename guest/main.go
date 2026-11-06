@@ -219,6 +219,7 @@ func runSession(cfg sessionConfig) error {
 		inflight: map[string]context.CancelFunc{},
 		slots:    make(chan struct{}, 1),
 		services: map[string]*runner.Service{},
+		streams:  map[string]*httpStream{},
 		maxFile:  cfg.MaxFileBytes,
 	}
 	logEvent("guest_ready", map[string]any{"sessionId": cfg.SessionID, "leaseDeadline": sup.lease.UTC().Format(time.RFC3339)})
@@ -358,6 +359,8 @@ type supervisor struct {
 
 	// Long-running local services (HTTP servers) started by the customer.
 	services map[string]*runner.Service
+	// Streaming HTTP responses opened by the customer.
+	streams map[string]*httpStream
 }
 
 func (s *supervisor) serve(ctx context.Context) error {
@@ -403,6 +406,7 @@ func (s *supervisor) cancel(id string) {
 }
 
 func (s *supervisor) shutdownAll() {
+	s.stopAllStreams()
 	s.stopAllServices()
 	s.mu.Lock()
 	fns := make([]context.CancelFunc, 0, len(s.inflight))
@@ -486,6 +490,12 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 		result = s.listServices(req)
 	case protocol.OpHTTP:
 		result = s.httpRequest(ctx, req)
+	case protocol.OpHTTPOpen:
+		result = s.openStream(ctx, req)
+	case protocol.OpHTTPRead:
+		result = s.readStream(req)
+	case protocol.OpHTTPClose:
+		result = s.closeStreamRequest(req)
 	default:
 		result = protocol.ErrorResult(req, "unsupported_operation", "unknown operation")
 	}

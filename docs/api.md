@@ -220,6 +220,9 @@ POST /v1/sessions/{id}/services        # service.start envelope
 POST /v1/sessions/{id}/services/list   # service.list envelope
 POST /v1/sessions/{id}/services/stop   # service.stop envelope
 POST /v1/sessions/{id}/http            # http.request envelope
+POST /v1/sessions/{id}/http/stream     # http.stream.open envelope
+POST /v1/sessions/{id}/http/stream/read  # http.stream.read envelope
+POST /v1/sessions/{id}/http/stream/close # http.stream.close envelope
 ```
 
 All four use the same `{requestId, envelope, timeoutMs?, waitMs?}` body as
@@ -230,7 +233,8 @@ by a running service; there is no inbound pod networking. See
 
 Common errors: `service_not_found`, `service_exists`, `port_in_use`,
 `service_not_listening`, `too_many_services`, `service_unavailable`,
-`invalid_port`, `invalid_method`, `http_error`.
+`invalid_port`, `invalid_method`, `http_error`, `too_many_streams`,
+`stream_not_found`, `stream_idle`, `stream_error`, `stream_too_large`.
 
 ## Requests (reconnect / cancel)
 

@@ -517,6 +517,50 @@ describe("local services and HTTP data plane", () => {
   }, 180_000);
 });
 
+describe("streaming HTTP data plane", () => {
+  it("streams SSE chunks through the relay", async () => {
+    const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
+    await client.waitForReady(handle);
+    await client.putFile(handle, {
+      path: "sse.py",
+      data: Buffer.from(
+        [
+          "from http.server import BaseHTTPRequestHandler, HTTPServer",
+          "import time",
+          "class H(BaseHTTPRequestHandler):",
+          "    def do_GET(self):",
+          "        self.send_response(200)",
+          "        self.send_header('Content-Type', 'text/event-stream')",
+          "        self.end_headers()",
+          "        for i in range(5):",
+          "            self.wfile.write(f'data: tick {i}\\n\\n'.encode())",
+          "            self.wfile.flush()",
+          "            time.sleep(0.2)",
+          "HTTPServer(('127.0.0.1', 18082), H).serve_forever()",
+        ].join("\n"),
+      ),
+    });
+    await client.startService(handle, {
+      name: "sse",
+      command: ["python3", "sse.py"],
+      port: 18082,
+    });
+    const stream = await client.openHttpStream(handle, { port: 18082, path: "/events" });
+    let text = "";
+    let done = false;
+    for (let i = 0; i < 100 && !done; i++) {
+      const part = await stream.read();
+      if (part.chunk) text += part.chunk.toString();
+      done = part.done;
+    }
+    expect(text).toContain("tick 0");
+    expect(text).toContain("tick 4");
+    await stream.close();
+    await client.stopService(handle, "sse");
+    await client.destroy(handle);
+  }, 180_000);
+});
+
 describe("checkpoint and resume", () => {
   it("auto-suspends after the idle policy", async () => {
     const handle = await client.createSession({

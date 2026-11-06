@@ -55,6 +55,7 @@ sandbox sessions                  # locally stored handles
 sandbox serve <id> --name web --port 8080 -- python3 -m http.server 8080 --bind 127.0.0.1
 sandbox services <id>
 sandbox http <id> 8080 /
+sandbox http <id> 8080 /events --stream   # SSE/chunked output
 sandbox stop-service <id> web
 
 # a checkpoint is disk-only: processes, memory and sockets do not survive.
