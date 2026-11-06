@@ -104,6 +104,25 @@ export class Provisioning {
       return;
     }
 
+    const existingPod = await this.ctx.provisioner
+      .listSandboxPods()
+      .then((pods) => pods.find((pod) => pod.sessionId === session.id && pod.phase !== "Failed" && pod.phase !== "Succeeded"))
+      .catch(() => undefined);
+    if (existingPod) {
+      // The controller crashed after Kubernetes accepted the Pod but before the
+      // session row was marked PROVISIONING. Adopt it instead of creating a
+      // second Pod or rotating the relay token the guest already holds.
+      if (this.ctx.store.setProvisioning(session.id, existingPod.name)) {
+        this.ctx.capacity.updatePod(session.id, existingPod.name);
+        this.ctx.store.mergeTimings(session.id, {
+          podRequestedAt: this.ctx.now(),
+          podCreateCallMs: 0,
+        });
+        log.info("sandbox_pod_adopted", { sessionId: session.id, podName: existingPod.name });
+      }
+      return;
+    }
+
     const { podName, createStarted } = await this.createPod(session, relayAddr, proxyAddr, {
       ...(workspacePvc ? { workspacePvc } : {}),
       ...(reservation && reservation.nodeId !== "disabled" ? { nodeName: reservation.nodeId } : {}),

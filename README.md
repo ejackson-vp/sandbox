@@ -207,6 +207,7 @@ Run: `make test` and `make security-test` (after `make up`).
 - [docs/transfer-security.md](docs/transfer-security.md)
 - [docs/transfer-performance.md](docs/transfer-performance.md)
 - [docs/milestone-6-results.md](docs/milestone-6-results.md)
+- [docs/control-plane-faults.md](docs/control-plane-faults.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)
 - [docs/cli.md](docs/cli.md)

@@ -14,7 +14,7 @@ import { decodePaymentSignatureHeader } from "@x402/core/http";
 import { createMockFacilitator, type MockFacilitatorHandle } from "../../api/src/mock-facilitator.js";
 import { createApp } from "../../api/src/server.js";
 import { loadConfig } from "../../api/src/config.js";
-import { ControllerClient } from "../../api/src/controller-client.js";
+import { ControllerClient, ControllerError } from "../../api/src/controller-client.js";
 import { createControlApi } from "../../controller/src/control-api.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
@@ -53,6 +53,9 @@ let servers: http.Server[] = [];
 let workDir: string;
 let client: SandboxClient;
 let snapshotter: RecordingSnapshotter;
+let apiController: ControllerClient;
+let provisioner: LocalProvisioner;
+let capacity: CapacityService;
 
 class RecordingSnapshotter implements Snapshotter {
   readonly captured: string[] = [];
@@ -146,7 +149,7 @@ beforeAll(async () => {
     ALLOW_CUSTOM_DURATIONS: "true",
   });
 
-  const provisioner = new LocalProvisioner({
+  provisioner = new LocalProvisioner({
     binary: GUEST_BINARY,
     relayHost: "127.0.0.1",
     relayPort: RELAY_PORT,
@@ -155,7 +158,7 @@ beforeAll(async () => {
     workRoot: join(workDir, "sandboxes"),
   });
 
-  const capacity = new CapacityService({ cfg: controllerCfg, store, provisioner });
+  capacity = new CapacityService({ cfg: controllerCfg, store, provisioner });
 
   let suspendFn: ((id: string) => Promise<void>) | undefined;
   let resumeFn: ((id: string) => Promise<void>) | undefined;
@@ -203,12 +206,8 @@ beforeAll(async () => {
     PAYMENT_INTENT_STALE_MS: "1000",
     ALLOW_CUSTOM_DURATIONS: "true",
   });
-  servers.push(
-    await listen(
-      await createApp({ config: apiCfg, controller: new ControllerClient(apiCfg.controllerUrl, ADMIN) }),
-      API_PORT,
-    ),
-  );
+  apiController = new ControllerClient(apiCfg.controllerUrl, ADMIN);
+  servers.push(await listen(await createApp({ config: apiCfg, controller: apiController }), API_PORT));
 
   process.env.DEV_ATTESTATION_KEY = DEV_SEED;
   process.env.DEV_ATTESTATION_KEY_ID = "x402-dev-attestation-key-INSECURE-DEV-ONLY";
@@ -334,6 +333,53 @@ describe("payments and entitlements", () => {
     expect(res.status).toBe(201);
     expect(store.countSessions()).toBe(before + 1);
   });
+
+  it("recovers when the controller crashes after settlement but before entitlement", async () => {
+    const body = await createBody();
+    const { header } = await createSessionPayment(apiUrl, body);
+    const before = store.countSessions();
+    const original = apiController.completeIntent.bind(apiController);
+    (apiController as unknown as { completeIntent: typeof apiController.completeIntent }).completeIntent = async () => {
+      throw new ControllerError(503, "injected_crash", "simulated controller crash after settlement");
+    };
+    try {
+      const first = await postSession(body, header);
+      expect(first.status).toBe(503);
+      expect(store.countSessions()).toBe(before);
+    } finally {
+      (apiController as unknown as { completeIntent: typeof apiController.completeIntent }).completeIntent = original;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const retry = await postSession(body, header);
+    expect(retry.status).toBe(201);
+    expect(store.countSessions()).toBe(before + 1);
+    const created = (await retry.json()) as { sessionId: string; capability: string };
+    await fetch(`${apiUrl}/v1/sessions/${created.sessionId}`, {
+      method: "DELETE",
+      headers: { "x-sandbox-capability": created.capability },
+    }).catch(() => undefined);
+  }, 30_000);
+
+  it("adopts a Pod created just before the controller crashed", async () => {
+    const original = provisioner.createPod.bind(provisioner);
+    let failOnce = true;
+    provisioner.createPod = async (spec) => {
+      const result = await original(spec);
+      if (failOnce) {
+        failOnce = false;
+        throw new Error("simulated controller crash after Pod creation");
+      }
+      return result;
+    };
+    try {
+      const handle = await client.createSession({ tier: "custom", durationSeconds: 60, cpuMillis: 500, memoryMiB: 512, diskMiB: 256 });
+      const ready = await client.waitForReady(handle, 20_000);
+      expect(ready.state).toBe("READY");
+      await client.destroy(handle);
+    } finally {
+      provisioner.createPod = original;
+    }
+  }, 30_000);
 
   it("scopes capabilities to a single session", async () => {
     const a = await client.createSession({ tier: "custom", durationSeconds: 30 });
@@ -711,6 +757,36 @@ describe("capacity admission", () => {
       }),
     ).rejects.toMatchObject({ code: "capacity_unavailable" });
   }, 60_000);
+});
+
+describe("control-plane failure recovery", () => {
+  it("keeps capacity reserved while a deleted Pod is still observed", async () => {
+    const handle = await client.createSession({ tier: "custom", durationSeconds: 60, cpuMillis: 500, memoryMiB: 512, diskMiB: 256 });
+    await client.waitForReady(handle);
+    const original = provisioner.deletePod.bind(provisioner);
+    provisioner.deletePod = async () => {
+      throw new Error("simulated persistent Pod deletion failure");
+    };
+    try {
+      await client.destroy(handle);
+      let state = "";
+      for (let i = 0; i < 30; i += 1) {
+        state = store.reservations.getBySession(handle.sessionId)?.state ?? "gone";
+        if (state === "RELEASING") break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(state).toBe("RELEASING");
+    } finally {
+      provisioner.deletePod = original;
+    }
+    let finalState = "";
+    for (let i = 0; i < 40; i += 1) {
+      finalState = store.reservations.getBySession(handle.sessionId)?.state ?? "gone";
+      if (finalState === "RELEASED" || finalState === "gone") break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(["RELEASED", "gone"]).toContain(finalState);
+  }, 30_000);
 });
 
 describe("configuration guards", () => {

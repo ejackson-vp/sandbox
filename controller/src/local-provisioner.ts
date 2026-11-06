@@ -46,6 +46,11 @@ export class LocalProvisioner implements Provisioner {
 
   async createPod(spec: SandboxPodSpec): Promise<{ podName: string }> {
     const podName = `local-${spec.sessionId}`;
+    const existing = this.pods.get(podName);
+    if (existing && existing.phase !== "Succeeded" && existing.phase !== "Failed") {
+      return { podName };
+    }
+    if (existing) this.pods.delete(podName);
     const workDir = join(this.workRoot, spec.sessionId);
     const workspace = join(workDir, "workspace");
     mkdirSync(workspace, { recursive: true });
