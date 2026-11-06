@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up down build deploy demo demo-agent demo-timeout demo-capacity test test-unit test-integration security-test security-network guest guest-load logs clean fmt images benchmark-capacity
+.PHONY: help up down build deploy demo demo-agent demo-timeout demo-capacity demo-placement test test-unit test-integration security-test security-network guest guest-load logs clean fmt images benchmark-capacity
 
 help:
 	@echo "x402 sandbox sessions"
@@ -20,6 +20,7 @@ help:
 	@echo "  make deploy         load images into kind and apply manifests"
 	@echo "  make demo           full paid workflow with a mock payment"
 	@echo "  make demo-agent     same purchase driven by the x402 client SDK"
+	@echo "  make demo-placement two-worker least-allocated placement (make up-2w)"
 	@echo "  make demo-session   full multi-command session workflow"
 	@echo "  make demo-expire    demonstrate lease expiration and cleanup"
 	@echo "  make demo-timeout   demonstrate the per-command timeout"
@@ -92,6 +93,9 @@ demo-lifecycle:
 
 demo-capacity:
 	./scripts/demo-capacity.sh
+
+demo-placement:
+	./scripts/demo-placement.sh
 
 demo-portability:
 	npx tsx scripts/lifecycle-portability.ts

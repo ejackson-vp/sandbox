@@ -97,13 +97,13 @@ actual node, and placement mismatches are reconciled. Remaining gaps:
 A clean fix is a warm reservation row transferred to the session in one
 transaction, at the cost of a second source for ephemeral pool Pods.
 
-### 4. Multi-node behavior is not benchmarked
+### 4. Multi-node behavior is validated, not load-benchmarked
 
-The model supports multiple nodes and the two-worker rig exists, but all
-Milestone 4 measurements used one worker. Placement is property-tested, not
-load-tested across workers. Kubernetes can still schedule differently despite
-required node affinity (for example, a Pending Pod if the node is full), and the
-reconciliation is a warning + pin rather than a re-decision.
+**Partially addressed.** `make demo-placement` runs on the two-worker rig and
+shows least-allocated placement spreading four sessions across both workers
+(1000m / 512 MiB reserved on each). It is a placement demo, not a multi-node
+load benchmark. Kubernetes can still schedule differently despite required node
+affinity; reconciliation is a warning + pin rather than a re-decision.
 
 ### 5. Admission and hold are two controller round trips
 

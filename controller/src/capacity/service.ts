@@ -31,6 +31,7 @@ export interface CapacityView {
   nodes: Array<{
     id: string;
     allocatable: ResourceVector;
+    platformOverhead: ResourceVector;
     reserved: ResourceVector;
     available: ResourceVector;
     eligible: boolean;
@@ -265,25 +266,23 @@ export class CapacityService {
       nodes: snapshot.nodes.map((node) => ({
         id: node.id,
         allocatable: node.allocatable,
-        reserved: addResources(
-          reservations
-            .filter((r) => r.nodeId === node.id && r.state !== "RELEASED")
-            .reduce(
-              (sum, r) =>
-                addResources(
-                  sum,
-                  r.state === "SUSPENDED"
-                    ? {
-                        cpuMillicores: 0,
-                        memoryBytes: 0,
-                        storageBytes: (snapshot.accounting === "peak" ? r.peak : r.baseline).storageBytes,
-                      }
-                    : snapshot.accounting === "peak" ? r.peak : r.baseline,
-                ),
-              ZERO_RESOURCES,
-            ),
-          node.platformOverhead,
-        ),
+        platformOverhead: node.platformOverhead,
+        reserved: reservations
+          .filter((r) => r.nodeId === node.id && r.state !== "RELEASED")
+          .reduce(
+            (sum, r) =>
+              addResources(
+                sum,
+                r.state === "SUSPENDED"
+                  ? {
+                      cpuMillicores: 0,
+                      memoryBytes: 0,
+                      storageBytes: (snapshot.accounting === "peak" ? r.peak : r.baseline).storageBytes,
+                    }
+                  : snapshot.accounting === "peak" ? r.peak : r.baseline,
+              ),
+            ZERO_RESOURCES,
+          ),
         available: availableOnNode(node, reservations, snapshot.now, snapshot.accounting),
         eligible: eligibleIds.has(node.id),
       })),

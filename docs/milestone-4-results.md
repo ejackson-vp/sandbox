@@ -74,6 +74,19 @@ explicit.
 
 No Pods or reservations remained after cleanup (`sandboxPodsAfter=0`).
 
+## Multi-node placement
+
+A two-worker kind run validated least-allocated placement:
+
+- 4 custom sessions (500m / 256 MiB baseline),
+- eligible workers: `x402-sandbox-worker`, `x402-sandbox-worker2`,
+- reservations after READY: 1000m / 512 MiB on **each** worker (2 sessions per worker),
+- `make demo-placement` passed and all sessions were destroyed.
+
+This is a placement demo, not a multi-node load benchmark. The two-worker rig is
+created with `make up-2w` and the standard benchmark rig must be restored with
+`make down up` afterwards.
+
 ## Provisioning concurrency
 
 Fresh 50-create burst, pool=8, capacity enabled:
