@@ -265,9 +265,21 @@ export class Provisioning {
 
     if (session.podName) {
       const pod = await this.ctx.provisioner.getPod(session.podName).catch(() => null);
-      if (pod?.nodeName && session.workspacePvc && !session.nodeName) {
-        this.ctx.store.setNodeName(session.id, pod.nodeName);
-        session.nodeName = pod.nodeName;
+      if (pod?.nodeName) {
+        const reservation = this.ctx.capacity.getReservation(session.id);
+        if (reservation && reservation.nodeId !== pod.nodeName && reservation.nodeId !== "disabled") {
+          this.ctx.capacity.pinSessionNode(session.id, pod.nodeName);
+          metrics.counter("sandbox_capacity_placement_reconciled_total", "Placement intents reconciled with Kubernetes").inc();
+          log.warn("sandbox_placement_reconciled", {
+            sessionId: session.id,
+            intended: reservation.nodeId,
+            actual: pod.nodeName,
+          });
+        }
+        if (session.workspacePvc && !session.nodeName) {
+          this.ctx.store.setNodeName(session.id, pod.nodeName);
+          session.nodeName = pod.nodeName;
+        }
       }
       if (pod && pod.phase === "Running") {
         // Record the first observation of a running container (tick resolution).

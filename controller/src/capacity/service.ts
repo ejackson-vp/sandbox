@@ -11,14 +11,12 @@ import { availableOnNode, placementCandidates } from "./placement.js";
 import type {
   AdmissionDecision,
   CapacitySnapshot,
-  NodeCapacity,
   ReservationState,
   ResourceVector,
 } from "./types.js";
 import { addResources, requestForLimits, requestForSession, ZERO_RESOURCES } from "./types.js";
+import { CapacitySnapshotBuilder } from "./snapshot.js";
 import type { ReservationAdmission, ReservationRecord } from "./reservations.js";
-
-const MIB = 1024 * 1024;
 
 export interface CapacityDeps {
   cfg: ControllerConfig;
@@ -46,99 +44,10 @@ export interface CapacityView {
 }
 
 export class CapacityService {
-  private nodeCache: { nodes: NodeCapacity[]; at: number } | null = null;
+  private readonly builder: CapacitySnapshotBuilder;
 
-  constructor(private readonly deps: CapacityDeps) {}
-
-  private async loadNodes(now: number): Promise<NodeCapacity[]> {
-    if (!this.deps.cfg.capacityEnabled) {
-      return [{
-        id: "disabled",
-        allocatable: {
-          cpuMillicores: 1_000_000,
-          memoryBytes: 1_000_000 * MIB,
-          storageBytes: 1_000_000 * MIB,
-        },
-        platformOverhead: ZERO_RESOURCES,
-        labels: { "x402.io/sandbox-pool": "true" },
-        taints: [],
-        ready: true,
-        schedulable: true,
-      }];
-    }
-    if (this.nodeCache && now - this.nodeCache.at < 1_000) return this.nodeCache.nodes;
-    const nodes = await this.deps.provisioner.listNodes();
-    const mapped: NodeCapacity[] = nodes.map((node) => ({
-      id: node.name,
-      allocatable: {
-        cpuMillicores:
-          this.deps.cfg.capacityNodeCpuOverrideMillis > 0
-            ? Math.min(node.allocatableCpuMillis, this.deps.cfg.capacityNodeCpuOverrideMillis)
-            : node.allocatableCpuMillis,
-        memoryBytes:
-          this.deps.cfg.capacityNodeMemoryOverrideMiB > 0
-            ? Math.min(node.allocatableMemoryBytes, this.deps.cfg.capacityNodeMemoryOverrideMiB * MIB)
-            : node.allocatableMemoryBytes,
-        storageBytes: node.allocatableStorageBytes,
-      },
-      platformOverhead: {
-        cpuMillicores: this.deps.cfg.capacityPlatformOverhead.cpuMillicores,
-        memoryBytes: this.deps.cfg.capacityPlatformOverhead.memoryMiB * MIB,
-        storageBytes: this.deps.cfg.capacityPlatformOverhead.storageMiB * MIB,
-      },
-      labels: node.labels,
-      taints: node.taints,
-      ready: node.ready,
-      schedulable: node.schedulable,
-    }));
-    this.nodeCache = { nodes: mapped, at: now };
-    return mapped;
-  }
-
-  private async warmReservationsForSnapshot(
-    nodes: NodeCapacity[],
-    now: number,
-  ): Promise<ReservationRecord[]> {
-    if (this.deps.cfg.warmPoolSize === 0) return [];
-    let warmPods;
-    try {
-      warmPods = await this.deps.provisioner.listWarmPods();
-    } catch {
-      return [];
-    }
-    if (warmPods.length === 0) return [];
-    const tier = this.deps.cfg.tiers[this.deps.cfg.warmPoolTier];
-    if (!tier) return [];
-    const request = requestForLimits({
-      cpuMillis: tier.cpuMillis,
-      memoryMiB: tier.memoryMiB,
-      diskMiB: tier.diskMiB,
-    });
-    const fallbackNode = nodes[0]?.id ?? "unassigned";
-    return warmPods
-      .filter((pod) => pod.phase !== "Succeeded" && pod.phase !== "Failed")
-      .map((pod) => ({
-        id: `warm_${pod.warmId}`,
-        paymentKey: null,
-        sessionId: null,
-        specHash: null,
-        nodeId: pod.nodeName ?? fallbackNode,
-        podName: pod.name,
-        state: "ALLOCATED" as ReservationState,
-        baseline: request.baseline,
-        peak: request.peak,
-        expiresAt: null,
-        createdAt: pod.createdAt,
-        updatedAt: now,
-      }));
-  }
-
-  private async snapshotWithWarm(): Promise<CapacitySnapshot> {
-    const now = Date.now();
-    const nodes = await this.loadNodes(now);
-    const reservations = this.deps.store.reservations.listActive();
-    const warm = await this.warmReservationsForSnapshot(nodes, now);
-    return { nodes, reservations: [...reservations, ...warm], now };
+  constructor(private readonly deps: CapacityDeps) {
+    this.builder = new CapacitySnapshotBuilder(deps.cfg, deps.store, deps.provisioner);
   }
 
   private observe(
@@ -189,7 +98,7 @@ export class CapacityService {
 
   async preflight(spec: { limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } }): Promise<AdmissionDecision> {
     const started = Date.now();
-    const snapshot = await this.snapshotWithWarm();
+    const snapshot = await this.builder.snapshotWithWarm();
     const decision = admitCapacity(snapshot, requestForLimits(spec.limits, spec.baseline));
     this.observe(decision, Date.now() - started);
     this.publishGauges(snapshot);
@@ -202,7 +111,7 @@ export class CapacityService {
     spec: { limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } },
   ): Promise<ReservationAdmission> {
     const started = Date.now();
-    const snapshot = await this.snapshotWithWarm();
+    const snapshot = await this.builder.snapshotWithWarm();
     const admission = this.deps.store.reservations.admit(
       snapshot,
       requestForLimits(spec.limits, spec.baseline),
@@ -220,7 +129,7 @@ export class CapacityService {
     spec: { limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } },
   ): Promise<ReservationAdmission> {
     const started = Date.now();
-    const snapshot = await this.snapshotWithWarm();
+    const snapshot = await this.builder.snapshotWithWarm();
     const admission = this.deps.store.reservations.attachToSession(
       snapshot,
       requestForLimits(spec.limits, spec.baseline),
@@ -235,7 +144,7 @@ export class CapacityService {
 
   async resume(session: SessionRecord): Promise<ReservationAdmission> {
     const started = Date.now();
-    const snapshot = await this.snapshotWithWarm();
+    const snapshot = await this.builder.snapshotWithWarm();
     const request = requestForSession(session);
     if (this.deps.cfg.pinCheckpointNode && session.nodeName) {
       request.requiredNodeId = session.nodeName;
@@ -278,6 +187,10 @@ export class CapacityService {
     this.deps.store.reservations.updatePod(sessionId, podName);
   }
 
+  pinSessionNode(sessionId: string, nodeId: string): boolean {
+    return this.deps.store.reservations.pinNode(sessionId, nodeId);
+  }
+
   async reap(): Promise<void> {
     const now = Date.now();
     const expired = this.deps.store.reservations.reapExpiredHolds(now);
@@ -313,11 +226,11 @@ export class CapacityService {
         metrics.counter("sandbox_reservation_leaks_detected_total", "Reservations stuck in RELEASING").inc();
       }
     }
-    this.publishGauges(await this.snapshotWithWarm());
+    this.publishGauges(await this.builder.snapshotWithWarm());
   }
 
   async summary(): Promise<CapacityView> {
-    const snapshot = await this.snapshotWithWarm();
+    const snapshot = await this.builder.snapshotWithWarm();
     const reservations = snapshot.reservations;
     const count = (state: ReservationState) => reservations.filter((r) => r.state === state).length;
     const reserved = reservations.reduce((sum, reservation) => {

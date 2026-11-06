@@ -186,6 +186,20 @@ describe("durable capacity reservations", () => {
     }
   });
 
+  it("reconciles the reservation node with the node Kubernetes actually chose", () => {
+    const store = freshStore();
+    try {
+      store.reservations.admit(snapshot(), request(), {
+        sessionId: "sbx_move",
+        state: "ALLOCATED",
+      });
+      expect(store.reservations.pinNode("sbx_move", "node-b")).toBe(true);
+      expect(store.reservations.getBySession("sbx_move")?.nodeId).toBe("node-b");
+    } finally {
+      store.close();
+    }
+  });
+
   it("keeps capacity reserved in RELEASING until the Pod is confirmed gone", () => {
     const store = freshStore();
     try {

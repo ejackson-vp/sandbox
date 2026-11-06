@@ -154,6 +154,9 @@ export class ReservationRepository {
       rebindSession: this.db.prepare(
         "UPDATE reservations SET session_id=?, updated_at=? WHERE id=?",
       ),
+      setNode: this.db.prepare(
+        "UPDATE reservations SET node_id=?, updated_at=? WHERE session_id=? AND state != 'RELEASED'",
+      ),
       sessionExists: this.db.prepare("SELECT 1 AS present FROM sessions WHERE id = ?"),
     };
   }
@@ -429,6 +432,11 @@ export class ReservationRepository {
 
   updatePod(sessionId: string, podName: string | null): void {
     this.stmts.updatePod!.run(podName, Date.now(), sessionId);
+  }
+
+  /** Reconcile a planning decision with the node Kubernetes actually chose. */
+  pinNode(sessionId: string, nodeId: string): boolean {
+    return this.stmts.setNode!.run(nodeId, Date.now(), sessionId).changes > 0;
   }
 
   listReleasing(): ReservationRecord[] {

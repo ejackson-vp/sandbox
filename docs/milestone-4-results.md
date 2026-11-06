@@ -1,6 +1,7 @@
 # Milestone 4 results: capacity-aware admission and scheduling
 
-Status: implemented and measured on the local kind rig. Measurements are for
+Status: implemented and measured on the local kind rig. A critical design
+review is in [capacity-design-review.md](capacity-design-review.md). Measurements are for
 ordinary Pods on macOS + Docker Desktop + kind + Cilium. They are **not** VM or
 TEE isolation measurements.
 
@@ -176,7 +177,7 @@ Do not add an autoscaler or distributed scheduler before those measurements.
 
 - `npm run build` — clean
 - `npm run lint:structure` — clean
-- Full suite — 145 passed, 3 skipped
+- Full suite — 147 passed, 3 skipped (including an eight-process SQLite concurrency test)
 - Security suite on kind — 12 passed, 3 skipped
 - `make demo-capacity` — passed end to end on the final deployment
 - `sandbox admin capacity` — returns capacity only with the internal token;

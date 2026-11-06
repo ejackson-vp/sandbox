@@ -202,6 +202,7 @@ Run: `make test` and `make security-test` (after `make up`).
 - [docs/reservation-lifecycle.md](docs/reservation-lifecycle.md)
 - [docs/scheduling-tradeoffs.md](docs/scheduling-tradeoffs.md)
 - [docs/milestone-4-results.md](docs/milestone-4-results.md)
+- [docs/capacity-design-review.md](docs/capacity-design-review.md)
 - [docs/production-readiness.md](docs/production-readiness.md)
 
 ## Explicit non-goals

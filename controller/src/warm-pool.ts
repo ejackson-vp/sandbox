@@ -149,6 +149,9 @@ export class WarmPool {
       return false;
     }
 
+    if (warm.nodeName) {
+      this.ctx.capacity.pinSessionNode(session.id, warm.nodeName);
+    }
     const claimedAt = this.ctx.now();
     this.ctx.store.mergeTimings(session.id, {
       provisionStartAt: claimedAt,
