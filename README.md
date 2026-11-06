@@ -22,6 +22,7 @@ Prerequisites: Docker, `kind`, `kubectl`, `cilium` CLI, Node ≥ 24, Go ≥ 1.24
 make up             # kind + Cilium + images + deploy (~2 min)
 make demo-session   # the full 11-step session workflow
 make demo-expire    # buy a 5s session, watch it expire and clean up
+make demo-lifecycle # checkpoint a session, resume it, verify the workspace
 make test           # unit + local integration tests
 make security-test  # packet-level isolation + lifecycle tests on the cluster
 make down
@@ -46,6 +47,10 @@ Sandbox: destroyed
 == 11/11 verifying Kubernetes resources are gone
 no sandbox pods remain
 ```
+
+Lifecycle: `make demo-lifecycle` exercises the suspend/resume contract; see
+[docs/lifecycle.md](docs/lifecycle.md) for the state machine, security caveats
+and the AWS Lambda MicroVMs comparison.
 
 Other targets: `make demo` (create + run a file + destroy), `make demo-agent`
 (purchase through `@x402/fetch`), `make demo-timeout` (per-command timeout).

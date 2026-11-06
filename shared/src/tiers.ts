@@ -8,6 +8,7 @@
 import { canonicalJson, sha256Hex } from "./crypto.js";
 import {
   MAX_LEASE_SECONDS,
+  MAX_SESSION_LIFETIME_SECONDS,
   MIN_LEASE_SECONDS,
   type CreateSessionRequest,
   type SessionLimits,
@@ -153,9 +154,51 @@ export function resolveSessionSpec(
     maxProcesses: limits.maxProcesses,
   };
 
+  // Optional checkpoint/resume policy. Normalize defaults so the spec hash is
+  // stable between the API and the controller.
+  let idlePolicy: SessionSpec["idlePolicy"];
+  let maxLifetimeSeconds: number | undefined;
+  if (req.idlePolicy) {
+    const maxIdleSeconds = Math.trunc(req.idlePolicy.maxIdleSeconds ?? 300);
+    const suspendedDurationSeconds = Math.trunc(req.idlePolicy.suspendedDurationSeconds ?? MAX_SESSION_LIFETIME_SECONDS);
+    if (maxIdleSeconds < 1 || maxIdleSeconds > MAX_SESSION_LIFETIME_SECONDS) {
+      return { ok: false, code: "invalid_idle_policy", message: "maxIdleSeconds must be between 1 and 28800" };
+    }
+    if (suspendedDurationSeconds < 1 || suspendedDurationSeconds > MAX_SESSION_LIFETIME_SECONDS) {
+      return {
+        ok: false,
+        code: "invalid_idle_policy",
+        message: "suspendedDurationSeconds must be between 1 and 28800",
+      };
+    }
+    idlePolicy = {
+      maxIdleSeconds,
+      suspendedDurationSeconds,
+      autoResume: req.idlePolicy.autoResume ?? true,
+    };
+    maxLifetimeSeconds = Math.trunc(req.maxLifetimeSeconds ?? MAX_SESSION_LIFETIME_SECONDS);
+  } else if (req.maxLifetimeSeconds !== undefined) {
+    maxLifetimeSeconds = Math.trunc(req.maxLifetimeSeconds);
+  }
+  if (maxLifetimeSeconds !== undefined) {
+    if (maxLifetimeSeconds < durationSeconds || maxLifetimeSeconds > MAX_SESSION_LIFETIME_SECONDS) {
+      return {
+        ok: false,
+        code: "invalid_max_lifetime",
+        message: `maxLifetimeSeconds must be between the lease duration and ${MAX_SESSION_LIFETIME_SECONDS}`,
+      };
+    }
+  }
+
   return {
     ok: true,
-    spec: { tier, durationSeconds, limits: sessionLimits },
+    spec: {
+      tier,
+      durationSeconds,
+      limits: sessionLimits,
+      ...(idlePolicy ? { idlePolicy } : {}),
+      ...(maxLifetimeSeconds !== undefined ? { maxLifetimeSeconds } : {}),
+    },
     priceUsd,
   };
 }

@@ -17,6 +17,7 @@ export type SessionState =
   | "PROVISIONING"
   | "READY"
   | "ACTIVE"
+  | "SUSPENDED"
   | "TERMINATING"
   | "EXPIRED"
   | "FAILED"
@@ -37,6 +38,8 @@ export function isUsable(state: SessionState): boolean {
 
 /** Hard upper bound on any lease, regardless of configuration. */
 export const MAX_LEASE_SECONDS = 3600;
+/** Hard upper bound on a session's wall-clock lifetime, including suspended time. */
+export const MAX_SESSION_LIFETIME_SECONDS = 28800;
 /** Development floor for tests. */
 export const MIN_LEASE_SECONDS = 1;
 
@@ -63,10 +66,27 @@ export interface SessionLimits {
   maxProcesses: number;
 }
 
+/**
+ * Suspended-session policy. Present only when the customer wants a checkpointed
+ * workspace instead of a short-lived lease.
+ */
+export interface IdlePolicy {
+  /** Suspend after this many seconds without an operation. */
+  maxIdleSeconds?: number;
+  /** Terminate after this many seconds in the suspended state. */
+  suspendedDurationSeconds?: number;
+  /** Hint to clients that they may resume automatically on the next request. */
+  autoResume?: boolean;
+}
+
 export interface SessionSpec {
   tier: SessionTier;
   durationSeconds: number;
   limits: SessionLimits;
+  /** Present when the session is suspendable. */
+  idlePolicy?: IdlePolicy;
+  /** Wall-clock cap, including suspended time. */
+  maxLifetimeSeconds?: number;
 }
 
 export interface CreateSessionRequest {
@@ -80,6 +100,10 @@ export interface CreateSessionRequest {
   clientPublicKey: string;
   /** Customer freshness nonce (base64, 32 bytes) bound into attestation. */
   clientNonce: string;
+  /** Opt into checkpointed suspend/resume. */
+  idlePolicy?: IdlePolicy;
+  /** Wall-clock cap, including suspended time (default 8h for suspendable). */
+  maxLifetimeSeconds?: number;
 }
 
 export interface PaymentSummary {
@@ -163,8 +187,16 @@ export interface SessionStatus {
   readyAt?: string;
   /** Immutable lease deadline: readyAt + purchased duration. */
   leaseExpiresAt?: string;
-  /** Whole seconds remaining in the lease (0 when expired). */
+  /** Whole seconds remaining in the lease (0 when expired or suspended). */
   remainingSeconds: number;
+  /** Present once the session has been checkpointed. */
+  suspendedAt?: string;
+  /** Number of times this session has been resumed. */
+  resumeCount?: number;
+  /** Wall-clock cap, including suspended time. */
+  maxLifetimeSeconds?: number;
+  /** Present for suspendable sessions. */
+  idlePolicy?: IdlePolicy;
   terminatingAt?: string;
   destroyedAt?: string;
   clientNonce: string;

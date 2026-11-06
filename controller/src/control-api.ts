@@ -31,6 +31,7 @@ function opLabel(op: string | undefined): string {
   return op && OP_LABELS.has(op) ? op : "other";
 }
 import { PaymentAlreadyRedeemedError } from "./store.js";
+import { LifecycleError } from "./reconciler.js";
 import { log } from "./log.js";
 
 const sessionIdPattern = /^sbx_[0-9a-f]{24}$/;
@@ -41,9 +42,17 @@ const intentClaimSchema = z.object({
   staleMs: z.number().int().min(1000).max(600_000).optional(),
 });
 
+const idlePolicySchema = z.object({
+  maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
+  suspendedDurationSeconds: z.number().int().min(1).max(28800).optional(),
+  autoResume: z.boolean().optional(),
+});
+
 const specSchema = z.object({
   tier: z.enum(["short", "standard", "extended", "long", "custom"]),
   durationSeconds: z.number().int().min(1).max(MAX_LEASE_SECONDS),
+  idlePolicy: idlePolicySchema.optional(),
+  maxLifetimeSeconds: z.number().int().min(1).max(28800).optional(),
   limits: z.object({
     cpuMillis: z.number().int().positive(),
     memoryMiB: z.number().int().positive(),
@@ -98,6 +107,9 @@ export interface ControlApiDeps {
   relay: RelayClient;
   /** Optional event-driven nudge (the reconciler is not started in unit tests). */
   wake?: () => void;
+  /** Optional lifecycle actions (the reconciler owns them). */
+  suspend?: (id: string) => Promise<void>;
+  resume?: (id: string) => Promise<void>;
 }
 
 export function createControlApi(deps: ControlApiDeps): express.Express {
@@ -172,6 +184,10 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       runtimeClass: session.runtimeClass ?? undefined,
       executionMode: session.executionMode ?? undefined,
       busy: session.activeRequestId !== null,
+      suspendedAt: session.suspendedAt ?? undefined,
+      resumeCount: session.resumeCount,
+      maxLifetimeSeconds: session.maxLifetimeSeconds ?? undefined,
+      idlePolicy: session.idlePolicyJson ? JSON.parse(session.idlePolicyJson) : undefined,
       timings: session.timingsJson ? JSON.parse(session.timingsJson) : undefined,
       payment: {
         paymentKey: payment?.paymentKey ?? session.paymentKey,
@@ -266,6 +282,10 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
         diskMiB: body.spec.limits.diskMiB,
         clientPublicKey: body.clientPublicKey,
         clientNonce: body.clientNonce,
+        ...(body.spec.idlePolicy ? { idlePolicy: body.spec.idlePolicy } : {}),
+        ...(body.spec.maxLifetimeSeconds !== undefined
+          ? { maxLifetimeSeconds: body.spec.maxLifetimeSeconds }
+          : {}),
       },
       cfg.tiers,
       cfg.platformLimits,
@@ -330,6 +350,12 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
           relayPurgedAt: null,
           destroyRequested: 0,
           timingsJson: null,
+          idlePolicyJson: spec.idlePolicy ? JSON.stringify(spec.idlePolicy) : null,
+          maxLifetimeSeconds: spec.maxLifetimeSeconds ?? null,
+          suspendedAt: null,
+          resumeCount: 0,
+          lastActivityAt: null,
+          workspacePvc: null,
           updatedAt: now,
         },
       );
@@ -374,6 +400,52 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     res.json(view);
   });
 
+  app.post("/internal/sessions/:id/suspend", async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? "");
+    if (!deps.suspend) {
+      res.status(501).json({ error: "not_supported" });
+      return;
+    }
+    try {
+      await deps.suspend(id);
+      const view = describe(id);
+      if (!view) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      res.json(view);
+    } catch (err) {
+      if (err instanceof LifecycleError) {
+        res.status(err.status).json({ error: err.code, message: err.message });
+        return;
+      }
+      res.status(500).json({ error: "suspend_failed", message: (err as Error).message });
+    }
+  });
+
+  app.post("/internal/sessions/:id/resume", async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? "");
+    if (!deps.resume) {
+      res.status(501).json({ error: "not_supported" });
+      return;
+    }
+    try {
+      await deps.resume(id);
+      const view = describe(id);
+      if (!view) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      res.status(202).json(view);
+    } catch (err) {
+      if (err instanceof LifecycleError) {
+        res.status(err.status).json({ error: err.code, message: err.message });
+        return;
+      }
+      res.status(500).json({ error: "resume_failed", message: (err as Error).message });
+    }
+  });
+
   app.post("/internal/sessions/:id/operations", async (req: Request, res: Response) => {
     const id = String(req.params.id ?? "");
     const parsed = operationSchema.safeParse(req.body);
@@ -398,6 +470,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       res.status(404).json({ error: "not_found" });
       return;
     }
+    if (session.state !== "SUSPENDED") store.touchActivity(id);
     const claim = store.claimOperation(id, requestId, op ?? "operation");
     if (!claim.ok) {
       if (claim.code === "duplicate") {

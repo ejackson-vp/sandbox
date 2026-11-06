@@ -14,7 +14,7 @@ editable assumption and is labelled as such.
 | Worker | AWS m7g.4xlarge, 16 vCPU / 64 GiB, us-east-1 Linux on-demand | **verified**, $0.6528/hr |
 | Alternative | AWS c7g.4xlarge, 16 vCPU / 32 GiB | **verified**, $0.58/hr |
 | Internet egress | $0.09/GB (first paid tier) | assumption, not re-verified |
-| Block storage | $0.08/GB-month (gp3) | assumption, not re-verified (emptyDir does not use EBS) |
+| Block storage | $0.08/GB-month (gp3) | assumption, not re-verified (ordinary sessions use memory emptyDir; suspendable sessions use a PVC) |
 | Managed control plane | $0.10/hr | assumption |
 | Load balancer | $0.0225/hr (base, no LCU) | assumption |
 | Observability | $15/node-month | assumption |

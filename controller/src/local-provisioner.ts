@@ -73,6 +73,7 @@ export class LocalProvisioner implements Provisioner {
       DEV_ATTESTATION_KEY_ID: process.env.DEV_ATTESTATION_KEY_ID ?? "",
       EGRESS_PROXY_URL: `http://${this.opts.proxyHost}:${this.opts.proxyPort}`,
       PROXY_TOKEN: spec.proxyToken,
+      ...(spec.resume ? { RESUME: "1" } : {}),
       LOG_LEVEL: process.env.GUEST_LOG_LEVEL ?? "warn",
     };
 
@@ -150,6 +151,24 @@ export class LocalProvisioner implements Provisioner {
     });
     this.pods.set(podName, pod);
     return { podName };
+  }
+
+  async createWorkspacePvc(sessionId: string, _sizeMiB: number): Promise<string> {
+    return `local-ws-${sessionId.replace(/^sbx_/, "")}`;
+  }
+
+  async deleteWorkspacePvc(pvcName: string): Promise<void> {
+    const sessionId = pvcName.replace(/^local-ws-/, "sbx_");
+    rmSync(join(this.workRoot, sessionId), { recursive: true, force: true });
+  }
+
+  async suspendPod(podName: string): Promise<void> {
+    const pod = this.pods.get(podName);
+    if (!pod) return;
+    if (pod.proc.exitCode === null) pod.proc.kill("SIGKILL");
+    pod.phase = "Suspended";
+    this.pods.delete(podName);
+    // Keep workDir for the resume.
   }
 
   async deletePod(podName: string): Promise<void> {

@@ -31,6 +31,14 @@ export interface SessionView {
   capabilityExpiresAt: number;
   guestPublicKey?: string;
   attestation?: AttestationEnvelope;
+  suspendedAt?: number;
+  resumeCount?: number;
+  maxLifetimeSeconds?: number;
+  idlePolicy?: {
+    maxIdleSeconds?: number;
+    suspendedDurationSeconds?: number;
+    autoResume?: boolean;
+  };
   failureCode?: string;
   failureMessage?: string;
   runtimeClass?: string;
@@ -191,6 +199,20 @@ export class ControllerClient {
       `/internal/sessions/${encodeURIComponent(sessionId)}/operations/${encodeURIComponent(requestId)}`,
       { method: "DELETE" },
     );
+  }
+
+  async suspend(sessionId: string): Promise<SessionView> {
+    return this.call<SessionView>(`/internal/sessions/${encodeURIComponent(sessionId)}/suspend`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
+
+  async resume(sessionId: string): Promise<SessionView> {
+    return this.call<SessionView>(`/internal/sessions/${encodeURIComponent(sessionId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
   }
 
   async destroy(sessionId: string): Promise<{ state: SessionState }> {

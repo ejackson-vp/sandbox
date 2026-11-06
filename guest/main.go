@@ -178,7 +178,13 @@ func runSession(cfg sessionConfig) error {
 		"executionMode": cfg.ExecutionMode,
 		"leaseSeconds":  cfg.LeaseSeconds,
 		"kernelRelease": attest.KernelRelease(),
+		"resumed":       getEnv("RESUME", "") == "1",
 	})
+	if getEnv("RESUME", "") == "1" {
+		// The workspace is a persistent volume; the guest is a fresh process
+		// with a fresh keypair, exactly like a Lambda MicroVM resume hook.
+		logEvent("guest_resumed", map[string]any{"sessionId": cfg.SessionID})
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

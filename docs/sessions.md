@@ -6,10 +6,17 @@ CREATED ──settle──► PAID ──pod──► PROVISIONING ──guest h
                                                                     ▼
                                                                  ACTIVE
                                                                   │    │
-                                                    lease ends ───┘    └─── DELETE
-                                                                  │         │
-                                                                  ▼         ▼
-                                                             TERMINATING ◄──┘
+                                                    lease ends ───┘    ├─── DELETE
+                                                                  │    │
+                                                                  │    └── idle policy
+                                                                  │            │
+                                                                  │            ▼
+                                                                  │        SUSPENDED
+                                                                  │            │ resume
+                                                                  │            ▼
+                                                                  │        PROVISIONING
+                                                                  ▼
+                                                             TERMINATING
                                                                   │
                               ┌───────────────────────────────────┼──────────────────────┐
                               ▼                                   ▼                      ▼
@@ -29,6 +36,7 @@ the final state).
 | `PROVISIONING` | pod scheduled/starting | none (poll) |
 | `READY` | guest connected, attested, lease started | exec/files |
 | `ACTIVE` | at least one operation has run | exec/files |
+| `SUSPENDED` | checkpointed, no compute; workspace PVC retained | none (resume first) |
 | `TERMINATING` | shutdown in progress | none |
 | `EXPIRED` | lease elapsed | none |
 | `FAILED` | provisioning/guest failure | none |
@@ -40,8 +48,11 @@ has been used.
 ## Timing rules
 
 - **The lease starts at READY**, not at payment, so provisioning time is not
-  billed against the customer. `leaseExpiresAt = readyAt + durationSeconds` and
-  is immutable.
+  billed against the customer. `leaseExpiresAt = readyAt + durationSeconds` for
+  the first run. A suspend sets it to `null`; a resume starts a **fresh** lease
+  of the purchased duration.
+- **`maxLifetimeSeconds`** (≤ 8 h) is a wall-clock cap that includes suspended
+  time; it is separate from the lease.
 - **Provisioning has its own timeout** (`PROVISIONING_TIMEOUT_MS`, default 90 s).
   Exceeding it terminates the session as `FAILED` with `provisioning_timeout`.
 - **No extension**: no API call changes the deadline. Buying more time means
@@ -69,8 +80,11 @@ has been used.
 
 - The pod is deleted on `TERMINATING` (grace 1 s so the guest can kill children).
 - The relay drops all ciphertext for the session.
-- The workspace is a memory-backed `emptyDir`: it disappears with the pod. No
-  persistent volume is ever mounted into a sandbox.
+- The workspace is a memory-backed `emptyDir` for ordinary sessions. A
+  **suspendable** session (`idlePolicy`) uses a per-session PVC instead, so it
+  survives pod deletion; the PVC is deleted on terminate, suspended expiry or
+  max lifetime. See [lifecycle.md](lifecycle.md).
+- Suspended sessions have no pod and no relay entry; only the PVC remains.
 - The reconciler reaps pods whose session is unknown or terminal, and pods older
   than `MAX_POD_AGE_MS`, including after a controller crash.
 - The SQLite database stores metadata only (state, timings, hashes, limits) and

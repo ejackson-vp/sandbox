@@ -40,7 +40,10 @@ PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
   "clientNonce": "<base64 32 bytes>",       // freshness nonce bound into attestation
   "cpuMillis": 1000,                        // custom only
   "memoryMiB": 1024,                        // custom only
-  "diskMiB": 1024                           // custom only
+  "diskMiB": 1024,                          // custom only
+  // optional checkpoint/resume opt-in:
+  "idlePolicy": { "maxIdleSeconds": 300, "suspendedDurationSeconds": 28800, "autoResume": false },
+  "maxLifetimeSeconds": 28800               // wall clock, includes suspended time
 }
 ```
 
@@ -91,8 +94,12 @@ GET /v1/sessions/{id}
   "durationSeconds": 300,
   "limits": { "...": 0 },
   "createdAt": "…", "paidAt": "…", "readyAt": "…",
-  "leaseExpiresAt": "…",          // immutable: readyAt + duration
-  "remainingSeconds": 287,
+  "leaseExpiresAt": "…",          // readyAt + duration; null while suspended
+  "remainingSeconds": 287,        // 0 while suspended
+  "suspendedAt": "…",             // present after suspend
+  "resumeCount": 1,               // present after resume
+  "maxLifetimeSeconds": 28800,
+  "idlePolicy": { "maxIdleSeconds": 300, "suspendedDurationSeconds": 28800, "autoResume": false },
   "clientNonce": "…",
   "guestPublicKey": "<base64>",   // present once READY
   "attestation": { "...": "…" },  // signed evidence (simulated in dev)
@@ -214,6 +221,33 @@ DELETE /v1/sessions/{id}/requests/{requestId}      # cancel the in-flight comman
 result_expired` once the relay cache (5 minutes) has dropped it. Retrying an
 `exec` with the same `requestId` returns the same result without executing twice.
 
+## Suspend and resume
+
+```http
+POST /v1/sessions/{id}/suspend
+X-Sandbox-Capability: …
+→ 200 { "state": "SUSPENDED", ... }
+
+POST /v1/sessions/{id}/resume
+X-Sandbox-Capability: …
+→ 202 { "state": "PROVISIONING", ... }   // poll until READY
+```
+
+Suspend stops compute and keeps the per-session workspace PVC; resume boots a
+fresh guest against the same workspace with a new guest keypair. Clients must
+call `resume()` (SDK) and wait for READY before sending operations. Operations
+against a suspended session return `409 session_suspended`. See
+[lifecycle.md](lifecycle.md).
+
+## Images
+
+```http
+GET /v1/images
+```
+
+Returns the operator-pinned guest image, digest, runtime class and execution
+mode. The digest is informational today; production admission should enforce it.
+
 ## Destroy
 
 ```http
@@ -221,7 +255,8 @@ DELETE /v1/sessions/{id}
 ```
 
 Marks the session `TERMINATING`; the controller asks the guest to stop, deletes
-the pod, purges relay state and finalises as `DESTROYED`. Idempotent.
+the pod, purges relay state, deletes the workspace PVC (if any) and finalises as
+`DESTROYED`. Idempotent.
 
 ## Pricing
 
@@ -245,7 +280,7 @@ GET /healthz
 | 401 | `capability_required` | missing capability |
 | 402 | `payment_required`, `payment_invalid:*`, `payment_settlement_rejected:*` | payment problem |
 | 404 | `session_not_found` | wrong capability or unknown session |
-| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `session_not_usable` | conflict |
+| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `session_not_usable`, `session_suspended` | conflict; resume first |
 | 410 | `lease_expired`, `capability_expired`, `result_expired` | gone |
 | 413 | `payload_too_large` | envelope too big |
 | 429 | `rate_limited` (`scope: payer` or `ip`) | slow down; honour `Retry-After` |

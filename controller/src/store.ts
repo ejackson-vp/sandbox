@@ -14,7 +14,7 @@ import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared";
 
 export type { SessionState };
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export interface PaymentRecord {
   paymentKey: string;
@@ -58,6 +58,12 @@ export interface SessionRecord {
   relayPurgedAt: number | null;
   destroyRequested: number;
   timingsJson: string | null;
+  idlePolicyJson: string | null;
+  maxLifetimeSeconds: number | null;
+  suspendedAt: number | null;
+  resumeCount: number;
+  lastActivityAt: number | null;
+  workspacePvc: string | null;
   updatedAt: number;
 }
 
@@ -108,7 +114,8 @@ const SESSION_COLUMNS = `
   destroyed_at, termination_reason, failure_code, failure_message,
   attestation_json, guest_public_key, payment_key, pod_name, runtime_class,
   execution_mode, relay_token_hash, active_request_id, relay_purged_at,
-  destroy_requested, timings_json, updated_at
+  destroy_requested, timings_json, idle_policy_json, max_lifetime_seconds,
+  suspended_at, resume_count, last_activity_at, workspace_pvc, updated_at
 `;
 
 interface RawSession {
@@ -147,6 +154,12 @@ interface RawSession {
   relay_purged_at: number | null;
   destroy_requested: number;
   timings_json: string | null;
+  idle_policy_json: string | null;
+  max_lifetime_seconds: number | null;
+  suspended_at: number | null;
+  resume_count: number;
+  last_activity_at: number | null;
+  workspace_pvc: string | null;
   updated_at: number;
 }
 
@@ -189,6 +202,12 @@ function mapSession(r: RawSession): SessionRecord {
     relayPurgedAt: r.relay_purged_at,
     destroyRequested: r.destroy_requested,
     timingsJson: r.timings_json,
+    idlePolicyJson: r.idle_policy_json,
+    maxLifetimeSeconds: r.max_lifetime_seconds,
+    suspendedAt: r.suspended_at,
+    resumeCount: r.resume_count,
+    lastActivityAt: r.last_activity_at,
+    workspacePvc: r.workspace_pvc,
     updatedAt: r.updated_at,
   };
 }
@@ -284,6 +303,12 @@ export class Store {
         relay_purged_at INTEGER,
         destroy_requested INTEGER NOT NULL DEFAULT 0,
         timings_json TEXT,
+        idle_policy_json TEXT,
+        max_lifetime_seconds INTEGER,
+        suspended_at INTEGER,
+        resume_count INTEGER NOT NULL DEFAULT 0,
+        last_activity_at INTEGER,
+        workspace_pvc TEXT,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS exec_requests (
@@ -331,22 +356,43 @@ export class Store {
         "UPDATE payment_intents SET status='failed', reason=?, updated_at=? WHERE payment_key=?",
       ),
       listNonTerminal: this.db.prepare(
-        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('PAID','PROVISIONING','READY','ACTIVE','TERMINATING')`,
+        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDED','TERMINATING')`,
       ),
       listTerminalWithPod: this.db.prepare(
         `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('EXPIRED','FAILED','DESTROYED') AND pod_name IS NOT NULL`,
       ),
+      listTerminalWithPvc: this.db.prepare(
+        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('EXPIRED','FAILED','DESTROYED') AND workspace_pvc IS NOT NULL`,
+      ),
+      initLifecycle: this.db.prepare(
+        `UPDATE sessions SET idle_policy_json=?, max_lifetime_seconds=?, last_activity_at=?,
+           workspace_pvc=?, suspended_at=?, resume_count=?, updated_at=? WHERE id=?`,
+      ),
+      touchActivity: this.db.prepare(
+        "UPDATE sessions SET last_activity_at=?, updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')",
+      ),
+      markSuspended: this.db.prepare(
+        `UPDATE sessions SET state='SUSPENDED', suspended_at=?, lease_expires_at=NULL,
+           pod_name=NULL, updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')`,
+      ),
+      markResuming: this.db.prepare(
+        `UPDATE sessions SET state='PROVISIONING', pod_name=?, suspended_at=NULL,
+           resume_count=resume_count+1, lease_expires_at=NULL, updated_at=?
+         WHERE id=? AND state='SUSPENDED'`,
+      ),
+      setWorkspacePvc: this.db.prepare("UPDATE sessions SET workspace_pvc=?, updated_at=? WHERE id=?"),
+      clearWorkspacePvc: this.db.prepare("UPDATE sessions SET workspace_pvc=NULL, updated_at=? WHERE id=?"),
       setProvisioning: this.db.prepare(
         "UPDATE sessions SET pod_name = ?, state = 'PROVISIONING', updated_at = ? WHERE id = ? AND state = 'PAID'",
       ),
       setRelayToken: this.db.prepare("UPDATE sessions SET relay_token_hash = ?, updated_at = ? WHERE id = ?"),
       setReady: this.db.prepare(
         `UPDATE sessions SET state='READY', ready_at=?, lease_expires_at=?, attestation_json=?,
-           guest_public_key=?, updated_at=? WHERE id=? AND state='PROVISIONING'`,
+           guest_public_key=?, last_activity_at=?, updated_at=? WHERE id=? AND state='PROVISIONING'`,
       ),
       requestTermination: this.db.prepare(
         `UPDATE sessions SET state='TERMINATING', terminating_at=?, termination_reason=?, updated_at=?
-         WHERE id=? AND state IN ('PAID','PROVISIONING','READY','ACTIVE')`,
+         WHERE id=? AND state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDED')`,
       ),
       setFailure: this.db.prepare(
         "UPDATE sessions SET failure_code = ?, failure_message = ?, updated_at = ? WHERE id = ?",
@@ -477,6 +523,16 @@ export class Store {
         session.relayTokenHash,
         session.updatedAt,
       );
+      this.stmts.initLifecycle!.run(
+        session.idlePolicyJson ?? null,
+        session.maxLifetimeSeconds ?? null,
+        session.lastActivityAt ?? session.createdAt,
+        session.workspacePvc ?? null,
+        session.suspendedAt ?? null,
+        session.resumeCount ?? 0,
+        session.updatedAt,
+        session.id,
+      );
       this.stmts.settleIntent!.run(session.id, Date.now(), paymentKey);
       this.db.exec("COMMIT");
     } catch (err) {
@@ -544,8 +600,41 @@ export class Store {
     guestPublicKey: string,
   ): boolean {
     return (
-      this.stmts.setReady!.run(readyAt, leaseExpiresAt, attestationJson, guestPublicKey, Date.now(), id).changes > 0
+      this.stmts.setReady!.run(
+        readyAt,
+        leaseExpiresAt,
+        attestationJson,
+        guestPublicKey,
+        readyAt,
+        Date.now(),
+        id,
+      ).changes > 0
     );
+  }
+
+  touchActivity(id: string): void {
+    const now = Date.now();
+    this.stmts.touchActivity!.run(now, now, id);
+  }
+
+  markSuspended(id: string, suspendedAt: number): boolean {
+    return this.stmts.markSuspended!.run(suspendedAt, suspendedAt, id).changes > 0;
+  }
+
+  markResuming(id: string, podName: string): boolean {
+    return this.stmts.markResuming!.run(podName, Date.now(), id).changes > 0;
+  }
+
+  setWorkspacePvc(id: string, pvcName: string): void {
+    this.stmts.setWorkspacePvc!.run(pvcName, Date.now(), id);
+  }
+
+  clearWorkspacePvc(id: string): void {
+    this.stmts.clearWorkspacePvc!.run(Date.now(), id);
+  }
+
+  listTerminalWithPvc(): SessionRecord[] {
+    return (this.stmts.listTerminalWithPvc!.all() as unknown as RawSession[]).map(mapSession);
   }
 
   requestTermination(id: string, reason: string, failure?: { code: string; message: string }): boolean {

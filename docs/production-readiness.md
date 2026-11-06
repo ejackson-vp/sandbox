@@ -16,6 +16,9 @@ concrete next step.
 | 6 | **No refunds** | a settled payment whose provisioning fails is not returned | define policy: automatic refund job or credit; requires a settlement ledger |
 | 7 | **Image not pinned by digest** | a compromised controller could run another image | pin `GUEST_IMAGE` by digest + Kyverno/sigstore admission; CoCo encrypted images for Mode C |
 | 8 | **Secrets in the repo (dev)** | dev attestation key, admin/capability/proxy secrets | external secret manager; remove the dev key entirely in production |
+| 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; local-path has no encryption | use an encrypted StorageClass / CSI encryption, document the trust boundary, and expire PVCs aggressively |
+| 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |
+| 11 | **Suspend/resume pricing undefined** | a resume starts a fresh lease in the mock model | bill active time + storage, or charge per resume; decide before charging real money |
 
 ## 2. Security hardening backlog
 
@@ -41,6 +44,11 @@ concrete next step.
 - **Workspace race**: path validation is TOCTOU-safe for the customer's own
   session only (single tenant). A second process could race the check; the
   workspace is single-customer, so the impact is self-inflicted.
+- **Suspend/resume**: the capability is extended to `maxLifetimeSeconds`, so a
+  leaked capability remains valid across suspends. The workspace PVC is a new
+  at-rest data store; include it in backup/retention/encryption policy.
+- **Suspendable sessions bypass the warm pool**: first READY and resume are cold
+  (~0.9–5.8 s on the local rig), so the pool does not hide the checkpoint cost.
 
 ## 3. Reliability / operations
 

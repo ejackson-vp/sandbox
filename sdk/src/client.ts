@@ -85,6 +85,14 @@ export interface CreateOptions {
   cpuMillis?: number;
   memoryMiB?: number;
   diskMiB?: number;
+  /** Opt into checkpointed suspend/resume. */
+  idlePolicy?: {
+    maxIdleSeconds?: number;
+    suspendedDurationSeconds?: number;
+    autoResume?: boolean;
+  };
+  /** Wall-clock cap, including suspended time. */
+  maxLifetimeSeconds?: number;
   /** Persist the handle (default true when a store is configured). */
   save?: boolean;
 }
@@ -151,6 +159,8 @@ export class SandboxClient {
       ...(opts.cpuMillis === undefined ? {} : { cpuMillis: opts.cpuMillis }),
       ...(opts.memoryMiB === undefined ? {} : { memoryMiB: opts.memoryMiB }),
       ...(opts.diskMiB === undefined ? {} : { diskMiB: opts.diskMiB }),
+      ...(opts.idlePolicy ? { idlePolicy: opts.idlePolicy } : {}),
+      ...(opts.maxLifetimeSeconds === undefined ? {} : { maxLifetimeSeconds: opts.maxLifetimeSeconds }),
       clientPublicKey: toBase64(keys.publicKey),
       clientNonce,
     };
@@ -310,6 +320,34 @@ export class SandboxClient {
     handle.status = last;
     if (this.store) this.persist(handle);
     return last;
+  }
+
+  /**
+   * Checkpoint the session. The workspace is persisted; compute stops and the
+   * next operation must go through resume().
+   */
+  async suspend(handle: SessionHandle): Promise<SessionStatus> {
+    const res = await this.api(`/v1/sessions/${handle.sessionId}/suspend`, {
+      method: "POST",
+      headers: this.auth(handle),
+    });
+    if (!res.ok) throw await this.errorFrom(res, "suspend_failed");
+    const status = (await res.json()) as SessionStatus;
+    handle.status = status;
+    if (this.store) this.persist(handle);
+    return status;
+  }
+
+  /** Resume a suspended session and refresh the guest key/evidence. */
+  async resume(handle: SessionHandle, timeoutMs = 180_000): Promise<SessionStatus> {
+    const res = await this.api(`/v1/sessions/${handle.sessionId}/resume`, {
+      method: "POST",
+      headers: this.auth(handle),
+    });
+    if (!res.ok) throw await this.errorFrom(res, "resume_failed");
+    // The new guest has a new keypair; waitForReady verifies its evidence and
+    // updates handle.guestPublicKey before any operation is sent.
+    return this.waitForReady(handle, timeoutMs);
   }
 
   async destroy(handle: SessionHandle, waitMs = 30_000): Promise<SessionStatus | null> {

@@ -169,6 +169,24 @@ This is a short run, not a multi-hour leak test. The two drift indicators to
 watch are the residual relay entry (9 vs 8 pool entries) and DB growth
 (~10 KB/session).
 
+### 2.7 Checkpoint/resume (dev, per-session PVC)
+
+Suspendable sessions (`idlePolicy`) skip the warm pool because their workspace is
+a per-session PVC. Three end-to-end kind runs:
+
+| Stage | Measured |
+|---|---:|
+| create → READY (cold, PVC bind + pod + guest) | 4.30–5.84 s |
+| suspend (guest stop + pod delete) | 21–23 ms |
+| resume → READY (new pod + fresh guest key) | 0.86–1.90 s |
+| workspace after resume | intact (`persist.txt` read) |
+| guest keypair after resume | rotated |
+
+These are three kind runs, not a distribution. They prove the control-plane
+semantics, not a performance target. The resume is a cold container start plus PVC mount;
+there is no memory snapshot. Use an encrypted StorageClass in production. See
+[lifecycle.md](lifecycle.md).
+
 ## 3. Concurrency and density
 
 All levels use the 512 MiB / 500 m tier with a 240 s lease. Sessions are created

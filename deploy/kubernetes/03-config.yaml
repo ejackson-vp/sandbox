@@ -36,6 +36,8 @@ data:
   RUNTIME_CLASS: "x402-sandbox"
   GUEST_IMAGE: "x402-sandbox/guest:dev"
   GUEST_IMAGE_DIGEST: "sha256:dev-unpinned-image"
+  # StorageClass for checkpointed (suspendable) session workspaces.
+  WORKSPACE_STORAGE_CLASS: "standard"
   PROVISIONING_TIMEOUT_MS: "90000"
   LEASE_GRACE_MS: "2000"
   SHUTDOWN_GRACE_MS: "2000"

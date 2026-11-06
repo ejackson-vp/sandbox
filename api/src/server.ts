@@ -50,6 +50,14 @@ const createSchema = z.object({
   diskMiB: z.number().int().positive().optional(),
   clientPublicKey: z.string().min(40).max(64),
   clientNonce: z.string().min(40).max(64),
+  idlePolicy: z
+    .object({
+      maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
+      suspendedDurationSeconds: z.number().int().min(1).max(28800).optional(),
+      autoResume: z.boolean().optional(),
+    })
+    .optional(),
+  maxLifetimeSeconds: z.number().int().min(1).max(28800).optional(),
 });
 
 const requestIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/);
@@ -234,6 +242,10 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     ...(s.readyAt ? { readyAt: new Date(s.readyAt).toISOString() } : {}),
     ...(s.leaseExpiresAt ? { leaseExpiresAt: new Date(s.leaseExpiresAt).toISOString() } : {}),
     remainingSeconds: s.remainingSeconds,
+    ...(s.suspendedAt ? { suspendedAt: new Date(s.suspendedAt).toISOString() } : {}),
+    ...(s.resumeCount ? { resumeCount: s.resumeCount } : {}),
+    ...(s.maxLifetimeSeconds ? { maxLifetimeSeconds: s.maxLifetimeSeconds } : {}),
+    ...(s.idlePolicy ? { idlePolicy: s.idlePolicy } : {}),
     ...(s.terminatingAt ? { terminatingAt: new Date(s.terminatingAt).toISOString() } : {}),
     ...(s.destroyedAt ? { destroyedAt: new Date(s.destroyedAt).toISOString() } : {}),
     clientNonce: s.clientNonce,
@@ -318,6 +330,23 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   /* ---------------------------------------------------------------- */
   /* Create session (x402 protected)                                   */
   /* ---------------------------------------------------------------- */
+  // Read-only image catalog. One operator-pinned guest image today; the
+  // endpoint establishes the lifecycle noun and surfaces the digest.
+  app.get("/v1/images", (_req, res) => {
+    res.json({
+      images: [
+        {
+          id: "guest",
+          digest: process.env.GUEST_IMAGE_DIGEST ?? "sha256:dev-unpinned-image",
+          reference: process.env.GUEST_IMAGE ?? "x402-sandbox/guest:dev",
+          runtimeClass: process.env.RUNTIME_CLASS ?? "x402-sandbox",
+          executionMode: process.env.EXECUTION_MODE ?? "dev",
+          current: true,
+        },
+      ],
+    });
+  });
+
   app.post("/v1/sessions", rejectPlaintextBodies, async (req: Request, res: Response): Promise<void> => {
     const apiReceivedAt = Date.now();
     let paymentVerifyMs = 0;
@@ -421,7 +450,10 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
       const sessionId = `sbx_${randomBytes(12).toString("hex")}`;
       // The capability outlives the lease by a small grace window so a client
       // can still read the final status / fetch a late result.
-      const capabilityExpiresAt = Date.now() + (spec.durationSeconds + config.capabilityTtlSeconds) * 1000;
+      // A suspended session can be resumed for its whole wall-clock lifetime,
+      // so the capability must cover that window, not just the first lease.
+      const capabilityLifetime = spec.maxLifetimeSeconds ?? spec.durationSeconds;
+      const capabilityExpiresAt = Date.now() + (capabilityLifetime + config.capabilityTtlSeconds) * 1000;
       try {
         await controller.completeIntent(key, {
           sessionId,
@@ -629,6 +661,13 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   const runOperation = async (req: Request, res: Response, opHint: string): Promise<void> => {
     const session = await authorize(req, res);
     if (!session) return;
+    if (session.state === "SUSPENDED") {
+      res.status(409).json({
+        error: "session_suspended",
+        message: "resume the session before sending operations",
+      });
+      return;
+    }
     const parsed = operationSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
@@ -742,6 +781,37 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     try {
       await controller.cancelOperation(session.sessionId, requestId);
       res.status(202).json({ ok: true, requestId });
+    } catch (err) {
+      if (err instanceof ControllerError) {
+        res.status(err.status).json({ error: err.code, message: err.message });
+        return;
+      }
+      res.status(503).json({ error: "control_plane_unavailable" });
+    }
+  });
+
+  app.post("/v1/sessions/:id/suspend", async (req, res) => {
+    const session = await authorize(req, res);
+    if (!session) return;
+    try {
+      const out = await controller.suspend(session.sessionId);
+      res.json(toStatus(out));
+    } catch (err) {
+      if (err instanceof ControllerError) {
+        res.status(err.status).json({ error: err.code, message: err.message });
+        return;
+      }
+      res.status(503).json({ error: "control_plane_unavailable" });
+    }
+  });
+
+  app.post("/v1/sessions/:id/resume", async (req, res) => {
+    const session = await authorize(req, res);
+    if (!session) return;
+    try {
+      const out = await controller.resume(session.sessionId);
+      void controller.wake();
+      res.status(202).json(toStatus(out));
     } catch (err) {
       if (err instanceof ControllerError) {
         res.status(err.status).json({ error: err.code, message: err.message });

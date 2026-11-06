@@ -27,7 +27,7 @@ implemented **and** covered by tests in this repository.
 | Direct internet | Proxy-only; direct egress blocked | Same | Same |
 | Proxy SSRF (private IPs, rebinding, IPv6, metadata) | Proxy resolves + validates every IP, pins the validated IP, denies private/metadata/ULA/link-local/cluster/mapped forms | Same | Same |
 | Exfiltrate via DNS | No usable DNS (`dnsPolicy: None`, black-hole resolver, policy deny) | Same | Same |
-| Persist data / leave processes | Workspace is memory `emptyDir`; process group killed per command; pod deleted at termination; no PVC/hostPath | Same | Same |
+| Persist data / leave processes | Ordinary: memory `emptyDir`; suspendable: per-session PVC deleted at termination; process group killed per command; no hostPath | Same | Same |
 | Fork bomb / disk exhaustion | CPU/memory limits, per-pod `pod-max-pids` cgroup cap, disk quota, per-file cap, per-command timeout, lease cap | Same | Same |
 | Archive traversal / symlink escape | Path canonicalisation, symlink-parent rejection, `O_NOFOLLOW`, tar entry validation | Same | Same |
 | Read another session's data | Separate pod, keys, relay entry, capability; no shared volumes | Same | Same + memory encryption |
@@ -132,7 +132,9 @@ admission control.
 - Logs redact envelopes, tokens, file contents, commands; a marker test asserts
   code/output never appear in any control-plane or pod log.
 - SQLite stores metadata only. Relay stores ciphertext with a 5-minute TTL.
-- Workspace is memory-backed and deleted with the pod.
+- Ordinary workspace is memory-backed and deleted with the pod. Suspendable
+  workspaces use a per-session PVC, deleted at termination; storage-class
+  encryption is required in production.
 - The controller never logs bodies or headers.
 
 ### L. New session-specific races
@@ -168,6 +170,19 @@ identity and keys enter the sandbox, not the isolation boundary.
 | Controller/relay compromise during claim | Can redirect or deny a session (availability/impersonation) exactly as it can for a cold pod. Dev mode already trusts the controller with the simulated evidence key; confidential mode rejects the pool until a TEE-aware warm handshake exists. |
 | Pool exhausts node capacity | `WARM_POOL_SIZE` is operator-controlled and bounded (0–50). Idle pods have small real usage (~3.4 MiB) but reserve scheduler requests. |
 
+### O. Checkpoint workspaces
+
+A suspendable session keeps its `/workspace` on a per-session PVC while the pod
+is gone.
+
+| Threat | Handling |
+| --- | --- |
+| Read a suspended workspace | Node/storage admins can read the PVC; at-rest encryption depends on the StorageClass. The controller never mounts it. Use an encrypted class in production. |
+| Reuse another session's workspace | One PVC per session, name-bound, deleted on terminate / suspended expiry / max lifetime; never handed to another session. |
+| Resume with stale guest keys | The resumed guest generates a **new** keypair and fresh evidence; the client must re-verify before operating. The old pod/private key is gone. |
+| Replay a capability after resume | The capability is payment-bound and remains valid for `maxLifetimeSeconds`; the client nonce and session id are unchanged, so operations remain bound to the same session. A leaked capability is the same risk as a live session. |
+| Relay state after suspend | Purged at suspend; resume registers a new entry/token. |
+
 ## 3. Risk summary
 
 | Risk | Dev | Kata | Future TEE |
@@ -182,4 +197,5 @@ identity and keys enter the sandbox, not the isolation boundary.
 | Fake attestation accepted | Mitigated (labelled + opt-in) | Mitigated | Fail-closed until implemented |
 | Filesystem escape | Mitigated | Mitigated | Mitigated |
 | Warm-pool cross-session reuse | Mitigated (claim-once, no reset) | Mitigated | Pool disabled |
+| Suspended workspace at rest | PVC; storage-class encryption needed | PVC | PVC + TEE disk encryption |
 | Side channels | N/A (no claim) | N/A (no claim) | Residual |

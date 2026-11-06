@@ -32,6 +32,10 @@ export interface SandboxPodSpec {
   runtimeClass: string;
   executionMode: "dev" | "kata" | "confidential";
   workspaceDir: string;
+  /** Mount a persistent workspace (checkpoint/resume) instead of emptyDir. */
+  workspacePvc?: string;
+  /** True when this pod is a resume of a suspended session. */
+  resume?: boolean;
 }
 
 export interface WarmPodSpec {
@@ -62,6 +66,10 @@ export interface WarmPodInfo {
 export interface Provisioner {
   createPod(spec: SandboxPodSpec): Promise<{ podName: string }>;
   createWarmPod(spec: WarmPodSpec): Promise<{ podName: string }>;
+  createWorkspacePvc(sessionId: string, sizeMiB: number): Promise<string>;
+  deleteWorkspacePvc(pvcName: string): Promise<void>;
+  /** Stop the workload but keep its persistent workspace (checkpoint). */
+  suspendPod(podName: string): Promise<void>;
   deletePod(podName: string, gracePeriodSeconds?: number): Promise<void>;
   getPod(podName: string): Promise<{
     phase: string;
@@ -97,6 +105,7 @@ interface PodBuild {
   deadlineSeconds: number;
   guestEnv: k8s.V1EnvVar[];
   initEnv: k8s.V1EnvVar[];
+  workspacePvc?: string;
 }
 
 export class KubeProvisioner implements Provisioner {
@@ -147,6 +156,7 @@ export class KubeProvisioner implements Provisioner {
       { name: "MAX_COMMAND_SECONDS", value: String(spec.limits.maxCommandSeconds) },
       { name: "MAX_PROCESSES", value: String(spec.limits.maxProcesses) },
       { name: "GUEST_TOOLS", value: GUEST_TOOLS.join(",") },
+      ...(spec.resume ? [{ name: "RESUME", value: "1" }] : []),
     ];
 
     const initEnv: k8s.V1EnvVar[] = [
@@ -176,6 +186,7 @@ export class KubeProvisioner implements Provisioner {
       deadlineSeconds: Math.ceil(spec.leaseSeconds + spec.limits.maxCommandSeconds + 300),
       guestEnv,
       initEnv,
+      ...(spec.workspacePvc ? { workspacePvc: spec.workspacePvc } : {}),
     });
 
     try {
@@ -378,10 +389,12 @@ export class KubeProvisioner implements Provisioner {
           },
         ],
         volumes: [
-          {
-            name: "workspace",
-            emptyDir: { medium: "Memory", sizeLimit: `${opts.limits.diskMiB + 32}Mi` },
-          },
+          opts.workspacePvc
+            ? { name: "workspace", persistentVolumeClaim: { claimName: opts.workspacePvc } }
+            : {
+                name: "workspace",
+                emptyDir: { medium: "Memory", sizeLimit: `${opts.limits.diskMiB + 32}Mi` },
+              },
           // Bootstrap credentials live outside the customer workspace and are
           // deleted by the guest before any operation runs.
           { name: "runtime", emptyDir: { medium: "Memory", sizeLimit: "8Mi" } },
@@ -389,6 +402,52 @@ export class KubeProvisioner implements Provisioner {
         ],
       },
     };
+  }
+
+  async createWorkspacePvc(sessionId: string, sizeMiB: number): Promise<string> {
+    const name = `x402-ws-${sessionId.replace(/^sbx_/, "")}`;
+    const pvc: k8s.V1PersistentVolumeClaim = {
+      metadata: {
+        name,
+        namespace: this.namespace,
+        labels: { "x402.io/session": sessionId, "x402.io/pool": "workspace" },
+      },
+      spec: {
+        accessModes: ["ReadWriteOnce"],
+        storageClassName: process.env.WORKSPACE_STORAGE_CLASS ?? "standard",
+        resources: { requests: { storage: `${Math.max(64, sizeMiB + 64)}Mi` } },
+      },
+    };
+    try {
+      await this.core.createNamespacedPersistentVolumeClaim({ namespace: this.namespace, body: pvc });
+      log.info("workspace_pvc_created", { pvcName: name, sessionId });
+    } catch (err) {
+      if ((err as { code?: number }).code !== 409) throw err;
+    }
+    return name;
+  }
+
+  async deleteWorkspacePvc(pvcName: string): Promise<void> {
+    try {
+      await this.core.deleteNamespacedPersistentVolumeClaim({ name: pvcName, namespace: this.namespace });
+      log.info("workspace_pvc_deleted", { pvcName });
+    } catch (err) {
+      if ((err as { code?: number }).code === 404) return;
+      throw err;
+    }
+  }
+
+  async suspendPod(podName: string): Promise<void> {
+    // The workspace PVC is retained; only the compute goes away. Wait for the
+    // pod to be fully gone before the resume path reuses the same name.
+    await this.deletePod(podName, 0);
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      const pod = await this.getPod(podName).catch(() => null);
+      if (!pod) return;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error(`pod ${podName} did not terminate in time`);
   }
 
   async deletePod(podName: string, gracePeriodSeconds = 0): Promise<void> {
@@ -503,6 +562,11 @@ export class NullProvisioner implements Provisioner {
   async createWarmPod(): Promise<{ podName: string }> {
     throw new Error("NullProvisioner cannot create warm pods");
   }
+  async createWorkspacePvc(): Promise<string> {
+    throw new Error("NullProvisioner cannot create PVCs");
+  }
+  async deleteWorkspacePvc(): Promise<void> {}
+  async suspendPod(): Promise<void> {}
   async deletePod(): Promise<void> {}
   async getPod(): Promise<null> {
     return null;

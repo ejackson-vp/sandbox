@@ -135,8 +135,29 @@ beforeAll(async () => {
     workRoot: join(workDir, "sandboxes"),
   });
 
-  servers.push(await listen(createControlApi({ cfg: controllerCfg, store, relay: relayClient }), CONTROLLER_PORT));
+  let suspendFn: ((id: string) => Promise<void>) | undefined;
+  let resumeFn: ((id: string) => Promise<void>) | undefined;
+  servers.push(
+    await listen(
+      createControlApi({
+        cfg: controllerCfg,
+        store,
+        relay: relayClient,
+        suspend: (id) => {
+          if (!suspendFn) return Promise.reject(new Error("reconciler not started"));
+          return suspendFn(id);
+        },
+        resume: (id) => {
+          if (!resumeFn) return Promise.reject(new Error("reconciler not started"));
+          return resumeFn(id);
+        },
+      }),
+      CONTROLLER_PORT,
+    ),
+  );
   reconciler = new Reconciler({ cfg: controllerCfg, store, provisioner, relay: relayClient });
+  suspendFn = (id) => reconciler.suspendSession(id);
+  resumeFn = (id) => reconciler.resumeSession(id);
   reconciler.start();
 
   const apiCfg = loadConfig({
@@ -460,6 +481,64 @@ describe("session execution", () => {
       (late as SandboxError).code,
     );
   }, 60_000);
+});
+
+describe("checkpoint and resume", () => {
+  it("auto-suspends after the idle policy", async () => {
+    const handle = await client.createSession({
+      tier: "custom",
+      durationSeconds: 60,
+      idlePolicy: { maxIdleSeconds: 1, suspendedDurationSeconds: 60, autoResume: false },
+    });
+    await client.waitForReady(handle);
+    const suspended = await pollStatus(handle, (s) => s.state === "SUSPENDED", 20_000);
+    expect(suspended.suspendedAt).toBeDefined();
+    expect(suspended.remainingSeconds).toBe(0);
+    await client.resume(handle);
+    await client.destroy(handle);
+  }, 120_000);
+
+  it("exposes the pinned image digest", async () => {
+    const res = await fetch(`${apiUrl}/v1/images`);
+    expect(res.ok).toBe(true);
+    const body = (await res.json()) as { images: Array<{ id: string; digest: string; current: boolean }> };
+    expect(body.images[0]?.id).toBe("guest");
+    expect(body.images[0]?.digest).toMatch(/^sha256:/);
+    expect(body.images[0]?.current).toBe(true);
+  });
+
+  it("persists the workspace, rotates the guest key, and resumes", async () => {
+    const handle = await client.createSession({
+      tier: "custom",
+      durationSeconds: 60,
+      idlePolicy: { maxIdleSeconds: 300, suspendedDurationSeconds: 600, autoResume: false },
+    });
+    await client.waitForReady(handle);
+    const put = await client.putFile(handle, {
+      path: "persist.txt",
+      data: Buffer.from("keep-me"),
+    });
+    expect("ok" in put && put.ok).toBe(true);
+    const keyBefore = handle.guestPublicKey;
+    expect(keyBefore).toBeDefined();
+
+    const suspended = await client.suspend(handle);
+    expect(suspended.state).toBe("SUSPENDED");
+    expect(suspended.remainingSeconds).toBe(0);
+
+    await expect(client.exec(handle, { command: ["cat", "persist.txt"] })).rejects.toMatchObject({
+      code: "session_suspended",
+    });
+
+    const resumed = await client.resume(handle);
+    expect(resumed.state).toBe("READY");
+    expect(handle.guestPublicKey).toBeDefined();
+    expect(Buffer.from(handle.guestPublicKey!).equals(Buffer.from(keyBefore!))).toBe(false);
+
+    const read = await client.exec(handle, { command: ["cat", "persist.txt"] });
+    expect("stdout" in read && read.stdout.trim()).toBe("keep-me");
+    await client.destroy(handle);
+  }, 180_000);
 });
 
 describe("configuration guards", () => {

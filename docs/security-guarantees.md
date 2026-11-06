@@ -86,13 +86,19 @@ be advertised as provider-blind in dev/Kata.
 
 ## 5. Filesystem guarantees
 
-- Workspace is a memory-backed `emptyDir`; it disappears with the pod.
+- Ordinary sessions: the workspace is a memory-backed `emptyDir` and disappears
+  with the pod.
+- Suspendable sessions: the workspace is a per-session PVC. It is deleted on
+  terminate / suspended expiry / max lifetime and never reused. The controller
+  never mounts it; at-rest encryption depends on the StorageClass. See
+  [lifecycle.md](lifecycle.md).
 - Paths are canonicalised and must stay inside the workspace; `..` and symlink
   escapes are rejected for read, write, list and stat.
 - Uploads are size- and quota-checked before writing; archives are validated
   entry by entry and bounded by the same limits.
 - Downloads never export symlinks and are capped at `maxFileBytes`.
-- No hostPath, no PVC, no shared volume between sessions.
+- No hostPath; no shared volume between sessions. Suspendable sessions use a
+  per-session PVC, never a shared one.
 
 ## 6. Termination guarantees (residual latency)
 

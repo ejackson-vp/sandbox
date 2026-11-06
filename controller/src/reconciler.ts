@@ -21,6 +21,17 @@ import { newOpaqueToken, sha256Hex } from "./tokens.js";
 import { proxyTokenFor } from "./config.js";
 import { log } from "./log.js";
 
+export class LifecycleError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status: number = 409,
+  ) {
+    super(message);
+    this.name = "LifecycleError";
+  }
+}
+
 export interface ReconcilerDeps {
   cfg: ControllerConfig;
   store: Store;
@@ -134,10 +145,58 @@ export class Reconciler {
     try {
       await this.sweepOrphanPods();
       await this.reconcileWarmPool();
+      await this.enforceLifecyclePolicies();
+      await this.cleanupTerminalPvcs();
     } catch (err) {
       log.warn("housekeeping_failed", { error: (err as Error).message });
     } finally {
       this.housekeepingRunning = false;
+    }
+  }
+
+  /** Idle suspension, suspended expiry, and the wall-clock lifetime cap. */
+  private async enforceLifecyclePolicies(): Promise<void> {
+    const now = this.now();
+    for (const session of this.deps.store.listNonTerminal()) {
+      if (this.lifetimeExceeded(session)) {
+        this.deps.store.requestTermination(session.id, "max_lifetime");
+        continue;
+      }
+      const idle = session.idlePolicyJson
+        ? (JSON.parse(session.idlePolicyJson) as {
+            maxIdleSeconds?: number;
+            suspendedDurationSeconds?: number;
+          })
+        : null;
+      if (
+        idle?.maxIdleSeconds &&
+        (session.state === "READY" || session.state === "ACTIVE") &&
+        session.lastActivityAt &&
+        now - session.lastActivityAt > idle.maxIdleSeconds * 1000
+      ) {
+        try {
+          await this.suspendSession(session.id);
+        } catch (err) {
+          log.warn("auto_suspend_failed", { sessionId: session.id, error: (err as Error).message });
+        }
+        continue;
+      }
+      if (
+        idle?.suspendedDurationSeconds &&
+        session.state === "SUSPENDED" &&
+        session.suspendedAt &&
+        now - session.suspendedAt > idle.suspendedDurationSeconds * 1000
+      ) {
+        this.deps.store.requestTermination(session.id, "suspended_expired");
+      }
+    }
+  }
+
+  private async cleanupTerminalPvcs(): Promise<void> {
+    for (const session of this.deps.store.listTerminalWithPvc()) {
+      if (!session.workspacePvc) continue;
+      await this.deps.provisioner.deleteWorkspacePvc(session.workspacePvc).catch(() => undefined);
+      this.deps.store.clearWorkspacePvc(session.id);
     }
   }
 
@@ -186,49 +245,27 @@ export class Reconciler {
       return;
     }
 
-    if (await this.tryWarmClaim(session, relayAddr, proxyAddr, provisionBeginAt)) return;
-
-    this.deps.store.mergeTimings(session.id, {
-      provisionStartAt: Date.now(),
-      podRequestedAt: Date.now(),
-    });
-    const guestToken = newOpaqueToken(32);
-    const tokenHash = sha256Hex(guestToken);
-    const ttlMs =
-      this.deps.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
-    try {
-      await this.deps.relay.register(session.id, tokenHash, ttlMs);
-    } catch (err) {
-      if ((err as { status?: number }).status !== 409) {
-        log.warn("relay_register_failed", { sessionId: session.id, error: (err as Error).message });
-        return;
-      }
+    if (this.lifetimeExceeded(session)) {
+      this.deps.store.requestTermination(session.id, "max_lifetime");
+      return;
     }
-    this.deps.store.setRelayToken(session.id, tokenHash);
 
-    const relayUrl = `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(session.id)}`;
-    const proxyUrl = `http://${proxyAddr.host}:${proxyAddr.port}`;
+    const suspendable = Boolean(session.idlePolicyJson);
+    let workspacePvc = session.workspacePvc ?? undefined;
+    if (suspendable) {
+      // A checkpointed session needs its workspace to outlive the pod. It also
+      // cannot use a warm pod: volumes are immutable at claim time.
+      if (!workspacePvc) {
+        workspacePvc = await this.deps.provisioner.createWorkspacePvc(session.id, session.limits.diskMiB);
+        this.deps.store.setWorkspacePvc(session.id, workspacePvc);
+      }
+    } else if (await this.tryWarmClaim(session, relayAddr, proxyAddr, provisionBeginAt)) {
+      return;
+    }
 
-    const createStarted = Date.now();
-    const { podName } = await this.deps.provisioner.createPod({
-      sessionId: session.id,
-      leaseSeconds: session.durationSeconds,
-      limits: session.limits,
-      clientPublicKey: session.clientPublicKey,
-      clientNonce: session.clientNonce,
-      guestToken,
-      relayUrl,
-      relayHost: relayAddr.host,
-      relayPort: relayAddr.port,
-      proxyUrl,
-      proxyToken: proxyTokenFor(this.deps.cfg, session.id),
-      image: this.deps.cfg.guestImage,
-      imageDigest: this.deps.cfg.guestImageDigest,
-      runtimeClass: this.deps.cfg.runtimeClass,
-      executionMode: this.deps.cfg.executionMode,
-      workspaceDir: this.deps.cfg.workspaceDir,
+    const { podName, createStarted } = await this.createSandboxPod(session, relayAddr, proxyAddr, {
+      ...(workspacePvc ? { workspacePvc } : {}),
     });
-
     this.deps.store.setProvisioning(session.id, podName);
     this.deps.store.mergeTimings(session.id, { podCreateCallMs: Date.now() - createStarted });
     metrics
@@ -240,7 +277,141 @@ export class Reconciler {
       runtimeClass: this.deps.cfg.runtimeClass,
       tier: session.tier,
       leaseSeconds: session.durationSeconds,
+      suspendable,
     });
+  }
+
+  private async createSandboxPod(
+    session: SessionRecord,
+    relayAddr: { host: string; port: number },
+    proxyAddr: { host: string; port: number },
+    opts: { workspacePvc?: string; resume?: boolean } = {},
+  ): Promise<{ podName: string; createStarted: number }> {
+    this.deps.store.mergeTimings(session.id, {
+      provisionStartAt: Date.now(),
+      podRequestedAt: Date.now(),
+    });
+    const guestToken = newOpaqueToken(32);
+    const tokenHash = sha256Hex(guestToken);
+    const ttlMs = this.deps.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
+    try {
+      await this.deps.relay.register(session.id, tokenHash, ttlMs);
+    } catch (err) {
+      if ((err as { status?: number }).status === 409) {
+        // A resumed session may still have a stale relay entry (purge raced a
+        // relay restart). Replace it so the new guest token is the valid one.
+        await this.deps.relay.purge(session.id).catch(() => undefined);
+        await this.deps.relay.register(session.id, tokenHash, ttlMs);
+      } else {
+        throw err;
+      }
+    }
+    this.deps.store.setRelayToken(session.id, tokenHash);
+
+    const createStarted = Date.now();
+    const { podName } = await this.deps.provisioner.createPod({
+      sessionId: session.id,
+      leaseSeconds: session.durationSeconds,
+      limits: session.limits,
+      clientPublicKey: session.clientPublicKey,
+      clientNonce: session.clientNonce,
+      guestToken,
+      relayUrl: `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(session.id)}`,
+      relayHost: relayAddr.host,
+      relayPort: relayAddr.port,
+      proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
+      proxyToken: proxyTokenFor(this.deps.cfg, session.id),
+      image: this.deps.cfg.guestImage,
+      imageDigest: this.deps.cfg.guestImageDigest,
+      runtimeClass: this.deps.cfg.runtimeClass,
+      executionMode: this.deps.cfg.executionMode,
+      workspaceDir: this.deps.cfg.workspaceDir,
+      ...(opts.workspacePvc ? { workspacePvc: opts.workspacePvc } : {}),
+      ...(opts.resume ? { resume: true } : {}),
+    });
+    return { podName, createStarted };
+  }
+
+  private lifetimeExceeded(session: SessionRecord): boolean {
+    return Boolean(
+      session.maxLifetimeSeconds &&
+        this.now() - session.createdAt > session.maxLifetimeSeconds * 1000,
+    );
+  }
+
+  /**
+   * Checkpoint a live session: stop the workload, keep its workspace PVC, and
+   * release compute. There is no memory snapshot in this mode; the guest is
+   * booted fresh on resume and sees the persisted files.
+   */
+  async suspendSession(id: string): Promise<void> {
+    const session = this.deps.store.getSession(id);
+    if (!session) throw new LifecycleError("not_found", "session not found", 404);
+    if (session.state !== "READY" && session.state !== "ACTIVE") {
+      throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
+    }
+    if (!session.workspacePvc) {
+      throw new LifecycleError("not_suspendable", "session has no persistent workspace", 409);
+    }
+    try {
+      await this.deps.relay.shutdown(id, "suspend");
+    } catch {
+      /* relay may already be gone */
+    }
+    if (session.podName) {
+      await this.deps.provisioner.suspendPod(session.podName);
+      this.deps.store.clearPod(id);
+    }
+    const suspendedAt = this.now();
+    if (!this.deps.store.markSuspended(id, suspendedAt)) {
+      throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
+    }
+    await this.deps.relay.purge(id).catch(() => undefined);
+    metrics.counter("sandbox_sessions_suspended_total", "Sessions suspended").inc();
+    log.info("sandbox_suspended", { sessionId: id, suspendedAt });
+  }
+
+  /** Boot a fresh guest against the persisted workspace. */
+  async resumeSession(id: string): Promise<void> {
+    const session = this.deps.store.getSession(id);
+    if (!session) throw new LifecycleError("not_found", "session not found", 404);
+    if (session.state !== "SUSPENDED") {
+      throw new LifecycleError("not_suspended", `session is ${session.state}`, 409);
+    }
+    if (this.lifetimeExceeded(session)) {
+      this.deps.store.requestTermination(id, "max_lifetime");
+      throw new LifecycleError("max_lifetime", "session exceeded its maximum lifetime", 409);
+    }
+    const idle = session.idlePolicyJson
+      ? (JSON.parse(session.idlePolicyJson) as { suspendedDurationSeconds?: number })
+      : {};
+    if (
+      idle.suspendedDurationSeconds &&
+      session.suspendedAt &&
+      this.now() - session.suspendedAt > idle.suspendedDurationSeconds * 1000
+    ) {
+      this.deps.store.requestTermination(id, "suspended_expired");
+      throw new LifecycleError("suspended_expired", "session was suspended for too long", 409);
+    }
+    if (!session.workspacePvc) {
+      throw new LifecycleError("not_resumable", "session has no persistent workspace", 409);
+    }
+    const relayAddr = await this.serviceAddress(this.deps.cfg.relayServiceName);
+    const proxyAddr = await this.serviceAddress(this.deps.cfg.proxyServiceName);
+    if (!relayAddr || !proxyAddr) {
+      throw new LifecycleError("control_plane_unavailable", "relay or proxy unavailable", 503);
+    }
+    const { podName } = await this.createSandboxPod(session, relayAddr, proxyAddr, {
+      workspacePvc: session.workspacePvc,
+      resume: true,
+    });
+    if (!this.deps.store.markResuming(id, podName)) {
+      await this.deps.provisioner.deletePod(podName, 0).catch(() => undefined);
+      await this.deps.relay.purge(id).catch(() => undefined);
+      throw new LifecycleError("not_suspended", "session changed state while resuming", 409);
+    }
+    metrics.counter("sandbox_sessions_resumed_total", "Sessions resumed").inc();
+    log.info("sandbox_resuming", { sessionId: id, podName, resumeCount: session.resumeCount + 1 });
   }
 
   private warmPoolLimits(): SessionLimits {
@@ -678,6 +849,16 @@ export class Reconciler {
     if (session.podName) {
       await this.deps.provisioner.deletePod(session.podName, 1).catch(() => undefined);
       this.deps.store.clearPod(session.id);
+    }
+    if (session.workspacePvc) {
+      await this.deps.provisioner.deleteWorkspacePvc(session.workspacePvc).catch((err) => {
+        log.warn("workspace_pvc_delete_failed", {
+          sessionId: session.id,
+          pvc: session.workspacePvc,
+          error: (err as Error).message,
+        });
+      });
+      this.deps.store.clearWorkspacePvc(session.id);
     }
     if (session.relayPurgedAt === null) {
       try {

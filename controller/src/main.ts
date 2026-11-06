@@ -94,7 +94,22 @@ async function main(): Promise<void> {
   const relay = makeRelayClient(cfg);
 
   let wake: (() => void) | undefined;
-  const control = createControlApi({ cfg, store, relay, wake: () => wake?.() });
+  let suspend: ((id: string) => Promise<void>) | undefined;
+  let resume: ((id: string) => Promise<void>) | undefined;
+  const control = createControlApi({
+    cfg,
+    store,
+    relay,
+    wake: () => wake?.(),
+    suspend: (id) => {
+      if (!suspend) return Promise.reject(new Error("reconciler not started"));
+      return suspend(id);
+    },
+    resume: (id) => {
+      if (!resume) return Promise.reject(new Error("reconciler not started"));
+      return resume(id);
+    },
+  });
   const server = http.createServer(control);
   await listen(server, cfg.controllerPort);
   log.info("controller_listening", {
@@ -107,6 +122,8 @@ async function main(): Promise<void> {
 
   const reconciler = new Reconciler({ cfg, store, provisioner, relay });
   wake = () => reconciler.wake();
+  suspend = (id) => reconciler.suspendSession(id);
+  resume = (id) => reconciler.resumeSession(id);
   reconciler.start();
 
   installShutdown(async () => {

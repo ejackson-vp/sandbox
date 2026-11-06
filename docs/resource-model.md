@@ -22,7 +22,7 @@ raised by a request. `ALLOW_CUSTOM_DURATIONS` exists for development and tests.
 | --- | --- |
 | Lease duration | controller deadline (authoritative), guest watchdog, `activeDeadlineSeconds` |
 | CPU / memory | Kubernetes container `resources.limits` (mirrored from the tier) |
-| Disk | `emptyDir` `sizeLimit` (tier + 32 MiB) **and** the guest's own quota (`diskMiB`) |
+| Disk | `emptyDir` `sizeLimit` (tier + 32 MiB) **and** the guest's own quota (`diskMiB`); suspendable sessions use a per-session PVC of `diskMiB` + 64 MiB |
 | Output | guest truncates stdout/stderr at `maxOutputBytes` (256 KiB default) |
 | File size | guest rejects payloads/archives above `maxFileBytes` (8 MiB default) |
 | Processes | pod-level `pod-max-pids` (1024) per sandbox; `maxProcesses` is advisory (a per-UID `RLIMIT_NPROC` would be node-wide because all sandboxes share a UID) |

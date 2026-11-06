@@ -42,7 +42,8 @@ provider's control plane.
        │  │ sandbox pod (runtimeClassName: x402-sandbox)            │  │
        │  │  guest supervisor (Go, non-dumpable)                    │  │
        │  │   - ephemeral X25519 key, attestation, sealed-box open   │  │
-       │  │   - persistent /workspace (memory emptyDir)             │  │
+       │  │   - /workspace: memory emptyDir, or a per-session PVC   │  │
+       │  │     for suspendable sessions                             │  │
        │  │   - one operation at a time, process-group watchdog     │  │
        │  │   - python3 / node / bash toolchain                     │  │
        │  └────────────────────────────────────────────────────────┘  │
@@ -130,7 +131,7 @@ handles (id, capability, client key) locally with mode `0600`.
 | max output / file size / command seconds / processes | platform limits |
 | created / paid / ready / lease expiry | controller clock (immutable after READY) |
 | capability | HMAC(payment key), hash stored server-side |
-| state | `PAID → PROVISIONING → READY → ACTIVE → TERMINATING → terminal` |
+| state | `PAID → PROVISIONING → READY ⇄ ACTIVE → TERMINATING → terminal`; `READY/ACTIVE → SUSPENDED → PROVISIONING` for suspendable sessions |
 
 The lease starts at READY, so provisioning is free to the customer. The full
 state machine and timing rules are in [sessions.md](sessions.md).
@@ -209,7 +210,7 @@ signatures over canonical JSON produced by both implementations.
 - RBAC: controller may only manage pods in `sandbox-workloads` and read services
   in `sandbox-system`.
 - No hostPath, no host namespaces, no SA token, no Linux capabilities, read-only
-  root filesystem, seccomp `RuntimeDefault`, memory-backed workspace.
+  root filesystem, seccomp `RuntimeDefault`, memory-backed workspace (or a PVC for checkpointed sessions).
 - CNI: Cilium (kind's kindnet does not enforce NetworkPolicy). One Cilium-specific
   policy grants the controller access to the `kube-apiserver` entity; sandbox
   pods get nothing equivalent.

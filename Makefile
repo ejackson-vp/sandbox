@@ -22,6 +22,7 @@ help:
 	@echo "  make demo-session   full multi-command session workflow"
 	@echo "  make demo-expire    demonstrate lease expiration and cleanup"
 	@echo "  make demo-timeout   demonstrate the per-command timeout"
+	@echo "  make demo-lifecycle checkpoint a session, resume it, verify the workspace"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
 	@echo "  make benchmark-smoke / benchmark-startup / benchmark-startup-pool"
@@ -72,6 +73,9 @@ demo-session: cli
 
 demo-expire: cli
 	./scripts/demo-expire.sh
+
+demo-lifecycle:
+	npx tsx scripts/lifecycle-demo.ts
 
 cli:
 	npm run build -w @x402s/shared

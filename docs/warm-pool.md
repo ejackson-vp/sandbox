@@ -187,3 +187,7 @@ kubectl -n sandbox-system set env deploy/controller WARM_POOL_SIZE-
   wake on guest hello would remove most of it.
 - One pool tier per controller. A production deployment would want per-tier
   pools or a pool sized to the dominant tier.
+- Suspendable sessions bypass the pool entirely: a checkpointed session needs
+  its per-session PVC, and pod volumes are immutable at claim time. First READY
+  and resume are therefore cold (~5.8 s / ~1.9 s in one local run). See
+  [lifecycle.md](lifecycle.md).
