@@ -153,6 +153,21 @@ hypervisor-coordinated DoS, attestation-policy mistakes and firmware issues
 remain. Confidential computing protects data in use; it is not verifiable
 computation and this system is **not** "zero knowledge".
 
+### N. Warm pool
+
+A warm pod is booted before it has a session, so the pool changes *when*
+identity and keys enter the sandbox, not the isolation boundary.
+
+| Threat | Handling |
+| --- | --- |
+| Read a previous customer's data from a pooled pod | No pod is ever returned to the pool. A claimed pod is relabelled and destroyed at session end; there is no reuse/reset path. |
+| Learn a session id/key before payment | The warm pod template has no `SESSION_ID`, client key, nonce, token, or capability. The claim is the first time they enter the pod. |
+| Reuse the pool's keypair/evidence | The pool hello is `evidenceType: "warm-pool"` and is only a readiness signal. The guest generates a fresh keypair and fresh evidence after the claim. |
+| Claim a pod as another customer | Only the controller may call the relay's admin claim endpoint; sandbox pods cannot reach it. |
+| Sniff the claim on the relay | The relay is a trusted control-plane component and already handles ciphertext; it cannot decrypt payloads. The claim carries the session guest token (not the customer capability). Future hardening: seal the claim to a guest key announced in the pool hello. |
+| Controller/relay compromise during claim | Can redirect or deny a session (availability/impersonation) exactly as it can for a cold pod. Dev mode already trusts the controller with the simulated evidence key; confidential mode rejects the pool until a TEE-aware warm handshake exists. |
+| Pool exhausts node capacity | `WARM_POOL_SIZE` is operator-controlled and bounded (0–50). Idle pods have small real usage (~3.4 MiB) but reserve scheduler requests. |
+
 ## 3. Risk summary
 
 | Risk | Dev | Kata | Future TEE |
@@ -166,4 +181,5 @@ computation and this system is **not** "zero knowledge".
 | Payment replay / double charge | Mitigated | Mitigated | Mitigated |
 | Fake attestation accepted | Mitigated (labelled + opt-in) | Mitigated | Fail-closed until implemented |
 | Filesystem escape | Mitigated | Mitigated | Mitigated |
+| Warm-pool cross-session reuse | Mitigated (claim-once, no reset) | Mitigated | Pool disabled |
 | Side channels | N/A (no claim) | N/A (no claim) | Residual |

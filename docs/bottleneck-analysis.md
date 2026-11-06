@@ -17,8 +17,17 @@ The image is already in containerd; there is no pull. The cost is the init
 container, main container start, and guest process start on the Docker Desktop
 VM. Its run-to-run variance (1.32 vs 1.76 s, tight within each run) tracks
 image-layer page-cache state, not application code. **This dominates the
-lifecycle and cannot be fixed in the control plane.** It must be re-measured on
-native Linux (and with Kata) before deciding whether a warm pool is worth it.
+lifecycle and cannot be removed from the control plane — only paid in advance.**
+
+Measured fix (dev mode, pool size 8, n=100): pre-booted warm pods claimed over
+the relay reduce create→READY p50 from **2.10 s to 285 ms** (p90 366 ms, p95
+424 ms), with 98/100 pool hits. The remaining bottleneck is the 250 ms reconcile
+tick between the guest hello and READY; a relay→controller wake on hello would
+remove most of it. The tail (p99 1.51 s) comes from two empty-pool fallbacks, so
+pool sizing to arrival rate is now the operational lever. See
+[performance-report.md §2.4](performance-report.md#24-warm-pool-measured-dev-mode)
+and [warm-pool.md](warm-pool.md). This does **not** transfer to Kata/TEE cold
+start or real-node density, which still need a KVM host.
 
 ## 2. Mass-start contention — ready latency grows 2.3× from 1 to 50 sessions
 

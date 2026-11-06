@@ -11,6 +11,7 @@ clocks, sample sizes and threats to validity. Raw data:
 |---|---|
 | Cold start p50 / p95 / p99 | **not available in this environment** (no registry-backed image; see §2.3) |
 | Warm start (create → client-ready) p50 / p95 / p99 | **1.80 s / 1.82 s / 2.37 s** baseline (n=100); **2.10 s** after optimizations, in a run where container startup was 0.44 s slower (see §7) |
+| Warm start with warm pool (dev, pool=8) p50 / p90 / p95 / p99 | **285 ms / 366 ms / 424 ms / 1.51 s** (n=100, 98/100 pool hits; see §2.4) |
 | Warm start (server entitlement → READY) p50 / p95 | **1.61 s / 1.73 s** (n=99) |
 | Existing-session exec p50 / p95 | **10.6 ms / 13.1 ms** (n=100) |
 | Maximum tested concurrency | **50 sessions, 50/50 READY, 0 failures** (idle); 25 for CPU and mixed workloads |
@@ -97,6 +98,37 @@ make benchmark-startup-cold IMAGE_REF=<registry>/x402-sandbox/guest:bench SAMPLE
 ```
 
 No cold numbers are estimated here.
+
+### 2.4 Warm pool (measured, dev mode)
+
+The warm pool keeps pre-booted, unleased guest pods. A paid session claims one
+over the relay instead of creating a pod, so container startup is paid in
+advance rather than per session. Full design and security notes:
+[warm-pool.md](warm-pool.md).
+
+100 sequential samples, same spec as §2.1, pool size 8:
+
+| Stage | n | p50 | p90 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| create (payment verify+settle+entitlement) | 100 | 15.8 ms | 17.8 ms | 19.8 ms | 38.6 ms |
+| claim handshake (API received → warm claimed) | 98 | 33 ms | 67 ms | 100 ms | 166 ms |
+| guest hello → READY (controller tick) | 100 | 214 ms | 275 ms | 308 ms | 356 ms |
+| READY → client observed (SDK poll) | 100 | 51 ms | 87 ms | 89 ms | 138 ms |
+| **create → client READY** | 100 | **285 ms** | **366 ms** | **424 ms** | **1.51 s** |
+| first exec | 100 | 8.6 ms | 10.1 ms | 11.9 ms | 41.3 ms |
+
+- **98/100 samples hit the pool.** The two cold fallbacks (pool empty under a
+  ~1.2 create/s sample rate) are the entire p99 tail; one was a 9.8 s outlier.
+- The claim itself is ~33 ms p50. The remaining ~214 ms is the controller's
+  250 ms reconcile tick, not guest work. A relay→controller wake on hello would
+  remove most of it.
+- Idle pool cost is ~3.4 MiB current / 1.8 MiB anon per pod (`128Mi` request,
+  `512Mi` limit). The real cost is scheduler requests, not resident memory.
+- With sub-second starts the default API limiter (30 burst / 1 per s) becomes the
+  throughput ceiling; the benchmark raised it to 1000/500 and restored it after.
+
+The pool is off by default and is rejected in confidential mode (a warm guest
+has no session to attest to yet).
 
 ## 3. Concurrency and density
 
@@ -454,6 +486,11 @@ Supported by the measurements:
   not by the payment or control plane. Two application-level delays (reconcile
   tick and client polling) were removable and are now gone (~0.44 s → ~0.24 s of
   application-owned latency); teardown fell from 518 ms to 112 ms.
+- Pre-booting removes container startup from the per-session path: a measured
+  warm pool (8 pods, dev mode) cut create→READY p50 from 2.10 s to **285 ms**
+  (p90 366 ms, p95 424 ms, 98/100 pool hits). The remaining ~214 ms is the
+  reconcile tick; the tail is empty-pool fallback, so sizing to arrival rate is
+  the operational lever. Idle cost is ~3.4 MiB actual per pod.
 - Unit economics at the modelled 16 vCPU/64 GiB worker are strongly positive per
   session ($0.0015–$0.035) at $0.01–$0.05/min, *if* capacity is utilized.
 
@@ -470,11 +507,12 @@ Unknown / not supported:
 Highest-impact next investment: **validate on a Linux/KVM host with Kata and a
 registry-backed image pipeline, and measure cold start + density there.** That
 single experiment resolves the two largest unknowns (isolation viability and
-whether startup is image-bound). If cold start is dominated by image pull, a
-node-local image cache is worth more than a warm sandbox pool; if it is
-container-start-bound (as here), a small warm pool may be justified later. In
-parallel, add per-payer admission control and make the relay/controller
-restart-safe before charging real money.
+whether startup is image-bound). Container startup was the dominant warm-start
+cost here, and the warm pool fixed it locally (p50 2.10 s → 285 ms); the same
+test on a KVM host tells you whether Kata/TEE startup leaves the pool worthwhile
+and how many idle pods a real node can afford. In parallel, add per-payer
+admission control and make the relay/controller restart-safe before charging
+real money.
 
 ## 13. Reproduction
 
@@ -482,6 +520,7 @@ restart-safe before charging real money.
 make down && make up
 make benchmark-smoke
 make benchmark-startup                 # 100 warm samples
+make benchmark-startup-pool            # same, with 8 pre-booted sandboxes
 make benchmark-density MODE=idle LEVELS=1,5,10,25
 make benchmark-density MODE=cpu LEVELS=1,5,10
 make benchmark-density MODE=mixed LEVELS=1,5,10

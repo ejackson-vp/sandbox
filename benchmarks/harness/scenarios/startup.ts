@@ -95,24 +95,30 @@ export async function runStartup(bench: Bench, opts: BenchOptions): Promise<numb
     let row: SampleRow;
     try {
       const session = await createAndReady(bench, spec, opts.cold ? 240_000 : 120_000);
+      const warmHit = session.timings?.warmPoolHit === 1;
       const podName = `sbx-${session.sessionId.replace(/^sbx_/, "")}`;
-      const marks = await watcher.waitForRunning(podName, 5000);
-      const podAddedAt = watcher.absolute(marks.addedAt);
-      const scheduledAt = watcher.absolute(marks.scheduledAt);
-      const runningAt = watcher.absolute(marks.runningAt);
-      // Guest-side startup breakdown from its structured log (same host clock).
-      const guestLog = kubectlTry(["-n", "sandbox-workloads", "logs", podName, "-c", "guest", "--tail=-1"]).out;
+      let podAddedAt: number | undefined;
+      let scheduledAt: number | undefined;
+      let runningAt: number | undefined;
       let guestStartedTs: number | undefined;
       let guestHelloTs: number | undefined;
-      for (const line of guestLog.split("\n")) {
-        try {
-          const entry = JSON.parse(line) as { event?: string; ts?: string };
-          const ts = entry.ts ? Date.parse(entry.ts) : NaN;
-          if (!Number.isFinite(ts)) continue;
-          if (entry.event === "guest_started") guestStartedTs = ts;
-          if (entry.event === "guest_hello_sent") guestHelloTs = ts;
-        } catch {
-          /* non-JSON line */
+      if (!warmHit) {
+        const marks = await watcher.waitForRunning(podName, 5000);
+        podAddedAt = watcher.absolute(marks.addedAt);
+        scheduledAt = watcher.absolute(marks.scheduledAt);
+        runningAt = watcher.absolute(marks.runningAt);
+        // Guest-side startup breakdown from its structured log (same host clock).
+        const guestLog = kubectlTry(["-n", "sandbox-workloads", "logs", podName, "-c", "guest", "--tail=-1"]).out;
+        for (const line of guestLog.split("\n")) {
+          try {
+            const entry = JSON.parse(line) as { event?: string; ts?: string };
+            const ts = entry.ts ? Date.parse(entry.ts) : NaN;
+            if (!Number.isFinite(ts)) continue;
+            if (entry.event === "guest_started") guestStartedTs = ts;
+            if (entry.event === "guest_hello_sent") guestHelloTs = ts;
+          } catch {
+            /* non-JSON line */
+          }
         }
       }
       const first = await timedExec(bench, session.handle, ["bash", "-c", "echo ready"]);
@@ -185,6 +191,7 @@ export async function runStartup(bench: Bench, opts: BenchOptions): Promise<numb
     ready: ok.map((r) => r.readyObservedMs ?? NaN),
     serverReady: ok.map((r) => r.derived?.serverReadyMs ?? NaN),
     provision: ok.map((r) => r.derived?.serverProvisionMs ?? NaN),
+    warmClaim: ok.map((r) => r.derived?.warmClaimMs ?? NaN),
     podObjectCreated: ok.map((r) => r.stages?.podAddedMs ?? NaN),
     scheduled: ok.map((r) =>
       r.stages?.scheduledMs !== undefined && r.stages?.podAddedMs !== undefined
@@ -207,6 +214,7 @@ export async function runStartup(bench: Bench, opts: BenchOptions): Promise<numb
     samples: rows.length,
     ok: ok.length,
     failed: rows.length - ok.length,
+    warmHits: ok.filter((r) => r.timings?.warmPoolHit === 1).length,
     errorCodes: [...new Set(rows.filter((r) => !r.ok).map((r) => r.errorCode))],
     distributions: Object.fromEntries(
       Object.entries(metrics).map(([k, v]) => [k, summarize(v.filter((n) => Number.isFinite(n)))]),

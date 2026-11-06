@@ -11,9 +11,10 @@
  * Deadline enforcement never depends on the untrusted guest cooperating: the
  * controller's clock decides, and pod deletion is the backstop.
  */
-import { LATENCY_BUCKETS, metrics, type RelaySessionState } from "@x402s/shared";
+import { LATENCY_BUCKETS, metrics, type RelaySessionState, type SessionLimits, type WarmClaim } from "@x402s/shared";
+import { randomBytes } from "node:crypto";
 import type { ControllerConfig } from "./config.js";
-import type { Provisioner } from "./k8s.js";
+import { GUEST_TOOLS, type Provisioner, type WarmPodInfo } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
 import type { SessionRecord, Store } from "./store.js";
 import { newOpaqueToken, sha256Hex } from "./tokens.js";
@@ -38,6 +39,8 @@ export class Reconciler {
   private readonly healthCheckedAt = new Map<string, number>();
   /** Consecutive *successful* probes reporting a missing/terminal pod. */
   private readonly healthStrikes = new Map<string, number>();
+  /** Warm pods claimed in this tick, before their labels are patched. */
+  private readonly warmClaimed = new Set<string>();
   private readonly now: () => number;
 
   constructor(private readonly deps: ReconcilerDeps) {
@@ -92,6 +95,7 @@ export class Reconciler {
         this.deps.store.clearPod(session.id);
       }
       await this.sweepOrphanPods();
+      await this.reconcileWarmPool();
       const active = this.deps.store
         .listNonTerminal()
         .filter((s) => s.state === "READY" || s.state === "ACTIVE").length;
@@ -146,6 +150,8 @@ export class Reconciler {
       });
       return;
     }
+
+    if (await this.tryWarmClaim(session, relayAddr, proxyAddr)) return;
 
     this.deps.store.mergeTimings(session.id, {
       provisionStartAt: Date.now(),
@@ -202,7 +208,281 @@ export class Reconciler {
     });
   }
 
+  private warmPoolLimits(): SessionLimits {
+    const def = this.deps.cfg.tiers[this.deps.cfg.warmPoolTier];
+    const platform = this.deps.cfg.platformLimits;
+    return {
+      cpuMillis: def.cpuMillis,
+      memoryMiB: def.memoryMiB,
+      diskMiB: def.diskMiB,
+      maxOutputBytes: platform.maxOutputBytes,
+      maxFileBytes: platform.maxFileBytes,
+      maxCommandSeconds: Math.min(platform.maxCommandSeconds, def.durationSeconds),
+      maxProcesses: platform.maxProcesses,
+    };
+  }
+
+  /**
+   * A warm pod is sized by its cgroup and emptyDir limits. Everything else
+   * (output, file size, process count, command timeout) is re-sent in the
+   * claim and enforced by the guest, so only the pod-shaped limits must fit.
+   */
+  private warmLimitsFit(need: SessionLimits, have: SessionLimits): boolean {
+    return (
+      need.cpuMillis <= have.cpuMillis &&
+      need.memoryMiB <= have.memoryMiB &&
+      need.diskMiB <= have.diskMiB
+    );
+  }
+
+  private async tryWarmClaim(
+    session: SessionRecord,
+    relayAddr: { host: string; port: number },
+    proxyAddr: { host: string; port: number },
+  ): Promise<boolean> {
+    const cfg = this.deps.cfg;
+    if (cfg.warmPoolSize === 0) return false;
+    if (!this.warmLimitsFit(session.limits, this.warmPoolLimits())) {
+      metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "miss_limits" });
+      return false;
+    }
+
+    const warm = await this.pickWarmPod();
+    if (!warm) {
+      metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "miss_empty" });
+      return false;
+    }
+    // Reserve it immediately so a second session in this tick cannot take it.
+    this.warmClaimed.add(warm.warmId);
+
+    const guestToken = newOpaqueToken(32);
+    const tokenHash = sha256Hex(guestToken);
+    const ttlMs = cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
+    try {
+      await this.deps.relay.register(session.id, tokenHash, ttlMs);
+    } catch (err) {
+      if ((err as { status?: number }).status !== 409) {
+        log.warn("warm_relay_register_failed", { sessionId: session.id, error: (err as Error).message });
+        this.warmClaimed.delete(warm.warmId);
+        return false;
+      }
+    }
+    this.deps.store.setRelayToken(session.id, tokenHash);
+
+    const claim: WarmClaim = {
+      sessionId: session.id,
+      relayUrl: `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(session.id)}`,
+      guestToken,
+      clientPublicKey: session.clientPublicKey,
+      clientNonce: session.clientNonce,
+      leaseSeconds: session.durationSeconds,
+      executionMode: cfg.executionMode,
+      runtimeClass: cfg.runtimeClass,
+      imageDigest: cfg.guestImageDigest,
+      proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
+      proxyToken: proxyTokenFor(cfg, session.id),
+      maxOutputBytes: session.limits.maxOutputBytes,
+      maxFileBytes: session.limits.maxFileBytes,
+      maxDiskMiB: session.limits.diskMiB,
+      maxCommandSeconds: session.limits.maxCommandSeconds,
+      maxProcesses: session.limits.maxProcesses,
+      tools: GUEST_TOOLS.join(","),
+    };
+
+    try {
+      await this.deps.relay.claim(warm.poolId, claim);
+    } catch (err) {
+      log.warn("warm_claim_failed", { sessionId: session.id, warmId: warm.warmId, error: (err as Error).message });
+      this.warmClaimed.delete(warm.warmId);
+      await this.deps.provisioner.deletePod(warm.name, 0).catch(() => undefined);
+      await this.deps.relay.purge(warm.poolId).catch(() => undefined);
+      return false;
+    }
+
+    // The guest accepted the claim and is reconnecting as the real session.
+    // Relabel before the next sweep so the pod is owned by that session.
+    try {
+      await this.deps.provisioner.patchPodLabels(warm.name, {
+        "x402.io/pool": "sandbox",
+        "x402.io/session": session.id,
+        "x402.io/warm-claimed": "true",
+      });
+    } catch (err) {
+      log.warn("warm_relabel_failed", { sessionId: session.id, warmId: warm.warmId, error: (err as Error).message });
+      this.warmClaimed.delete(warm.warmId);
+      await this.deps.provisioner.deletePod(warm.name, 0).catch(() => undefined);
+      await this.deps.relay.purge(session.id).catch(() => undefined);
+      return false;
+    }
+
+    if (!this.deps.store.setProvisioning(session.id, warm.name)) {
+      // The session moved on (destroyed, reaped) between selection and here.
+      this.warmClaimed.delete(warm.warmId);
+      await this.deps.provisioner.deletePod(warm.name, 0).catch(() => undefined);
+      await this.deps.relay.purge(session.id).catch(() => undefined);
+      return false;
+    }
+
+    const claimedAt = this.now();
+    this.deps.store.mergeTimings(session.id, {
+      provisionStartAt: claimedAt,
+      podRequestedAt: claimedAt,
+      warmClaimAt: claimedAt,
+      warmPoolHit: 1,
+    });
+    this.warmClaimed.delete(warm.warmId);
+    // The pooled identity is dead the moment the guest reconnects.
+    await this.deps.relay.purge(warm.poolId).catch(() => undefined);
+    metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "hit" });
+    log.info("sandbox_warm_claimed", {
+      sessionId: session.id,
+      warmId: warm.warmId,
+      podName: warm.name,
+    });
+    return true;
+  }
+
+  private async pickWarmPod(): Promise<WarmPodInfo | null> {
+    let pods: WarmPodInfo[];
+    try {
+      pods = await this.deps.provisioner.listWarmPods();
+    } catch (err) {
+      log.warn("warm_pool_list_failed", { error: (err as Error).message });
+      return null;
+    }
+    const now = this.now();
+    for (const pod of pods) {
+      if (!pod.warmId || this.warmClaimed.has(pod.warmId)) continue;
+      if (pod.phase !== "Running" && pod.phase !== "Pending") continue;
+      if (pod.createdAt > 0 && now - pod.createdAt > this.deps.cfg.warmPoolTtlMs) continue;
+      try {
+        const state = await this.deps.relay.state(pod.poolId);
+        // `attestation` here is the *pool* hello, not customer evidence. The
+        // real session hello (with its own binding) arrives after the claim
+        // and is what the session is judged on.
+        if (state.registered && state.connected && state.attestation) return pod;
+      } catch {
+        /* try the next pod */
+      }
+    }
+    return null;
+  }
+
+  /** Keep the pool topped up and recycle stale, dead or unrecoverable pods. */
+  private async reconcileWarmPool(): Promise<void> {
+    const cfg = this.deps.cfg;
+    let pods: WarmPodInfo[];
+    try {
+      pods = await this.deps.provisioner.listWarmPods();
+    } catch {
+      return;
+    }
+    if (pods.length === 0 && cfg.warmPoolSize === 0) return;
+
+    const now = this.now();
+    let live = 0;
+    for (const pod of pods) {
+      if (!pod.warmId) continue;
+      if (this.warmClaimed.has(pod.warmId)) {
+        live++;
+        continue;
+      }
+      const dead = pod.phase === "Failed" || pod.phase === "Succeeded";
+      const tooOld = pod.createdAt > 0 && now - pod.createdAt > cfg.warmPoolTtlMs;
+      const scaleDown = cfg.warmPoolSize === 0;
+      if (dead || tooOld || scaleDown) {
+        await this.deps.provisioner.deletePod(pod.name, 0).catch(() => undefined);
+        await this.deps.relay.purge(pod.poolId).catch(() => undefined);
+        log.info("warm_pod_recycled", {
+          podName: pod.name,
+          reason: scaleDown ? "scale_down" : dead ? "dead" : "ttl",
+        });
+        continue;
+      }
+      // A pool pod created before a controller/relay restart has no known
+      // token hash; it can never authenticate again, so recycle it.
+      const state = await this.deps.relay.state(pod.poolId).catch(() => null);
+      if (state && !state.registered && pod.createdAt > 0 && now - pod.createdAt > 30_000) {
+        await this.deps.provisioner.deletePod(pod.name, 0).catch(() => undefined);
+        log.info("warm_pod_recycled", { podName: pod.name, reason: "unregistered" });
+        continue;
+      }
+      live++;
+    }
+
+    metrics.gauge("sandbox_warm_pool_pods", "Warm pool pods (live)").set({}, live);
+    if (cfg.warmPoolSize === 0) return;
+
+    const missing = Math.max(0, cfg.warmPoolSize - live);
+    if (missing === 0) return;
+
+    const relayAddr = await this.serviceAddress(cfg.relayServiceName);
+    const proxyAddr = await this.serviceAddress(cfg.proxyServiceName);
+    if (!relayAddr || !proxyAddr) return;
+    // Bounded per pass so a large pool does not burst the kubelet.
+    for (let i = 0; i < Math.min(missing, 2); i++) {
+      await this.createWarmPod(relayAddr, proxyAddr);
+    }
+  }
+
+  private async createWarmPod(
+    relayAddr: { host: string; port: number },
+    proxyAddr: { host: string; port: number },
+  ): Promise<void> {
+    const cfg = this.deps.cfg;
+    const warmId = randomBytes(6).toString("hex");
+    const poolId = `warm_${warmId}`;
+    const guestToken = newOpaqueToken(32);
+    const tokenHash = sha256Hex(guestToken);
+    const ttlMs = cfg.warmPoolTtlMs + 120_000;
+    try {
+      await this.deps.relay.register(poolId, tokenHash, ttlMs);
+    } catch (err) {
+      log.warn("warm_relay_register_failed", { poolId, error: (err as Error).message });
+      return;
+    }
+    try {
+      await this.deps.provisioner.createWarmPod({
+        warmId,
+        poolId,
+        ttlMs,
+        limits: this.warmPoolLimits(),
+        guestToken,
+        relayUrl: `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(poolId)}`,
+        proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
+        proxyToken: proxyTokenFor(cfg, poolId),
+        image: cfg.guestImage,
+        imageDigest: cfg.guestImageDigest,
+        runtimeClass: cfg.runtimeClass,
+        executionMode: cfg.executionMode,
+        workspaceDir: cfg.workspaceDir,
+        tools: GUEST_TOOLS.join(","),
+      });
+      metrics.counter("sandbox_warm_pool_created_total", "Warm pods created").inc();
+    } catch (err) {
+      await this.deps.relay.purge(poolId).catch(() => undefined);
+      log.warn("warm_pod_create_failed", { warmId, error: (err as Error).message });
+    }
+  }
+
   private async awaitReady(session: SessionRecord): Promise<void> {
+    const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
+    if (
+      timings.warmPoolHit === 1 &&
+      typeof timings.warmClaimAt === "number" &&
+      this.now() - timings.warmClaimAt > this.deps.cfg.warmClaimTimeoutMs
+    ) {
+      this.deps.store.requestTermination(session.id, "failure:warm_claim_timeout", {
+        code: "warm_claim_timeout",
+        message: "the warm sandbox did not attach to the session in time",
+      });
+      log.warn("sandbox_warm_claim_timeout", {
+        sessionId: session.id,
+        warmClaimAt: timings.warmClaimAt,
+      });
+      return;
+    }
+
     const age = this.now() - (session.paidAt ?? session.createdAt);
     if (age > this.deps.cfg.provisioningTimeoutMs) {
       this.deps.store.requestTermination(session.id, "failure:provisioning_timeout", {
@@ -234,13 +514,18 @@ export class Reconciler {
             state.attestation.guestPublicKey,
           );
           if (ok) {
-            const podInfo = session.podName
-              ? await this.deps.provisioner.getPod(session.podName).catch(() => null)
-              : null;
+            const warm = timings.warmPoolHit === 1;
+            const podInfo = warm || !session.podName
+              ? null
+              : await this.deps.provisioner.getPod(session.podName).catch(() => null);
             this.deps.store.mergeTimings(session.id, {
-              podCreatedAt: podInfo?.createdAt,
-              podScheduledAt: podInfo?.scheduledAt,
-              containerStartedAt: podInfo?.startedAt,
+              ...(warm
+                ? {}
+                : {
+                    podCreatedAt: podInfo?.createdAt,
+                    podScheduledAt: podInfo?.scheduledAt,
+                    containerStartedAt: podInfo?.startedAt,
+                  }),
               guestHelloAt: state.helloAt ?? readyAt,
               readyAt,
               leaseExpiresAt,
@@ -266,7 +551,7 @@ export class Reconciler {
       if (pod && pod.phase === "Running") {
         // Record the first observation of a running container (tick resolution).
         const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
-        if (!timings.podRunningObservedAt) {
+        if (!timings.podRunningObservedAt && timings.warmPoolHit !== 1) {
           this.deps.store.mergeTimings(session.id, { podRunningObservedAt: this.now() });
         }
       }

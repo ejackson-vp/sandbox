@@ -20,6 +20,7 @@ benchmarks/
 make up                   # kind + Cilium + images + deploy
 make benchmark-smoke      # 1 session, safe on a laptop
 make benchmark-startup    # 100 warm create→ready→exec→destroy samples
+make benchmark-startup-pool  # same, with 8 pre-booted sandboxes (restores defaults)
 make benchmark-density    # 1,5,10,25 concurrent idle sessions
 make benchmark-workloads  # hello, compute, filesystem, pip, multi-command, expiry
 make benchmark-reliability

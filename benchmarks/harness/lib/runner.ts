@@ -34,6 +34,7 @@ export interface DerivedTimings {
   helloToReadyMs?: number;
   serverReadyMs?: number;
   serverProvisionMs?: number;
+  warmClaimMs?: number;
   readyToClientObservedMs?: number;
   cleanupMs?: number;
 }
@@ -215,6 +216,9 @@ export function derive(
   if (server.readyAt && server.provisionStartAt) {
     d.serverProvisionMs = server.readyAt - server.provisionStartAt;
   }
+  if (server.warmClaimAt && server.apiReceivedAt) {
+    d.warmClaimMs = server.warmClaimAt - server.apiReceivedAt;
+  }
   if (observed.readyObservedMs !== undefined && server.readyAt && server.apiReceivedAt) {
     d.readyToClientObservedMs = observed.readyObservedMs - (server.readyAt - server.apiReceivedAt);
   }
@@ -256,7 +260,13 @@ export async function createAndReady(
   await bench.client.waitForReady(handle, readyTimeoutMs);
   const readyObservedMs = performance.now() - t0;
   const status = handle.status!;
-  const timings = status.timings;
+  const timings = status.timings ? { ...status.timings } : undefined;
+  // READY is committed before the controller's timing patch lands; the
+  // top-level field is authoritative when the snapshot races it.
+  if (timings && timings.readyAt === undefined && status.readyAt) {
+    const parsed = Date.parse(status.readyAt);
+    if (Number.isFinite(parsed)) timings.readyAt = parsed;
+  }
   return {
     handle,
     status,

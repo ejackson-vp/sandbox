@@ -333,11 +333,11 @@ function parseProm(text: string): Record<string, number> {
 
 /** Delete every sandbox pod (operator cleanup after interrupted runs). */
 export function sweepSandboxes(): number {
-  const before = kubectlTry(["-n", SANDBOX_NS, "get", "pods", "-l", "app.kubernetes.io/name=x402-sandbox", "--no-headers"]).out;
+  const selector = "app.kubernetes.io/name=x402-sandbox,x402.io/pool=sandbox";
+  const before = kubectlTry(["-n", SANDBOX_NS, "get", "pods", "-l", selector, "--no-headers"]).out;
   const count = before.split("\n").filter(Boolean).length;
   if (count > 0) {
-    kubectlTry(["-n", SANDBOX_NS, "delete", "pods", "-l", "app.kubernetes.io/name=x402-sandbox", "--grace-period=0", "--force"]);
-    kubectlTry(["-n", SANDBOX_NS, "delete", "pods", "--all", "--grace-period=0", "--force"]);
+    kubectlTry(["-n", SANDBOX_NS, "delete", "pods", "-l", selector, "--grace-period=0", "--force"]);
   }
   return count;
 }
@@ -349,7 +349,7 @@ export function sandboxPodCount(): number {
     "get",
     "pods",
     "-l",
-    "app.kubernetes.io/name=x402-sandbox",
+    "app.kubernetes.io/name=x402-sandbox,x402.io/pool=sandbox",
     "--no-headers",
   ]).out;
   return out.split("\n").filter(Boolean).length;

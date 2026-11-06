@@ -59,6 +59,11 @@ export interface ControllerConfig {
   devAttestationKeyId: string;
   tiers: TierTable;
   platformLimits: PlatformLimits;
+  /** Pre-booted, unleased sandboxes kept ready for fast claims (0 = off). */
+  warmPoolSize: number;
+  warmPoolTier: keyof TierTable;
+  warmPoolTtlMs: number;
+  warmClaimTimeoutMs: number;
 }
 
 /**
@@ -97,6 +102,19 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   const adminToken = env.ADMIN_TOKEN ?? "";
   if (["controller", "all"].includes(role) && adminToken.length < 16) {
     throw new Error("ADMIN_TOKEN must be set (>=16 chars) for controller roles");
+  }
+
+  const tiers = loadTiers(env);
+  const warmPoolSize = int(env.WARM_POOL_SIZE, 0, 0, 50);
+  const warmPoolTier = (env.WARM_POOL_TIER ?? "short") as keyof TierTable;
+  if (!(warmPoolTier in tiers)) {
+    throw new Error(`invalid WARM_POOL_TIER ${String(warmPoolTier)}`);
+  }
+  if (warmPoolSize > 0 && executionMode === "confidential") {
+    // A warm guest announces itself before it has a session to attest to.
+    // Enabling the pool here would put non-hardware evidence on a relay entry;
+    // keep the confidential path strict until a TEE-aware warm handshake exists.
+    throw new Error("WARM_POOL_SIZE is not supported in confidential mode");
   }
 
   return {
@@ -139,8 +157,12 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
       .filter(Boolean),
     devAttestationKey: env.DEV_ATTESTATION_KEY ?? "",
     devAttestationKeyId: env.DEV_ATTESTATION_KEY_ID ?? "",
-    tiers: loadTiers(env),
+    tiers,
     platformLimits: loadPlatformLimits(env),
+    warmPoolSize,
+    warmPoolTier,
+    warmPoolTtlMs: int(env.WARM_POOL_TTL_MS, 300_000, 30_000, 3_600_000),
+    warmClaimTimeoutMs: int(env.WARM_CLAIM_TIMEOUT_MS, 8_000, 1_000, 60_000),
   };
 }
 

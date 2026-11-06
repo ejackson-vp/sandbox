@@ -101,6 +101,9 @@ benchmark-startup:
 benchmark-startup-cold:
 	$(BENCH) startup --cold --image-ref $(IMAGE_REF) --samples $(or $(SAMPLES),10)
 
+benchmark-startup-pool:
+	POOL_SIZE=$(or $(POOL_SIZE),8) SAMPLES=$(or $(SAMPLES),100) ./scripts/benchmark-warm-pool.sh
+
 benchmark-density:
 	$(BENCH) density --levels $(or $(LEVELS),1,5,10,25) --mode $(or $(MODE),idle) --max $(or $(MAX),25)
 

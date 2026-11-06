@@ -137,6 +137,10 @@ export interface SessionTimings {
   guestHelloAt?: number;
   readyAt?: number;
   leaseExpiresAt?: number;
+  /** Controller: a pre-booted pod was claimed instead of creating one. */
+  warmClaimAt?: number;
+  /** 1 when the session was served by the warm pool. */
+  warmPoolHit?: number;
   terminationStartedAt?: number;
   podDeletedAt?: number;
   /** Controller: TERMINATING -> final state. */
@@ -383,7 +387,43 @@ export interface RelayShutdownMessage {
   reason: string;
 }
 
-export type RelayToGuest = RelayRequestMessage | RelayCancelMessage | RelayShutdownMessage;
+/**
+ * Claim sent to a warm (pre-booted, unleased) guest. Everything the guest
+ * needs to become a real session is here, so the pod template itself never
+ * carries customer identity. The guest drops the pooled relay connection and
+ * reconnects with `guestToken` before sending its session hello.
+ */
+export interface WarmClaim {
+  sessionId: string;
+  relayUrl: string;
+  guestToken: string;
+  clientPublicKey: string;
+  clientNonce: string;
+  leaseSeconds: number;
+  executionMode: ExecutionMode;
+  runtimeClass: string;
+  imageDigest: string;
+  proxyUrl: string;
+  proxyToken: string;
+  maxOutputBytes: number;
+  maxFileBytes: number;
+  maxDiskMiB: number;
+  maxCommandSeconds: number;
+  maxProcesses: number;
+  tools: string;
+}
+
+/** Relay -> warm guest. */
+export interface RelayClaimMessage {
+  type: "claim";
+  claim: WarmClaim;
+}
+
+export type RelayToGuest =
+  | RelayRequestMessage
+  | RelayCancelMessage
+  | RelayShutdownMessage
+  | RelayClaimMessage;
 
 export interface GuestHelloMessage {
   type: "hello";

@@ -1,4 +1,4 @@
-import type { RelaySessionState } from "@x402s/shared";
+import type { RelaySessionState, WarmClaim } from "@x402s/shared";
 
 export interface RelayClientOptions {
   baseUrl: string;
@@ -99,6 +99,14 @@ export class RelayClient {
     await this.call(`/internal/${encodeURIComponent(sessionId)}/shutdown`, {
       method: "POST",
       body: JSON.stringify({ reason }),
+    });
+  }
+
+  /** Send a claim to a warm (unleased) guest over its pooled relay entry. */
+  async claim(poolSessionId: string, claim: WarmClaim): Promise<void> {
+    await this.call(`/internal/${encodeURIComponent(poolSessionId)}/claim`, {
+      method: "POST",
+      body: JSON.stringify({ claim }),
     });
   }
 

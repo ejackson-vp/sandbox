@@ -11,7 +11,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Provisioner, SandboxPodSpec } from "./k8s.js";
+import type { Provisioner, SandboxPodSpec, WarmPodInfo, WarmPodSpec } from "./k8s.js";
 import { GUEST_TOOLS } from "./k8s.js";
 
 interface LocalPod {
@@ -22,6 +22,8 @@ interface LocalPod {
   phase: string;
   workDir: string;
   stderr: string;
+  warm: boolean;
+  warmId?: string;
 }
 
 export interface LocalProvisionerOptions {
@@ -83,10 +85,64 @@ export class LocalProvisioner implements Provisioner {
       phase: "Running",
       workDir,
       stderr: "",
+      warm: false,
     };
     proc.stderr?.on("data", (chunk: Buffer) => {
       // Bounded tail for diagnostics only; guest logs never contain customer
       // code, file contents or output.
+      pod.stderr = (pod.stderr + chunk.toString()).slice(-4096);
+    });
+    proc.on("exit", () => {
+      pod.phase = "Succeeded";
+    });
+    this.pods.set(podName, pod);
+    return { podName };
+  }
+
+  async createWarmPod(spec: WarmPodSpec): Promise<{ podName: string }> {
+    const podName = `local-warm-${spec.warmId}`;
+    const workDir = join(this.workRoot, `warm-${spec.warmId}`);
+    const workspace = join(workDir, "workspace");
+    mkdirSync(workspace, { recursive: true });
+
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH,
+      WARM_MODE: "true",
+      POOL_ID: spec.poolId,
+      RELAY_URL: spec.relayUrl,
+      WARM_TTL_SECONDS: String(Math.ceil(spec.ttlMs / 1000)),
+      GUEST_TOKEN: spec.guestToken,
+      EXECUTION_MODE: spec.executionMode,
+      RUNTIME_CLASS: spec.runtimeClass,
+      GUEST_IMAGE_DIGEST: spec.imageDigest,
+      WORKSPACE_DIR: workspace,
+      X402_SANDBOX_DIR: workDir,
+      MAX_OUTPUT_BYTES: String(spec.limits.maxOutputBytes),
+      MAX_FILE_BYTES: String(spec.limits.maxFileBytes),
+      MAX_DISK_MIB: String(spec.limits.diskMiB),
+      MAX_COMMAND_SECONDS: String(spec.limits.maxCommandSeconds),
+      MAX_PROCESSES: String(spec.limits.maxProcesses),
+      GUEST_TOOLS: spec.tools,
+      DEV_ATTESTATION_KEY: process.env.DEV_ATTESTATION_KEY ?? "",
+      DEV_ATTESTATION_KEY_ID: process.env.DEV_ATTESTATION_KEY_ID ?? "",
+      EGRESS_PROXY_URL: spec.proxyUrl,
+      PROXY_TOKEN: spec.proxyToken,
+      LOG_LEVEL: process.env.GUEST_LOG_LEVEL ?? "warn",
+    };
+
+    const proc = spawn(this.opts.binary, ["run"], { env, stdio: ["ignore", "ignore", "pipe"] });
+    const pod: LocalPod = {
+      name: podName,
+      sessionId: "",
+      proc,
+      createdAt: Date.now(),
+      phase: "Running",
+      workDir,
+      stderr: "",
+      warm: true,
+      warmId: spec.warmId,
+    };
+    proc.stderr?.on("data", (chunk: Buffer) => {
       pod.stderr = (pod.stderr + chunk.toString()).slice(-4096);
     });
     proc.on("exit", () => {
@@ -124,12 +180,33 @@ export class LocalProvisioner implements Provisioner {
   }
 
   async listSandboxPods(): Promise<Array<{ name: string; sessionId: string; createdAt: number; phase: string }>> {
-    return [...this.pods.values()].map((p) => ({
-      name: p.name,
-      sessionId: p.sessionId,
-      createdAt: p.createdAt,
-      phase: p.phase,
-    }));
+    return [...this.pods.values()]
+      .filter((p) => !p.warm)
+      .map((p) => ({
+        name: p.name,
+        sessionId: p.sessionId,
+        createdAt: p.createdAt,
+        phase: p.phase,
+      }));
+  }
+
+  async listWarmPods(): Promise<WarmPodInfo[]> {
+    return [...this.pods.values()]
+      .filter((p) => p.warm && p.warmId)
+      .map((p) => ({
+        name: p.name,
+        warmId: p.warmId!,
+        poolId: `warm_${p.warmId}`,
+        createdAt: p.createdAt,
+        phase: p.phase,
+      }));
+  }
+
+  async patchPodLabels(podName: string, labels: Record<string, string | null>): Promise<void> {
+    const pod = this.pods.get(podName);
+    if (!pod) return;
+    if (labels["x402.io/session"]) pod.sessionId = labels["x402.io/session"]!;
+    if (labels["x402.io/pool"] === "sandbox") pod.warm = false;
   }
 
   async getServiceAddress(name: string): Promise<{ host: string; port: number } | null> {

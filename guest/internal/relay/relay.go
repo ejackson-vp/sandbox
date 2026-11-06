@@ -13,13 +13,37 @@ import (
 // Frame is the relay's control-plane envelope. Exactly one of the fields is
 // meaningful per type:
 //
-//	inbound:  request {id,envelope,deadlineMs} | cancel {id} | shutdown {reason}
+//	inbound:  request {id,envelope,deadlineMs} | cancel {id} | shutdown {reason} | claim {claim}
 type Frame struct {
 	Type       string `json:"type"`
 	ID         string `json:"id"`
 	Envelope   string `json:"envelope"`
 	DeadlineMs int64  `json:"deadlineMs"`
 	Reason     string `json:"reason"`
+	Claim      *Claim `json:"claim,omitempty"`
+}
+
+// Claim is the session identity handed to a warm guest. It is only valid on a
+// pooled relay entry; the guest drops that connection and reconnects with
+// GuestToken before it sends any session evidence.
+type Claim struct {
+	SessionID         string `json:"sessionId"`
+	RelayURL          string `json:"relayUrl"`
+	GuestToken        string `json:"guestToken"`
+	ClientPublicKey   string `json:"clientPublicKey"`
+	ClientNonce       string `json:"clientNonce"`
+	LeaseSeconds      int64  `json:"leaseSeconds"`
+	ExecutionMode     string `json:"executionMode"`
+	RuntimeClass      string `json:"runtimeClass"`
+	ImageDigest       string `json:"imageDigest"`
+	ProxyURL          string `json:"proxyUrl"`
+	ProxyToken        string `json:"proxyToken"`
+	MaxOutputBytes    int    `json:"maxOutputBytes"`
+	MaxFileBytes      int64  `json:"maxFileBytes"`
+	MaxDiskMiB        int64  `json:"maxDiskMiB"`
+	MaxCommandSeconds int    `json:"maxCommandSeconds"`
+	MaxProcesses      int    `json:"maxProcesses"`
+	Tools             string `json:"tools"`
 }
 
 type Client struct {

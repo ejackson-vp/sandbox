@@ -244,6 +244,36 @@ export function createRelay(opts: RelayOptions): RelayServer {
     res.status(202).json({ ok: true });
   });
 
+  /**
+   * Hand a warm guest its session identity. The payload is forwarded verbatim;
+   * the relay never interprets customer keys or tokens. Ordering matters: the
+   * controller registers the real session entry before calling this, so the
+   * guest can reconnect immediately after it closes the pooled connection.
+   */
+  app.post("/internal/:sessionId/claim", requireAdmin, (req: Request, res: Response) => {
+    const entry = getEntry(String(req.params.sessionId ?? ""));
+    if (!entry || !entry.ws || entry.ws.readyState !== 1) {
+      res.status(409).json({ error: "guest_not_connected" });
+      return;
+    }
+    const claim = req.body?.claim;
+    if (!claim || typeof claim !== "object" || typeof (claim as { sessionId?: unknown }).sessionId !== "string") {
+      res.status(400).json({ error: "invalid_claim" });
+      return;
+    }
+    try {
+      entry.ws.send(JSON.stringify({ type: "claim", claim }));
+    } catch {
+      res.status(409).json({ error: "guest_disconnected" });
+      return;
+    }
+    log.info("relay_claim_forwarded", {
+      poolSessionId: entry.sessionId,
+      sessionId: (claim as { sessionId: string }).sessionId,
+    });
+    res.status(202).json({ ok: true });
+  });
+
   app.get("/internal/:sessionId/response/:requestId", requireAdmin, async (req: Request, res: Response) => {
     const entry = getEntry(String(req.params.sessionId ?? ""));
     if (!entry) {
