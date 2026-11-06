@@ -33,6 +33,7 @@ make demo-http      # Node HTTP/SSE/WebSocket workload
 make demo-python    # Python pandas data-processing workload
 make demo-browser   # Playwright/Chromium compatibility probe
 make demo-large-file # 100 MiB streaming round trip
+make demo-directory # streamed directory archive round trip
 make demo-http-basic # minimal Python HTTP server through the relay
 make demo-sse       # stream server-sent events through the relay
 make demo-ws        # WebSocket echo through the relay

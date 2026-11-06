@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up down build deploy demo demo-agent demo-timeout demo-capacity demo-placement demo-python demo-browser demo-large-file demo-http-basic test-workloads test-transfers benchmark-transfers benchmark-transfer-stress test test-unit test-integration security-test security-network guest guest-load logs clean fmt images benchmark-capacity benchmark-multinode
+.PHONY: help up down build deploy demo demo-agent demo-timeout demo-capacity demo-placement demo-python demo-browser demo-large-file demo-directory demo-http-basic test-workloads test-transfers benchmark-transfers benchmark-transfer-stress test test-unit test-integration security-test security-network guest guest-load logs clean fmt images benchmark-capacity benchmark-multinode
 
 help:
 	@echo "x402 sandbox sessions"
@@ -118,6 +118,9 @@ demo-browser:
 
 demo-large-file:
 	npx tsx examples/large-file.ts
+
+demo-directory:
+	npx tsx examples/directory-transfer.ts
 
 test-transfers:
 	npx vitest run tests/transfers

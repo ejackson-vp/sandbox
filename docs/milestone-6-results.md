@@ -15,9 +15,20 @@ payments; synthetic data only. No security control was relaxed.
 | 256 MiB | Yes (opt-in stress) | 512 chunks, SHA-256 verified |
 | Upload/download resume after client disconnect | Yes | same transfer id; guest stays alive |
 | Cancellation | Yes | `transfer.cancel` removes staging |
-| Directory archive streaming | **No** | legacy archive path remains 8 MiB, whole-buffer |
+| Directory archive streaming | **Yes** | 80-file synthetic tree round trip; upload extracts to a temporary directory; destination must not already exist |
 | Resume after guest/relay restart | **No** | fails explicitly; no distributed storage |
 | 1 MiB chunk | **No** | sealed envelope cap is 1 MiB; chunk cap is 512 KiB |
+
+The Milestone 5 Python workload was upgraded to a **102.45 MiB, 6,000,000-row
+CSV** and completed end to end:
+
+- session ready 1.60 s,
+- upload 7.33 s (13.99 MiB/s),
+- pandas install 5.22 s,
+- Python grouping/filtering 1.69 s,
+- verified 3,000,000 filtered rows,
+- downloaded a 51.54 MiB filtered artifact in 3.57 s,
+- total 19.7 s, workspace used 340 MiB.
 
 Partial uploads never appear at the destination. Completion requires matching
 size and SHA-256, then an atomic rename.
@@ -141,7 +152,8 @@ Measured limits:
 
 ## G. Remaining gaps
 
-- Directory archive streaming is not implemented; legacy tar remains 8 MiB.
+- Directory archive publication requires a new destination; replacing an existing directory is rejected to avoid partial merges.
+- Archive uploads/downloads are streamed but use the host/SDK `tar` command for creation/extraction.
 - No in-flight window >1; no ACK batching.
 - No resume after guest/relay restart; no durable staging metadata.
 - No transfer-specific capability or byte-level controller metrics
@@ -176,7 +188,10 @@ make test-transfers
 
 ## Verification
 
-- Full suite: **158 passed, 3 skipped**
+- Full suite: **158 passed, 3 skipped** (transfer additions included; final run below)
+- `make demo-directory`: 80 files round trip verified
+- 102.45 MiB Python workload: grouped/filter validated, 51.54 MiB artifact downloaded
+- 100 MiB and 256 MiB binary round trips verified
 - Go guest tests: pass, including transfer ordering, path busy, atomic publish
 - `make demo-large-file`: 100 MiB round trip, matching SHA-256
 - 256 MiB stress: matching SHA-256

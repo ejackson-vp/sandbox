@@ -38,6 +38,7 @@ type transfer struct {
 	digest     hash.Hash
 	bytes      int64
 	size       int64
+	archive    bool
 	state      string
 	sourceSize int64
 	sourceMod  int64
@@ -160,8 +161,8 @@ func (m *transferManager) init(req *protocol.Request) *protocol.Result {
 		}
 		x := &transfer{
 			id: req.TransferID, direction: req.Direction, path: req.Path, staging: staging,
-			file: file, digest: sha256.New(), size: req.Size, state: "TRANSFERRING",
-			createdAt: now, lastUsed: now,
+			file: file, digest: sha256.New(), size: req.Size, archive: req.Archive,
+			state: "TRANSFERRING", createdAt: now, lastUsed: now,
 		}
 		m.items[x.id] = x
 		return m.result(req, x)
@@ -171,30 +172,52 @@ func (m *transferManager) init(req *protocol.Request) *protocol.Result {
 	if err != nil {
 		return m.error(req, "not_found", "source does not exist")
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return m.error(req, "symlink_escape", "refusing to read a symlink")
+	}
+	staging := m.stagingPath(req.TransferID) + ".tar.gz"
+	sourcePath := abs
+	sourceSize := info.Size()
+	sourceMod := info.ModTime().UnixNano()
+	if req.Archive {
+		if err := os.MkdirAll(filepath.Dir(staging), 0o700); err != nil {
+			return m.error(req, "io_error", "could not create archive staging directory")
+		}
+		if _, err := m.workspace.TarToFile(req.Path, staging); err != nil {
+			return m.error(req, "archive_failed", err.Error())
+		}
+		stagingInfo, statErr := os.Stat(staging)
+		if statErr != nil {
+			return m.error(req, "io_error", "could not stat transfer archive")
+		}
+		sourcePath, sourceSize, sourceMod = staging, stagingInfo.Size(), stagingInfo.ModTime().UnixNano()
+	} else if !info.Mode().IsRegular() {
 		return m.error(req, "not_a_file", "source is not a regular file")
 	}
-	if info.Size() > m.maxBytes {
+	if sourceSize > m.maxBytes {
+		_ = os.Remove(staging)
 		return m.error(req, "transfer_too_large", fmt.Sprintf("source exceeds %d bytes", m.maxBytes))
 	}
-	file, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	file, err := os.OpenFile(sourcePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
+		_ = os.Remove(staging)
 		return m.error(req, "io_error", "could not open source")
 	}
 	digest := sha256.New()
 	if _, err := io.Copy(digest, file); err != nil {
 		_ = file.Close()
+		_ = os.Remove(staging)
 		return m.error(req, "io_error", "could not hash source")
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		_ = file.Close()
+		_ = os.Remove(staging)
 		return m.error(req, "io_error", "could not rewind source")
 	}
 	x := &transfer{
-		id: req.TransferID, direction: req.Direction, path: req.Path,
-		file: file, digest: digest, size: info.Size(), state: "TRANSFERRING",
-		sourceSize: info.Size(), sourceMod: info.ModTime().UnixNano(),
-		createdAt: now, lastUsed: now,
+		id: req.TransferID, direction: req.Direction, path: req.Path, staging: staging,
+		file: file, digest: digest, size: sourceSize, archive: req.Archive, state: "TRANSFERRING",
+		sourceSize: sourceSize, sourceMod: sourceMod, createdAt: now, lastUsed: now,
 	}
 	m.items[x.id] = x
 	return m.result(req, x)
@@ -286,7 +309,29 @@ func (m *transferManager) complete(req *protocol.Request) *protocol.Result {
 	if info, err := os.Lstat(dest); err == nil && info.IsDir() {
 		return m.error(req, "invalid_path", "destination is a directory")
 	}
-	if err := os.Rename(x.staging, dest); err != nil {
+	if x.archive {
+		tmpDir := x.staging + ".dir"
+		if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+			return m.error(req, "io_error", "could not create archive extraction directory")
+		}
+		if _, _, extractErr := m.workspace.ExtractTarFile(tmpDir, x.staging); extractErr != nil {
+			_ = os.RemoveAll(tmpDir)
+			_ = os.Remove(x.staging)
+			delete(m.items, x.id)
+			return m.error(req, "archive_rejected", extractErr.Error())
+		}
+		if _, statErr := os.Lstat(dest); statErr == nil {
+			_ = os.RemoveAll(tmpDir)
+			_ = os.Remove(x.staging)
+			delete(m.items, x.id)
+			return m.error(req, "destination_exists", "archive destination already exists")
+		}
+		if err := os.Rename(tmpDir, dest); err != nil {
+			_ = os.RemoveAll(tmpDir)
+			return m.error(req, "io_error", "could not publish archive")
+		}
+		_ = os.Remove(x.staging)
+	} else if err := os.Rename(x.staging, dest); err != nil {
 		return m.error(req, "io_error", "could not publish transfer")
 	}
 	x.state = "COMPLETED"
@@ -345,6 +390,9 @@ func (m *transferManager) read(req *protocol.Request) *protocol.Result {
 	if res.Done {
 		x.state = "COMPLETED"
 		_ = x.file.Close()
+		if x.staging != "" {
+			_ = os.Remove(x.staging)
+		}
 		delete(m.items, x.id)
 	}
 	return res

@@ -1,6 +1,6 @@
 # Python data processing
 
-Creates a 5-minute sandbox, uploads 100k deterministic rows, installs pandas
+Creates a 10-minute sandbox, uploads a 102 MiB / 6,000,000-row deterministic CSV, installs pandas
 into `/workspace/.deps`, runs grouping/filtering, downloads and verifies both
 artifacts.
 

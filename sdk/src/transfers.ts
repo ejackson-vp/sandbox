@@ -28,6 +28,8 @@ export interface TransferProgress {
 }
 
 export interface TransferOptions {
+  /** Transfer a directory as a safe tar.gz archive. */
+  archive?: boolean;
   /** Use an existing transfer id to resume after a transport failure. */
   transferId?: string;
   chunkSize?: number;
@@ -139,6 +141,7 @@ export class TransferService {
         path: remotePath,
         size: info.size,
         chunkSize,
+        archive: Boolean(opts.archive),
       }, transferId, opts.signal);
       committed = init.committedBytes;
       emit(committed);
@@ -224,6 +227,7 @@ export class TransferService {
         direction: "download",
         path: remotePath,
         chunkSize,
+        archive: Boolean(opts.archive),
       }, transferId, opts.signal);
       total = init.size;
       expectedDigest = init.digest ?? "";

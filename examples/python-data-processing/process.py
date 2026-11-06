@@ -4,6 +4,7 @@ import pandas as pd
 
 INPUT = "/workspace/input.csv"
 RESULT = "/workspace/result.csv"
+FILTERED = "/workspace/filtered.csv"
 SUMMARY = "/workspace/summary.json"
 
 frame = pd.read_csv(INPUT)
@@ -15,6 +16,7 @@ grouped = (
     .sort_values("category")
 )
 grouped.to_csv(RESULT, index=False)
+frame.loc[frame["selected"], ["id", "category", "value"]].to_csv(FILTERED, index=False)
 
 summary = {
     "rows": int(len(frame)),

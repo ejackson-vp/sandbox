@@ -44,6 +44,23 @@ envelope limit.
   time, so its live buffering is bounded by the envelope rather than file size.
 - No component constructs a complete base64 file or waits for all chunks.
 
+## Large Python workload
+
+Milestone 5's Python workload now uses a 102.45 MiB, 6,000,000-row CSV:
+
+| Stage | Result |
+|---|---:|
+| Session ready | 1.60 s |
+| Input upload | 7.33 s (13.99 MiB/s) |
+| pandas install | 5.22 s |
+| Python grouping/filtering | 1.69 s |
+| Filtered artifact download | 3.57 s (51.54 MiB) |
+| Total | 19.7 s |
+| Workspace used | 340 MiB |
+
+The workload verified 3,000,000 filtered rows and the summary independently on
+the client.
+
 ## Baseline comparison
 
 The older `file.put`/`file.get` path is limited to 8 MiB and uses a whole-file
