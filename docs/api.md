@@ -262,7 +262,7 @@ X-Sandbox-Capability: …
 
 POST /v1/sessions/{id}/resume
 X-Sandbox-Capability: …
-→ 202 { "state": "PROVISIONING", ... }   // poll until READY
+→ 202 { "state": "RESUMING", ... }     // poll until READY
 ```
 
 Suspend stops compute and keeps the per-session workspace PVC; resume boots a

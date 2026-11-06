@@ -28,30 +28,43 @@ compatibility is not a goal.
 ```
 PAID ──pod──► PROVISIONING ──hello──► READY ⇄ ACTIVE
   │                                     │
-  │                                     ├── idle policy ──► SUSPENDED
-  │                                     │                    │
-  │                                     │                    └── resume ──► PROVISIONING
+  │                                     ├── idle policy ──► SUSPENDING
+  │                                     │                    │ guest stopped
+  │                                     │                    ▼
+  │                                     │                 SUSPENDED
+  │                                     │                    │ resume
+  │                                     │                    ▼
+  │                                     │                 RESUMING ──hello──► READY
   └── lease / destroy / failure ──► TERMINATING ──► EXPIRED | FAILED | DESTROYED
 ```
 
-`SUSPENDED` is not usable. `leaseExpiresAt` is `null` while suspended; a resume
-starts a fresh lease of the purchased duration. `maxLifetimeSeconds` is a
-wall-clock cap that includes suspended time.
+`SUSPENDING` and `RESUMING` are real, observable states. A controller crash
+between `markSuspending` and `markSuspended` is repaired by the reconciler;
+`RESUMING` continues the normal readiness handshake. `SUSPENDED` is not usable.
+`leaseExpiresAt` is `null` while suspended or resuming; a resume starts a fresh
+lease of the purchased duration. `maxLifetimeSeconds` is a wall-clock cap that
+includes suspended time.
 
 ## What suspend actually does
 
-1. The controller sends a `shutdown`/`suspend` notice to the guest.
-2. The guest kills its process group and exits.
-3. The controller deletes the **pod** but keeps the per-session **workspace PVC**.
-4. The relay entry is purged; the session is marked `SUSPENDED`.
+1. The controller moves the session to `SUSPENDING` (atomic, from `READY`/`ACTIVE`).
+2. The controller sends a `shutdown`/`suspend` notice to the guest.
+3. The guest kills its process group and exits.
+4. The checkpoint adapter (`Snapshotter.capture`) is called. The local adapter
+   is a no-op because the workspace PVC *is* the checkpoint.
+5. The controller deletes the **pod** but keeps the per-session **workspace PVC**.
+6. The relay entry is purged; the session is marked `SUSPENDED`.
 
 Resume:
 
-1. The controller creates a new pod with the same PVC and a fresh relay token.
-2. A new guest process boots with a **fresh keypair** and fresh evidence.
-3. The SDK `resume()` waits for READY, verifies the new evidence, and updates
+1. The controller checks lifetime, suspended expiry, PVC existence and node
+   affinity, then calls `Snapshotter.restore` (no-op locally).
+2. The controller creates a new pod with the same PVC and a fresh relay token,
+   and marks the session `RESUMING`.
+3. A new guest process boots with a **fresh keypair** and fresh evidence.
+4. The SDK `resume()` waits for READY, verifies the new evidence, and updates
    `handle.guestPublicKey` before sending any operation.
-4. The workspace (files) is exactly as it was; processes, memory, open sockets
+5. The workspace (files) is exactly as it was; processes, memory, open sockets
    and in-memory caches are gone.
 
 This is the key difference from AWS: Lambda MicroVMs restore **memory and disk**
@@ -146,7 +159,7 @@ x-sandbox-capability: ...
 
 POST /v1/sessions/{id}/resume
 x-sandbox-capability: ...
-→ 202 { state: "PROVISIONING", ... }   # poll / wait for READY
+→ 202 { state: "RESUMING", ... }       # poll / wait for READY
 
 GET /v1/images
 → { images: [{ id, digest, reference, runtimeClass, executionMode, current }] }

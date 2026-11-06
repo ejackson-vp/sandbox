@@ -77,7 +77,7 @@ export class Store {
         "UPDATE payment_intents SET status='failed', reason=?, updated_at=? WHERE payment_key=?",
       ),
       listNonTerminal: this.db.prepare(
-        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDED','TERMINATING')`,
+        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDING','SUSPENDED','RESUMING','TERMINATING')`,
       ),
       listTerminalWithPod: this.db.prepare(
         `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('EXPIRED','FAILED','DESTROYED') AND pod_name IS NOT NULL`,
@@ -93,12 +93,15 @@ export class Store {
       touchActivity: this.db.prepare(
         "UPDATE sessions SET last_activity_at=?, updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')",
       ),
+      markSuspending: this.db.prepare(
+        `UPDATE sessions SET state='SUSPENDING', updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')`,
+      ),
       markSuspended: this.db.prepare(
         `UPDATE sessions SET state='SUSPENDED', suspended_at=?, lease_expires_at=NULL,
-           pod_name=NULL, updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')`,
+           pod_name=NULL, updated_at=? WHERE id=? AND state='SUSPENDING'`,
       ),
       markResuming: this.db.prepare(
-        `UPDATE sessions SET state='PROVISIONING', pod_name=?, suspended_at=NULL,
+        `UPDATE sessions SET state='RESUMING', pod_name=?, suspended_at=NULL,
            resume_count=resume_count+1, lease_expires_at=NULL, updated_at=?
          WHERE id=? AND state='SUSPENDED'`,
       ),
@@ -111,11 +114,11 @@ export class Store {
       setRelayToken: this.db.prepare("UPDATE sessions SET relay_token_hash = ?, updated_at = ? WHERE id = ?"),
       setReady: this.db.prepare(
         `UPDATE sessions SET state='READY', ready_at=?, lease_expires_at=?, attestation_json=?,
-           guest_public_key=?, last_activity_at=?, updated_at=? WHERE id=? AND state='PROVISIONING'`,
+           guest_public_key=?, last_activity_at=?, updated_at=? WHERE id=? AND state IN ('PROVISIONING','RESUMING')`,
       ),
       requestTermination: this.db.prepare(
         `UPDATE sessions SET state='TERMINATING', terminating_at=?, termination_reason=?, updated_at=?
-         WHERE id=? AND state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDED')`,
+         WHERE id=? AND state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDING','SUSPENDED','RESUMING')`,
       ),
       setFailure: this.db.prepare(
         "UPDATE sessions SET failure_code = ?, failure_message = ?, updated_at = ? WHERE id = ?",
@@ -340,6 +343,10 @@ export class Store {
   touchActivity(id: string): void {
     const now = Date.now();
     this.stmts.touchActivity!.run(now, now, id);
+  }
+
+  markSuspending(id: string): boolean {
+    return this.stmts.markSuspending!.run(Date.now(), id).changes > 0;
   }
 
   markSuspended(id: string, suspendedAt: number): boolean {

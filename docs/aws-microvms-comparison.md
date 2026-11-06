@@ -126,10 +126,13 @@ Concrete policy:
 
 ### 2. Add explicit `SUSPENDING` and `RESUMING` states
 
-AWS exposes `SUSPENDING` and treats resume as a distinct transition. x402
-currently reuses `PROVISIONING` for resume and does not expose a suspending
-state. Adding `SUSPENDING`/`RESUMING` would make the API more honest, improve
-idempotency, and give the client a state to poll without inferring intent.
+**Implemented.** AWS exposes `SUSPENDING` and treats resume as a distinct
+transition. x402 now has both states in the pure transition table, the SQL
+guards and the reconciler. `SUSPENDING` is repaired idempotently after a
+controller crash; `RESUMING` uses the resume start time for its provisioning
+timeout instead of the original `paidAt`. This also fixed a latent bug where a
+session suspended for longer than `PROVISIONING_TIMEOUT_MS` could be failed
+immediately on resume.
 
 ### 3. Standardize lifecycle hooks
 
@@ -200,13 +203,12 @@ gives us the option to get it:
 
 ## Suggested next experiments
 
-1. **Write the snapshot port, not the snapshot implementation.** Define
-   `Snapshotter` (`create`, `restore`, `delete`) and a no-op local adapter.
-   Wire it behind a config flag, then implement it on a KVM host with
-   Firecracker.
-2. **Add `SUSPENDING`/`RESUMING` to the pure state machine and property tests.**
-   This is a small, testable slice that improves the API before the substrate
-   exists.
+1. **Snapshot port (implemented as a seam).** `Snapshotter` (`capture`,
+   `restore`, `discard`) now has a no-op local adapter and is wired into
+   suspend, resume and termination. The next step is a Firecracker/Kata
+   implementation on a KVM host, not a change to the lifecycle use cases.
+2. **`SUSPENDING`/`RESUMING` (implemented).** The pure state machine, SQL
+   guards, reconciler recovery and property tests now cover both states.
 3. **Add cluster-capacity admission.** A pure `admitCapacity(snapshot, request)`
    function, property-tested, with a controller check before provisioning.
 4. **Prototype one Firecracker VM on a Linux/KVM host.** Measure boot, snapshot

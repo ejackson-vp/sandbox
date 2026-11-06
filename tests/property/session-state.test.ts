@@ -20,7 +20,9 @@ const STATES: SessionState[] = [
   "PROVISIONING",
   "READY",
   "ACTIVE",
+  "SUSPENDING",
   "SUSPENDED",
+  "RESUMING",
   "TERMINATING",
   "EXPIRED",
   "FAILED",
@@ -35,6 +37,7 @@ const eventArb: fc.Arbitrary<SessionEvent> = fc.oneof(
   fc.constant({ type: "operation_started" } as const),
   fc.constant({ type: "operation_finished" } as const),
   fc.constant({ type: "suspend_requested" } as const),
+  fc.constant({ type: "guest_stopped" } as const),
   fc.constant({ type: "resume_requested" } as const),
   fc.constant({ type: "lease_expired" } as const),
   fc.record({ type: fc.constant("terminate_requested" as const), reason: fc.string() }),
@@ -85,11 +88,11 @@ describe("session state machine properties", () => {
     );
   });
 
-  it("only enters SUSPENDED with a suspendable session and a workspace", () => {
+  it("only enters SUSPENDING with a suspendable session and a workspace", () => {
     fc.assert(
       fc.property(snapshotArb, eventArb, (snapshot, event) => {
         const result = transition(snapshot, event);
-        if (result.ok && result.value.state === "SUSPENDED") {
+        if (result.ok && result.value.state === "SUSPENDING") {
           expect(snapshot.suspendable).toBe(true);
           expect(snapshot.hasPvc).toBe(true);
           expect(["READY", "ACTIVE"]).toContain(snapshot.state);
@@ -99,12 +102,25 @@ describe("session state machine properties", () => {
     );
   });
 
-  it("enters READY only from PROVISIONING with a pod and relay", () => {
+  it("completes SUSPENDED only from SUSPENDING", () => {
+    fc.assert(
+      fc.property(snapshotArb, eventArb, (snapshot, event) => {
+        const result = transition(snapshot, event);
+        if (result.ok && result.value.state === "SUSPENDED") {
+          expect(snapshot.state).toBe("SUSPENDING");
+          expect(event.type).toBe("guest_stopped");
+        }
+      }),
+      { numRuns: 1000 },
+    );
+  });
+
+  it("enters READY only from PROVISIONING/RESUMING with a pod and relay", () => {
     fc.assert(
       fc.property(snapshotArb, eventArb, (snapshot, event) => {
         const result = transition(snapshot, event);
         if (result.ok && result.value.state === "READY" && event.type === "guest_ready") {
-          expect(snapshot.state).toBe("PROVISIONING");
+          expect(["PROVISIONING", "RESUMING"]).toContain(snapshot.state);
           expect(snapshot.hasPod).toBe(true);
           expect(snapshot.hasRelay).toBe(true);
         }
@@ -113,12 +129,15 @@ describe("session state machine properties", () => {
     );
   });
 
-  it("enters PROVISIONING only from PAID or SUSPENDED", () => {
+  it("enters PROVISIONING only from PAID and RESUMING only from SUSPENDED", () => {
     fc.assert(
       fc.property(snapshotArb, eventArb, (snapshot, event) => {
         const result = transition(snapshot, event);
         if (result.ok && result.value.state === "PROVISIONING") {
-          expect(["PAID", "SUSPENDED"]).toContain(snapshot.state);
+          expect(snapshot.state).toBe("PAID");
+        }
+        if (result.ok && result.value.state === "RESUMING") {
+          expect(snapshot.state).toBe("SUSPENDED");
         }
       }),
       { numRuns: 1000 },
@@ -129,9 +148,15 @@ describe("session state machine properties", () => {
     fc.assert(
       fc.property(snapshotArb, (snapshot) => {
         const suspend = transition(snapshot, { type: "suspend_requested" });
-        if (suspend.ok) expect(["READY", "ACTIVE"]).toContain(snapshot.state);
+        if (suspend.ok) {
+          expect(["READY", "ACTIVE"]).toContain(snapshot.state);
+          expect(suspend.value.state).toBe("SUSPENDING");
+        }
         const resume = transition(snapshot, { type: "resume_requested" });
-        if (resume.ok) expect(snapshot.state).toBe("SUSPENDED");
+        if (resume.ok) {
+          expect(snapshot.state).toBe("SUSPENDED");
+          expect(resume.value.state).toBe("RESUMING");
+        }
       }),
       { numRuns: 1000 },
     );
@@ -144,8 +169,21 @@ describe("session state machine properties", () => {
         if (suspend.ok) {
           const types = suspend.value.effects.map((effect) => effect.type);
           expect(types).not.toContain("delete_workspace_pvc");
-          expect(types).toContain("persist_suspended");
+          expect(types).toContain("persist_suspending");
+          if (snapshot.hasPod) expect(types).toContain("stop_guest");
           if (snapshot.hasPvc) expect(types).not.toContain("ensure_workspace_pvc");
+        }
+        const stopped = transition(
+          { ...snapshot, state: "SUSPENDING" },
+          { type: "guest_stopped" },
+        );
+        if (stopped.ok) {
+          const types = stopped.value.effects.map((effect) => effect.type);
+          expect(stopped.value.state).toBe("SUSPENDED");
+          expect(types).not.toContain("delete_workspace_pvc");
+          expect(types).toContain("persist_suspended");
+          if (snapshot.hasPod) expect(types).toContain("delete_pod");
+          if (snapshot.hasRelay) expect(types).toContain("purge_relay");
         }
         const terminate = transition(snapshot, { type: "terminate_requested", reason: "client_destroy" });
         if (terminate.ok && terminate.value.state === "TERMINATING") {

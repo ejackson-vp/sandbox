@@ -30,6 +30,7 @@ export type SessionEvent =
   | { type: "operation_started" }
   | { type: "operation_finished" }
   | { type: "suspend_requested" }
+  | { type: "guest_stopped" }
   | { type: "resume_requested" }
   | { type: "lease_expired" }
   | { type: "terminate_requested"; reason: string }
@@ -44,6 +45,7 @@ export type SessionEffect =
   | { type: "delete_pod" }
   | { type: "delete_workspace_pvc" }
   | { type: "persist_ready" }
+  | { type: "persist_suspending" }
   | { type: "persist_suspended" }
   | { type: "finalize"; final: "EXPIRED" | "FAILED" | "DESTROYED" };
 
@@ -137,11 +139,10 @@ export function transition(
           return fail(snapshot, event, "not_suspendable", "session has no checkpoint workspace");
         }
         return Ok({
-          state: "SUSPENDED",
+          state: "SUSPENDING",
           effects: [
-            ...(snapshot.hasPod ? [{ type: "stop_guest" as const }, { type: "delete_pod" as const }] : []),
-            ...(snapshot.hasRelay ? [{ type: "purge_relay" as const }] : []),
-            { type: "persist_suspended" },
+            ...(snapshot.hasPod ? [{ type: "stop_guest" as const }] : []),
+            { type: "persist_suspending" },
           ],
         });
       }
@@ -150,13 +151,29 @@ export function transition(
       }
       return fail(snapshot, event, "invalid_transition", "READY/ACTIVE accepts operations, suspend, or terminate");
 
+    case "SUSPENDING":
+      if (event.type === "guest_stopped") {
+        return Ok({
+          state: "SUSPENDED",
+          effects: [
+            ...(snapshot.hasPod ? [{ type: "delete_pod" as const }] : []),
+            ...(snapshot.hasRelay ? [{ type: "purge_relay" as const }] : []),
+            { type: "persist_suspended" },
+          ],
+        });
+      }
+      if (event.type === "lease_expired" || event.type === "terminate_requested") {
+        return Ok({ state: "TERMINATING", effects: terminateEffects(snapshot) });
+      }
+      return fail(snapshot, event, "invalid_transition", "SUSPENDING accepts guest_stopped or terminate");
+
     case "SUSPENDED":
       if (event.type === "resume_requested") {
         if (!snapshot.hasPvc) {
           return fail(snapshot, event, "not_resumable", "session has no checkpoint workspace");
         }
         return Ok({
-          state: "PROVISIONING",
+          state: "RESUMING",
           effects: [{ type: "register_relay" }, { type: "start_pod", warm: false }],
         });
       }
@@ -167,6 +184,18 @@ export function transition(
         return fail(snapshot, event, "invalid_transition", "resume the session before operations");
       }
       return fail(snapshot, event, "invalid_transition", "SUSPENDED accepts resume or terminate");
+
+    case "RESUMING":
+      if (event.type === "guest_ready") {
+        if (!snapshot.hasPod || !snapshot.hasRelay) {
+          return fail(snapshot, event, "invariant", "READY requires a pod and a relay entry");
+        }
+        return Ok({ state: "READY", effects: [{ type: "persist_ready" }] });
+      }
+      if (event.type === "terminate_requested" || event.type === "lease_expired") {
+        return Ok({ state: "TERMINATING", effects: terminateEffects(snapshot) });
+      }
+      return fail(snapshot, event, "invalid_transition", "RESUMING accepts guest_ready or terminate");
 
     case "TERMINATING":
       if (event.type === "terminated") {

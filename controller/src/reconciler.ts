@@ -4,7 +4,10 @@
  *  PAID          -> register relay session + create pod
  *  PROVISIONING  -> READY when the guest hello (with evidence) arrives; the
  *                   immutable lease deadline is set here (ready + duration)
- *  READY/ACTIVE  -> TERMINATING on lease expiry or client destroy
+ *  READY/ACTIVE  -> SUSPENDING on idle/suspend; TERMINATING on expiry/destroy
+ *  SUSPENDING    -> finish checkpointing, then SUSPENDED
+ *  SUSPENDED     -> RESUMING on resume; TERMINATING on expiry/destroy
+ *  RESUMING      -> READY when the restored guest hello arrives
  *  TERMINATING   -> ask the guest to stop, delete the pod, purge relay state,
  *                   then finalise as EXPIRED / DESTROYED / FAILED
  *
@@ -21,6 +24,7 @@ import { Provisioning } from "./provisioning.js";
 import { Lifecycle } from "./lifecycle.js";
 import { Termination } from "./termination.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
+import { NoopSnapshotter, type Snapshotter } from "./snapshotter.js";
 import { log } from "./log.js";
 
 export { LifecycleError } from "./lifecycle.js";
@@ -31,6 +35,8 @@ export interface ReconcilerDeps {
   provisioner: Provisioner;
   relay: RelayClient;
   now?: () => number;
+  /** Override for tests or a future Firecracker/Kata checkpoint adapter. */
+  snapshotter?: Snapshotter;
   /** Override for tests: resolves service addresses without Kubernetes. */
   serviceAddress?: (name: string) => Promise<{ host: string; port: number } | null>;
 }
@@ -61,6 +67,7 @@ export class Reconciler {
       store: deps.store,
       provisioner: deps.provisioner,
       relay: deps.relay,
+      snapshotter: deps.snapshotter ?? new NoopSnapshotter(),
       now: () => this.now(),
       serviceAddress: (name) => this.serviceAddress(name),
     };
@@ -128,10 +135,12 @@ export class Reconciler {
       }
       const nonTerminal = this.deps.store.listNonTerminal();
       const active = nonTerminal.filter((s) => s.state === "READY" || s.state === "ACTIVE").length;
-      const provisioning = nonTerminal.filter((s) => s.state === "PROVISIONING").length;
+      const provisioning = nonTerminal.filter(
+        (s) => s.state === "PROVISIONING" || s.state === "RESUMING",
+      ).length;
       const queued = nonTerminal.filter((s) => s.state === "PAID").length;
       metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE").set({}, active);
-      metrics.gauge("sandbox_provisioning_active", "Sessions in PROVISIONING").set({}, provisioning);
+      metrics.gauge("sandbox_provisioning_active", "Sessions in PROVISIONING or RESUMING").set({}, provisioning);
       metrics.gauge("sandbox_provisioning_queued", "PAID sessions waiting for a provisioning slot").set({}, queued);
     } catch (err) {
       log.error("reconcile_pass_failed", { error: (err as Error).message });
@@ -170,11 +179,15 @@ export class Reconciler {
         await this.provisioning.provision(session);
         break;
       case "PROVISIONING":
+      case "RESUMING":
         await this.provisioning.awaitReady(session);
         break;
       case "READY":
       case "ACTIVE":
         await this.enforceLease(session);
+        break;
+      case "SUSPENDING":
+        await this.lifecycle.finishSuspend(session);
         break;
       case "TERMINATING":
         await this.terminate(session);

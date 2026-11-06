@@ -61,9 +61,9 @@ export class Lifecycle {
   }
 
   /**
-   * Checkpoint a live session: stop the workload, keep its workspace PVC, and
-   * release compute. There is no memory snapshot in this mode; the guest is
-   * booted fresh on resume and sees the persisted files.
+   * Checkpoint a live session: move to SUSPENDING, stop the workload, keep its
+   * workspace PVC, and release compute. There is no memory snapshot in this
+   * mode; the guest is booted fresh on resume and sees the persisted files.
    */
   async suspend(id: string): Promise<void> {
     const session = this.ctx.store.getSession(id);
@@ -71,11 +71,28 @@ export class Lifecycle {
     if (!canSuspend(snapshotOf(session))) {
       throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
     }
+    if (!this.ctx.store.markSuspending(id)) {
+      throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
+    }
+    await this.finishSuspend(this.ctx.store.getSession(id) ?? session);
+  }
+
+  /**
+   * Complete a SUSPENDING transition. Idempotent so a controller crash between
+   * markSuspending and markSuspended is repaired by the next reconcile tick.
+   */
+  async finishSuspend(session: SessionRecord): Promise<void> {
+    if (session.state === "SUSPENDED") return;
+    if (session.state !== "SUSPENDING") {
+      throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
+    }
+    const id = session.id;
     try {
       await this.ctx.relay.shutdown(id, "suspend");
     } catch {
       /* relay may already be gone */
     }
+    await this.ctx.snapshotter.capture(session);
     if (session.podName) {
       if (!session.nodeName && session.workspacePvc) {
         const pod = await this.ctx.provisioner.getPod(session.podName).catch(() => null);
@@ -89,6 +106,7 @@ export class Lifecycle {
     }
     const suspendedAt = this.ctx.now();
     if (!this.ctx.store.markSuspended(id, suspendedAt)) {
+      if (this.ctx.store.getSession(id)?.state === "SUSPENDED") return;
       throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
     }
     await this.ctx.relay.purge(id).catch(() => undefined);
@@ -147,6 +165,7 @@ export class Lifecycle {
     if (!relayAddr || !proxyAddr) {
       throw new LifecycleError("control_plane_unavailable", "relay or proxy unavailable", 503);
     }
+    await this.ctx.snapshotter.restore(session);
     const { podName } = await this.provisioning.createPod(session, relayAddr, proxyAddr, {
       workspacePvc: session.workspacePvc,
       resume: true,

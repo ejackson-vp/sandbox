@@ -11,10 +11,16 @@ CREATED ──settle──► PAID ──pod──► PROVISIONING ──guest h
                                                                   │    └── idle policy
                                                                   │            │
                                                                   │            ▼
+                                                                  │       SUSPENDING
+                                                                  │            │ guest stopped
+                                                                  │            ▼
                                                                   │        SUSPENDED
                                                                   │            │ resume
                                                                   │            ▼
-                                                                  │        PROVISIONING
+                                                                  │        RESUMING
+                                                                  │            │ guest hello
+                                                                  │            ▼
+                                                                  │          READY
                                                                   ▼
                                                              TERMINATING
                                                                   │
@@ -23,6 +29,10 @@ CREATED ──settle──► PAID ──pod──► PROVISIONING ──guest h
                            EXPIRED                             FAILED                DESTROYED
                         (lease ended)                   (provision/guest error)   (client destroy)
 ```
+
+`SUSPENDING` and `RESUMING` are observable transitional states. A controller
+crash during either is repaired by the reconciler: `SUSPENDING` is finished
+idempotently and `RESUMING` continues the readiness handshake.
 
 Every terminal transition goes through `TERMINATING` so the controller performs
 one cleanup sequence (ask the guest to stop → delete pod → purge relay → record
@@ -36,7 +46,9 @@ the final state).
 | `PROVISIONING` | pod scheduled/starting | none (poll) |
 | `READY` | guest connected, attested, lease started | exec/files |
 | `ACTIVE` | at least one operation has run | exec/files |
+| `SUSPENDING` | checkpoint in progress; compute still winding down | none |
 | `SUSPENDED` | checkpointed, no compute; workspace PVC retained | none (resume first) |
+| `RESUMING` | restoring the workspace into a fresh guest | none (poll) |
 | `TERMINATING` | shutdown in progress | none |
 | `EXPIRED` | lease elapsed | none |
 | `FAILED` | provisioning/guest failure | none |
@@ -101,6 +113,8 @@ has been used.
 | After payment settlement, before entitlement | Durable intent (`payment_intents.status = claimed`) + facilitator settlement lookup completes the entitlement on retry; the capability is derived from the payment so the client gets the same session. |
 | After entitlement, before pod creation | Session stays `PAID`; the next reconcile provisions it. |
 | While `PROVISIONING` | New controller re-registers the relay session, adopts the existing pod (idempotent create) and continues. |
+| While `SUSPENDING` | New controller finishes the checkpoint idempotently: stop guest, delete pod, purge relay, mark `SUSPENDED`. |
+| While `RESUMING` | New controller adopts the pod and continues the readiness handshake; the provisioning timeout is measured from the resume start, not the original payment. |
 | While `ACTIVE` | Lease deadline is in SQLite; the new controller enforces it and deletes the pod. |
 | While `TERMINATING` | Cleanup is idempotent and retried on the next tick. |
 

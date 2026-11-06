@@ -69,6 +69,7 @@ controller/src/provisioning.ts  cold/warm provisioning + readiness handshake
 controller/src/warm-pool.ts     warm-pool policy and lifecycle
 controller/src/lifecycle.ts     suspend/resume, idle/expiry policy, PVC cleanup
 controller/src/termination.ts   terminate/finalise/reap
+controller/src/snapshotter.ts   checkpoint port; no-op locally, Firecracker/Kata later
 controller/src/store/           models + schema; Store is the SQL adapter facade
 controller/src/k8s-types.ts     provisioner contract and pod specs
 controller/src/k8s-null.ts      no-op provisioner for unit tests
@@ -98,6 +99,9 @@ Completed slices:
 - API split into create/session routers, schemas, status mapping and composition.
 - Wire protocol split by concept while keeping `@x402s/shared` exports stable.
 - Guest split into entrypoint, config, supervisor and log modules.
+- Explicit `SUSPENDING`/`RESUMING` states with idempotent crash recovery.
+- `Snapshotter` checkpoint port with a no-op local adapter, wired into
+  suspend/resume/termination.
 
 Next slices:
 

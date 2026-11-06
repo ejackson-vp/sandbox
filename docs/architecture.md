@@ -131,7 +131,7 @@ handles (id, capability, client key) locally with mode `0600`.
 | max output / file size / command seconds / processes | platform limits |
 | created / paid / ready / lease expiry | controller clock (immutable after READY) |
 | capability | HMAC(payment key), hash stored server-side |
-| state | `PAID → PROVISIONING → READY ⇄ ACTIVE → TERMINATING → terminal`; `READY/ACTIVE → SUSPENDED → PROVISIONING` for suspendable sessions |
+| state | `PAID → PROVISIONING → READY ⇄ ACTIVE → TERMINATING → terminal`; `READY/ACTIVE → SUSPENDING → SUSPENDED → RESUMING → READY` for suspendable sessions |
 
 The lease starts at READY, so provisioning is free to the customer. The full
 state machine and timing rules are in [sessions.md](sessions.md).

@@ -20,6 +20,8 @@ import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import { Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store.js";
+import type { Snapshotter } from "../../controller/src/snapshotter.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import {
@@ -49,6 +51,23 @@ let reconciler: Reconciler;
 let servers: http.Server[] = [];
 let workDir: string;
 let client: SandboxClient;
+let snapshotter: RecordingSnapshotter;
+
+class RecordingSnapshotter implements Snapshotter {
+  readonly captured: string[] = [];
+  readonly restored: string[] = [];
+  readonly discarded: string[] = [];
+
+  async capture(session: SessionRecord): Promise<void> {
+    this.captured.push(session.id);
+  }
+  async restore(session: SessionRecord): Promise<void> {
+    this.restored.push(session.id);
+  }
+  async discard(session: SessionRecord): Promise<void> {
+    this.discarded.push(session.id);
+  }
+}
 
 function listen(app: http.RequestListener | http.Server, port: number): Promise<http.Server> {
   const server = http.createServer(app as http.RequestListener);
@@ -155,7 +174,14 @@ beforeAll(async () => {
       CONTROLLER_PORT,
     ),
   );
-  reconciler = new Reconciler({ cfg: controllerCfg, store, provisioner, relay: relayClient });
+  snapshotter = new RecordingSnapshotter();
+  reconciler = new Reconciler({
+    cfg: controllerCfg,
+    store,
+    provisioner,
+    relay: relayClient,
+    snapshotter,
+  });
   suspendFn = (id) => reconciler.suspendSession(id);
   resumeFn = (id) => reconciler.resumeSession(id);
   reconciler.start();
@@ -647,6 +673,7 @@ describe("checkpoint and resume", () => {
     const suspended = await client.suspend(handle);
     expect(suspended.state).toBe("SUSPENDED");
     expect(suspended.remainingSeconds).toBe(0);
+    expect(snapshotter.captured).toContain(handle.sessionId);
 
     await expect(client.exec(handle, { command: ["cat", "persist.txt"] })).rejects.toMatchObject({
       code: "session_suspended",
@@ -654,12 +681,14 @@ describe("checkpoint and resume", () => {
 
     const resumed = await client.resume(handle);
     expect(resumed.state).toBe("READY");
+    expect(snapshotter.restored).toContain(handle.sessionId);
     expect(handle.guestPublicKey).toBeDefined();
     expect(Buffer.from(handle.guestPublicKey!).equals(Buffer.from(keyBefore!))).toBe(false);
 
     const read = await client.exec(handle, { command: ["cat", "persist.txt"] });
     expect("stdout" in read && read.stdout.trim()).toBe("keep-me");
     await client.destroy(handle);
+    expect(snapshotter.discarded).toContain(handle.sessionId);
   }, 180_000);
 });
 

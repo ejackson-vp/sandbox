@@ -23,6 +23,9 @@ export class Termination {
       await this.ctx.provisioner.deletePod(session.podName, 1).catch(() => undefined);
       this.ctx.store.clearPod(session.id);
     }
+    await this.ctx.snapshotter.discard(session).catch((err) => {
+      log.warn("snapshot_discard_failed", { sessionId: session.id, error: (err as Error).message });
+    });
     if (session.workspacePvc) {
       await this.ctx.provisioner.deleteWorkspacePvc(session.workspacePvc).catch((err) => {
         log.warn("workspace_pvc_delete_failed", {

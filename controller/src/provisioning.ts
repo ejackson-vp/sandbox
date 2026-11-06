@@ -161,7 +161,9 @@ export class Provisioning {
       return;
     }
 
-    const age = this.ctx.now() - (session.paidAt ?? session.createdAt);
+    const startedAt =
+      session.state === "RESUMING" ? session.updatedAt : (session.paidAt ?? session.createdAt);
+    const age = this.ctx.now() - startedAt;
     if (age > this.ctx.cfg.provisioningTimeoutMs) {
       this.ctx.store.requestTermination(session.id, "failure:provisioning_timeout", {
         code: "provisioning_timeout",
@@ -210,7 +212,7 @@ export class Provisioning {
             });
             metrics
               .histogram("sandbox_ready_duration_seconds", "Entitlement to READY", LATENCY_BUCKETS)
-              .observe((readyAt - (session.paidAt ?? session.createdAt)) / 1000);
+              .observe((readyAt - startedAt) / 1000);
             log.info("sandbox_ready", {
               sessionId: session.id,
               evidenceType: state.attestation.evidenceType,

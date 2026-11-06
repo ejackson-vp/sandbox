@@ -192,13 +192,14 @@ Run: `make test` and `make security-test` (after `make up`).
 - [docs/networking.md](docs/networking.md)
 - [docs/threat-model.md](docs/threat-model.md)
 - [docs/security-guarantees.md](docs/security-guarantees.md)
+- [docs/aws-microvms-comparison.md](docs/aws-microvms-comparison.md)
 - [docs/production-readiness.md](docs/production-readiness.md)
 
 ## Explicit non-goals
 
 No coding agent, no GitHub integration, no persistent dev environments, no
-snapshots, no GPUs, no accounts, no managed wallets, no mainnet payments, no
-enterprise features.
+memory snapshots (filesystem checkpoints only), no GPUs, no accounts, no managed
+wallets, no mainnet payments, no enterprise features.
 
 ## Licence
 
