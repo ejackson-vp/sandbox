@@ -4,9 +4,8 @@
  */
 import type { ControllerConfig } from "../config.js";
 import type { Provisioner } from "../k8s.js";
-import type { Store } from "../store.js";
 import { requestForLimits, ZERO_RESOURCES, type CapacitySnapshot, type NodeCapacity, type ReservationState } from "./types.js";
-import type { ReservationRecord } from "./reservations.js";
+import type { ReservationRecord, ReservationStore } from "./reservation-store.js";
 
 const MIB = 1024 * 1024;
 
@@ -15,7 +14,7 @@ export class CapacitySnapshotBuilder {
 
   constructor(
     private readonly cfg: ControllerConfig,
-    private readonly store: Store,
+    private readonly reservations: ReservationStore,
     private readonly provisioner: Provisioner,
   ) {}
 
@@ -105,7 +104,7 @@ export class CapacitySnapshotBuilder {
   async snapshotWithWarm(): Promise<CapacitySnapshot> {
     const now = Date.now();
     const nodes = await this.loadNodes(now);
-    const reservations = this.store.reservations.listActive();
+    const reservations = this.reservations.listActive();
     const warm = await this.warmReservationsForSnapshot(nodes, now);
     return { nodes, reservations: [...reservations, ...warm], now, accounting: this.cfg.capacityAccounting };
   }

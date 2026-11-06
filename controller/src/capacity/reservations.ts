@@ -10,26 +10,24 @@
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { admitCapacity } from "./admission.js";
-import {
-  type AdmissionDecision,
-  type CapacityReservation,
-  type CapacitySnapshot,
-  type ResourceVector,
-  type ReservationState,
-  type SandboxResourceRequest,
+import type {
+  CapacitySnapshot,
+  ResourceVector,
+  ReservationState,
+  SandboxResourceRequest,
 } from "./types.js";
+import type {
+  AdmitOptions,
+  ReservationAdmission,
+  ReservationRecord,
+  ReservationStore,
+} from "./reservation-store.js";
 
-export interface ReservationRecord extends CapacityReservation {
-  paymentKey: string | null;
-  specHash: string | null;
-  podName: string | null;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export type ReservationAdmission =
-  | { admitted: true; reservation: ReservationRecord; reused: boolean }
-  | Extract<AdmissionDecision, { admitted: false }>;
+export type {
+  AdmitOptions,
+  ReservationAdmission,
+  ReservationRecord,
+} from "./reservation-store.js";
 
 interface ReservationRow {
   id: string;
@@ -49,15 +47,6 @@ interface ReservationRow {
   expires_at: number | null;
   created_at: number;
   updated_at: number;
-}
-
-export interface AdmitOptions {
-  paymentKey?: string;
-  sessionId?: string;
-  warmId?: string;
-  specHash?: string;
-  ttlMs?: number;
-  state?: "HELD" | "ALLOCATED";
 }
 
 function vectorOf(row: ReservationRow): ResourceVector {
@@ -93,7 +82,7 @@ function mapRow(row: ReservationRow): ReservationRecord {
   };
 }
 
-export class ReservationRepository {
+export class ReservationRepository implements ReservationStore {
   private readonly stmts: Record<string, StatementSync>;
 
   constructor(private readonly db: DatabaseSync) {

@@ -16,12 +16,14 @@ import type {
 } from "./types.js";
 import { addResources, requestForLimits, requestForSession, ZERO_RESOURCES } from "./types.js";
 import { CapacitySnapshotBuilder } from "./snapshot.js";
-import type { ReservationAdmission, ReservationRecord } from "./reservations.js";
+import type { ReservationAdmission, ReservationRecord, ReservationStore } from "./reservation-store.js";
 
 export interface CapacityDeps {
   cfg: ControllerConfig;
   store: Store;
   provisioner: Provisioner;
+  /** Override the reservation store port; defaults to Store's SQLite adapter. */
+  reservations?: ReservationStore;
 }
 
 export interface CapacityView {
@@ -46,9 +48,11 @@ export interface CapacityView {
 
 export class CapacityService {
   private readonly builder: CapacitySnapshotBuilder;
+  private readonly reservations: ReservationStore;
 
   constructor(private readonly deps: CapacityDeps) {
-    this.builder = new CapacitySnapshotBuilder(deps.cfg, deps.store, deps.provisioner);
+    this.reservations = deps.reservations ?? deps.store.reservations;
+    this.builder = new CapacitySnapshotBuilder(deps.cfg, this.reservations, deps.provisioner);
   }
 
   private observe(
@@ -114,7 +118,7 @@ export class CapacityService {
   ): Promise<ReservationAdmission> {
     const started = Date.now();
     const snapshot = await this.builder.snapshotWithWarm();
-    const admission = this.deps.store.reservations.admit(
+    const admission = this.reservations.admit(
       snapshot,
       requestForLimits(spec.limits, spec.baseline),
       { paymentKey, specHash, ttlMs: this.deps.cfg.capacityHoldTtlMs },
@@ -132,7 +136,7 @@ export class CapacityService {
   ): Promise<ReservationAdmission> {
     const started = Date.now();
     const snapshot = await this.builder.snapshotWithWarm();
-    const admission = this.deps.store.reservations.attachToSession(
+    const admission = this.reservations.attachToSession(
       snapshot,
       requestForLimits(spec.limits, spec.baseline),
       paymentKey,
@@ -151,78 +155,78 @@ export class CapacityService {
     if (this.deps.cfg.pinCheckpointNode && session.nodeName) {
       request.requiredNodeId = session.nodeName;
     }
-    const existing = this.deps.store.reservations.getBySession(session.id);
+    const existing = this.reservations.getBySession(session.id);
     const admission = !existing || existing.state === "RELEASED"
-      ? this.deps.store.reservations.attachToSession(snapshot, request, session.paymentKey, session.id, "")
-      : this.deps.store.reservations.resume(snapshot, request, session.id);
+      ? this.reservations.attachToSession(snapshot, request, session.paymentKey, session.id, "")
+      : this.reservations.resume(snapshot, request, session.id);
     this.observe(admission, Date.now() - started);
     this.publishGauges(snapshot);
     return admission;
   }
 
   releasePayment(paymentKey: string): boolean {
-    return this.deps.store.reservations.releasePayment(paymentKey);
+    return this.reservations.releasePayment(paymentKey);
   }
 
   suspend(sessionId: string): boolean {
-    return this.deps.store.reservations.suspendSession(sessionId);
+    return this.reservations.suspendSession(sessionId);
   }
 
   beginRelease(sessionId: string, podName: string | null): boolean {
-    if (!podName) return this.deps.store.reservations.releaseSession(sessionId);
-    return this.deps.store.reservations.beginRelease(sessionId, podName);
+    if (!podName) return this.reservations.releaseSession(sessionId);
+    return this.reservations.beginRelease(sessionId, podName);
   }
 
   confirmRelease(sessionId: string): boolean {
-    return this.deps.store.reservations.confirmRelease(sessionId);
+    return this.reservations.confirmRelease(sessionId);
   }
 
   releaseSession(sessionId: string): boolean {
-    return this.deps.store.reservations.releaseSession(sessionId);
+    return this.reservations.releaseSession(sessionId);
   }
 
   getReservation(sessionId: string): ReservationRecord | null {
-    return this.deps.store.reservations.getBySession(sessionId);
+    return this.reservations.getBySession(sessionId);
   }
 
   updatePod(sessionId: string, podName: string): void {
-    this.deps.store.reservations.updatePod(sessionId, podName);
+    this.reservations.updatePod(sessionId, podName);
   }
 
   pinSessionNode(sessionId: string, nodeId: string): boolean {
-    return this.deps.store.reservations.pinNode(sessionId, nodeId);
+    return this.reservations.pinNode(sessionId, nodeId);
   }
 
   async reap(): Promise<void> {
     const now = Date.now();
-    const expired = this.deps.store.reservations.reapExpiredHolds(now);
+    const expired = this.reservations.reapExpiredHolds(now);
     if (expired > 0) {
       metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "expired_hold" }, expired);
     }
-    for (const reservation of this.deps.store.reservations.listActive()) {
+    for (const reservation of this.reservations.listActive()) {
       if (!reservation.sessionId) continue;
       const session = this.deps.store.getSession(reservation.sessionId);
       if (!session) continue;
       if (["EXPIRED", "FAILED", "DESTROYED"].includes(session.state) && reservation.state !== "RELEASING") {
         if (reservation.podName) {
-          this.deps.store.reservations.beginRelease(reservation.sessionId, reservation.podName);
+          this.reservations.beginRelease(reservation.sessionId, reservation.podName);
         } else {
-          this.deps.store.reservations.releaseSession(reservation.sessionId);
+          this.reservations.releaseSession(reservation.sessionId);
         }
         metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "terminal_session" });
       } else if (session.state === "SUSPENDED" && reservation.state === "ALLOCATED") {
-        this.deps.store.reservations.suspendSession(reservation.sessionId);
+        this.reservations.suspendSession(reservation.sessionId);
         metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "suspended_session" });
       }
     }
-    for (const reservation of this.deps.store.reservations.listReleasing()) {
+    for (const reservation of this.reservations.listReleasing()) {
       if (!reservation.podName) {
-        this.deps.store.reservations.confirmRelease(reservation.sessionId ?? "");
+        this.reservations.confirmRelease(reservation.sessionId ?? "");
         continue;
       }
       const pod = await this.deps.provisioner.getPod(reservation.podName).catch(() => null);
       if (!pod || pod.phase === "Succeeded" || pod.phase === "Failed") {
-        this.deps.store.reservations.confirmRelease(reservation.sessionId ?? "");
+        this.reservations.confirmRelease(reservation.sessionId ?? "");
         metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "released_pod_gone" });
       } else if (now - reservation.updatedAt > 60_000) {
         metrics.counter("sandbox_reservation_leaks_detected_total", "Reservations stuck in RELEASING").inc();

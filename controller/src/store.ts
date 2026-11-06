@@ -26,6 +26,7 @@ import {
 } from "./store/models.js";
 import { migrate } from "./store/schema.js";
 import { ReservationRepository } from "./capacity/reservations.js";
+import type { ReservationStore } from "./capacity/reservation-store.js";
 
 export type {
   ClaimOperationResult,
@@ -42,7 +43,7 @@ export { PaymentAlreadyRedeemedError } from "./store/models.js";
 export class Store {
   private readonly db: DatabaseSync;
   private readonly stmts: Record<string, StatementSync>;
-  readonly reservations: ReservationRepository;
+  readonly reservations: ReservationStore;
 
   constructor(path: string) {
     this.db = new DatabaseSync(path);

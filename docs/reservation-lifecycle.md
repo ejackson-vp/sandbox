@@ -55,9 +55,12 @@ Consequences:
 - a retry with a different spec hash is rejected,
 - `HELD → ALLOCATED` is one row update, not release + re-reserve.
 
-SQLite is single-writer; for multiple controllers this becomes a conditional
-write in a shared database. The capacity snapshot also needs to be shared or
-refreshed from a single source.
+SQLite is single-writer. `ReservationStore` in
+`capacity/reservation-store.ts` is the port; `ReservationRepository` is the
+SQLite adapter. A multi-controller deployment supplies a conditional-write
+adapter (Postgres, DynamoDB) with the same admission contract. `CapacityService` accepts a `ReservationStore` override; the snapshot builder
+uses the same port. The capacity snapshot still needs to be shared or refreshed
+from a single source.
 
 ## Crash recovery
 

@@ -9,6 +9,8 @@ TEE isolation measurements.
 
 - Pure integer capacity model: baseline reservations, peak tracking, node
   eligibility, taints, least-allocated placement, suspended-storage accounting.
+- `ReservationStore` port with a SQLite adapter, so the controller is not
+  hard-wired to a concrete repository.
 - Durable SQLite reservations with `HELD`, `ALLOCATED`, `SUSPENDED`,
   `RELEASING`, `RELEASED`, atomic `BEGIN IMMEDIATE` admission and unique
   payment/session keys.
@@ -178,7 +180,7 @@ Do not add an autoscaler or distributed scheduler before those measurements.
 
 - `npm run build` — clean
 - `npm run lint:structure` — clean
-- Full suite — 149 passed, 3 skipped (including an eight-process SQLite concurrency test)
+- Full suite — 152 passed, 3 skipped (including an eight-process SQLite concurrency test)
 - Security suite on kind — 12 passed, 3 skipped
 - `make demo-capacity` — passed end to end on the final deployment
 - `sandbox admin capacity` — returns capacity only with the internal token;

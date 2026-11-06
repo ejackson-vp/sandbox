@@ -73,12 +73,14 @@ limits exceed allocatable capacity. Property tests cover both modes. A peak
 overcommit ratio and per-tier policy are still future work; the default remains
 baseline to keep density and benchmark comparability.
 
-### 2. Multiple controllers are not supported, only documented
+### 2. Multiple controllers are still unsupported, but the port exists
 
-SQLite is a single-writer assumption. The reservation code is written so the
-transaction boundary is obvious, but there is no shared-store adapter. Running
-two controllers is unsupported. A shared snapshot is also needed; node capacity
-can change between processes.
+SQLite remains a single-writer assumption. `ReservationStore` is now an
+explicit port, and `ReservationRepository` is its SQLite adapter. A
+multi-controller deployment can supply a conditional-write adapter without
+changing the capacity service. The alternate adapter, shared snapshot and
+leader/lease ownership are still missing; running two controllers remains
+unsupported.
 
 ### 3. Warm-pool claim accounting is approximate
 
@@ -118,9 +120,9 @@ the rest receive `503`. A bounded queue could improve success rate, but it must
 have a deadline and must not hold a reservation indefinitely. This was left out
 because it was not needed to validate the model.
 
-### 7. Fault injection is narrower than the milestone asks
+### 7. Fault injection is still narrower than the milestone asks
 
-Covered:
+Covered automatically now:
 
 - expired holds,
 - release confirmation,

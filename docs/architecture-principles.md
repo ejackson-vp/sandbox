@@ -73,7 +73,7 @@ controller/src/snapshotter.ts   checkpoint port; no-op locally, Firecracker/Kata
 controller/src/store/           models + schema; Store is the SQL adapter facade
 controller/src/k8s-types.ts     provisioner contract and pod specs
 controller/src/k8s-null.ts      no-op provisioner for unit tests
-controller/src/capacity/        pure admission, placement, snapshot builder and durable reservations
+controller/src/capacity/        pure admission, placement, snapshot builder, reservation port + SQLite adapter
 
 guest/main.go                   entrypoint + session/warm lifecycle
 guest/config.go                 env/bootstrap configuration
