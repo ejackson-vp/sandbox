@@ -6,7 +6,6 @@
  * NetworkPolicies (ROLE=controller|relay|proxy).
  */
 import http from "node:http";
-import express from "express";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadControllerConfig, makeProvisioner, makeRelayClient } from "./config.js";

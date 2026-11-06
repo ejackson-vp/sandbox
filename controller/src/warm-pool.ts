@@ -1,0 +1,306 @@
+/**
+ * Warm pool: pre-booted, unleased pods. Policy and lifecycle live here; the
+ * reconciler only schedules the calls.
+ */
+import { randomBytes } from "node:crypto";
+import { metrics, type SessionLimits, type WarmClaim } from "@x402s/shared";
+import { GUEST_TOOLS, type WarmPodInfo } from "./k8s.js";
+import { proxyTokenFor } from "./config.js";
+import { newOpaqueToken, sha256Hex } from "./tokens.js";
+import { log } from "./log.js";
+import type { ReconcilerContext } from "./reconciler-context.js";
+import type { SessionRecord } from "./store.js";
+
+export class WarmPool {
+  private readonly claimed = new Set<string>();
+  private cache: { pods: WarmPodInfo[]; at: number } | null = null;
+
+  constructor(private readonly ctx: ReconcilerContext) {}
+
+  limits(): SessionLimits {
+    const def = this.ctx.cfg.tiers[this.ctx.cfg.warmPoolTier];
+    const platform = this.ctx.cfg.platformLimits;
+    return {
+      cpuMillis: def.cpuMillis,
+      memoryMiB: def.memoryMiB,
+      diskMiB: def.diskMiB,
+      maxOutputBytes: platform.maxOutputBytes,
+      maxFileBytes: platform.maxFileBytes,
+      maxCommandSeconds: Math.min(platform.maxCommandSeconds, def.durationSeconds),
+      maxProcesses: platform.maxProcesses,
+    };
+  }
+
+  /**
+   * A warm pod is sized by its cgroup and emptyDir limits. Everything else
+   * (output, file size, process count, command timeout) is re-sent in the
+   * claim and enforced by the guest, so only the pod-shaped limits must fit.
+   */
+  private fits(need: SessionLimits, have: SessionLimits): boolean {
+    return (
+      need.cpuMillis <= have.cpuMillis &&
+      need.memoryMiB <= have.memoryMiB &&
+      need.diskMiB <= have.diskMiB
+    );
+  }
+
+  async tryClaim(
+    session: SessionRecord,
+    relayAddr: { host: string; port: number },
+    proxyAddr: { host: string; port: number },
+    provisionBeginAt: number,
+  ): Promise<boolean> {
+    const cfg = this.ctx.cfg;
+    if (cfg.warmPoolSize === 0) return false;
+    const poolLimits = this.limits();
+    const poolBaseline = {
+      cpuMillis: Math.max(50, Math.floor(poolLimits.cpuMillis / 4)),
+      memoryMiB: Math.max(64, Math.floor(poolLimits.memoryMiB / 4)),
+    };
+    if (
+      !this.fits(session.limits, poolLimits) ||
+      (session.baselineCpuMillis ?? 0) > poolBaseline.cpuMillis ||
+      (session.baselineMemoryMib ?? 0) > poolBaseline.memoryMiB
+    ) {
+      metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "miss_limits" });
+      return false;
+    }
+
+    const pickStarted = this.ctx.now();
+    const warm = await this.pick();
+    const warmPickMs = this.ctx.now() - pickStarted;
+    if (!warm) {
+      metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "miss_empty" });
+      return false;
+    }
+    // Reserve it immediately so a second session in this tick cannot take it.
+    this.claimed.add(warm.warmId);
+
+    const registerStarted = this.ctx.now();
+    const guestToken = newOpaqueToken(32);
+    const tokenHash = sha256Hex(guestToken);
+    const ttlMs = cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
+    try {
+      await this.ctx.relay.register(session.id, tokenHash, ttlMs);
+    } catch (err) {
+      if ((err as { status?: number }).status !== 409) {
+        log.warn("warm_relay_register_failed", { sessionId: session.id, error: (err as Error).message });
+        this.claimed.delete(warm.warmId);
+        return false;
+      }
+    }
+    this.ctx.store.setRelayToken(session.id, tokenHash);
+    const warmRegisterMs = this.ctx.now() - registerStarted;
+
+    const claim: WarmClaim = {
+      sessionId: session.id,
+      relayUrl: `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(session.id)}`,
+      guestToken,
+      clientPublicKey: session.clientPublicKey,
+      clientNonce: session.clientNonce,
+      leaseSeconds: session.durationSeconds,
+      executionMode: cfg.executionMode,
+      runtimeClass: cfg.runtimeClass,
+      imageDigest: cfg.guestImageDigest,
+      proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
+      proxyToken: proxyTokenFor(cfg, session.id),
+      maxOutputBytes: session.limits.maxOutputBytes,
+      maxFileBytes: session.limits.maxFileBytes,
+      maxDiskMiB: session.limits.diskMiB,
+      maxCommandSeconds: session.limits.maxCommandSeconds,
+      maxProcesses: session.limits.maxProcesses,
+      tools: GUEST_TOOLS.join(","),
+    };
+
+    const claimCallStarted = this.ctx.now();
+    try {
+      await this.ctx.relay.claim(warm.poolId, claim);
+    } catch (err) {
+      log.warn("warm_claim_failed", { sessionId: session.id, warmId: warm.warmId, error: (err as Error).message });
+      this.claimed.delete(warm.warmId);
+      await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
+      await this.ctx.relay.purge(warm.poolId).catch(() => undefined);
+      return false;
+    }
+
+    const warmClaimCallMs = this.ctx.now() - claimCallStarted;
+    // The guest accepted the claim and is reconnecting as the real session.
+    // Relabel before the next sweep so the pod is owned by that session.
+    const relabelStarted = this.ctx.now();
+    try {
+      await this.ctx.provisioner.patchPodLabels(warm.name, {
+        "x402.io/pool": "sandbox",
+        "x402.io/session": session.id,
+        "x402.io/warm-claimed": "true",
+      });
+    } catch (err) {
+      log.warn("warm_relabel_failed", { sessionId: session.id, warmId: warm.warmId, error: (err as Error).message });
+      this.claimed.delete(warm.warmId);
+      await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
+      await this.ctx.relay.purge(session.id).catch(() => undefined);
+      return false;
+    }
+
+    if (!this.ctx.store.setProvisioning(session.id, warm.name)) {
+      // The session moved on (destroyed, reaped) between selection and here.
+      this.claimed.delete(warm.warmId);
+      await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
+      await this.ctx.relay.purge(session.id).catch(() => undefined);
+      return false;
+    }
+
+    const claimedAt = this.ctx.now();
+    this.ctx.store.mergeTimings(session.id, {
+      provisionStartAt: claimedAt,
+      podRequestedAt: claimedAt,
+      warmClaimAt: claimedAt,
+      provisionBeginAt,
+      warmPoolHit: 1,
+      warmPickMs,
+      warmRegisterMs,
+      warmClaimCallMs,
+      warmRelabelMs: this.ctx.now() - relabelStarted,
+    });
+    if (this.cache) {
+      this.cache.pods = this.cache.pods.filter((p) => p.warmId !== warm.warmId);
+    }
+    this.claimed.delete(warm.warmId);
+    // The pooled identity is dead the moment the guest reconnects.
+    await this.ctx.relay.purge(warm.poolId).catch(() => undefined);
+    metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "hit" });
+    log.info("sandbox_warm_claimed", {
+      sessionId: session.id,
+      warmId: warm.warmId,
+      podName: warm.name,
+    });
+    return true;
+  }
+
+  private async pick(): Promise<WarmPodInfo | null> {
+    const now = this.ctx.now();
+    let pods: WarmPodInfo[];
+    if (this.cache && now - this.cache.at < 2_000) {
+      pods = this.cache.pods;
+    } else {
+      try {
+        pods = await this.ctx.provisioner.listWarmPods();
+        this.cache = { pods, at: now };
+      } catch (err) {
+        log.warn("warm_pool_list_failed", { error: (err as Error).message });
+        return null;
+      }
+    }
+    for (const pod of pods) {
+      if (!pod.warmId || this.claimed.has(pod.warmId)) continue;
+      if (pod.phase !== "Running" && pod.phase !== "Pending") continue;
+      if (pod.createdAt > 0 && now - pod.createdAt > this.ctx.cfg.warmPoolTtlMs) continue;
+      try {
+        const state = await this.ctx.relay.state(pod.poolId);
+        // `attestation` here is the *pool* hello, not customer evidence. The
+        // real session hello (with its own binding) arrives after the claim
+        // and is what the session is judged on.
+        if (state.registered && state.connected && state.attestation) return pod;
+      } catch {
+        /* try the next pod */
+      }
+    }
+    return null;
+  }
+
+  /** Keep the pool topped up and recycle stale, dead or unrecoverable pods. */
+  async reconcile(): Promise<void> {
+    const cfg = this.ctx.cfg;
+    let pods: WarmPodInfo[];
+    try {
+      pods = await this.ctx.provisioner.listWarmPods();
+    } catch {
+      return;
+    }
+    if (pods.length === 0 && cfg.warmPoolSize === 0) return;
+
+    const now = this.ctx.now();
+    let live = 0;
+    for (const pod of pods) {
+      if (!pod.warmId) continue;
+      if (this.claimed.has(pod.warmId)) {
+        live++;
+        continue;
+      }
+      const dead = pod.phase === "Failed" || pod.phase === "Succeeded";
+      const tooOld = pod.createdAt > 0 && now - pod.createdAt > cfg.warmPoolTtlMs;
+      const scaleDown = cfg.warmPoolSize === 0;
+      if (dead || tooOld || scaleDown) {
+        await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
+        await this.ctx.relay.purge(pod.poolId).catch(() => undefined);
+        log.info("warm_pod_recycled", {
+          podName: pod.name,
+          reason: scaleDown ? "scale_down" : dead ? "dead" : "ttl",
+        });
+        continue;
+      }
+      // A pool pod created before a controller/relay restart has no known
+      // token hash; it can never authenticate again, so recycle it.
+      const state = await this.ctx.relay.state(pod.poolId).catch(() => null);
+      if (state && !state.registered && pod.createdAt > 0 && now - pod.createdAt > 30_000) {
+        await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
+        log.info("warm_pod_recycled", { podName: pod.name, reason: "unregistered" });
+        continue;
+      }
+      live++;
+    }
+
+    metrics.gauge("sandbox_warm_pool_pods", "Warm pool pods (live)").set({}, live);
+    if (cfg.warmPoolSize === 0) return;
+
+    const missing = Math.max(0, cfg.warmPoolSize - live);
+    if (missing === 0) return;
+
+    const relayAddr = await this.ctx.serviceAddress(cfg.relayServiceName);
+    const proxyAddr = await this.ctx.serviceAddress(cfg.proxyServiceName);
+    if (!relayAddr || !proxyAddr) return;
+    // Bounded per pass so a large pool does not burst the kubelet.
+    for (let i = 0; i < Math.min(missing, 2); i++) {
+      await this.create(relayAddr, proxyAddr);
+    }
+  }
+
+  private async create(
+    relayAddr: { host: string; port: number },
+    proxyAddr: { host: string; port: number },
+  ): Promise<void> {
+    const cfg = this.ctx.cfg;
+    const warmId = randomBytes(6).toString("hex");
+    const poolId = `warm_${warmId}`;
+    const guestToken = newOpaqueToken(32);
+    const tokenHash = sha256Hex(guestToken);
+    const ttlMs = cfg.warmPoolTtlMs + 120_000;
+    try {
+      await this.ctx.relay.register(poolId, tokenHash, ttlMs);
+    } catch (err) {
+      log.warn("warm_relay_register_failed", { poolId, error: (err as Error).message });
+      return;
+    }
+    try {
+      await this.ctx.provisioner.createWarmPod({
+        warmId,
+        poolId,
+        ttlMs,
+        limits: this.limits(),
+        guestToken,
+        relayUrl: `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(poolId)}`,
+        proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
+        proxyToken: proxyTokenFor(cfg, poolId),
+        image: cfg.guestImage,
+        imageDigest: cfg.guestImageDigest,
+        runtimeClass: cfg.runtimeClass,
+        executionMode: cfg.executionMode,
+        workspaceDir: cfg.workspaceDir,
+        tools: GUEST_TOOLS.join(","),
+      });
+      metrics.counter("sandbox_warm_pool_created_total", "Warm pods created").inc();
+    } catch (err) {
+      await this.ctx.relay.purge(poolId).catch(() => undefined);
+      log.warn("warm_pod_create_failed", { warmId, error: (err as Error).message });
+    }
+  }
+}

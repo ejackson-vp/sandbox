@@ -1,0 +1,151 @@
+/**
+ * Public SDK types and errors. Kept separate from the client implementation so
+ * modules can depend on the contract without importing the facade.
+ */
+import type { OperationError, SessionStatus, SessionTier } from "@x402s/shared";
+import type { Payer, PaymentMode } from "./payment.js";
+import type { FileSessionStore } from "./session-store.js";
+
+export class SandboxError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status?: number,
+    readonly requestId?: string,
+  ) {
+    super(message);
+    this.name = "SandboxError";
+  }
+}
+
+export class SessionExpiredError extends SandboxError {
+  constructor(message = "the session lease has ended") {
+    super("lease_expired", message, 410);
+    this.name = "SessionExpiredError";
+  }
+}
+
+export interface SandboxClientOptions {
+  apiUrl: string;
+  payer?: Payer;
+  paymentMode?: PaymentMode;
+  /** Explicit acknowledgement that simulated attestation is not confidential. */
+  allowInsecureDev?: boolean;
+  /** Reject anything that is not hardware-attested. */
+  requireHardware?: boolean;
+  expectedMeasurement?: string;
+  /** Persist session handles for multi-process CLI use. */
+  store?: FileSessionStore;
+  log?: (line: string) => void;
+}
+
+export interface SessionHandle {
+  sessionId: string;
+  capability: string;
+  clientPublicKey: Uint8Array;
+  clientPrivateKey: Uint8Array;
+  clientNonce: string;
+  guestPublicKey?: Uint8Array;
+  status?: SessionStatus;
+  createdAt: number;
+}
+
+export interface CreateOptions {
+  tier?: SessionTier;
+  durationSeconds?: number;
+  cpuMillis?: number;
+  memoryMiB?: number;
+  diskMiB?: number;
+  /** Steady-state reservation (defaults to a quarter of the peak). */
+  baselineCpuMillis?: number;
+  baselineMemoryMiB?: number;
+  /** Opt into checkpointed suspend/resume. */
+  idlePolicy?: {
+    maxIdleSeconds?: number;
+    suspendedDurationSeconds?: number;
+    autoResume?: boolean;
+  };
+  /** Wall-clock cap, including suspended time. */
+  maxLifetimeSeconds?: number;
+  /** Persist the handle (default true when a store is configured). */
+  save?: boolean;
+}
+
+export interface StartServiceOptions {
+  name: string;
+  command: string[];
+  port: number;
+  env?: Record<string, string>;
+  cwd?: string;
+}
+
+export interface HttpOptions {
+  port: number;
+  method?: string;
+  path?: string;
+  headers?: Record<string, string>;
+  body?: Buffer | Uint8Array | string;
+  timeoutMs?: number;
+}
+
+export interface HttpResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: Buffer;
+  truncated: boolean;
+}
+
+export interface OpenHttpStreamOptions {
+  port: number;
+  method?: string;
+  path?: string;
+  headers?: Record<string, string>;
+  body?: Buffer | Uint8Array | string;
+}
+
+export interface HttpStream {
+  streamId: string;
+  status: number;
+  headers: Record<string, string>;
+  read(): Promise<{ chunk?: Buffer; done: boolean }>;
+  close(): Promise<void>;
+}
+
+export interface OpenWebSocketOptions {
+  port: number;
+  path: string;
+  headers?: Record<string, string>;
+}
+
+export interface WebSocketStream {
+  streamId: string;
+  status: number;
+  read(): Promise<{ data?: Buffer; binary: boolean; done: boolean }>;
+  send(data: Buffer | Uint8Array | string, opts?: { binary?: boolean }): Promise<void>;
+  close(): Promise<void>;
+}
+
+export interface ExecOptions {
+  command: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  stdin?: string;
+  timeoutMs?: number;
+  requestId?: string;
+  /** Wait for a busy session instead of failing immediately (ms). */
+  queueMs?: number;
+  /** Abort the client-side wait (the command keeps running server-side). */
+  signal?: AbortSignal;
+}
+
+export interface FilePutOptions {
+  path: string;
+  data: Buffer | Uint8Array;
+  archive?: boolean;
+  mode?: number;
+  requestId?: string;
+  queueMs?: number;
+}
+
+export type FileOutcome<T> = T | OperationError;
+

@@ -47,25 +47,65 @@ performs the effects; the table is the tested contract.
 ## Module map
 
 ```
-shared/domain/session.ts    pure lifecycle: transitions, guards, expiry, final state
-shared/fp.ts                Result, Option, assertNever
-controller/session-snapshot.ts  the only persistence -> domain mapping
-controller/reconciler.ts    imperative shell (next: split into app use cases)
-guest/target.go             one validated loopback target + client
-guest/services.go           service process manager
-guest/streams.go            SSE/chunked window
-guest/websockets.go         polled WebSocket window
+shared/src/protocol/            wire contract: lifecycle, session, operations,
+                                attestation, relay, control (re-exported by protocol.ts)
+shared/src/domain/session.ts    pure lifecycle: transitions, guards, expiry, final state
+shared/src/fp.ts                Result, Option, assertNever
+
+sdk/src/client.ts               public facade only
+sdk/src/runtime.ts              transport, auth, attestation, persistence, operation loop
+sdk/src/session.ts              create/attach/suspend/resume/destroy
+sdk/src/operations.ts           exec + filesystem operations
+sdk/src/data-plane.ts           services, HTTP, SSE/chunked, WebSocket
+
+api/src/server.ts               composition, middleware, pricing/health/images
+api/src/routes/create-session.ts x402 handshake, verify, settle, entitlement
+api/src/routes/sessions.ts      status, operations, data plane, lifecycle
+api/src/schemas.ts              request schemas + plaintext guard
+api/src/status.ts               controller view -> public wire status
+
+controller/src/reconciler.ts    scheduler: tick, health, lease, dispatch
+controller/src/provisioning.ts  cold/warm provisioning + readiness handshake
+controller/src/warm-pool.ts     warm-pool policy and lifecycle
+controller/src/lifecycle.ts     suspend/resume, idle/expiry policy, PVC cleanup
+controller/src/termination.ts   terminate/finalise/reap
+controller/src/store/           models + schema; Store is the SQL adapter facade
+controller/src/k8s-types.ts     provisioner contract and pod specs
+controller/src/k8s-null.ts      no-op provisioner for unit tests
+
+guest/main.go                   entrypoint + session/warm lifecycle
+guest/config.go                 env/bootstrap configuration
+guest/supervisor.go             frame loop, dispatch, encrypted replies
+guest/log.go                    structured guest logs
+guest/target.go                 one validated loopback target + client
+guest/services.go               service process manager
+guest/streams.go                SSE/chunked window
+guest/websockets.go             polled WebSocket window
 ```
 
-Planned slices:
+## Module size budget
 
-1. Split `sdk/client.ts` into transport/session/operations/data-plane with a
-   facade.
-2. Extract `ProvisionSession`, `SuspendSession`, `ResumeSession`,
-   `TerminateSession` use cases; make `Reconciler` a thin scheduler.
-3. Split `store.ts` into schema/migrations and domain repositories.
-4. Split API routers; keep the wire protocol stable.
-5. Unify SSE/WebSocket poll windows in the guest (`window.go`).
+`npm run lint:structure` fails any `.ts`/`.go` module over 600 lines. The
+budget is a backstop, not a target: most modules are 100–350 lines. If a module
+grows past the budget, split it by use case or adapter, not by arbitrary line
+count.
+
+Completed slices:
+
+- SDK split behind a stable `SandboxClient` facade.
+- Reconciler split into warm-pool, provisioning, lifecycle, termination and a
+  scheduler; persistence split into models/schema.
+- API split into create/session routers, schemas, status mapping and composition.
+- Wire protocol split by concept while keeping `@x402s/shared` exports stable.
+- Guest split into entrypoint, config, supervisor and log modules.
+
+Next slices:
+
+1. Move controller use cases onto a shared effect interpreter so suspend/resume
+   and provisioning cannot drift from the pure transition table.
+2. Split the remaining control API payment-route handlers from session routes.
+3. Unify SSE/WebSocket poll windows in the guest (`window.go`).
+4. Add dependency-cruiser layer rules and enable `exactOptionalPropertyTypes`.
 
 ## Testing strategy
 

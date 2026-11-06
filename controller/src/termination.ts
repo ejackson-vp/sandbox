@@ -1,0 +1,96 @@
+/**
+ * Termination use case: stop the guest, delete pod/PVC, purge relay, finalise,
+ * and reap orphan pods.
+ */
+import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
+import { log } from "./log.js";
+import type { ReconcilerContext } from "./reconciler-context.js";
+import type { SessionRecord } from "./store.js";
+
+export class Termination {
+  constructor(private readonly ctx: ReconcilerContext) {}
+
+  async terminate(session: SessionRecord): Promise<void> {
+    const cleanupStarted = session.terminatingAt ?? this.ctx.now();
+    // Ask the guest to stop so it can kill descendants before the pod goes away.
+    try {
+      await this.ctx.relay.shutdown(session.id, session.terminationReason ?? "terminated");
+    } catch {
+      /* relay may already be gone */
+    }
+
+    if (session.podName) {
+      await this.ctx.provisioner.deletePod(session.podName, 1).catch(() => undefined);
+      this.ctx.store.clearPod(session.id);
+    }
+    if (session.workspacePvc) {
+      await this.ctx.provisioner.deleteWorkspacePvc(session.workspacePvc).catch((err) => {
+        log.warn("workspace_pvc_delete_failed", {
+          sessionId: session.id,
+          pvc: session.workspacePvc,
+          error: (err as Error).message,
+        });
+      });
+      this.ctx.store.clearWorkspacePvc(session.id);
+    }
+    if (session.relayPurgedAt === null) {
+      try {
+        await this.ctx.relay.purge(session.id);
+        this.ctx.store.markRelayPurged(session.id);
+      } catch (err) {
+        log.warn("relay_purge_failed", { sessionId: session.id, error: (err as Error).message });
+      }
+    }
+    const cleanupMs = Date.now() - cleanupStarted;
+    this.ctx.store.mergeTimings(session.id, {
+      terminationStartedAt: cleanupStarted,
+      podDeletedAt: Date.now(),
+      cleanupMs,
+    });
+    metrics
+      .histogram("sandbox_cleanup_duration_seconds", "TERMINATING to cleanup complete", LATENCY_BUCKETS)
+      .observe(cleanupMs / 1000);
+    const finalState = this.ctx.store.finalizeTermination(session.id);
+    if (finalState === "FAILED" || finalState === "EXPIRED") {
+      metrics
+        .counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED")
+        .inc({ final_state: finalState, reason: (session.terminationReason ?? "unknown").split(":")[0]! });
+    }
+    log.info("sandbox_destroyed", {
+      sessionId: session.id,
+      state: finalState ?? "unknown",
+      reason: session.terminationReason ?? "unknown",
+    });
+  }
+
+  /** Delete pods that no session owns, or that outlived every possible deadline. */
+  async sweep(): Promise<void> {
+    let pods;
+    try {
+      pods = await this.ctx.provisioner.listSandboxPods();
+    } catch {
+      return;
+    }
+    const now = this.ctx.now();
+    for (const pod of pods) {
+      const session = pod.sessionId ? this.ctx.store.getSession(pod.sessionId) : null;
+      const terminal =
+        !session || ["DESTROYED", "EXPIRED", "FAILED", "TERMINATING"].includes(session.state);
+      const tooOld = pod.createdAt > 0 && now - pod.createdAt > this.ctx.cfg.maxPodAgeMs;
+      if (terminal || tooOld) {
+        await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
+        log.warn("orphan_pod_reaped", {
+          podName: pod.name,
+          sessionId: pod.sessionId || undefined,
+          reason: terminal ? "no_live_session" : "max_age",
+        });
+        if (session && session.state !== "TERMINATING") {
+          this.ctx.store.requestTermination(session.id, "failure:reaped", {
+            code: "reaped",
+            message: "sandbox exceeded the maximum pod age",
+          });
+        }
+      }
+    }
+  }
+}

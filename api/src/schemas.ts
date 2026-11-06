@@ -1,0 +1,72 @@
+/**
+ * Request schemas and the plaintext guard shared by all routes.
+ */
+import type { NextFunction, Request, Response } from "express";
+import { z } from "zod";
+import { MAX_LEASE_SECONDS } from "@x402s/shared";
+
+
+export const createSchema = z.object({
+  tier: z.enum(["short", "standard", "extended", "long", "custom"]).optional(),
+  durationSeconds: z.number().int().min(1).max(MAX_LEASE_SECONDS).optional(),
+  cpuMillis: z.number().int().positive().optional(),
+  memoryMiB: z.number().int().positive().optional(),
+  diskMiB: z.number().int().positive().optional(),
+  clientPublicKey: z.string().min(40).max(64),
+  clientNonce: z.string().min(40).max(64),
+  baselineCpuMillis: z.number().int().min(50).optional(),
+  baselineMemoryMiB: z.number().int().min(64).optional(),
+  idlePolicy: z
+    .object({
+      maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
+      suspendedDurationSeconds: z.number().int().min(1).max(28800).optional(),
+      autoResume: z.boolean().optional(),
+    })
+    .optional(),
+  maxLifetimeSeconds: z.number().int().min(1).max(28800).optional(),
+});
+
+export const requestIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/);
+
+export const operationSchema = z.object({
+  requestId: requestIdSchema,
+  envelope: z.string().min(1).max(16 * 1024 * 1024),
+  timeoutMs: z.number().int().min(100).max(3_600_000).optional(),
+  waitMs: z.number().int().min(0).max(120_000).optional(),
+});
+
+/** Fields that must never be accepted as JSON: they imply plaintext. */
+const FORBIDDEN_FIELDS = [
+  "code",
+  "source",
+  "script",
+  "command",
+  "args",
+  "argv",
+  "env",
+  "cwd",
+  "stdin",
+  "stdout",
+  "stderr",
+  "content",
+  "data",
+  "plaintext",
+];
+
+export function rejectPlaintextBodies(req: Request, res: Response, next: NextFunction): void {
+  const body = req.body;
+  if (body && typeof body === "object") {
+    for (const field of FORBIDDEN_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(body, field)) {
+        res.status(400).json({
+          error: "plaintext_not_accepted",
+          message:
+            "this endpoint only accepts ciphertext; encrypt your operation for the attested guest key",
+          field,
+        });
+        return;
+      }
+    }
+  }
+  next();
+}

@@ -1,0 +1,163 @@
+/**
+ * Lifecycle use cases: suspend, resume, idle/expiry policy, PVC cleanup.
+ */
+import { canResume, canSuspend, idleExpired, lifetimeExpired, metrics, suspendedExpired } from "@x402s/shared";
+import { log } from "./log.js";
+import type { ReconcilerContext } from "./reconciler-context.js";
+import type { SessionRecord } from "./store.js";
+import { snapshotOf } from "./session-snapshot.js";
+import type { Provisioning } from "./provisioning.js";
+
+export class LifecycleError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status: number = 409,
+  ) {
+    super(message);
+    this.name = "LifecycleError";
+  }
+}
+
+export class Lifecycle {
+  constructor(
+    private readonly ctx: ReconcilerContext,
+    private readonly provisioning: Provisioning,
+  ) {}
+
+  async enforce(): Promise<void> {
+    const now = this.ctx.now();
+    for (const session of this.ctx.store.listNonTerminal()) {
+      if (this.lifetimeExceeded(session)) {
+        this.ctx.store.requestTermination(session.id, "max_lifetime");
+        continue;
+      }
+      const snap = snapshotOf(session);
+      if (idleExpired(snap, now)) {
+        try {
+          await this.suspend(session.id);
+        } catch (err) {
+          log.warn("auto_suspend_failed", { sessionId: session.id, error: (err as Error).message });
+        }
+        continue;
+      }
+      if (suspendedExpired(snap, now)) {
+        this.ctx.store.requestTermination(session.id, "suspended_expired");
+      }
+    }
+  }
+
+  async cleanup(): Promise<void> {
+    for (const session of this.ctx.store.listTerminalWithPvc()) {
+      if (!session.workspacePvc) continue;
+      await this.ctx.provisioner.deleteWorkspacePvc(session.workspacePvc).catch(() => undefined);
+      this.ctx.store.clearWorkspacePvc(session.id);
+    }
+  }
+
+
+  private lifetimeExceeded(session: SessionRecord): boolean {
+    return lifetimeExpired(snapshotOf(session), this.ctx.now());
+  }
+
+  /**
+   * Checkpoint a live session: stop the workload, keep its workspace PVC, and
+   * release compute. There is no memory snapshot in this mode; the guest is
+   * booted fresh on resume and sees the persisted files.
+   */
+  async suspend(id: string): Promise<void> {
+    const session = this.ctx.store.getSession(id);
+    if (!session) throw new LifecycleError("not_found", "session not found", 404);
+    if (!canSuspend(snapshotOf(session))) {
+      throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
+    }
+    try {
+      await this.ctx.relay.shutdown(id, "suspend");
+    } catch {
+      /* relay may already be gone */
+    }
+    if (session.podName) {
+      if (!session.nodeName && session.workspacePvc) {
+        const pod = await this.ctx.provisioner.getPod(session.podName).catch(() => null);
+        if (pod?.nodeName) {
+          this.ctx.store.setNodeName(id, pod.nodeName);
+          session.nodeName = pod.nodeName;
+        }
+      }
+      await this.ctx.provisioner.suspendPod(session.podName);
+      this.ctx.store.clearPod(id);
+    }
+    const suspendedAt = this.ctx.now();
+    if (!this.ctx.store.markSuspended(id, suspendedAt)) {
+      throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
+    }
+    await this.ctx.relay.purge(id).catch(() => undefined);
+    metrics.counter("sandbox_sessions_suspended_total", "Sessions suspended").inc();
+    log.info("sandbox_suspended", { sessionId: id, suspendedAt });
+  }
+
+  /** Boot a fresh guest against the persisted workspace. */
+  async resume(id: string): Promise<void> {
+    const session = this.ctx.store.getSession(id);
+    if (!session) throw new LifecycleError("not_found", "session not found", 404);
+    if (session.state !== "SUSPENDED" || !canResume(snapshotOf(session))) {
+      throw new LifecycleError("not_suspended", `session is ${session.state}`, 409);
+    }
+    if (this.lifetimeExceeded(session)) {
+      this.ctx.store.requestTermination(id, "max_lifetime");
+      throw new LifecycleError("max_lifetime", "session exceeded its maximum lifetime", 409);
+    }
+    const idle = session.idlePolicyJson
+      ? (JSON.parse(session.idlePolicyJson) as { suspendedDurationSeconds?: number })
+      : {};
+    if (
+      idle.suspendedDurationSeconds &&
+      session.suspendedAt &&
+      this.ctx.now() - session.suspendedAt > idle.suspendedDurationSeconds * 1000
+    ) {
+      this.ctx.store.requestTermination(id, "suspended_expired");
+      throw new LifecycleError("suspended_expired", "session was suspended for too long", 409);
+    }
+    if (!session.workspacePvc) {
+      throw new LifecycleError("not_resumable", "session has no persistent workspace", 409);
+    }
+    if (!(await this.ctx.provisioner.workspacePvcExists(session.workspacePvc).catch(() => false))) {
+      this.ctx.store.requestTermination(id, "failure:checkpoint_missing", {
+        code: "checkpoint_missing",
+        message: "the checkpoint workspace no longer exists",
+      });
+      throw new LifecycleError(
+        "resume_unavailable",
+        "the checkpoint workspace no longer exists; the session cannot be resumed",
+        409,
+      );
+    }
+    if (this.ctx.cfg.pinCheckpointNode && session.nodeName) {
+      const available = await this.ctx.provisioner.nodeAvailable(session.nodeName).catch(() => false);
+      if (!available) {
+        throw new LifecycleError(
+          "resume_unavailable",
+          `the checkpoint's node ${session.nodeName} is unavailable; it cannot be resumed on another node`,
+          409,
+        );
+      }
+    }
+    const relayAddr = await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName);
+    const proxyAddr = await this.ctx.serviceAddress(this.ctx.cfg.proxyServiceName);
+    if (!relayAddr || !proxyAddr) {
+      throw new LifecycleError("control_plane_unavailable", "relay or proxy unavailable", 503);
+    }
+    const { podName } = await this.provisioning.createPod(session, relayAddr, proxyAddr, {
+      workspacePvc: session.workspacePvc,
+      resume: true,
+      ...(this.ctx.cfg.pinCheckpointNode && session.nodeName ? { nodeName: session.nodeName } : {}),
+    });
+    if (!this.ctx.store.markResuming(id, podName)) {
+      await this.ctx.provisioner.deletePod(podName, 0).catch(() => undefined);
+      await this.ctx.relay.purge(id).catch(() => undefined);
+      throw new LifecycleError("not_suspended", "session changed state while resuming", 409);
+    }
+    metrics.counter("sandbox_sessions_resumed_total", "Sessions resumed").inc();
+    log.info("sandbox_resuming", { sessionId: id, podName, resumeCount: session.resumeCount + 1 });
+  }
+}
