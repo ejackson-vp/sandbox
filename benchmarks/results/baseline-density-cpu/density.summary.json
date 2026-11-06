@@ -1,0 +1,819 @@
+{
+  "mode": "cpu",
+  "spec": {
+    "tier": "custom",
+    "durationSeconds": 240,
+    "cpuMillis": 500,
+    "memoryMiB": 512,
+    "diskMiB": 256
+  },
+  "allocatable": {
+    "cpuMillis": 100,
+    "memoryBytes": 10485760,
+    "pods": 0,
+    "allocatableCpuMillis": 14000,
+    "allocatableMemoryBytes": 8320954368,
+    "allocatablePods": 110
+  },
+  "levels": [
+    {
+      "level": 1,
+      "mode": "cpu",
+      "requested": {
+        "cpuMillis": 500,
+        "memoryMiB": 512,
+        "perSandboxMemoryBytes": 134217728
+      },
+      "created": 1,
+      "ready": 1,
+      "failed": 0,
+      "pending": 0,
+      "createMs": {
+        "count": 1,
+        "min": 50.52566700000034,
+        "mean": 50.52566700000034,
+        "p50": 50.52566700000034,
+        "p90": 50.52566700000034,
+        "p95": 50.52566700000034,
+        "p99": 50.52566700000034,
+        "max": 50.52566700000034,
+        "stdev": 0
+      },
+      "readyMs": {
+        "count": 1,
+        "min": 1341,
+        "mean": 1341,
+        "p50": 1341,
+        "p90": 1341,
+        "p95": 1341,
+        "p99": 1341,
+        "max": 1341,
+        "stdev": 0
+      },
+      "anonBytes": {
+        "count": 1,
+        "min": 8826880,
+        "mean": 8826880,
+        "p50": 8826880,
+        "p90": 8826880,
+        "p95": 8826880,
+        "p99": 8826880,
+        "max": 8826880,
+        "stdev": 0
+      },
+      "fileBytes": {
+        "count": 1,
+        "min": 4096,
+        "mean": 4096,
+        "p50": 4096,
+        "p90": 4096,
+        "p95": 4096,
+        "p99": 4096,
+        "max": 4096,
+        "stdev": 0
+      },
+      "pids": {
+        "count": 1,
+        "min": 9,
+        "mean": 9,
+        "p50": 9,
+        "p90": 9,
+        "p95": 9,
+        "p99": 9,
+        "max": 9,
+        "stdev": 0
+      },
+      "nodeMemBytes": 1198452736,
+      "workerDockerMemBytes": 841482240,
+      "nodeCpuPct": 4.831979695431472,
+      "infra": {
+        "before": {
+          "at": "2026-11-06T02:18:05.417Z",
+          "node": {
+            "memBytes": 1185280000,
+            "cpuUsec": 199299910
+          },
+          "components": {
+            "api": {
+              "memBytes": 45592576,
+              "cpuUsec": 4575751,
+              "pids": 12
+            },
+            "controller": {
+              "memBytes": 106196992,
+              "cpuUsec": 44484117,
+              "pids": 12
+            },
+            "relay": {
+              "memBytes": 67072000,
+              "cpuUsec": 2641625,
+              "pids": 8
+            },
+            "egress-proxy": {
+              "memBytes": 64524288,
+              "cpuUsec": 1163432,
+              "pids": 12
+            },
+            "facilitator": {
+              "memBytes": 43077632,
+              "cpuUsec": 2111194,
+              "pids": 8
+            }
+          },
+          "metrics": {
+            "api": {
+              "sandbox_sessions_created_total": 15,
+              "sandbox_payment_verify_duration_seconds_bucket": 139,
+              "sandbox_payment_verify_duration_seconds_sum": 0.6270000000000004,
+              "sandbox_payment_verify_duration_seconds_count": 139,
+              "sandbox_payment_settle_duration_seconds_bucket": 139,
+              "sandbox_payment_settle_duration_seconds_sum": 0.5740000000000004,
+              "sandbox_payment_settle_duration_seconds_count": 139,
+              "sandbox_session_create_duration_seconds_bucket": 299,
+              "sandbox_session_create_duration_seconds_sum": 2.099999999999994,
+              "sandbox_session_create_duration_seconds_count": 299
+            },
+            "controller": {
+              "sandbox_exec_total": 143,
+              "sandbox_sessions_created_total": 132,
+              "sandbox_sessions_failed_total": 0,
+              "sandbox_sessions_active": 0,
+              "sandbox_provision_duration_seconds_bucket": 139,
+              "sandbox_provision_duration_seconds_sum": 22.54599999999999,
+              "sandbox_provision_duration_seconds_count": 139,
+              "sandbox_ready_duration_seconds_bucket": 139,
+              "sandbox_ready_duration_seconds_sum": 230.88799999999992,
+              "sandbox_ready_duration_seconds_count": 139,
+              "sandbox_exec_duration_seconds_bucket": 143,
+              "sandbox_exec_duration_seconds_sum": 4.730999999999982,
+              "sandbox_exec_duration_seconds_count": 143,
+              "sandbox_cleanup_duration_seconds_bucket": 139,
+              "sandbox_cleanup_duration_seconds_sum": 37.722,
+              "sandbox_cleanup_duration_seconds_count": 139,
+              "sandbox_reconcile_duration_seconds_bucket": 4964,
+              "sandbox_reconcile_duration_seconds_sum": 53.653000000001015,
+              "sandbox_reconcile_duration_seconds_count": 4964
+            },
+            "relay": {
+              "sandbox_relay_sessions": 0,
+              "sandbox_relay_pending_requests": 0
+            }
+          }
+        },
+        "after": {
+          "at": "2026-11-06T02:18:16.291Z",
+          "node": {
+            "memBytes": 1198305280,
+            "cpuUsec": 200062034
+          },
+          "components": {
+            "api": {
+              "memBytes": 45309952,
+              "cpuUsec": 4604519,
+              "pids": 12
+            },
+            "controller": {
+              "memBytes": 106786816,
+              "cpuUsec": 44878056,
+              "pids": 12
+            },
+            "relay": {
+              "memBytes": 67305472,
+              "cpuUsec": 2709939,
+              "pids": 8
+            },
+            "egress-proxy": {
+              "memBytes": 65028096,
+              "cpuUsec": 1171663,
+              "pids": 12
+            },
+            "facilitator": {
+              "memBytes": 42115072,
+              "cpuUsec": 2126201,
+              "pids": 8
+            }
+          },
+          "metrics": {
+            "api": {
+              "sandbox_sessions_created_total": 15,
+              "sandbox_payment_verify_duration_seconds_bucket": 140,
+              "sandbox_payment_verify_duration_seconds_sum": 0.6300000000000004,
+              "sandbox_payment_verify_duration_seconds_count": 140,
+              "sandbox_payment_settle_duration_seconds_bucket": 140,
+              "sandbox_payment_settle_duration_seconds_sum": 0.5760000000000004,
+              "sandbox_payment_settle_duration_seconds_count": 140,
+              "sandbox_session_create_duration_seconds_bucket": 301,
+              "sandbox_session_create_duration_seconds_sum": 2.1099999999999937,
+              "sandbox_session_create_duration_seconds_count": 301
+            },
+            "controller": {
+              "sandbox_exec_total": 144,
+              "sandbox_sessions_created_total": 133,
+              "sandbox_sessions_failed_total": 0,
+              "sandbox_sessions_active": 1,
+              "sandbox_provision_duration_seconds_bucket": 140,
+              "sandbox_provision_duration_seconds_sum": 22.64199999999999,
+              "sandbox_provision_duration_seconds_count": 140,
+              "sandbox_ready_duration_seconds_bucket": 140,
+              "sandbox_ready_duration_seconds_sum": 232.2199999999999,
+              "sandbox_ready_duration_seconds_count": 140,
+              "sandbox_exec_duration_seconds_bucket": 144,
+              "sandbox_exec_duration_seconds_sum": 4.740999999999982,
+              "sandbox_exec_duration_seconds_count": 144,
+              "sandbox_cleanup_duration_seconds_bucket": 139,
+              "sandbox_cleanup_duration_seconds_sum": 37.722,
+              "sandbox_cleanup_duration_seconds_count": 139,
+              "sandbox_reconcile_duration_seconds_bucket": 5008,
+              "sandbox_reconcile_duration_seconds_sum": 54.07800000000101,
+              "sandbox_reconcile_duration_seconds_count": 5008
+            },
+            "relay": {
+              "sandbox_relay_sessions": 1,
+              "sandbox_relay_pending_requests": 0
+            }
+          }
+        },
+        "dockerBefore": {
+          "name": "x402-sandbox-worker",
+          "cpu": 6.49,
+          "memBytes": 829109043.2,
+          "memLimit": 8320425394.176
+        },
+        "dockerAfter": {
+          "name": "x402-sandbox-worker",
+          "cpu": 4.61,
+          "memBytes": 841482240,
+          "memLimit": 8320425394.176
+        }
+      },
+      "phase": {
+        "wallMs": 212.9932919999992,
+        "opsPerSecond": 4.694983539669426,
+        "byKind": {
+          "compute": {
+            "count": 1,
+            "ok": 1,
+            "latency": {
+              "count": 1,
+              "min": 212.82883299999958,
+              "mean": 212.82883299999958,
+              "p50": 212.82883299999958,
+              "p90": 212.82883299999958,
+              "p95": 212.82883299999958,
+              "p99": 212.82883299999958,
+              "max": 212.82883299999958,
+              "stdev": 0
+            }
+          }
+        },
+        "errors": []
+      },
+      "teardownMs": {
+        "count": 1,
+        "min": 520.9013329999998,
+        "mean": 520.9013329999998,
+        "p50": 520.9013329999998,
+        "p90": 520.9013329999998,
+        "p95": 520.9013329999998,
+        "p99": 520.9013329999998,
+        "max": 520.9013329999998,
+        "stdev": 0
+      },
+      "podsAfter": 0,
+      "notes": []
+    },
+    {
+      "level": 5,
+      "mode": "cpu",
+      "requested": {
+        "cpuMillis": 500,
+        "memoryMiB": 512,
+        "perSandboxMemoryBytes": 134217728
+      },
+      "created": 5,
+      "ready": 5,
+      "failed": 0,
+      "pending": 0,
+      "createMs": {
+        "count": 5,
+        "min": 23.145292000001064,
+        "mean": 29.84773320000095,
+        "p50": 29.84858300000269,
+        "p90": 36.057416000003286,
+        "p95": 36.057416000003286,
+        "p99": 36.057416000003286,
+        "max": 36.057416000003286,
+        "stdev": 5.438243621438499
+      },
+      "readyMs": {
+        "count": 5,
+        "min": 1502,
+        "mean": 1711,
+        "p50": 1518,
+        "p90": 2502,
+        "p95": 2502,
+        "p99": 2502,
+        "max": 2502,
+        "stdev": 442.2623655704835
+      },
+      "anonBytes": {
+        "count": 5,
+        "min": 8568832,
+        "mean": 8687616,
+        "p50": 8691712,
+        "p90": 8843264,
+        "p95": 8843264,
+        "p99": 8843264,
+        "max": 8843264,
+        "stdev": 108098.70926148933
+      },
+      "fileBytes": {
+        "count": 5,
+        "min": 4096,
+        "mean": 4096,
+        "p50": 4096,
+        "p90": 4096,
+        "p95": 4096,
+        "p99": 4096,
+        "max": 4096,
+        "stdev": 0
+      },
+      "pids": {
+        "count": 5,
+        "min": 9,
+        "mean": 9.6,
+        "p50": 10,
+        "p90": 10,
+        "p95": 10,
+        "p99": 10,
+        "max": 10,
+        "stdev": 0.5477225575051662
+      },
+      "nodeMemBytes": 1260482560,
+      "workerDockerMemBytes": 906074521.6,
+      "nodeCpuPct": 4.334774376775008,
+      "infra": {
+        "before": {
+          "at": "2026-11-06T02:18:20.370Z",
+          "node": {
+            "memBytes": 1184915456,
+            "cpuUsec": 200485802
+          },
+          "components": {
+            "api": {
+              "memBytes": 46206976,
+              "cpuUsec": 4628095,
+              "pids": 12
+            },
+            "controller": {
+              "memBytes": 105312256,
+              "cpuUsec": 45115114,
+              "pids": 12
+            },
+            "relay": {
+              "memBytes": 68890624,
+              "cpuUsec": 2782871,
+              "pids": 8
+            },
+            "egress-proxy": {
+              "memBytes": 64274432,
+              "cpuUsec": 1180606,
+              "pids": 12
+            },
+            "facilitator": {
+              "memBytes": 42389504,
+              "cpuUsec": 2134291,
+              "pids": 8
+            }
+          },
+          "metrics": {
+            "api": {
+              "sandbox_sessions_created_total": 15,
+              "sandbox_payment_verify_duration_seconds_bucket": 140,
+              "sandbox_payment_verify_duration_seconds_sum": 0.6300000000000004,
+              "sandbox_payment_verify_duration_seconds_count": 140,
+              "sandbox_payment_settle_duration_seconds_bucket": 140,
+              "sandbox_payment_settle_duration_seconds_sum": 0.5760000000000004,
+              "sandbox_payment_settle_duration_seconds_count": 140,
+              "sandbox_session_create_duration_seconds_bucket": 301,
+              "sandbox_session_create_duration_seconds_sum": 2.1099999999999937,
+              "sandbox_session_create_duration_seconds_count": 301
+            },
+            "controller": {
+              "sandbox_exec_total": 147,
+              "sandbox_sessions_created_total": 133,
+              "sandbox_sessions_failed_total": 0,
+              "sandbox_sessions_active": 0,
+              "sandbox_provision_duration_seconds_bucket": 140,
+              "sandbox_provision_duration_seconds_sum": 22.64199999999999,
+              "sandbox_provision_duration_seconds_count": 140,
+              "sandbox_ready_duration_seconds_bucket": 140,
+              "sandbox_ready_duration_seconds_sum": 232.2199999999999,
+              "sandbox_ready_duration_seconds_count": 140,
+              "sandbox_exec_duration_seconds_bucket": 147,
+              "sandbox_exec_duration_seconds_sum": 4.955999999999981,
+              "sandbox_exec_duration_seconds_count": 147,
+              "sandbox_cleanup_duration_seconds_bucket": 140,
+              "sandbox_cleanup_duration_seconds_sum": 37.984,
+              "sandbox_cleanup_duration_seconds_count": 140,
+              "sandbox_reconcile_duration_seconds_bucket": 5024,
+              "sandbox_reconcile_duration_seconds_sum": 54.247000000000995,
+              "sandbox_reconcile_duration_seconds_count": 5024
+            },
+            "relay": {
+              "sandbox_relay_sessions": 0,
+              "sandbox_relay_pending_requests": 0
+            }
+          }
+        },
+        "after": {
+          "at": "2026-11-06T02:18:32.265Z",
+          "node": {
+            "memBytes": 1262456832,
+            "cpuUsec": 202555620
+          },
+          "components": {
+            "api": {
+              "memBytes": 45215744,
+              "cpuUsec": 4735800,
+              "pids": 12
+            },
+            "controller": {
+              "memBytes": 107560960,
+              "cpuUsec": 45756018,
+              "pids": 12
+            },
+            "relay": {
+              "memBytes": 67567616,
+              "cpuUsec": 2877179,
+              "pids": 8
+            },
+            "egress-proxy": {
+              "memBytes": 63959040,
+              "cpuUsec": 1189064,
+              "pids": 12
+            },
+            "facilitator": {
+              "memBytes": 42512384,
+              "cpuUsec": 2165003,
+              "pids": 8
+            }
+          },
+          "metrics": {
+            "api": {
+              "sandbox_sessions_created_total": 15,
+              "sandbox_payment_verify_duration_seconds_bucket": 145,
+              "sandbox_payment_verify_duration_seconds_sum": 0.6710000000000005,
+              "sandbox_payment_verify_duration_seconds_count": 145,
+              "sandbox_payment_settle_duration_seconds_bucket": 145,
+              "sandbox_payment_settle_duration_seconds_sum": 0.6010000000000004,
+              "sandbox_payment_settle_duration_seconds_count": 145,
+              "sandbox_session_create_duration_seconds_bucket": 311,
+              "sandbox_session_create_duration_seconds_sum": 2.202999999999993,
+              "sandbox_session_create_duration_seconds_count": 311
+            },
+            "controller": {
+              "sandbox_exec_total": 152,
+              "sandbox_sessions_created_total": 138,
+              "sandbox_sessions_failed_total": 0,
+              "sandbox_sessions_active": 5,
+              "sandbox_provision_duration_seconds_bucket": 145,
+              "sandbox_provision_duration_seconds_sum": 24.02399999999999,
+              "sandbox_provision_duration_seconds_count": 145,
+              "sandbox_ready_duration_seconds_bucket": 145,
+              "sandbox_ready_duration_seconds_sum": 240.68899999999994,
+              "sandbox_ready_duration_seconds_count": 145,
+              "sandbox_exec_duration_seconds_bucket": 152,
+              "sandbox_exec_duration_seconds_sum": 5.01799999999998,
+              "sandbox_exec_duration_seconds_count": 152,
+              "sandbox_cleanup_duration_seconds_bucket": 140,
+              "sandbox_cleanup_duration_seconds_sum": 37.984,
+              "sandbox_cleanup_duration_seconds_count": 140,
+              "sandbox_reconcile_duration_seconds_bucket": 5071,
+              "sandbox_reconcile_duration_seconds_sum": 54.92900000000102,
+              "sandbox_reconcile_duration_seconds_count": 5071
+            },
+            "relay": {
+              "sandbox_relay_sessions": 5,
+              "sandbox_relay_pending_requests": 0
+            }
+          }
+        },
+        "dockerBefore": {
+          "name": "x402-sandbox-worker",
+          "cpu": 5.72,
+          "memBytes": 828270182.4,
+          "memLimit": 8320425394.176
+        },
+        "dockerAfter": {
+          "name": "x402-sandbox-worker",
+          "cpu": 3.83,
+          "memBytes": 906074521.6,
+          "memLimit": 8320425394.176
+        }
+      },
+      "phase": {
+        "wallMs": 239.01720800000112,
+        "opsPerSecond": 20.91899592434356,
+        "byKind": {
+          "compute": {
+            "count": 5,
+            "ok": 5,
+            "latency": {
+              "count": 5,
+              "min": 203.97237499999756,
+              "mean": 218.29235839999893,
+              "p50": 217.17983399999866,
+              "p90": 238.97750000000087,
+              "p95": 238.97750000000087,
+              "p99": 238.97750000000087,
+              "max": 238.97750000000087,
+              "stdev": 14.984935519213305
+            }
+          }
+        },
+        "errors": []
+      },
+      "teardownMs": {
+        "count": 5,
+        "min": 522.3416249999973,
+        "mean": 522.6793668000006,
+        "p50": 522.6448750000018,
+        "p90": 522.9751250000008,
+        "p95": 522.9751250000008,
+        "p99": 522.9751250000008,
+        "max": 522.9751250000008,
+        "stdev": 0.24185150756549373
+      },
+      "podsAfter": 0,
+      "notes": []
+    },
+    {
+      "level": 10,
+      "mode": "cpu",
+      "requested": {
+        "cpuMillis": 500,
+        "memoryMiB": 512,
+        "perSandboxMemoryBytes": 134217728
+      },
+      "created": 10,
+      "ready": 10,
+      "failed": 0,
+      "pending": 0,
+      "createMs": {
+        "count": 10,
+        "min": 25.218291999997746,
+        "mean": 33.299991799999404,
+        "p50": 33.483916999997746,
+        "p90": 38.19445799999812,
+        "p95": 39.581249999995634,
+        "p99": 39.581249999995634,
+        "max": 39.581249999995634,
+        "stdev": 4.531018092948502
+      },
+      "readyMs": {
+        "count": 10,
+        "min": 1368,
+        "mean": 1791.6,
+        "p50": 1405,
+        "p90": 2203,
+        "p95": 2210,
+        "p99": 2210,
+        "max": 2210,
+        "stdev": 425.20928180524623
+      },
+      "anonBytes": {
+        "count": 10,
+        "min": 8593408,
+        "mean": 8771174.4,
+        "p50": 8757248,
+        "p90": 8912896,
+        "p95": 8937472,
+        "p99": 8937472,
+        "max": 8937472,
+        "stdev": 124555.52195190349
+      },
+      "fileBytes": {
+        "count": 10,
+        "min": 4096,
+        "mean": 12697.6,
+        "p50": 4096,
+        "p90": 20480,
+        "p95": 24576,
+        "p99": 24576,
+        "max": 24576,
+        "stdev": 9148.752182067721
+      },
+      "pids": {
+        "count": 10,
+        "min": 9,
+        "mean": 9.7,
+        "p50": 10,
+        "p90": 10,
+        "p95": 10,
+        "p99": 10,
+        "max": 10,
+        "stdev": 0.483045891539648
+      },
+      "nodeMemBytes": 1348448256,
+      "workerDockerMemBytes": 994259763.2,
+      "nodeCpuPct": 5.451471053464093,
+      "infra": {
+        "before": {
+          "at": "2026-11-06T02:18:36.396Z",
+          "node": {
+            "memBytes": 1183338496,
+            "cpuUsec": 203954720
+          },
+          "components": {
+            "api": {
+              "memBytes": 45588480,
+              "cpuUsec": 4770687,
+              "pids": 12
+            },
+            "controller": {
+              "memBytes": 108011520,
+              "cpuUsec": 45964755,
+              "pids": 12
+            },
+            "relay": {
+              "memBytes": 67837952,
+              "cpuUsec": 2955461,
+              "pids": 8
+            },
+            "egress-proxy": {
+              "memBytes": 64208896,
+              "cpuUsec": 1197751,
+              "pids": 12
+            },
+            "facilitator": {
+              "memBytes": 42835968,
+              "cpuUsec": 2171880,
+              "pids": 8
+            }
+          },
+          "metrics": {
+            "api": {
+              "sandbox_sessions_created_total": 15,
+              "sandbox_payment_verify_duration_seconds_bucket": 145,
+              "sandbox_payment_verify_duration_seconds_sum": 0.6710000000000005,
+              "sandbox_payment_verify_duration_seconds_count": 145,
+              "sandbox_payment_settle_duration_seconds_bucket": 145,
+              "sandbox_payment_settle_duration_seconds_sum": 0.6010000000000004,
+              "sandbox_payment_settle_duration_seconds_count": 145,
+              "sandbox_session_create_duration_seconds_bucket": 311,
+              "sandbox_session_create_duration_seconds_sum": 2.202999999999993,
+              "sandbox_session_create_duration_seconds_count": 311
+            },
+            "controller": {
+              "sandbox_exec_total": 167,
+              "sandbox_sessions_created_total": 138,
+              "sandbox_sessions_failed_total": 0,
+              "sandbox_sessions_active": 0,
+              "sandbox_provision_duration_seconds_bucket": 145,
+              "sandbox_provision_duration_seconds_sum": 24.02399999999999,
+              "sandbox_provision_duration_seconds_count": 145,
+              "sandbox_ready_duration_seconds_bucket": 145,
+              "sandbox_ready_duration_seconds_sum": 240.68899999999994,
+              "sandbox_ready_duration_seconds_count": 145,
+              "sandbox_exec_duration_seconds_bucket": 167,
+              "sandbox_exec_duration_seconds_sum": 6.122999999999982,
+              "sandbox_exec_duration_seconds_count": 167,
+              "sandbox_cleanup_duration_seconds_bucket": 145,
+              "sandbox_cleanup_duration_seconds_sum": 39.306,
+              "sandbox_cleanup_duration_seconds_count": 145,
+              "sandbox_reconcile_duration_seconds_bucket": 5088,
+              "sandbox_reconcile_duration_seconds_sum": 55.16800000000104,
+              "sandbox_reconcile_duration_seconds_count": 5088
+            },
+            "relay": {
+              "sandbox_relay_sessions": 0,
+              "sandbox_relay_pending_requests": 0
+            }
+          }
+        },
+        "after": {
+          "at": "2026-11-06T02:18:48.364Z",
+          "node": {
+            "memBytes": 1352626176,
+            "cpuUsec": 207482644
+          },
+          "components": {
+            "api": {
+              "memBytes": 45379584,
+              "cpuUsec": 4870077,
+              "pids": 12
+            },
+            "controller": {
+              "memBytes": 111837184,
+              "cpuUsec": 46873336,
+              "pids": 12
+            },
+            "relay": {
+              "memBytes": 68096000,
+              "cpuUsec": 3062134,
+              "pids": 8
+            },
+            "egress-proxy": {
+              "memBytes": 64954368,
+              "cpuUsec": 1206536,
+              "pids": 12
+            },
+            "facilitator": {
+              "memBytes": 42934272,
+              "cpuUsec": 2217547,
+              "pids": 8
+            }
+          },
+          "metrics": {
+            "api": {
+              "sandbox_sessions_created_total": 15,
+              "sandbox_payment_verify_duration_seconds_bucket": 155,
+              "sandbox_payment_verify_duration_seconds_sum": 0.7250000000000005,
+              "sandbox_payment_verify_duration_seconds_count": 155,
+              "sandbox_payment_settle_duration_seconds_bucket": 155,
+              "sandbox_payment_settle_duration_seconds_sum": 0.6880000000000005,
+              "sandbox_payment_settle_duration_seconds_count": 155,
+              "sandbox_session_create_duration_seconds_bucket": 331,
+              "sandbox_session_create_duration_seconds_sum": 2.3919999999999924,
+              "sandbox_session_create_duration_seconds_count": 331
+            },
+            "controller": {
+              "sandbox_exec_total": 177,
+              "sandbox_sessions_created_total": 148,
+              "sandbox_sessions_failed_total": 0,
+              "sandbox_sessions_active": 10,
+              "sandbox_provision_duration_seconds_bucket": 155,
+              "sandbox_provision_duration_seconds_sum": 25.703999999999986,
+              "sandbox_provision_duration_seconds_count": 155,
+              "sandbox_ready_duration_seconds_bucket": 155,
+              "sandbox_ready_duration_seconds_sum": 258.4309999999999,
+              "sandbox_ready_duration_seconds_count": 155,
+              "sandbox_exec_duration_seconds_bucket": 177,
+              "sandbox_exec_duration_seconds_sum": 6.26799999999998,
+              "sandbox_exec_duration_seconds_count": 177,
+              "sandbox_cleanup_duration_seconds_bucket": 145,
+              "sandbox_cleanup_duration_seconds_sum": 39.306,
+              "sandbox_cleanup_duration_seconds_count": 145,
+              "sandbox_reconcile_duration_seconds_bucket": 5135,
+              "sandbox_reconcile_duration_seconds_sum": 56.180000000001044,
+              "sandbox_reconcile_duration_seconds_count": 5135
+            },
+            "relay": {
+              "sandbox_relay_sessions": 10,
+              "sandbox_relay_pending_requests": 0
+            }
+          }
+        },
+        "dockerBefore": {
+          "name": "x402-sandbox-worker",
+          "cpu": 5.91,
+          "memBytes": 827116748.8,
+          "memLimit": 8320425394.176
+        },
+        "dockerAfter": {
+          "name": "x402-sandbox-worker",
+          "cpu": 6.91,
+          "memBytes": 994259763.2,
+          "memLimit": 8320425394.176
+        }
+      },
+      "phase": {
+        "wallMs": 247.94920899999852,
+        "opsPerSecond": 40.330840498870316,
+        "byKind": {
+          "compute": {
+            "count": 10,
+            "ok": 10,
+            "latency": {
+              "count": 10,
+              "min": 204.0080839999937,
+              "mean": 230.04381669999856,
+              "p50": 234.46033299999544,
+              "p90": 247.0857909999977,
+              "p95": 247.87075000000186,
+              "p99": 247.87075000000186,
+              "max": 247.87075000000186,
+              "stdev": 16.496706543958133
+            }
+          }
+        },
+        "errors": []
+      },
+      "teardownMs": {
+        "count": 10,
+        "min": 524.9646250000005,
+        "mean": 705.5656749999995,
+        "p50": 782.1357080000016,
+        "p90": 783.0015419999982,
+        "p95": 783.1058750000011,
+        "p99": 783.1058750000011,
+        "max": 783.1058750000011,
+        "stdev": 124.00110125163053
+      },
+      "podsAfter": 0,
+      "notes": []
+    }
+  ],
+  "measuredAt": "2026-11-06T02:18:50.499Z"
+}

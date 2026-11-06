@@ -1,0 +1,20 @@
+{
+  "runId": "final-reliability",
+  "scenario": "reliability",
+  "finishedAt": "2026-11-06T02:46:42.227Z",
+  "notes": [
+    "2026-11-06T02:39:54.723Z start reliability; host=Darwin 27.2.0/arm64 docker=14cpu/7.7GiB kvm=false",
+    "2026-11-06T02:40:02.542Z concurrent_create_20: ok=true  created=20 errors=[]",
+    "2026-11-06T02:40:04.969Z repeated_exec_100: ok=true  failures=0 p50_first=6.4ms p50_last=5.7ms drift=-0.7128749999992579ms",
+    "2026-11-06T02:40:12.112Z expiry_during_exec: ok=true  pod gone 5.85s after lease start; exec returned",
+    "2026-11-06T02:42:18.978Z controller_restart_under_load: ok=false  recovery 120.29s, exec errors during outage 377, probe after=false",
+    "2026-11-06T02:44:23.971Z relay_restart: ok=false  exec after restart: session_not_usable; session state before destroy: FAILED",
+    "2026-11-06T02:46:29.001Z api_restart_inflight: ok=false  in-flight created=10 errors=0; api back=false; new create=true",
+    "2026-11-06T02:46:31.360Z cancellation: ok=true  cancelled=true, session usable after=true",
+    "2026-11-06T02:46:35.622Z client_disconnect: ok=true  result recovered by request id",
+    "2026-11-06T02:46:42.047Z pod_killed_while_ready: ok=true  state after pod kill: FAILED (waited 60s)",
+    "2026-11-06T02:46:42.150Z orphan_check: ok=true  0 sandbox pod(s) remain",
+    "2026-11-06T02:46:42.227Z cleanup: swept 0 leftover sandbox pod(s)"
+  ],
+  "exitCode": 0
+}

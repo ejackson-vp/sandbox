@@ -46,6 +46,8 @@ export interface ApiConfig {
   publicBaseUrl: string;
   requestTimeoutMs: number;
   intentStaleMs: number;
+  createRateBurst: number;
+  createRateRefill: number;
   tiers: TierTable;
   platformLimits: PlatformLimits;
 }
@@ -110,6 +112,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     publicBaseUrl: env.PUBLIC_BASE_URL ?? `http://localhost:${env.PORT ?? "3000"}`,
     requestTimeoutMs: int(env.REQUEST_TIMEOUT_MS, 180_000, 1000, 600_000),
     intentStaleMs: int(env.PAYMENT_INTENT_STALE_MS, 30_000, 1000, 600_000),
+    createRateBurst: int(env.CREATE_RATE_BURST, 30, 1, 100_000),
+    createRateRefill: int(env.CREATE_RATE_REFILL, 1, 1, 100_000),
     tiers: loadTiers(env),
     platformLimits: loadPlatformLimits(env),
   };

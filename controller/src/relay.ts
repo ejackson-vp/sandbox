@@ -23,6 +23,7 @@ import type {
   RelaySessionState,
   RelayShutdownMessage,
 } from "@x402s/shared";
+import { metrics } from "@x402s/shared";
 import { log } from "./log.js";
 import { constantTimeEqual, sha256Hex } from "./tokens.js";
 
@@ -45,6 +46,7 @@ interface Entry {
   ws: WebSocket | null;
   connectedAt: number | null;
   hello: AttestationEnvelope | null;
+  helloAt: number | null;
   pending: Map<string, { at: number; waiter?: (v: { envelope: string } | { error: string } | null) => void }>;
   responses: Map<string, CachedResponse>;
   lastError: { code: string; message: string } | null;
@@ -103,6 +105,17 @@ export function createRelay(opts: RelayOptions): RelayServer {
     res.json({ ok: true, sessions: entries.size });
   });
 
+  app.get("/metrics", (_req, res) => {
+    const sessions = metrics.gauge("sandbox_relay_sessions", "Registered relay sessions");
+    const pending = metrics.gauge("sandbox_relay_pending_requests", "Requests awaiting a guest response");
+    let pendingTotal = 0;
+    for (const entry of entries.values()) pendingTotal += entry.pending.size;
+    sessions.set({}, entries.size);
+    pending.set({}, pendingTotal);
+    res.setHeader("content-type", "text/plain; version=0.0.4");
+    res.send(metrics.render());
+  });
+
   app.post("/internal/register", requireAdmin, (req, res) => {
     const { sessionId, tokenHash, ttlMs } = req.body ?? {};
     if (typeof sessionId !== "string" || typeof tokenHash !== "string") {
@@ -125,6 +138,7 @@ export function createRelay(opts: RelayOptions): RelayServer {
       ws: null,
       connectedAt: null,
       hello: null,
+      helloAt: existing?.helloAt ?? null,
       pending: existing?.pending ?? new Map(),
       responses: existing?.responses ?? new Map(),
       lastError: null,
@@ -143,6 +157,7 @@ export function createRelay(opts: RelayOptions): RelayServer {
       connected: Boolean(entry.ws && entry.ws.readyState === 1),
       pending: entry.pending.size,
       ...(entry.hello ? { attestation: entry.hello } : {}),
+      ...(entry.helloAt ? { helloAt: entry.helloAt } : {}),
       ...(entry.lastError ? { error: entry.lastError.message } : {}),
     };
     res.json(state);
@@ -375,6 +390,7 @@ export function createRelay(opts: RelayOptions): RelayServer {
             return;
           }
           entry.hello = evidence;
+          entry.helloAt = Date.now();
           clearTimeout(helloTimer);
           log.info("relay_guest_ready", {
             sessionId: entry.sessionId,

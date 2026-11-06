@@ -11,7 +11,7 @@
  * Deadline enforcement never depends on the untrusted guest cooperating: the
  * controller's clock decides, and pod deletion is the backstop.
  */
-import type { RelaySessionState } from "@x402s/shared";
+import { LATENCY_BUCKETS, metrics, type RelaySessionState } from "@x402s/shared";
 import type { ControllerConfig } from "./config.js";
 import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
@@ -33,6 +33,11 @@ export interface ReconcilerDeps {
 export class Reconciler {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private wakeRequested = false;
+  /** Last pod-health probe per session (guards K8s API traffic). */
+  private readonly healthCheckedAt = new Map<string, number>();
+  /** Consecutive *successful* probes reporting a missing/terminal pod. */
+  private readonly healthStrikes = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(private readonly deps: ReconcilerDeps) {
@@ -52,9 +57,23 @@ export class Reconciler {
     this.timer = null;
   }
 
+  /**
+   * Event-driven nudge: reconcile now instead of waiting for the next tick.
+   * Used after entitlement creation and destroy requests so provisioning and
+   * cleanup do not pay a full poll interval.
+   */
+  wake(): void {
+    if (this.running) {
+      this.wakeRequested = true;
+      return;
+    }
+    void this.tick();
+  }
+
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    const started = Date.now();
     try {
       for (const session of this.deps.store.listNonTerminal()) {
         try {
@@ -73,10 +92,21 @@ export class Reconciler {
         this.deps.store.clearPod(session.id);
       }
       await this.sweepOrphanPods();
+      const active = this.deps.store
+        .listNonTerminal()
+        .filter((s) => s.state === "READY" || s.state === "ACTIVE").length;
+      metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE").set({}, active);
     } catch (err) {
       log.error("reconcile_pass_failed", { error: (err as Error).message });
     } finally {
+      metrics
+        .histogram("sandbox_reconcile_duration_seconds", "Reconcile pass duration", LATENCY_BUCKETS)
+        .observe((Date.now() - started) / 1000);
       this.running = false;
+      if (this.wakeRequested) {
+        this.wakeRequested = false;
+        void this.tick();
+      }
     }
   }
 
@@ -117,6 +147,10 @@ export class Reconciler {
       return;
     }
 
+    this.deps.store.mergeTimings(session.id, {
+      provisionStartAt: Date.now(),
+      podRequestedAt: Date.now(),
+    });
     const guestToken = newOpaqueToken(32);
     const tokenHash = sha256Hex(guestToken);
     const ttlMs =
@@ -134,6 +168,7 @@ export class Reconciler {
     const relayUrl = `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(session.id)}`;
     const proxyUrl = `http://${proxyAddr.host}:${proxyAddr.port}`;
 
+    const createStarted = Date.now();
     const { podName } = await this.deps.provisioner.createPod({
       sessionId: session.id,
       leaseSeconds: session.durationSeconds,
@@ -154,6 +189,10 @@ export class Reconciler {
     });
 
     this.deps.store.setProvisioning(session.id, podName);
+    this.deps.store.mergeTimings(session.id, { podCreateCallMs: Date.now() - createStarted });
+    metrics
+      .histogram("sandbox_provision_duration_seconds", "Entitlement to pod create", LATENCY_BUCKETS)
+      .observe((Date.now() - (session.paidAt ?? session.createdAt)) / 1000);
     log.info("sandbox_provisioning", {
       sessionId: session.id,
       podName,
@@ -195,6 +234,20 @@ export class Reconciler {
             state.attestation.guestPublicKey,
           );
           if (ok) {
+            const podInfo = session.podName
+              ? await this.deps.provisioner.getPod(session.podName).catch(() => null)
+              : null;
+            this.deps.store.mergeTimings(session.id, {
+              podCreatedAt: podInfo?.createdAt,
+              podScheduledAt: podInfo?.scheduledAt,
+              containerStartedAt: podInfo?.startedAt,
+              guestHelloAt: state.helloAt ?? readyAt,
+              readyAt,
+              leaseExpiresAt,
+            });
+            metrics
+              .histogram("sandbox_ready_duration_seconds", "Entitlement to READY", LATENCY_BUCKETS)
+              .observe((readyAt - (session.paidAt ?? session.createdAt)) / 1000);
             log.info("sandbox_ready", {
               sessionId: session.id,
               evidenceType: state.attestation.evidenceType,
@@ -210,6 +263,13 @@ export class Reconciler {
 
     if (session.podName) {
       const pod = await this.deps.provisioner.getPod(session.podName).catch(() => null);
+      if (pod && pod.phase === "Running") {
+        // Record the first observation of a running container (tick resolution).
+        const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
+        if (!timings.podRunningObservedAt) {
+          this.deps.store.mergeTimings(session.id, { podRunningObservedAt: this.now() });
+        }
+      }
       if (pod && (pod.phase === "Failed" || pod.phase === "Succeeded")) {
         this.deps.store.requestTermination(session.id, "failure:pod_terminated", {
           code: "pod_terminated",
@@ -224,6 +284,38 @@ export class Reconciler {
       this.deps.store.requestTermination(session.id, "client_destroy");
       return;
     }
+
+    // Detect a dead guest/pod between operations (crash, OOM, relay loss).
+    // Probed at most every 2s per session to bound Kubernetes API traffic.
+    //
+    // Safety: a *failed probe* (API timeout, 429, connection reset) must never
+    // terminate a paid session. Only a successful read that reports the pod
+    // missing or terminal counts, and it must happen twice in a row. This was
+    // found by the density benchmark: an earlier version treated a transient
+    // Kubernetes error as "pod gone" and mass-terminated 20 sessions.
+    const readyAt = session.readyAt ?? 0;
+    if (session.podName && this.now() - readyAt > 2000 && this.now() - (this.healthCheckedAt.get(session.id) ?? 0) > 2000) {
+      this.healthCheckedAt.set(session.id, this.now());
+      try {
+        const pod = await this.deps.provisioner.getPod(session.podName);
+        if (!pod || pod.phase === "Failed" || pod.phase === "Succeeded") {
+          const strikes = (this.healthStrikes.get(session.id) ?? 0) + 1;
+          this.healthStrikes.set(session.id, strikes);
+          if (strikes >= 2) {
+            this.deps.store.requestTermination(session.id, "failure:guest_exited", {
+              code: "guest_exited",
+              message: "the sandbox guest exited before the lease ended",
+            });
+            this.healthStrikes.delete(session.id);
+            return;
+          }
+        } else {
+          this.healthStrikes.delete(session.id);
+        }
+      } catch (err) {
+        log.warn("pod_health_probe_failed", { sessionId: session.id, error: (err as Error).message });
+      }
+    }
     const deadline = session.leaseExpiresAt;
     if (deadline === null) return;
     const now = this.now();
@@ -234,6 +326,7 @@ export class Reconciler {
   }
 
   private async terminate(session: SessionRecord): Promise<void> {
+    const cleanupStarted = session.terminatingAt ?? this.now();
     // Ask the guest to stop so it can kill descendants before the pod goes away.
     try {
       await this.deps.relay.shutdown(session.id, session.terminationReason ?? "terminated");
@@ -253,7 +346,23 @@ export class Reconciler {
         log.warn("relay_purge_failed", { sessionId: session.id, error: (err as Error).message });
       }
     }
+    const cleanupMs = Date.now() - cleanupStarted;
+    this.deps.store.mergeTimings(session.id, {
+      terminationStartedAt: cleanupStarted,
+      podDeletedAt: Date.now(),
+      cleanupMs,
+    });
+    metrics
+      .histogram("sandbox_cleanup_duration_seconds", "TERMINATING to cleanup complete", LATENCY_BUCKETS)
+      .observe(cleanupMs / 1000);
+    this.healthCheckedAt.delete(session.id);
+    this.healthStrikes.delete(session.id);
     const finalState = this.deps.store.finalizeTermination(session.id);
+    if (finalState === "FAILED" || finalState === "EXPIRED") {
+      metrics
+        .counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED")
+        .inc({ final_state: finalState, reason: (session.terminationReason ?? "unknown").split(":")[0]! });
+    }
     log.info("sandbox_destroyed", {
       sessionId: session.id,
       state: finalState ?? "unknown",

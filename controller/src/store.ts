@@ -14,7 +14,7 @@ import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared";
 
 export type { SessionState };
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export interface PaymentRecord {
   paymentKey: string;
@@ -57,6 +57,7 @@ export interface SessionRecord {
   activeRequestId: string | null;
   relayPurgedAt: number | null;
   destroyRequested: number;
+  timingsJson: string | null;
   updatedAt: number;
 }
 
@@ -107,7 +108,7 @@ const SESSION_COLUMNS = `
   destroyed_at, termination_reason, failure_code, failure_message,
   attestation_json, guest_public_key, payment_key, pod_name, runtime_class,
   execution_mode, relay_token_hash, active_request_id, relay_purged_at,
-  destroy_requested, updated_at
+  destroy_requested, timings_json, updated_at
 `;
 
 interface RawSession {
@@ -145,6 +146,7 @@ interface RawSession {
   active_request_id: string | null;
   relay_purged_at: number | null;
   destroy_requested: number;
+  timings_json: string | null;
   updated_at: number;
 }
 
@@ -186,6 +188,7 @@ function mapSession(r: RawSession): SessionRecord {
     activeRequestId: r.active_request_id,
     relayPurgedAt: r.relay_purged_at,
     destroyRequested: r.destroy_requested,
+    timingsJson: r.timings_json,
     updatedAt: r.updated_at,
   };
 }
@@ -280,6 +283,7 @@ export class Store {
         active_request_id TEXT,
         relay_purged_at INTEGER,
         destroy_requested INTEGER NOT NULL DEFAULT 0,
+        timings_json TEXT,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS exec_requests (
@@ -356,6 +360,9 @@ export class Store {
       ),
       markRelayPurged: this.db.prepare("UPDATE sessions SET relay_purged_at = ?, updated_at = ? WHERE id = ?"),
       clearPod: this.db.prepare("UPDATE sessions SET pod_name = NULL, updated_at = ? WHERE id = ?"),
+      mergeTimings: this.db.prepare(
+        "UPDATE sessions SET timings_json = json_patch(COALESCE(timings_json, '{}'), ?), updated_at = ? WHERE id = ?",
+      ),
       clearActive: this.db.prepare(
         "UPDATE sessions SET active_request_id = NULL, updated_at = ? WHERE id = ? AND active_request_id = ?",
       ),
@@ -573,6 +580,16 @@ export class Store {
 
   clearPod(id: string): void {
     this.stmts.clearPod!.run(Date.now(), id);
+  }
+
+  /** Atomically merge lifecycle timings (JSON patch semantics). */
+  mergeTimings(id: string, patch: Record<string, number | undefined>): void {
+    const clean: Record<string, number> = {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (typeof value === "number" && Number.isFinite(value)) clean[key] = value;
+    }
+    if (Object.keys(clean).length === 0) return;
+    this.stmts.mergeTimings!.run(JSON.stringify(clean), Date.now(), id);
   }
 
   /* ---------------- operations ---------------- */

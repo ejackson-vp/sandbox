@@ -105,10 +105,22 @@ export class LocalProvisioner implements Provisioner {
     rmSync(pod.workDir, { recursive: true, force: true });
   }
 
-  async getPod(podName: string): Promise<{ phase: string; deleted: boolean } | null> {
+  async getPod(podName: string): Promise<{
+    phase: string;
+    deleted: boolean;
+    createdAt?: number;
+    scheduledAt?: number;
+    startedAt?: number;
+  } | null> {
     const pod = this.pods.get(podName);
     if (!pod) return null;
-    return { phase: pod.phase, deleted: false };
+    return {
+      phase: pod.phase,
+      deleted: false,
+      createdAt: pod.createdAt,
+      scheduledAt: pod.createdAt,
+      startedAt: pod.createdAt,
+    };
   }
 
   async listSandboxPods(): Promise<Array<{ name: string; sessionId: string; createdAt: number; phase: string }>> {

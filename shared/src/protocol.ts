@@ -112,6 +112,37 @@ export interface CreateSessionResponse {
   payment: PaymentSummary;
 }
 
+/**
+ * Per-session lifecycle timings captured by the control plane. Used by the
+ * benchmark harness and exposed on the status endpoint (no customer data).
+ */
+export interface SessionTimings {
+  /** Epoch ms when the API handler started processing the create request. */
+  apiReceivedAt?: number;
+  paymentVerifyMs?: number;
+  paymentSettleMs?: number;
+  /** API: create request start -> 201 written. */
+  entitlementMs?: number;
+  /** Controller: entitlement row visible -> pod create call. */
+  provisionStartAt?: number;
+  podRequestedAt?: number;
+  /** Controller: duration of the Kubernetes create-pod API call. */
+  podCreateCallMs?: number;
+  /** Controller: first poll where the pod phase was Running / container started. */
+  podRunningObservedAt?: number;
+  podCreatedAt?: number;
+  podScheduledAt?: number;
+  containerStartedAt?: number;
+  /** Relay: timestamp when the guest hello arrived. */
+  guestHelloAt?: number;
+  readyAt?: number;
+  leaseExpiresAt?: number;
+  terminationStartedAt?: number;
+  podDeletedAt?: number;
+  /** Controller: TERMINATING -> final state. */
+  cleanupMs?: number;
+}
+
 export interface SessionStatus {
   sessionId: string;
   state: SessionState;
@@ -136,6 +167,7 @@ export interface SessionStatus {
   executionMode?: ExecutionMode;
   /** True while a command/file operation is in flight. */
   busy: boolean;
+  timings?: SessionTimings;
 }
 
 /* ------------------------------------------------------------------ */
@@ -381,6 +413,8 @@ export interface RelaySessionState {
   attestation?: AttestationEnvelope;
   /** Number of requests awaiting a response. */
   pending: number;
+  /** When the hello frame was received (epoch ms). */
+  helloAt?: number;
   error?: string;
 }
 

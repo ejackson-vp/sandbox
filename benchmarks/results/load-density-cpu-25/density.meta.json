@@ -1,0 +1,14 @@
+{
+  "runId": "load-density-cpu-25",
+  "scenario": "density",
+  "finishedAt": "2026-11-06T02:33:55.352Z",
+  "notes": [
+    "2026-11-06T02:33:33.687Z start density; host=Darwin 27.2.0/arm64 docker=14cpu/7.7GiB kvm=false",
+    "2026-11-06T02:33:33.814Z worker allocatable: 7935MiB / 14.0 cores / 110 pods; already requested 10MiB / 0.10 cores",
+    "2026-11-06T02:33:33.814Z per-sandbox request: 125m CPU, 128MiB memory",
+    "2026-11-06T02:33:33.814Z level 25 (cpu): cleaning up",
+    "2026-11-06T02:33:52.342Z scenario failed: guest disconnected",
+    "2026-11-06T02:33:55.352Z cleanup: swept 23 leftover sandbox pod(s)"
+  ],
+  "exitCode": 1
+}

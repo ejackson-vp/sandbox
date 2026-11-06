@@ -28,7 +28,7 @@ implemented **and** covered by tests in this repository.
 | Proxy SSRF (private IPs, rebinding, IPv6, metadata) | Proxy resolves + validates every IP, pins the validated IP, denies private/metadata/ULA/link-local/cluster/mapped forms | Same | Same |
 | Exfiltrate via DNS | No usable DNS (`dnsPolicy: None`, black-hole resolver, policy deny) | Same | Same |
 | Persist data / leave processes | Workspace is memory `emptyDir`; process group killed per command; pod deleted at termination; no PVC/hostPath | Same | Same |
-| Fork bomb / disk exhaustion | CPU/memory limits, `pod-max-pids`, `RLIMIT_NPROC`, disk quota, per-file cap, per-command timeout, lease cap | Same | Same |
+| Fork bomb / disk exhaustion | CPU/memory limits, per-pod `pod-max-pids` cgroup cap, disk quota, per-file cap, per-command timeout, lease cap | Same | Same |
 | Archive traversal / symlink escape | Path canonicalisation, symlink-parent rejection, `O_NOFOLLOW`, tar entry validation | Same | Same |
 | Read another session's data | Separate pod, keys, relay entry, capability; no shared volumes | Same | Same + memory encryption |
 | Guess/replay another capability | 256-bit random-ish HMAC, SHA-256 stored, scoped by session, TTL, constant-time compare | Same | Same |

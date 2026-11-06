@@ -6,3 +6,4 @@ export * from "./payment.js";
 export * from "./tiers.js";
 export * from "./ip.js";
 export * from "./log.js";
+export * from "./metrics.js";

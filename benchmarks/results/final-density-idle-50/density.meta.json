@@ -1,0 +1,14 @@
+{
+  "runId": "final-density-idle-50",
+  "scenario": "density",
+  "finishedAt": "2026-11-06T02:37:29.025Z",
+  "notes": [
+    "2026-11-06T02:36:44.164Z start density; host=Darwin 27.2.0/arm64 docker=14cpu/7.7GiB kvm=false",
+    "2026-11-06T02:36:44.303Z worker allocatable: 7935MiB / 14.0 cores / 110 pods; already requested 10MiB / 0.10 cores",
+    "2026-11-06T02:36:44.303Z per-sandbox request: 125m CPU, 128MiB memory",
+    "2026-11-06T02:36:44.303Z level 50 (idle): cleaning up",
+    "2026-11-06T02:37:28.937Z level 50: ready 50/50, anon/sandbox 8.3 MiB, node 1.8 GiB, teardown 341.6ms",
+    "2026-11-06T02:37:29.025Z cleanup: swept 0 leftover sandbox pod(s)"
+  ],
+  "exitCode": 0
+}

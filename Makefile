@@ -24,6 +24,8 @@ help:
 	@echo "  make demo-timeout   demonstrate the per-command timeout"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
+	@echo "  make benchmark-smoke / benchmark-startup / benchmark-density / benchmark-workloads"
+	@echo "  make benchmark-reliability / benchmark-report"
 	@echo "  make logs           tail control-plane logs"
 	@echo "  make down           delete the kind cluster"
 	@echo ""
@@ -86,6 +88,33 @@ test-unit:
 
 test-integration: cli guest
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest npx vitest run tests/integration
+
+# ---------------------------------------------------------------- benchmarks
+BENCH := npx tsx benchmarks/harness/cli.ts
+
+benchmark-smoke:
+	$(BENCH) smoke
+
+benchmark-startup:
+	$(BENCH) startup --samples $(or $(SAMPLES),100)
+
+benchmark-startup-cold:
+	$(BENCH) startup --cold --image-ref $(IMAGE_REF) --samples $(or $(SAMPLES),10)
+
+benchmark-density:
+	$(BENCH) density --levels $(or $(LEVELS),1,5,10,25) --mode $(or $(MODE),idle) --max $(or $(MAX),25)
+
+benchmark-density-stress:
+	$(BENCH) density --levels $(or $(LEVELS),50) --mode $(or $(MODE),idle) --max $(or $(MAX),50) --yes
+
+benchmark-workloads:
+	$(BENCH) workloads
+
+benchmark-reliability:
+	$(BENCH) reliability
+
+benchmark-report:
+	python3 benchmarks/analysis/analyze.py --results benchmarks/results
 
 security-test: security-network
 

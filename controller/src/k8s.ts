@@ -32,7 +32,14 @@ export interface SandboxPodSpec {
 export interface Provisioner {
   createPod(spec: SandboxPodSpec): Promise<{ podName: string }>;
   deletePod(podName: string, gracePeriodSeconds?: number): Promise<void>;
-  getPod(podName: string): Promise<{ phase: string; deleted: boolean; imageID?: string } | null>;
+  getPod(podName: string): Promise<{
+    phase: string;
+    deleted: boolean;
+    imageID?: string;
+    createdAt?: number;
+    scheduledAt?: number;
+    startedAt?: number;
+  } | null>;
   listSandboxPods(): Promise<Array<{ name: string; sessionId: string; createdAt: number; phase: string }>>;
   getServiceAddress(name: string): Promise<{ host: string; port: number } | null>;
 }
@@ -240,14 +247,32 @@ export class KubeProvisioner implements Provisioner {
     }
   }
 
-  async getPod(podName: string): Promise<{ phase: string; deleted: boolean; imageID?: string } | null> {
+  async getPod(podName: string): Promise<{
+    phase: string;
+    deleted: boolean;
+    imageID?: string;
+    createdAt?: number;
+    scheduledAt?: number;
+    startedAt?: number;
+  } | null> {
     try {
       const pod = await this.core.readNamespacedPod({ name: podName, namespace: this.namespace });
       const statuses = pod.status?.containerStatuses ?? [];
+      const scheduled = pod.status?.conditions?.find((c) => c.type === "PodScheduled")?.lastTransitionTime;
+      const started = statuses.find((s) => s.name === "guest")?.state?.running?.startedAt
+        ?? statuses[0]?.state?.running?.startedAt;
+      const ms = (value: unknown): number | undefined => {
+        if (!value) return undefined;
+        const t = new Date(value as string).getTime();
+        return Number.isFinite(t) ? t : undefined;
+      };
       return {
         phase: pod.status?.phase ?? "Unknown",
         deleted: Boolean(pod.metadata?.deletionTimestamp),
         imageID: statuses[0]?.imageID,
+        createdAt: ms(pod.metadata?.creationTimestamp),
+        scheduledAt: ms(scheduled),
+        startedAt: ms(started),
       };
     } catch (err) {
       if ((err as { code?: number }).code === 404) return null;

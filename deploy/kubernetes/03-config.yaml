@@ -15,6 +15,9 @@ data:
   # --- api ----------------------------------------------------------------
   PUBLIC_BASE_URL: "http://localhost:8080"
   CAPABILITY_GRACE_SECONDS: "900"
+  # Admission control: 30-request burst, 1/s sustained per source.
+  CREATE_RATE_BURST: "30"
+  CREATE_RATE_REFILL: "1"
 
   # --- controller ---------------------------------------------------------
   CONTROLLER_URL: "http://controller.sandbox-system.svc.cluster.local:3001"

@@ -11,7 +11,9 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
 import {
+  LATENCY_BUCKETS,
   MAX_LEASE_SECONDS,
+  metrics,
   canonicalJson,
   resolveSessionSpec,
   specHash as computeSpecHash,
@@ -23,6 +25,11 @@ import type { ControllerConfig } from "./config.js";
 import type { Store } from "./store.js";
 import type { RelayClient } from "./relay-client.js";
 import { constantTimeEqual } from "./tokens.js";
+
+const OP_LABELS = new Set(["exec", "file.put", "file.get", "file.list", "file.stat"]);
+function opLabel(op: string | undefined): string {
+  return op && OP_LABELS.has(op) ? op : "other";
+}
 import { PaymentAlreadyRedeemedError } from "./store.js";
 import { log } from "./log.js";
 
@@ -48,6 +55,15 @@ const specSchema = z.object({
   }),
 });
 
+const timingsSchema = z
+  .object({
+    apiReceivedAt: z.number().int().optional(),
+    paymentVerifyMs: z.number().nonnegative().max(600_000).optional(),
+    paymentSettleMs: z.number().nonnegative().max(600_000).optional(),
+    entitlementMs: z.number().nonnegative().max(600_000).optional(),
+  })
+  .optional();
+
 const completeSchema = z.object({
   sessionId: z.string().regex(sessionIdPattern),
   capabilityHash: z.string().regex(/^[0-9a-f]{64}$/),
@@ -55,6 +71,7 @@ const completeSchema = z.object({
   spec: specSchema,
   clientPublicKey: z.string().min(40).max(64),
   clientNonce: z.string().min(40).max(64),
+  timings: timingsSchema,
   payment: z.object({
     paymentKey: z.string().regex(/^[0-9a-f]{64}$/),
     network: z.string().min(3).max(64),
@@ -79,6 +96,8 @@ export interface ControlApiDeps {
   cfg: ControllerConfig;
   store: Store;
   relay: RelayClient;
+  /** Optional event-driven nudge (the reconciler is not started in unit tests). */
+  wake?: () => void;
 }
 
 export function createControlApi(deps: ControlApiDeps): express.Express {
@@ -89,6 +108,21 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
 
   app.get("/internal/healthz", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  app.post("/internal/wake", (req, res) => {
+    if (!cfg.adminToken || !constantTimeEqual(req.header("x-internal-token") ?? "", cfg.adminToken)) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    deps.wake?.();
+    res.status(202).json({ ok: true });
+  });
+
+  // Aggregate metrics only (no session ids, no payloads). Scraped internally.
+  app.get("/metrics", (_req, res) => {
+    res.setHeader("content-type", "text/plain; version=0.0.4");
+    res.send(metrics.render());
   });
 
   app.use("/internal", (req: Request, res: Response, next: NextFunction) => {
@@ -131,6 +165,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       runtimeClass: session.runtimeClass ?? undefined,
       executionMode: session.executionMode ?? undefined,
       busy: session.activeRequestId !== null,
+      timings: session.timingsJson ? JSON.parse(session.timingsJson) : undefined,
       payment: {
         paymentKey: payment?.paymentKey ?? session.paymentKey,
         network: payment?.network ?? "unknown",
@@ -287,9 +322,16 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
           activeRequestId: null,
           relayPurgedAt: null,
           destroyRequested: 0,
+          timingsJson: null,
           updatedAt: now,
         },
       );
+      if (body.timings) {
+        store.mergeTimings(body.sessionId, body.timings);
+      }
+      metrics.counter("sandbox_sessions_created_total", "Entitlements created").inc({
+        tier: spec.tier,
+      });
     } catch (err) {
       if (err instanceof PaymentAlreadyRedeemedError) {
         const existing = store.getPaymentIntent(paymentKey);
@@ -333,6 +375,16 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       return;
     }
     const { requestId, envelope, op } = parsed.data;
+    const operationStarted = Date.now();
+    res.on("finish", () => {
+      const label = opLabel(op);
+      metrics
+        .histogram("sandbox_exec_duration_seconds", "Operation duration (controller view)", LATENCY_BUCKETS)
+        .observe((Date.now() - operationStarted) / 1000, { op: label });
+      metrics
+        .counter("sandbox_exec_total", "Operations by result")
+        .inc({ op: label, result: res.statusCode < 300 ? (res.statusCode === 202 ? "pending" : "ok") : "error" });
+    });
 
     const session = store.getSession(id);
     if (!session) {
@@ -471,6 +523,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       return;
     }
     store.requestDestroy(id);
+    deps.wake?.();
     log.info("session_destroy_requested", { sessionId: id, state: session.state });
     res.json({ state: store.getSession(id)?.state ?? session.state });
   });

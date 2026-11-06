@@ -25,7 +25,7 @@ raised by a request. `ALLOW_CUSTOM_DURATIONS` exists for development and tests.
 | Disk | `emptyDir` `sizeLimit` (tier + 32 MiB) **and** the guest's own quota (`diskMiB`) |
 | Output | guest truncates stdout/stderr at `maxOutputBytes` (256 KiB default) |
 | File size | guest rejects payloads/archives above `maxFileBytes` (8 MiB default) |
-| Processes | pod-level `pod-max-pids` (1024) + guest `RLIMIT_NPROC` (`maxProcesses`) |
+| Processes | pod-level `pod-max-pids` (1024) per sandbox; `maxProcesses` is advisory (a per-UID `RLIMIT_NPROC` would be node-wide because all sandboxes share a UID) |
 | Command time | guest watchdog (`min(requested, remaining lease, maxCommandSeconds)`) |
 | Concurrency | one active operation per session (controller gate) |
 

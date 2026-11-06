@@ -254,8 +254,21 @@ export class SandboxClient {
   async waitForReady(handle: SessionHandle, timeoutMs = 180_000): Promise<SessionStatus> {
     const deadline = Date.now() + timeoutMs;
     let last: SessionStatus | undefined;
+    // Adaptive polling: fast for the first ~0.6s (covers typical warm starts),
+    // then back off to keep API read pressure bounded at high fan-out.
+    let polls = 0;
     while (Date.now() < deadline) {
-      last = await this.status(handle);
+      try {
+        last = await this.status(handle);
+      } catch (err) {
+        // Under high fan-out the API's read limiter can reject status polls.
+        // Treat that as transient rather than failing the session.
+        if (err instanceof SandboxError && err.code === "rate_limited") {
+          await sleep(250);
+          continue;
+        }
+        throw err;
+      }
       if (last.state === "READY" || last.state === "ACTIVE") break;
       if (last.state === "EXPIRED" || last.state === "DESTROYED") {
         throw new SessionExpiredError(`session is ${last.state}`);
@@ -266,7 +279,7 @@ export class SandboxClient {
           `session ended before it became ready (${last.state}${last.failure ? `: ${last.failure.code}` : ""})`,
         );
       }
-      await sleep(250);
+      await sleep(polls++ < 8 ? 75 : 200);
     }
     if (!last || (last.state !== "READY" && last.state !== "ACTIVE")) {
       throw new SandboxError("ready_timeout", "sandbox did not become ready in time");
@@ -304,15 +317,20 @@ export class SandboxClient {
     if (this.store) this.forgetLocal(handle.sessionId);
     const deadline = Date.now() + waitMs;
     let last: SessionStatus | null = null;
+    let polls = 0;
     while (Date.now() < deadline) {
       try {
         last = await this.status(handle);
         if (["DESTROYED", "EXPIRED", "FAILED"].includes(last.state)) return last;
       } catch (err) {
         if (err instanceof SessionExpiredError) return null;
+        if (err instanceof SandboxError && err.code === "rate_limited") {
+          await sleep(100);
+          continue;
+        }
         throw err;
       }
-      await sleep(250);
+      await sleep(polls++ < 10 ? 100 : 250);
     }
     return last;
   }

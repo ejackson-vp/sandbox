@@ -18,6 +18,7 @@ import type { Network, PaymentRequirements } from "@x402/core/types";
 import { decodePaymentSignatureHeader, encodePaymentRequiredHeader } from "@x402/core/http";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import {
+  LATENCY_BUCKETS,
   MAX_LEASE_SECONDS,
   MOCK_NETWORK,
   MockExactServerScheme,
@@ -26,6 +27,7 @@ import {
   paymentKey,
   resolveSessionSpec,
   safeEqualHex,
+  metrics,
   sha256Hex,
   specHash,
   type CreateSessionRequest,
@@ -176,6 +178,12 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     "facilitator initialization",
   );
 
+  // Register metric families eagerly so /metrics is useful before the first event.
+  metrics.histogram("sandbox_payment_verify_duration_seconds", "Facilitator payment verification", LATENCY_BUCKETS);
+  metrics.histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS);
+  metrics.histogram("sandbox_session_create_duration_seconds", "Create request duration", LATENCY_BUCKETS);
+  metrics.counter("sandbox_sessions_created_total", "Session create requests by outcome");
+
   const resourceInfo = {
     url: `${config.publicBaseUrl}/v1/sessions`,
     description: "A temporary Linux sandbox session purchased with x402",
@@ -203,7 +211,10 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     return requirement;
   };
 
-  const createLimiter = new RateLimiter(30, 1);
+  // Defaults: a 30-request burst and 1/s refill per source. Configurable for
+  // deployments (and for density benchmarks that must not conflate admission
+  // control with capacity).
+  const createLimiter = new RateLimiter(config.createRateBurst, config.createRateRefill);
   const readLimiter = new RateLimiter(600, 40);
 
   app.use(express.json({ limit: config.maxBodyBytes }));
@@ -253,6 +264,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     ...(s.runtimeClass ? { runtimeClass: s.runtimeClass } : {}),
     ...(s.executionMode ? { executionMode: s.executionMode } : {}),
     busy: s.busy,
+    ...(s.timings ? { timings: s.timings } : {}),
     payment: {
       mode: s.payment.mode,
       network: s.payment.network,
@@ -284,6 +296,12 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, paymentMode: config.paymentMode, network: config.network });
+  });
+
+  // Aggregate metrics only; bounded labels, no session ids or payload data.
+  app.get("/metrics", (_req, res) => {
+    res.setHeader("content-type", "text/plain; version=0.0.4");
+    res.send(metrics.render());
   });
 
   app.get("/v1/pricing", (_req, res) => {
@@ -322,6 +340,17 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   /* Create session (x402 protected)                                   */
   /* ---------------------------------------------------------------- */
   app.post("/v1/sessions", rejectPlaintextBodies, async (req: Request, res: Response): Promise<void> => {
+    const apiReceivedAt = Date.now();
+    let paymentVerifyMs = 0;
+    let paymentSettleMs = 0;
+    res.on("finish", () => {
+      metrics
+        .histogram("sandbox_session_create_duration_seconds", "Create request duration", LATENCY_BUCKETS)
+        .observe((Date.now() - apiReceivedAt) / 1000);
+      metrics
+        .counter("sandbox_sessions_created_total", "Session create requests by outcome")
+        .inc({ result: res.statusCode < 300 ? "ok" : res.statusCode === 402 ? "payment_required" : "error" });
+    });
     if (!createLimiter.take(req.ip ?? "unknown")) {
       res.status(429).json({ error: "rate_limited" });
       return;
@@ -407,6 +436,12 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
           spec,
           clientPublicKey: body.clientPublicKey,
           clientNonce: body.clientNonce,
+          timings: {
+            apiReceivedAt,
+            paymentVerifyMs,
+            paymentSettleMs,
+            entitlementMs: Date.now() - apiReceivedAt,
+          },
           payment: {
             paymentKey: key,
             network: requirement.network,
@@ -436,6 +471,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
         res.status(503).json({ error: "provisioning_unavailable", message: "payment settled; contact support with your receipt" });
         return false;
       }
+      void controller.wake();
       log.info("session_created", {
         sessionId,
         tier: spec.tier,
@@ -487,8 +523,13 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     }
 
     let verify;
+    const verifyStarted = Date.now();
     try {
       verify = await resourceServer.verifyPayment(payload, requirement);
+      paymentVerifyMs = Date.now() - verifyStarted;
+      metrics
+        .histogram("sandbox_payment_verify_duration_seconds", "Facilitator payment verification", LATENCY_BUCKETS)
+        .observe(paymentVerifyMs / 1000);
     } catch (err) {
       log.warn("payment_verify_error", { error: (err as Error).message });
       await payment402(res, requirement, "payment_verify_failed");
@@ -509,8 +550,13 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     }
 
     let settle;
+    const settleStarted = Date.now();
     try {
       settle = await resourceServer.settlePayment(payload, requirement);
+      paymentSettleMs = Date.now() - settleStarted;
+      metrics
+        .histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS)
+        .observe(paymentSettleMs / 1000);
     } catch (err) {
       log.warn("payment_settle_error", { error: (err as Error).message });
       await controller.failIntent(key, "settle_error").catch(() => undefined);
@@ -716,6 +762,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     if (!session) return;
     try {
       const out = await controller.destroy(session.sessionId);
+      void controller.wake();
       res.json({ state: out.state });
     } catch (err) {
       log.error("destroy_failed", { error: (err as Error).message });

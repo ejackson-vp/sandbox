@@ -1,0 +1,14 @@
+{
+  "runId": "baseline-density-idle-50",
+  "scenario": "density",
+  "finishedAt": "2026-11-06T02:21:25.071Z",
+  "notes": [
+    "2026-11-06T02:20:43.742Z start density; host=Darwin 27.2.0/arm64 docker=14cpu/7.7GiB kvm=false",
+    "2026-11-06T02:20:43.848Z worker allocatable: 7935MiB / 14.0 cores / 110 pods; already requested 10MiB / 0.10 cores",
+    "2026-11-06T02:20:43.848Z per-sandbox request: 125m CPU, 128MiB memory",
+    "2026-11-06T02:20:43.848Z level 50 (idle): cleaning up",
+    "2026-11-06T02:21:24.996Z level 50: ready 10/50, anon/sandbox 8.3 MiB, node 1.3 GiB, teardown 521.5ms; create error codes: [\"rate_limited\"]; 40 session(s) were not created (rate limit or API error)",
+    "2026-11-06T02:21:25.071Z cleanup: swept 0 leftover sandbox pod(s)"
+  ],
+  "exitCode": 1
+}

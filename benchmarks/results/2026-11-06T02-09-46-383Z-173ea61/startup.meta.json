@@ -1,0 +1,14 @@
+{
+  "runId": "2026-11-06T02-09-46-383Z-173ea61",
+  "scenario": "startup",
+  "finishedAt": "2026-11-06T02:09:53.447Z",
+  "notes": [
+    "2026-11-06T02:09:46.396Z start startup; host=Darwin 27.2.0/arm64 docker=14cpu/7.7GiB kvm=false",
+    "2026-11-06T02:09:46.397Z startup: 3 warm samples, spec {\"tier\":\"custom\",\"durationSeconds\":60,\"cpuMillis\":500,\"memoryMiB\":512,\"diskMiB\":256}, sequential",
+    "2026-11-06T02:09:48.333Z 1/3: create 55.7ms ready 1.34s serverReady 1.10s exec 17.2ms destroy 521.9ms",
+    "2026-11-06T02:09:51.226Z 2/3: create 20.2ms ready 2.32s serverReady 2.21s exec 9.4ms destroy 518.4ms",
+    "2026-11-06T02:09:53.352Z 3/3: create 19.2ms ready 1.55s serverReady 1.32s exec 8.9ms destroy 517.5ms",
+    "2026-11-06T02:09:53.447Z cleanup: swept 0 leftover sandbox pod(s)"
+  ],
+  "exitCode": 0
+}

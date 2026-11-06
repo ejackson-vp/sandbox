@@ -9,6 +9,7 @@ import type {
   SessionSpec,
   SessionState,
   SessionTier,
+  SessionTimings,
 } from "@x402s/shared";
 
 export interface SessionView {
@@ -35,6 +36,7 @@ export interface SessionView {
   runtimeClass?: string;
   executionMode?: "dev" | "kata" | "confidential";
   busy: boolean;
+  timings?: SessionTimings;
   payment: PaymentSummary & { paymentKey: string };
 }
 
@@ -70,6 +72,12 @@ export interface CompleteIntentBody {
   spec: SessionSpec;
   clientPublicKey: string;
   clientNonce: string;
+  timings?: {
+    apiReceivedAt?: number;
+    paymentVerifyMs?: number;
+    paymentSettleMs?: number;
+    entitlementMs?: number;
+  };
   payment: {
     paymentKey: string;
     network: string;
@@ -187,6 +195,15 @@ export class ControllerClient {
 
   async destroy(sessionId: string): Promise<{ state: SessionState }> {
     return this.call(`/internal/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  }
+
+  /** Fire-and-forget nudge so provisioning/cleanup does not wait for a tick. */
+  async wake(): Promise<void> {
+    try {
+      await this.call("/internal/wake", { method: "POST" }, 2000);
+    } catch {
+      /* best effort: the periodic tick still runs */
+    }
   }
 
   async healthz(): Promise<{ ok: boolean }> {

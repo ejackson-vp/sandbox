@@ -1,0 +1,16 @@
+{
+  "name": "reliability",
+  "description": "Bounded fault injection against the dedicated test cluster.",
+  "defaults": { "cpuMillis": 500, "memoryMiB": 512, "diskMiB": 256 },
+  "faults": [
+    "20 concurrent creates",
+    "100 repeated execs",
+    "expiry during execution",
+    "controller restart under load",
+    "relay restart",
+    "API restart with in-flight creates",
+    "cancellation",
+    "client disconnect",
+    "pod killed while READY"
+  ]
+}

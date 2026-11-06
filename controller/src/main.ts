@@ -15,10 +15,22 @@ import { createControlApi } from "./control-api.js";
 import { createRelay } from "./relay.js";
 import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
+import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
 import { log } from "./log.js";
 
 async function main(): Promise<void> {
   const cfg = loadControllerConfig();
+
+  // Register metric families eagerly (bounded labels only).
+  metrics.histogram("sandbox_provision_duration_seconds", "Entitlement to pod create", LATENCY_BUCKETS);
+  metrics.histogram("sandbox_ready_duration_seconds", "Entitlement to READY", LATENCY_BUCKETS);
+  metrics.histogram("sandbox_exec_duration_seconds", "Operation duration", LATENCY_BUCKETS);
+  metrics.histogram("sandbox_cleanup_duration_seconds", "TERMINATING to cleanup complete", LATENCY_BUCKETS);
+  metrics.histogram("sandbox_reconcile_duration_seconds", "Reconcile pass duration", LATENCY_BUCKETS);
+  metrics.counter("sandbox_exec_total", "Operations by result");
+  metrics.counter("sandbox_sessions_created_total", "Entitlements created");
+  metrics.counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED");
+  metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE");
 
   if (cfg.role === "relay") {
     const relay = createRelay({ adminToken: cfg.relayAdminToken });
@@ -73,7 +85,8 @@ async function main(): Promise<void> {
   const provisioner = makeProvisioner(cfg);
   const relay = makeRelayClient(cfg);
 
-  const control = createControlApi({ cfg, store, relay });
+  let wake: (() => void) | undefined;
+  const control = createControlApi({ cfg, store, relay, wake: () => wake?.() });
   const server = http.createServer(control);
   await listen(server, cfg.controllerPort);
   log.info("controller_listening", {
@@ -85,6 +98,7 @@ async function main(): Promise<void> {
   });
 
   const reconciler = new Reconciler({ cfg, store, provisioner, relay });
+  wake = () => reconciler.wake();
   reconciler.start();
 
   installShutdown(async () => {

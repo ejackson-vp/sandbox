@@ -1,0 +1,5 @@
+level,mode,created,ready,failed,anonP50MiB,anonP95MiB,fileP50MiB,pidsP50,nodeMemMiB,dockerMemMiB,createP50,readyP50,teardownP50,opsPerSecond,podsAfter
+1,idle,1,1,0,8.42,8.42,0.00,10,1169,779,60.4,2033,518,,0
+5,idle,5,5,0,8.36,8.39,0.00,9,1229,842,28.0,1407,522,,0
+10,idle,10,10,0,8.34,8.45,0.02,10,1291,933,34.7,1485,555,,0
+25,idle,10,10,15,8.34,8.52,0.00,10,1277,940,11.5,2026,521,,0

@@ -75,7 +75,7 @@ is isolation, so the supervisor adds:
 | credentials dropped after use | the relay token and signing key are cleared once the evidence is produced |
 | curated child environment | children inherit only a fixed base + validated overrides; never the guest env |
 | process group per command | `SIGKILL` to the group on timeout/cancel/lease end; background children do not survive |
-| `RLIMIT_NPROC` | LUID process cap (`maxProcesses`) |
+| pod cgroup `pids.max` | per-sandbox process cap (kubelet `pod-max-pids=1024`) |
 | workspace confinement | every path resolved inside the workspace; symlink parents rejected; writes use `O_NOFOLLOW` |
 | archive validation | absolute paths, `..`, symlinks, hardlinks, devices, oversized members rejected |
 

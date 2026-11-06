@@ -1,0 +1,10 @@
+{
+  "name": "startup",
+  "description": "Create -> READY -> first exec -> destroy, sequential.",
+  "defaults": { "samples": 100, "coldSamples": 10, "durationSeconds": 60, "cpuMillis": 500, "memoryMiB": 512, "diskMiB": 256 },
+  "notes": [
+    "Warm = image present on the worker, no sandbox running.",
+    "Cold requires a registry-backed image (--cold --image-ref) because kind loads images directly into containerd.",
+    "Sequential execution: concurrent provisioning would change the measurement."
+  ]
+}
