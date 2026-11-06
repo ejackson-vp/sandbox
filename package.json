@@ -21,12 +21,14 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:security": "vitest run tests/security",
-    "clean": "rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist"
+    "clean": "rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist",
+    "test:property": "vitest run tests/property"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.0",
+    "fast-check": "^4.10.2",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^4.1.0"

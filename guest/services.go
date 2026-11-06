@@ -1,13 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -17,11 +14,8 @@ import (
 )
 
 const (
-	maxServices      = 4
-	maxHTTPBody      = 8 * 1024 * 1024
-	maxHTTPResponse  = 4 * 1024 * 1024
-	maxHTTPHeaders   = 64
-	maxHTTPHeaderLen = 8 * 1024
+	maxServices     = 4
+	maxHTTPResponse = 4 * 1024 * 1024
 )
 
 var serviceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
@@ -135,72 +129,17 @@ func (s *supervisor) serviceByPort(port int) *runner.Service {
 }
 
 func (s *supervisor) httpRequest(ctx context.Context, req *protocol.Request) *protocol.Result {
-	if s.serviceByPort(req.Port) == nil {
-		return protocol.ErrorResult(req, "service_unavailable", "no running service on that port")
+	target, errRes := s.httpTarget(req)
+	if errRes != nil {
+		return errRes
 	}
-	method := strings.ToUpper(strings.TrimSpace(req.Method))
-	switch method {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead, http.MethodOptions:
-	default:
-		return protocol.ErrorResult(req, "invalid_method", "unsupported HTTP method")
-	}
-	path := req.Path
-	if !strings.HasPrefix(path, "/") || len(path) > 4096 || strings.ContainsAny(path, "\r\n") {
-		return protocol.ErrorResult(req, "invalid_path", "path must start with / and contain no newlines")
-	}
-	body, err := base64.StdEncoding.DecodeString(req.BodyBase64)
-	if err != nil {
-		return protocol.ErrorResult(req, "invalid_body", "body is not valid base64")
-	}
-	if len(body) > maxHTTPBody {
-		return protocol.ErrorResult(req, "body_too_large", "request body exceeds the limit")
-	}
-	if len(req.Headers) > maxHTTPHeaders {
-		return protocol.ErrorResult(req, "too_many_headers", "too many request headers")
-	}
-
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			// The host is deliberately ignored; HTTP is loopback-only and only
-			// to a port declared by a running service.
-			return dialer.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", req.Port))
-		},
-	}
-	timeout := 30 * time.Second
-	if req.TimeoutMs > 0 {
-		requested := time.Duration(req.TimeoutMs) * time.Millisecond
-		if requested < timeout {
-			timeout = requested
-		}
-	}
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	httpReq, err := http.NewRequestWithContext(
-		ctx, method, fmt.Sprintf("http://127.0.0.1:%d%s", req.Port, path), bytes.NewReader(body),
-	)
+	httpReq, cancel, err := target.newRequest(ctx, requestTimeout(req, 30*time.Second))
 	if err != nil {
 		return protocol.ErrorResult(req, "invalid_request", err.Error())
 	}
-	for key, value := range req.Headers {
-		lower := strings.ToLower(key)
-		if len(key) > 128 || len(value) > maxHTTPHeaderLen {
-			continue
-		}
-		switch lower {
-		case "host", "connection", "transfer-encoding", "content-length", "proxy-connection", "upgrade":
-			continue
-		}
-		httpReq.Header.Set(key, value)
-	}
+	defer cancel()
 
-	resp, err := client.Do(httpReq)
+	resp, err := target.client().Do(httpReq)
 	if err != nil {
 		return protocol.ErrorResult(req, "http_error", err.Error())
 	}

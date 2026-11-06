@@ -6,9 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -43,33 +41,18 @@ type wsStream struct {
 }
 
 func (s *supervisor) openWS(ctx context.Context, req *protocol.Request) *protocol.Result {
-	if s.serviceByPort(req.Port) == nil {
-		return protocol.ErrorResult(req, "service_unavailable", "no running service on that port")
-	}
-	path := req.Path
-	if !strings.HasPrefix(path, "/") || len(path) > 4096 || strings.ContainsAny(path, "\r\n") {
-		return protocol.ErrorResult(req, "invalid_path", "path must start with / and contain no newlines")
+	target, errRes := s.httpTarget(req)
+	if errRes != nil {
+		return errRes
 	}
 	dialCtx, cancel := context.WithCancel(ctx)
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	client := &http.Client{
-		Transport: &http.Transport{
-			Proxy: nil,
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return dialer.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", req.Port))
-			},
-		},
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
 	conn, resp, err := websocket.Dial(
 		dialCtx,
-		fmt.Sprintf("ws://127.0.0.1:%d%s", req.Port, path),
+		target.wsURL(),
 		&websocket.DialOptions{
-			HTTPClient:      client,
+			HTTPClient:      target.client(),
 			CompressionMode: websocket.CompressionDisabled,
-			HTTPHeader:      http.Header{"Origin": []string{fmt.Sprintf("http://127.0.0.1:%d", req.Port)}},
+			HTTPHeader:      http.Header{"Origin": []string{target.origin()}},
 		},
 	)
 	if err != nil {

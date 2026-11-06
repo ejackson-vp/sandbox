@@ -1,4 +1,6 @@
 export * from "./protocol.js";
+export * from "./fp.js";
+export * from "./domain/session.js";
 export * from "./crypto.js";
 export * from "./attestation.js";
 export * from "./dev-attestation.js";

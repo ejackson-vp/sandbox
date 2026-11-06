@@ -31,6 +31,8 @@ function opLabel(op: string | undefined): string {
   return op && OP_LABELS.has(op) ? op : "other";
 }
 import { PaymentAlreadyRedeemedError } from "./store.js";
+import { remainingSeconds as remainingLeaseSeconds } from "@x402s/shared";
+import { snapshotOf } from "./session-snapshot.js";
 import { LifecycleError } from "./reconciler.js";
 import { log } from "./log.js";
 
@@ -164,8 +166,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     if (!session) return null;
     const payment = store.getPayment(session.paymentKey);
     const now = Date.now();
-    const remainingSeconds =
-      session.leaseExpiresAt === null ? 0 : Math.max(0, Math.floor((session.leaseExpiresAt - now) / 1000));
+    const remainingSeconds = remainingLeaseSeconds(snapshotOf(session), now);
     return {
       sessionId: session.id,
       state: session.state,

@@ -10,7 +10,7 @@
  * database is recreated (session state is disposable by design).
  */
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared";
+import { finalStateForReason, type SessionLimits, type SessionState, type SessionTier } from "@x402s/shared";
 
 export type { SessionState };
 

@@ -1,15 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -39,61 +36,17 @@ type httpStream struct {
 }
 
 func (s *supervisor) openStream(ctx context.Context, req *protocol.Request) *protocol.Result {
-	if s.serviceByPort(req.Port) == nil {
-		return protocol.ErrorResult(req, "service_unavailable", "no running service on that port")
+	target, errRes := s.httpTarget(req)
+	if errRes != nil {
+		return errRes
 	}
-	method := strings.ToUpper(strings.TrimSpace(req.Method))
-	switch method {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead, http.MethodOptions:
-	default:
-		return protocol.ErrorResult(req, "invalid_method", "unsupported HTTP method")
-	}
-	path := req.Path
-	if !strings.HasPrefix(path, "/") || len(path) > 4096 || strings.ContainsAny(path, "\r\n") {
-		return protocol.ErrorResult(req, "invalid_path", "path must start with / and contain no newlines")
-	}
-	body, err := base64.StdEncoding.DecodeString(req.BodyBase64)
-	if err != nil {
-		return protocol.ErrorResult(req, "invalid_body", "body is not valid base64")
-	}
-	if len(body) > maxHTTPBody {
-		return protocol.ErrorResult(req, "body_too_large", "request body exceeds the limit")
-	}
-
 	streamCtx, cancel := context.WithCancel(ctx)
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", req.Port))
-		},
-	}
-	client := &http.Client{
-		Transport: transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	httpReq, err := http.NewRequestWithContext(
-		streamCtx, method, fmt.Sprintf("http://127.0.0.1:%d%s", req.Port, path), bytes.NewReader(body),
-	)
+	httpReq, _, err := target.newRequest(streamCtx, 0)
 	if err != nil {
 		cancel()
 		return protocol.ErrorResult(req, "invalid_request", err.Error())
 	}
-	for key, value := range req.Headers {
-		lower := strings.ToLower(key)
-		if len(key) > 128 || len(value) > maxHTTPHeaderLen {
-			continue
-		}
-		switch lower {
-		case "host", "connection", "transfer-encoding", "content-length", "proxy-connection", "upgrade":
-			continue
-		}
-		httpReq.Header.Set(key, value)
-	}
-
-	resp, err := client.Do(httpReq)
+	resp, err := target.client().Do(httpReq)
 	if err != nil {
 		cancel()
 		return protocol.ErrorResult(req, "http_error", err.Error())

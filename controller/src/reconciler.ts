@@ -11,7 +11,18 @@
  * Deadline enforcement never depends on the untrusted guest cooperating: the
  * controller's clock decides, and pod deletion is the backstop.
  */
-import { LATENCY_BUCKETS, metrics, type RelaySessionState, type SessionLimits, type WarmClaim } from "@x402s/shared";
+import {
+  LATENCY_BUCKETS,
+  canResume,
+  canSuspend,
+  idleExpired,
+  lifetimeExpired,
+  metrics,
+  suspendedExpired,
+  type RelaySessionState,
+  type SessionLimits,
+  type WarmClaim,
+} from "@x402s/shared";
 import { randomBytes } from "node:crypto";
 import type { ControllerConfig } from "./config.js";
 import { GUEST_TOOLS, type Provisioner, type WarmPodInfo } from "./k8s.js";
@@ -19,6 +30,7 @@ import type { RelayClient } from "./relay-client.js";
 import type { SessionRecord, Store } from "./store.js";
 import { newOpaqueToken, sha256Hex } from "./tokens.js";
 import { proxyTokenFor } from "./config.js";
+import { snapshotOf } from "./session-snapshot.js";
 import { log } from "./log.js";
 
 export class LifecycleError extends Error {
@@ -165,18 +177,8 @@ export class Reconciler {
         this.deps.store.requestTermination(session.id, "max_lifetime");
         continue;
       }
-      const idle = session.idlePolicyJson
-        ? (JSON.parse(session.idlePolicyJson) as {
-            maxIdleSeconds?: number;
-            suspendedDurationSeconds?: number;
-          })
-        : null;
-      if (
-        idle?.maxIdleSeconds &&
-        (session.state === "READY" || session.state === "ACTIVE") &&
-        session.lastActivityAt &&
-        now - session.lastActivityAt > idle.maxIdleSeconds * 1000
-      ) {
+      const snap = snapshotOf(session);
+      if (idleExpired(snap, now)) {
         try {
           await this.suspendSession(session.id);
         } catch (err) {
@@ -184,12 +186,7 @@ export class Reconciler {
         }
         continue;
       }
-      if (
-        idle?.suspendedDurationSeconds &&
-        session.state === "SUSPENDED" &&
-        session.suspendedAt &&
-        now - session.suspendedAt > idle.suspendedDurationSeconds * 1000
-      ) {
+      if (suspendedExpired(snap, now)) {
         this.deps.store.requestTermination(session.id, "suspended_expired");
       }
     }
@@ -361,10 +358,7 @@ export class Reconciler {
   }
 
   private lifetimeExceeded(session: SessionRecord): boolean {
-    return Boolean(
-      session.maxLifetimeSeconds &&
-        this.now() - session.createdAt > session.maxLifetimeSeconds * 1000,
-    );
+    return lifetimeExpired(snapshotOf(session), this.now());
   }
 
   /**
@@ -375,11 +369,8 @@ export class Reconciler {
   async suspendSession(id: string): Promise<void> {
     const session = this.deps.store.getSession(id);
     if (!session) throw new LifecycleError("not_found", "session not found", 404);
-    if (session.state !== "READY" && session.state !== "ACTIVE") {
+    if (!canSuspend(snapshotOf(session))) {
       throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
-    }
-    if (!session.workspacePvc) {
-      throw new LifecycleError("not_suspendable", "session has no persistent workspace", 409);
     }
     try {
       await this.deps.relay.shutdown(id, "suspend");
@@ -410,7 +401,7 @@ export class Reconciler {
   async resumeSession(id: string): Promise<void> {
     const session = this.deps.store.getSession(id);
     if (!session) throw new LifecycleError("not_found", "session not found", 404);
-    if (session.state !== "SUSPENDED") {
+    if (session.state !== "SUSPENDED" || !canResume(snapshotOf(session))) {
       throw new LifecycleError("not_suspended", `session is ${session.state}`, 409);
     }
     if (this.lifetimeExceeded(session)) {

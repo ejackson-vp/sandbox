@@ -18,6 +18,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:unit
+      - run: npm run test:property
 
   integration:
     name: integration (local guest)
@@ -35,6 +36,9 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: make guest
+      - name: go tests
+        working-directory: guest
+        run: go test ./...
       - name: integration tests
         env:
           GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
