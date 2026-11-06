@@ -79,6 +79,32 @@ first 30 and return 20 immediate 429s (token-bucket shape) instead of an ~19 s
 p50 — the intended backpressure, and better than accepting work the pool cannot
 serve quickly.
 
+## Provisioning concurrency
+
+Even with a warm pool, a burst larger than the pool produces cold starts. A
+second, coarser control is **how many cold provisions may be in flight**:
+
+| Env | Default | Meaning |
+|---|---:|---|
+| `MAX_CONCURRENT_PROVISIONING` | `0` | 0 = unlimited; otherwise PAID sessions wait until a PROVISIONING slot frees |
+| `PROVISION_QUEUE_TIMEOUT_MS` | `120000` | fail a PAID session that waits too long (0 disables) |
+
+Excess sessions stay `PAID` and are retried on the next reconcile tick. The
+trade is deliberate: queueing adds tail latency but stops the kubelet from being
+stampeded, and it gives the warm pool time to refill.
+
+Measured 50-create burst (pool 8, all admission buckets raised):
+
+| Limit | READY p50 | p95 | Warm hits | Cold | Throughput |
+|---:|---:|---:|---:|---:|---:|
+| unlimited | 18.92 s | 24.72 s | 8 | 42 | 1.9/s |
+| 4 | **11.69 s** | 22.82 s | **28** | 22 | 1.7/s |
+
+At 25 simultaneous creates the trade is less favourable: p50 2.63 s (vs 2.78 s)
+but p95 9.41 s (vs 5.85 s), because queued sessions wait for a slot. Tune the
+limit to the pool replenishment rate and the worker's cold-start parallelism;
+4–8 is a sensible starting range, not a universal constant.
+
 ## Reproduction
 
 ```bash

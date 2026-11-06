@@ -151,6 +151,12 @@ same 50-create burst would admit 30 and return 20 immediate 429s instead of an
 ~19 s p50 — the intended backpressure. See [admission-control.md](admission-control.md) for the two-bucket
 model and the sizing implications.
 
+A provisioning concurrency cap (`MAX_CONCURRENT_PROVISIONING`) changes the shape:
+with a cap of 4 the same 50-create burst gives READY p50 11.69 s / p95 22.82 s
+(vs 18.92 s / 24.72 s unlimited) and **28 warm hits instead of 8**, because the
+queue lets the pool refill. At 25 creates the cap trades p50 2.63 s for p95
+9.41 s; it is a tuning knob, not a free win.
+
 ### 2.6 Soak and faults (3 min, pool = 8)
 
 A 180 s soak at 1 create/s with a relay restart, controller restart and warm-pod

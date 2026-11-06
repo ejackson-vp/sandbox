@@ -41,6 +41,10 @@ data:
   PROVISIONING_TIMEOUT_MS: "90000"
   LEASE_GRACE_MS: "2000"
   SHUTDOWN_GRACE_MS: "2000"
+  # 0 = unlimited. In production cap cold provisioning so a burst cannot
+  # stampede the kubelet; the excess stays PAID and retries each tick.
+  MAX_CONCURRENT_PROVISIONING: "0"
+  PROVISION_QUEUE_TIMEOUT_MS: "120000"
   # Pre-booted, unleased sandboxes. 0 = off. The pool is sized by cgroup/disk
   # limits, so only sessions at or below the pool tier can claim a pod.
   WARM_POOL_SIZE: "0"

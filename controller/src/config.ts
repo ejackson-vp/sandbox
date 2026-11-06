@@ -69,6 +69,10 @@ export interface ControllerConfig {
   warmClaimTimeoutMs: number;
   /** Pin a resumed checkpoint to the node that owns its local-path PVC. */
   pinCheckpointNode: boolean;
+  /** 0 = unlimited; otherwise the number of concurrent cold provisions. */
+  maxConcurrentProvisioning: number;
+  /** 0 = no queue timeout; otherwise fail a PAID session after this wait. */
+  provisionQueueTimeoutMs: number;
 }
 
 /**
@@ -178,6 +182,8 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     warmPoolTtlMs: int(env.WARM_POOL_TTL_MS, 300_000, 30_000, 3_600_000),
     warmClaimTimeoutMs: int(env.WARM_CLAIM_TIMEOUT_MS, 8_000, 1_000, 60_000),
     pinCheckpointNode: bool(env.PIN_CHECKPOINT_NODE, true),
+    maxConcurrentProvisioning: int(env.MAX_CONCURRENT_PROVISIONING, 0, 0, 1_000),
+    provisionQueueTimeoutMs: int(env.PROVISION_QUEUE_TIMEOUT_MS, 120_000, 0, 3_600_000),
   };
 }
 

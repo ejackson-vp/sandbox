@@ -1,0 +1,17 @@
+{
+  "runId": "2026-11-06T16-48-52-396Z-cf74a81",
+  "scenario": "burst",
+  "finishedAt": "2026-11-06T16:49:40.516Z",
+  "notes": [
+    "2026-11-06T16:48:52.411Z start burst; host=Darwin 27.2.0/arm64 docker=14cpu/7.7GiB kvm=false",
+    "2026-11-06T16:48:52.412Z burst: levels 25,50, spec {\"tier\":\"custom\",\"durationSeconds\":60,\"cpuMillis\":500,\"memoryMiB\":512,\"diskMiB\":256}",
+    "2026-11-06T16:48:52.412Z burst 25: cleaning up",
+    "2026-11-06T16:48:52.622Z burst 25: pool before=8",
+    "2026-11-06T16:49:06.380Z burst 25: ready 25/25, warm 14, cold 11, p50 2.63s p95 9.41s, 2.4/s, pool after 8; 11 cold fallback(s)",
+    "2026-11-06T16:49:06.380Z burst 50: cleaning up",
+    "2026-11-06T16:49:06.558Z burst 50: pool before=8",
+    "2026-11-06T16:49:40.419Z burst 50: ready 50/50, warm 28, cold 22, p50 11.69s p95 22.82s, 1.7/s, pool after 8; 22 cold fallback(s)",
+    "2026-11-06T16:49:40.516Z cleanup: swept 0 leftover sandbox pod(s)"
+  ],
+  "exitCode": 0
+}

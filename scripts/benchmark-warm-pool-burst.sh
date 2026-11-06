@@ -9,6 +9,7 @@ set -euo pipefail
 CONTEXT="${CONTEXT:-kind-x402-sandbox}"
 POOL_SIZE="${POOL_SIZE:-8}"
 POOL_TIER="${POOL_TIER:-short}"
+PROVISION_LIMIT="${PROVISION_LIMIT:-0}"
 LEVELS="${LEVELS:-10,25,50}"
 MAX="${MAX:-50}"
 KUBECTL=(kubectl --context "${CONTEXT}" -n sandbox-system)
@@ -18,7 +19,7 @@ restore() {
   echo "==> restoring deployment defaults"
   "${KUBECTL[@]}" set env deploy/api \
     CREATE_RATE_BURST- CREATE_RATE_REFILL- CREATE_IP_RATE_BURST- CREATE_IP_RATE_REFILL- >/dev/null 2>&1 || true
-  "${KUBECTL[@]}" set env deploy/controller WARM_POOL_SIZE- WARM_POOL_TIER- >/dev/null 2>&1 || true
+  "${KUBECTL[@]}" set env deploy/controller WARM_POOL_SIZE- WARM_POOL_TIER- MAX_CONCURRENT_PROVISIONING- >/dev/null 2>&1 || true
   "${KUBECTL[@]}" rollout status deploy/api --timeout=120s >/dev/null 2>&1 || true
   "${KUBECTL[@]}" rollout status deploy/controller --timeout=180s >/dev/null 2>&1 || true
 }
@@ -28,7 +29,9 @@ echo "==> enabling warm pool (size=${POOL_SIZE}, tier=${POOL_TIER})"
 "${KUBECTL[@]}" set env deploy/api \
   CREATE_RATE_BURST=1000 CREATE_RATE_REFILL=500 \
   CREATE_IP_RATE_BURST=1000 CREATE_IP_RATE_REFILL=500 >/dev/null
-"${KUBECTL[@]}" set env deploy/controller WARM_POOL_SIZE="${POOL_SIZE}" WARM_POOL_TIER="${POOL_TIER}" >/dev/null
+"${KUBECTL[@]}" set env deploy/controller \
+  WARM_POOL_SIZE="${POOL_SIZE}" WARM_POOL_TIER="${POOL_TIER}" \
+  MAX_CONCURRENT_PROVISIONING="${PROVISION_LIMIT}" >/dev/null
 "${KUBECTL[@]}" rollout status deploy/api --timeout=120s
 "${KUBECTL[@]}" rollout status deploy/controller --timeout=180s
 

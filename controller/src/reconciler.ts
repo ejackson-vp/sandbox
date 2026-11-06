@@ -120,10 +120,13 @@ export class Reconciler {
         await this.deps.provisioner.deletePod(session.podName, 0).catch(() => undefined);
         this.deps.store.clearPod(session.id);
       }
-      const active = this.deps.store
-        .listNonTerminal()
-        .filter((s) => s.state === "READY" || s.state === "ACTIVE").length;
+      const nonTerminal = this.deps.store.listNonTerminal();
+      const active = nonTerminal.filter((s) => s.state === "READY" || s.state === "ACTIVE").length;
+      const provisioning = nonTerminal.filter((s) => s.state === "PROVISIONING").length;
+      const queued = nonTerminal.filter((s) => s.state === "PAID").length;
       metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE").set({}, active);
+      metrics.gauge("sandbox_provisioning_active", "Sessions in PROVISIONING").set({}, provisioning);
+      metrics.gauge("sandbox_provisioning_queued", "PAID sessions waiting for a provisioning slot").set({}, queued);
     } catch (err) {
       log.error("reconcile_pass_failed", { error: (err as Error).message });
     } finally {
@@ -233,6 +236,23 @@ export class Reconciler {
   }
 
   private async provision(session: SessionRecord): Promise<void> {
+    const limit = this.deps.cfg.maxConcurrentProvisioning;
+    if (limit > 0) {
+      const active = this.deps.store
+        .listNonTerminal()
+        .filter((s) => s.state === "PROVISIONING").length;
+      if (active >= limit) {
+        const waited = session.paidAt === null ? 0 : this.now() - session.paidAt;
+        if (this.deps.cfg.provisionQueueTimeoutMs > 0 && waited > this.deps.cfg.provisionQueueTimeoutMs) {
+          this.deps.store.requestTermination(session.id, "failure:provisioning_queue_timeout", {
+            code: "provisioning_queue_timeout",
+            message: "the provisioning queue did not drain in time",
+          });
+          log.warn("sandbox_provisioning_queue_timeout", { sessionId: session.id, waitedMs: waited });
+        }
+        return;
+      }
+    }
     const provisionBeginAt = this.now();
     const relayAddr = await this.serviceAddress(this.deps.cfg.relayServiceName);
     const proxyAddr = await this.serviceAddress(this.deps.cfg.proxyServiceName);
