@@ -38,6 +38,7 @@ type supervisor struct {
 	streams map[string]*httpStream
 	// Bidirectional WebSocket streams opened by the customer.
 	websockets map[string]*wsStream
+	transfers  *transferManager
 }
 
 func (s *supervisor) serve(ctx context.Context) error {
@@ -83,6 +84,7 @@ func (s *supervisor) cancel(id string) {
 }
 
 func (s *supervisor) shutdownAll() {
+	s.transfers.shutdown()
 	s.stopAllWS()
 	s.stopAllStreams()
 	s.stopAllServices()
@@ -182,6 +184,18 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 		result = s.sendWS(ctx, req)
 	case protocol.OpWSClose:
 		result = s.closeWSRequest(req)
+	case protocol.OpTransferInit:
+		result = s.transfers.init(req)
+	case protocol.OpTransferChunk:
+		result = s.transfers.chunk(req)
+	case protocol.OpTransferComplete:
+		result = s.transfers.complete(req)
+	case protocol.OpTransferStatus:
+		result = s.transfers.status(req)
+	case protocol.OpTransferRead:
+		result = s.transfers.read(req)
+	case protocol.OpTransferCancel:
+		result = s.transfers.cancel(req)
 	default:
 		result = protocol.ErrorResult(req, "unsupported_operation", "unknown operation")
 	}

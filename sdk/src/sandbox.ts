@@ -3,11 +3,12 @@
  * recommended entry point for application code; the lower-level methods remain
  * available for tools that need to attach to an existing handle.
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import type { SandboxClient } from "./client.js";
-import type { ExecOptions, FileOutcome, HttpOptions, HttpResponse, SessionHandle } from "./types.js";
+import type { ExecOptions, HttpOptions, HttpResponse, SessionHandle } from "./types.js";
 import type { SessionStatus } from "@x402s/shared";
-import type { FileGetResult, FilePutResult, OperationError } from "@x402s/shared";
+import type { FilePutResult, OperationError } from "@x402s/shared";
+import type { TransferOptions, TransferOutcome } from "./transfers.js";
 
 export class Sandbox {
   constructor(
@@ -27,14 +28,21 @@ export class Sandbox {
     return this.client.exec(this.handle, opts);
   }
 
-  async upload(localPath: string, remotePath: string): Promise<FilePutResult | OperationError> {
+  async upload(
+    localPath: string,
+    remotePath: string,
+    opts: TransferOptions = {},
+  ): Promise<FilePutResult | TransferOutcome | OperationError> {
+    const maxFileBytes = this.handle.status?.limits.maxFileBytes ?? 8 * 1024 * 1024;
+    const info = await stat(localPath);
+    if (opts.transferId || info.size > maxFileBytes) {
+      return this.client.uploadFile(this.handle, localPath, remotePath, opts);
+    }
     return this.client.putFile(this.handle, { path: remotePath, data: await readFile(localPath) });
   }
 
-  async download(remotePath: string, localPath: string): Promise<FileOutcome<FileGetResult>> {
-    const result = await this.client.getFile(this.handle, remotePath);
-    if (result.ok) await writeFile(localPath, Buffer.from(result.dataBase64, "base64"));
-    return result;
+  async download(remotePath: string, localPath: string, opts: TransferOptions = {}): Promise<TransferOutcome> {
+    return this.client.downloadFile(this.handle, remotePath, localPath, opts);
   }
 
   http(opts: HttpOptions): Promise<HttpResponse> {

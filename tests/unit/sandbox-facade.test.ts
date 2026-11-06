@@ -35,14 +35,10 @@ describe("Sandbox facade", () => {
 
     const client = {
       putFile: vi.fn(async (_handle, opts) => ({ ok: true, filesWritten: 1, path: opts.path })),
-      getFile: vi.fn(async () => ({
-        ok: true,
-        op: "file.get",
-        path: "/workspace/out.txt",
-        dataBase64: Buffer.from("result").toString("base64"),
-        size: 6,
-        archive: false,
-      })),
+      downloadFile: vi.fn(async (_handle, _remote, local) => {
+        writeFileSync(local, "result");
+        return { transferId: "transfer-1", bytesTransferred: 6, digest: "digest" };
+      }),
       exec: vi.fn(async () => ({ ok: true, stdout: "ok", stderr: "", exitCode: 0 })),
       destroy: vi.fn(async () => ({ state: "DESTROYED" })),
     } as unknown as SandboxClient;
@@ -55,7 +51,7 @@ describe("Sandbox facade", () => {
       data: Buffer.from("hello"),
     });
     expect((await sandbox.exec({ command: ["echo", "ok"] })).ok).toBe(true);
-    expect((await sandbox.download("/workspace/out.txt", remote)).ok).toBe(true);
+    expect((await sandbox.download("/workspace/out.txt", remote)).transferId).toBe("transfer-1");
     expect(readFileSync(remote, "utf8")).toBe("result");
     await sandbox.destroy();
     expect(client.destroy).toHaveBeenCalledWith(handle, 30_000);

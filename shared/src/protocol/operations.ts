@@ -53,6 +53,54 @@ export interface FileStatOperation extends OperationBase {
 }
 
 /** Start a long-running process (a local server) inside the sandbox. */
+
+export type TransferDirection = "upload" | "download";
+export type TransferState = "TRANSFERRING" | "VERIFYING" | "COMPLETED" | "CANCELLED" | "FAILED" | "EXPIRED";
+
+export interface TransferInitOperation extends OperationBase {
+  op: "transfer.init";
+  transferId: string;
+  direction: TransferDirection;
+  path: string;
+  /** Declared final size for uploads; ignored for downloads. */
+  size?: number;
+  chunkSize: number;
+  /** Expected full-file SHA-256, where known. */
+  digest?: string;
+  archive?: boolean;
+}
+
+export interface TransferChunkOperation extends OperationBase {
+  op: "transfer.chunk";
+  transferId: string;
+  offset: number;
+  dataBase64: string;
+}
+
+export interface TransferCompleteOperation extends OperationBase {
+  op: "transfer.complete";
+  transferId: string;
+  size: number;
+  digest: string;
+}
+
+export interface TransferStatusOperation extends OperationBase {
+  op: "transfer.status";
+  transferId: string;
+}
+
+export interface TransferReadOperation extends OperationBase {
+  op: "transfer.read";
+  transferId: string;
+  offset: number;
+  maxBytes: number;
+}
+
+export interface TransferCancelOperation extends OperationBase {
+  op: "transfer.cancel";
+  transferId: string;
+}
+
 export interface ServiceStartOperation extends OperationBase {
   op: "service.start";
   name: string;
@@ -140,12 +188,26 @@ export interface ServiceInfo {
   stderr?: string;
 }
 
+export type TransferOperation =
+  | TransferInitOperation
+  | TransferChunkOperation
+  | TransferCompleteOperation
+  | TransferStatusOperation
+  | TransferReadOperation
+  | TransferCancelOperation;
+
 export type GuestRequest =
   | ExecOperation
   | FilePutOperation
   | FileGetOperation
   | FileListOperation
   | FileStatOperation
+  | TransferInitOperation
+  | TransferChunkOperation
+  | TransferCompleteOperation
+  | TransferStatusOperation
+  | TransferReadOperation
+  | TransferCancelOperation
   | ServiceStartOperation
   | ServiceStopOperation
   | ServiceListOperation
@@ -223,6 +285,25 @@ export interface FileStatResult extends ResultBase {
 export interface OperationError extends ResultBase {
   ok: false;
   op: GuestRequest["op"];
+}
+
+export interface TransferResult extends ResultBase {
+  ok: true;
+  op:
+    | "transfer.init"
+    | "transfer.chunk"
+    | "transfer.complete"
+    | "transfer.status"
+    | "transfer.read"
+    | "transfer.cancel";
+  transferId: string;
+  direction: TransferDirection;
+  state: TransferState;
+  committedBytes: number;
+  size: number;
+  digest?: string;
+  chunkBase64?: string;
+  done?: boolean;
 }
 
 export interface ServiceStartResult extends ResultBase {
@@ -308,6 +389,7 @@ export type GuestResult =
   | FileGetResult
   | FileListResult
   | FileStatResult
+  | TransferResult
   | ServiceStartResult
   | ServiceListResult
   | ServiceStopResult

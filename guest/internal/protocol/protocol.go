@@ -29,6 +29,15 @@ type Request struct {
 	BodyBase64 string            `json:"bodyBase64"`
 	StreamID   string            `json:"streamId"`
 	Binary     bool              `json:"binary,omitempty"`
+
+	// transfer.*
+	TransferID string `json:"transferId"`
+	Direction  string `json:"direction"`
+	Offset     int64  `json:"offset"`
+	ChunkSize  int64  `json:"chunkSize"`
+	Size       int64  `json:"size"`
+	MaxBytes   int64  `json:"maxBytes"`
+	Digest     string `json:"digest"`
 }
 
 type OpError struct {
@@ -89,6 +98,12 @@ type Result struct {
 	Pending       bool              `json:"pending,omitempty"`
 	Done          bool              `json:"done,omitempty"`
 	Binary        bool              `json:"binary,omitempty"`
+
+	TransferID     string `json:"transferId,omitempty"`
+	Direction      string `json:"direction,omitempty"`
+	State          string `json:"state,omitempty"`
+	CommittedBytes int64  `json:"committedBytes"`
+	Digest         string `json:"digest,omitempty"`
 }
 
 type ServiceInfo struct {
@@ -120,6 +135,13 @@ const (
 	OpWSRead       = "ws.read"
 	OpWSSend       = "ws.send"
 	OpWSClose      = "ws.close"
+
+	OpTransferInit     = "transfer.init"
+	OpTransferChunk    = "transfer.chunk"
+	OpTransferComplete = "transfer.complete"
+	OpTransferStatus   = "transfer.status"
+	OpTransferRead     = "transfer.read"
+	OpTransferCancel   = "transfer.cancel"
 )
 
 func ErrorResult(req *Request, code, message string) *Result {

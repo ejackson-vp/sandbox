@@ -2,7 +2,7 @@
  * Session routes: status, exec/files, services/http/ws, lifecycle.
  */
 import express, { type Request, type Response } from "express";
-import { sha256Hex, safeEqualHex } from "@x402s/shared";
+import { LATENCY_BUCKETS, metrics, sha256Hex, safeEqualHex } from "@x402s/shared";
 import { RateLimiter } from "../admission.js";
 import { ControllerError, type ControllerClient, type SessionView } from "../controller-client.js";
 import type { ApiConfig } from "../config.js";
@@ -17,7 +17,7 @@ export interface SessionsDeps {
 
 export function createSessionsRouter(deps: SessionsDeps): express.Router {
   const router = express.Router();
-  const readLimiter = new RateLimiter(600, 40);
+  const readLimiter = new RateLimiter(deps.config.readRateBurst, deps.config.readRateRefill);
 
   const authorize = async (req: Request, res: Response): Promise<SessionView | null> => {
     if (!readLimiter.take(req.ip ?? "unknown")) {
@@ -62,6 +62,16 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
 
   /** Shared by exec and file operations: the API only sees ciphertext. */
   const runOperation = async (req: Request, res: Response, opHint: string): Promise<void> => {
+    const transfer = opHint === "transfer";
+    const started = Date.now();
+    if (transfer) metrics.gauge("sandbox_transfer_active", "Active transfer operations").inc();
+    res.on("finish", () => {
+      if (!transfer) return;
+      metrics.gauge("sandbox_transfer_active", "Active transfer operations").dec();
+      metrics.histogram("sandbox_transfer_duration_seconds", "Transfer operation duration", LATENCY_BUCKETS).observe((Date.now() - started) / 1000);
+      metrics.counter("sandbox_transfer_total", "Transfer operations by result").inc({ result: res.statusCode < 300 ? "ok" : "error" });
+      if (res.statusCode >= 400) metrics.counter("sandbox_transfer_failures_total", "Transfer operations that failed").inc({ status: String(res.statusCode) });
+    });
     const session = await authorize(req, res);
     if (!session) return;
     if (session.state === "SUSPENDED") {
@@ -107,6 +117,9 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
   };
 
   router.post("/v1/sessions/:id/exec", rejectPlaintextBodies, (req, res) => runOperation(req, res, "exec"));
+  router.post("/v1/sessions/:id/transfers", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "transfer"),
+  );
 
   // Service and HTTP operations travel in the same opaque envelope. The API
   // never learns the command, port, headers or body.

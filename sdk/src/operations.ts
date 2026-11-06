@@ -15,6 +15,8 @@ import type {
   FileStatResult,
   GuestResult,
   OperationError,
+  TransferOperation,
+  TransferResult,
 } from "@x402s/shared";
 import type { ClientRuntime } from "./runtime.js";
 import { SandboxError } from "./types.js";
@@ -114,6 +116,16 @@ export class OperationService {
       method: "DELETE",
       headers: this.rt.auth(handle),
     });
+  }
+
+  transfer(
+    handle: SessionHandle,
+    operation: TransferOperation,
+    requestId: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<TransferResult | OperationError> {
+    return this.rt.run<TransferResult>(handle, operation, requestId, 0, timeoutMs, signal, "transfers");
   }
 
   getOperation(handle: SessionHandle, requestId: string, waitMs = 20_000): Promise<GuestResult | null> {

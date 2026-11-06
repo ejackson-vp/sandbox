@@ -25,6 +25,7 @@ type sessionConfig struct {
 	ProxyToken        string
 	MaxOutput         int
 	MaxFileBytes      int64
+	MaxTransferBytes  int64
 	MaxDiskMiB        int64
 	MaxCommandSeconds int
 	MaxProcesses      int
@@ -56,6 +57,7 @@ func configFromEnv() sessionConfig {
 		ProxyToken:        proxyToken,
 		MaxOutput:         parseIntEnv("MAX_OUTPUT_BYTES", 262144),
 		MaxFileBytes:      int64(parseIntEnv("MAX_FILE_BYTES", 8*1024*1024)),
+		MaxTransferBytes:  int64(parseIntEnv("MAX_TRANSFER_BYTES", 256*1024*1024)),
 		MaxDiskMiB:        int64(parseIntEnv("MAX_DISK_MIB", 256)),
 		MaxCommandSeconds: parseIntEnv("MAX_COMMAND_SECONDS", 300),
 		MaxProcesses:      parseIntEnv("MAX_PROCESSES", 256),

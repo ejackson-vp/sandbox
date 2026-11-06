@@ -50,6 +50,8 @@ export interface ApiConfig {
   createRateRefill: number;
   createIpRateBurst: number;
   createIpRateRefill: number;
+  readRateBurst: number;
+  readRateRefill: number;
   tiers: TierTable;
   platformLimits: PlatformLimits;
 }
@@ -118,6 +120,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     createRateRefill: int(env.CREATE_RATE_REFILL, 1, 1, 100_000),
     createIpRateBurst: int(env.CREATE_IP_RATE_BURST, 120, 1, 100_000),
     createIpRateRefill: int(env.CREATE_IP_RATE_REFILL, 10, 1, 100_000),
+    readRateBurst: int(env.READ_RATE_BURST, 2_400, 1, 100_000),
+    readRateRefill: int(env.READ_RATE_REFILL, 200, 1, 100_000),
     tiers: loadTiers(env),
     platformLimits: loadPlatformLimits(env),
   };

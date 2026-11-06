@@ -4,7 +4,7 @@
 import { z } from "zod";
 import { MAX_LEASE_SECONDS } from "@x402s/shared";
 
-const OP_LABELS = new Set(["exec", "file.put", "file.get", "file.list", "file.stat"]);
+const OP_LABELS = new Set(["exec", "transfer", "file.put", "file.get", "file.list", "file.stat"]);
 export function opLabel(op: string | undefined): string {
   return op && OP_LABELS.has(op) ? op : "other";
 }

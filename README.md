@@ -32,11 +32,13 @@ make demo-faults    # delete a suspended PVC; restart the controller mid-suspend
 make demo-http      # Node HTTP/SSE/WebSocket workload
 make demo-python    # Python pandas data-processing workload
 make demo-browser   # Playwright/Chromium compatibility probe
+make demo-large-file # 100 MiB streaming round trip
 make demo-http-basic # minimal Python HTTP server through the relay
 make demo-sse       # stream server-sent events through the relay
 make demo-ws        # WebSocket echo through the relay
 make test           # unit + local integration tests
 make test-workloads # workload fixtures and compatibility probes
+make test-transfers  # streaming transfer protocol checks
 make security-test  # packet-level isolation + lifecycle tests on the cluster
 make down
 ```
@@ -200,6 +202,10 @@ Run: `make test` and `make security-test` (after `make up`).
 - [docs/workload-compatibility.md](docs/workload-compatibility.md)
 - [docs/developer-experience-review.md](docs/developer-experience-review.md)
 - [docs/milestone-5-results.md](docs/milestone-5-results.md)
+- [docs/transfer-protocol.md](docs/transfer-protocol.md)
+- [docs/transfer-security.md](docs/transfer-security.md)
+- [docs/transfer-performance.md](docs/transfer-performance.md)
+- [docs/milestone-6-results.md](docs/milestone-6-results.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)
 - [docs/cli.md](docs/cli.md)

@@ -159,6 +159,7 @@ func runSession(cfg sessionConfig) error {
 		services:   map[string]*runner.Service{},
 		streams:    map[string]*httpStream{},
 		websockets: map[string]*wsStream{},
+		transfers:  newTransferManager(ws, cfg.MaxTransferBytes),
 		maxFile:    cfg.MaxFileBytes,
 	}
 	logEvent("guest_ready", map[string]any{"sessionId": cfg.SessionID, "leaseDeadline": sup.lease.UTC().Format(time.RFC3339)})
@@ -255,6 +256,7 @@ func runWarm() error {
 				ProxyToken:        claim.ProxyToken,
 				MaxOutput:         claim.MaxOutputBytes,
 				MaxFileBytes:      claim.MaxFileBytes,
+				MaxTransferBytes:  int64(parseIntEnv("MAX_TRANSFER_BYTES", 256*1024*1024)),
 				MaxDiskMiB:        claim.MaxDiskMiB,
 				MaxCommandSeconds: claim.MaxCommandSeconds,
 				MaxProcesses:      claim.MaxProcesses,
