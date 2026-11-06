@@ -40,6 +40,7 @@ make demo-ws        # WebSocket echo through the relay
 make test           # unit + local integration tests
 make test-workloads # workload fixtures and compatibility probes
 make test-transfers  # streaming transfer protocol checks
+make test-control-faults # 50-session controller-kill convergence on kind
 make security-test  # packet-level isolation + lifecycle tests on the cluster
 make down
 ```

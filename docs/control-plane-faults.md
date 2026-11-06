@@ -1,8 +1,9 @@
 # Control-plane fault recovery
 
-Status: initial fault slice implemented in
-`tests/integration/api-flow.test.ts`; full suite now 161 passed, 3 skipped.
-The broader child-process fault harness is next.
+Status: initial fault slice implemented in `tests/integration/api-flow.test.ts`;
+a real 50-session controller-kill harness is in `scripts/control-faults.ts`.
+Full suite is 161 passed, 3 skipped. API/relay kill and lifecycle-race matrices
+are next.
 
 ## Invariants
 
@@ -22,6 +23,7 @@ The broader child-process fault harness is next.
 | Persistent Pod-deletion failure | `keeps capacity reserved while a deleted Pod is still observed` | reservation stays `RELEASING`; after deletion is restored, orphan sweep + reaper release capacity |
 | Settlement failure | existing `does not create a session when settlement fails` | no session, no reservation attached |
 | Controller restart in cluster | existing security workload test | certifies no orphaned session after restart |
+| 50 sessions, controller killed during provisioning | `make test-control-faults` | **17.8 s to converge**, 50/50 sessions, 50 Pods, 50 allocated reservations, 0 failures; cleanup returned Pods/reservations to 0 |
 
 The Pod-adoption case required two product fixes:
 
@@ -31,8 +33,8 @@ The Pod-adoption case required two product fixes:
 
 ## Still required for the full milestone
 
-- A child-process fault controller that can pause/kill API, controller and relay
-  at named boundaries, rather than monkey-patching one method.
+- A process-level fault controller that can pause/kill API, controller and relay
+  at named boundaries; the 50-session controller kill is the first real case.
 - Deterministic convergence assertions instead of fixed sleeps.
 - 50 sessions across every lifecycle state at controller restart.
 - Duplicate/delayed payment, Kubernetes and relay responses.
