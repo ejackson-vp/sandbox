@@ -21,7 +21,7 @@ TEE isolation measurements.
 - Warm pods are counted from Kubernetes and replenishment preflights capacity.
 - Provisioning queue instrumentation: queue depth and wait histogram.
 - `make demo-capacity`, `make benchmark-capacity`, and `sandbox admin capacity`.
-- Structural guard still passes; no module over 600 lines.
+- Structural guard still passes; no module over 550 lines.
 
 ## Environment
 

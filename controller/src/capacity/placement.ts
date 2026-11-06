@@ -3,7 +3,6 @@
  * the controller's capacity-planning decision, not a guarantee.
  */
 import {
-  ZERO_RESOURCES,
   holdsCompute,
   subtractResources,
   type CapacityReservation,
@@ -14,10 +13,10 @@ import {
   type AccountingMode,
 } from "./types.js";
 
-export const SANDBOX_POOL_LABEL = "x402.io/sandbox-pool";
+const SANDBOX_POOL_LABEL = "x402.io/sandbox-pool";
 const DEFAULT_TOLERATIONS = ["x402.io/sandbox"];
 
-export function isNodeEligible(
+function isNodeEligible(
   node: NodeCapacity,
   request: SandboxResourceRequest,
 ): boolean {
@@ -32,7 +31,7 @@ export function isNodeEligible(
   );
 }
 
-export function reservedOnNode(
+function reservedOnNode(
   reservations: readonly CapacityReservation[],
   nodeId: string,
   now: number,
@@ -115,5 +114,3 @@ export function noEligibleNodeReason(
   }
   return "no_eligible_nodes";
 }
-
-export const EMPTY_RESERVATION_VECTOR = ZERO_RESOURCES;

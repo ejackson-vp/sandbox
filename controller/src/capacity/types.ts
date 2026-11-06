@@ -125,25 +125,7 @@ export type AdmissionDecision =
       requested: ResourceVector;
     };
 
-export interface CapacitySummary {
-  accounting: AccountingMode;
-  nodes: Array<{
-    id: string;
-    allocatable: ResourceVector;
-    reserved: ResourceVector;
-    available: ResourceVector;
-    eligible: boolean;
-  }>;
-  reservations: {
-    total: number;
-    held: number;
-    allocated: number;
-    suspended: number;
-    releasing: number;
-  };
-  reserved: ResourceVector;
-  available: ResourceVector;
-}
+
 
 const MIB = 1024 * 1024;
 

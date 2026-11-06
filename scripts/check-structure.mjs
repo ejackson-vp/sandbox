@@ -9,7 +9,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const MAX_LINES = 600;
+const MAX_LINES = 550;
 const ROOTS = ["shared/src", "sdk/src", "api/src", "controller/src", "guest"];
 
 function* files(dir) {

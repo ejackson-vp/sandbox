@@ -87,7 +87,7 @@ guest/websockets.go             polled WebSocket window
 
 ## Module size budget
 
-`npm run lint:structure` fails any `.ts`/`.go` module over 600 lines. The
+`npm run lint:structure` fails any `.ts`/`.go` module over 550 lines. The
 budget is a backstop, not a target: most modules are 100–350 lines. If a module
 grows past the budget, split it by use case or adapter, not by arbitrary line
 count.

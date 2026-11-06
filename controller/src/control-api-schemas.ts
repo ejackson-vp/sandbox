@@ -4,11 +4,11 @@
 import { z } from "zod";
 import { MAX_LEASE_SECONDS } from "@x402s/shared";
 
-export const OP_LABELS = new Set(["exec", "file.put", "file.get", "file.list", "file.stat"]);
+const OP_LABELS = new Set(["exec", "file.put", "file.get", "file.list", "file.stat"]);
 export function opLabel(op: string | undefined): string {
   return op && OP_LABELS.has(op) ? op : "other";
 }
-export const sessionIdPattern = /^sbx_[0-9a-f]{24}$/;
+const sessionIdPattern = /^sbx_[0-9a-f]{24}$/;
 
 export const intentClaimSchema = z.object({
   paymentKey: z.string().regex(/^[0-9a-f]{64}$/),
@@ -16,7 +16,7 @@ export const intentClaimSchema = z.object({
   staleMs: z.number().int().min(1000).max(600_000).optional(),
 });
 
-export const idlePolicySchema = z.object({
+const idlePolicySchema = z.object({
   maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
   suspendedDurationSeconds: z.number().int().min(1).max(28800).optional(),
   autoResume: z.boolean().optional(),
@@ -44,7 +44,7 @@ export const specSchema = z.object({
   }),
 });
 
-export const timingsSchema = z
+const timingsSchema = z
   .object({
     apiReceivedAt: z.number().int().optional(),
     paymentVerifyMs: z.number().nonnegative().max(600_000).optional(),

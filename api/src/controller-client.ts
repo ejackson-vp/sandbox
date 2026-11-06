@@ -4,6 +4,7 @@
  */
 import type {
   AttestationEnvelope,
+  EntitlementRequest,
   PaymentSummary,
   SessionLimits,
   SessionSpec,
@@ -83,29 +84,12 @@ export type CapacityDecision =
       requested: { cpuMillicores: number; memoryBytes: number; storageBytes: number };
     };
 
-export interface CompleteIntentBody {
-  sessionId: string;
-  capabilityHash: string;
-  capabilityExpiresAt: number;
-  spec: SessionSpec;
-  clientPublicKey: string;
-  clientNonce: string;
+export interface CompleteIntentBody extends EntitlementRequest {
   timings?: {
     apiReceivedAt?: number;
     paymentVerifyMs?: number;
     paymentSettleMs?: number;
     entitlementMs?: number;
-  };
-  payment: {
-    paymentKey: string;
-    network: string;
-    scheme: string;
-    asset: string;
-    amount: string;
-    payTo: string;
-    payer?: string;
-    transaction?: string;
-    mode: "mock" | "testnet";
   };
 }
 

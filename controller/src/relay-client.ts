@@ -11,7 +11,7 @@ export type RelayResponse =
   | { kind: "pending" }
   | { kind: "guest_error"; message: string };
 
-export class RelayUnavailableError extends Error {
+class RelayUnavailableError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
     this.name = "RelayUnavailableError";

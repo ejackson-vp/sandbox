@@ -23,10 +23,6 @@ export interface EntitlementRequest {
   };
 }
 
-export interface EntitlementResponse {
-  sessionId: string;
-  state: SessionState;
-}
 
 export interface PaymentIntentStatus {
   status: "claimed" | "pending" | "settled" | "failed";
