@@ -73,6 +73,7 @@ controller/src/snapshotter.ts   checkpoint port; no-op locally, Firecracker/Kata
 controller/src/store/           models + schema; Store is the SQL adapter facade
 controller/src/k8s-types.ts     provisioner contract and pod specs
 controller/src/k8s-null.ts      no-op provisioner for unit tests
+controller/src/capacity/        pure admission, placement and durable reservations
 
 guest/main.go                   entrypoint + session/warm lifecycle
 guest/config.go                 env/bootstrap configuration
@@ -102,6 +103,9 @@ Completed slices:
 - Explicit `SUSPENDING`/`RESUMING` states with idempotent crash recovery.
 - `Snapshotter` checkpoint port with a no-op local adapter, wired into
   suspend/resume/termination.
+- Capacity admission: integer baseline reservations, least-allocated placement,
+  SQLite `BEGIN IMMEDIATE` holds, pre-settlement capacity holds, suspend/resume
+  re-acquisition, and a constrained-capacity demo.
 
 Next slices:
 

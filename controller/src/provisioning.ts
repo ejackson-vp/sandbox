@@ -23,6 +23,12 @@ export class Provisioning {
         .listNonTerminal()
         .filter((s) => s.state === "PROVISIONING").length;
       if (active >= limit) {
+        const queued = session.timingsJson
+          ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
+          : {};
+        if (typeof queued.provisionQueueEnteredAt !== "number") {
+          this.ctx.store.mergeTimings(session.id, { provisionQueueEnteredAt: this.ctx.now() });
+        }
         const waited = session.paidAt === null ? 0 : this.ctx.now() - session.paidAt;
         if (this.ctx.cfg.provisionQueueTimeoutMs > 0 && waited > this.ctx.cfg.provisionQueueTimeoutMs) {
           this.ctx.store.requestTermination(session.id, "failure:provisioning_queue_timeout", {
@@ -33,6 +39,35 @@ export class Provisioning {
         }
         return;
       }
+    }
+    let reservation = this.ctx.capacity.getReservation(session.id);
+    if (!reservation) {
+      const admission = await this.ctx.capacity.attach(
+        session.paymentKey,
+        session.id,
+        "",
+        { limits: session.limits, ...(session.baselineCpuMillis && session.baselineMemoryMib ? {
+          baseline: { cpuMillis: session.baselineCpuMillis, memoryMiB: session.baselineMemoryMib },
+        } : {}) },
+      );
+      if (!admission.admitted) {
+        metrics.counter("sandbox_capacity_provision_deferred_total", "Paid sessions waiting for capacity").inc({
+          reason: admission.reason,
+        });
+        log.warn("sandbox_capacity_deferred", { sessionId: session.id, reason: admission.reason });
+        return;
+      }
+      reservation = admission.reservation;
+    }
+    const queued = session.timingsJson
+      ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
+      : {};
+    if (typeof queued.provisionQueueEnteredAt === "number" && typeof queued.provisionQueueWaitMs !== "number") {
+      const waitMs = Math.max(0, this.ctx.now() - queued.provisionQueueEnteredAt);
+      metrics
+        .histogram("sandbox_provisioning_wait_seconds", "Time spent waiting for a provisioning slot", LATENCY_BUCKETS)
+        .observe(waitMs / 1000);
+      this.ctx.store.mergeTimings(session.id, { provisionQueueWaitMs: waitMs });
     }
     const provisionBeginAt = this.ctx.now();
     const relayAddr = await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName);
@@ -71,8 +106,10 @@ export class Provisioning {
 
     const { podName, createStarted } = await this.createPod(session, relayAddr, proxyAddr, {
       ...(workspacePvc ? { workspacePvc } : {}),
+      ...(reservation && reservation.nodeId !== "disabled" ? { nodeName: reservation.nodeId } : {}),
     });
     this.ctx.store.setProvisioning(session.id, podName);
+    this.ctx.capacity.updatePod(session.id, podName);
     this.ctx.store.mergeTimings(session.id, { podCreateCallMs: Date.now() - createStarted });
     metrics
       .histogram("sandbox_provision_duration_seconds", "Entitlement to pod create", LATENCY_BUCKETS)

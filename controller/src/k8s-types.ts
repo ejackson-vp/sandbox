@@ -54,6 +54,18 @@ export interface WarmPodInfo {
   poolId: string;
   createdAt: number;
   phase: string;
+  nodeName?: string;
+}
+
+export interface NodeInfo {
+  name: string;
+  allocatableCpuMillis: number;
+  allocatableMemoryBytes: number;
+  allocatableStorageBytes: number;
+  labels: Record<string, string>;
+  taints: Array<{ key: string; effect: "NoSchedule" | "PreferNoSchedule" | "NoExecute" }>;
+  ready: boolean;
+  schedulable: boolean;
 }
 
 export interface Provisioner {
@@ -82,4 +94,6 @@ export interface Provisioner {
   /** Relabel a warm pod as a claimed sandbox (or update its session id). */
   patchPodLabels(podName: string, labels: Record<string, string | null>): Promise<void>;
   getServiceAddress(name: string): Promise<{ host: string; port: number } | null>;
+  /** Capacity planning only; Kubernetes remains the real scheduler. */
+  listNodes(): Promise<NodeInfo[]>;
 }

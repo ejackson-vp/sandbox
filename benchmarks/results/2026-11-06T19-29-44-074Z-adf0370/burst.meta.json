@@ -1,0 +1,23 @@
+{
+  "runId": "2026-11-06T19-29-44-074Z-adf0370",
+  "scenario": "burst",
+  "finishedAt": "2026-11-06T19:31:28.491Z",
+  "notes": [
+    "2026-11-06T19:29:44.092Z start burst; host=Darwin 27.2.0/arm64 docker=14cpu/7.7GiB kvm=false",
+    "2026-11-06T19:29:44.093Z burst: levels 5,10,25,50, spec {\"tier\":\"custom\",\"durationSeconds\":60,\"cpuMillis\":500,\"memoryMiB\":512,\"diskMiB\":256}",
+    "2026-11-06T19:29:44.093Z burst 5: cleaning up",
+    "2026-11-06T19:29:44.493Z burst 5: pool before=8",
+    "2026-11-06T19:29:47.980Z burst 5: ready 5/5, warm 5, cold 0, p50 647.4ms p95 650.5ms, 7.7/s, pool after 5; pool not replenished (5/8)",
+    "2026-11-06T19:29:47.980Z burst 10: cleaning up",
+    "2026-11-06T19:29:48.485Z burst 10: pool before=8",
+    "2026-11-06T19:29:53.532Z burst 10: ready 10/10, warm 8, cold 2, p50 755.2ms p95 2.24s, 4.5/s, pool after 6; 2 cold fallback(s); pool not replenished (6/8)",
+    "2026-11-06T19:29:53.533Z burst 25: cleaning up",
+    "2026-11-06T19:29:53.792Z burst 25: pool before=8",
+    "2026-11-06T19:30:04.501Z burst 25: ready 25/25, warm 8, cold 17, p50 3.18s p95 6.22s, 3.6/s, pool after 8; 17 cold fallback(s)",
+    "2026-11-06T19:30:04.501Z burst 50: cleaning up",
+    "2026-11-06T19:30:04.669Z burst 50: pool before=8",
+    "2026-11-06T19:31:28.391Z burst 50: ready 50/50, warm 8, cold 42, p50 16.07s p95 23.51s, 2.0/s, pool after 8; 42 cold fallback(s)",
+    "2026-11-06T19:31:28.491Z cleanup: swept 0 leftover sandbox pod(s)"
+  ],
+  "exitCode": 0
+}

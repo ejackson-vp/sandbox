@@ -4,6 +4,8 @@ Status: measurements on the reference workstation (macOS arm64, Docker Desktop).
 See [benchmark-methodology.md](benchmark-methodology.md) for environment,
 clocks, sample sizes and threats to validity. Raw data:
 `benchmarks/results/<run-id>/`; generated tables: `benchmarks/analysis/output/`.
+The Milestone 4 capacity-admission results are in
+[milestone-4-results.md](milestone-4-results.md).
 
 ## A. Performance summary
 

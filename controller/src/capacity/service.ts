@@ -1,0 +1,376 @@
+/**
+ * Capacity service: builds an immutable snapshot from Kubernetes + SQLite,
+ * delegates the decision to the pure model, and persists the reservation.
+ */
+import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
+import type { ControllerConfig } from "../config.js";
+import type { Provisioner } from "../k8s.js";
+import type { SessionRecord, Store } from "../store.js";
+import { admitCapacity } from "./admission.js";
+import { availableOnNode, placementCandidates } from "./placement.js";
+import type {
+  AdmissionDecision,
+  CapacitySnapshot,
+  NodeCapacity,
+  ReservationState,
+  ResourceVector,
+} from "./types.js";
+import { addResources, requestForLimits, requestForSession, ZERO_RESOURCES } from "./types.js";
+import type { ReservationAdmission, ReservationRecord } from "./reservations.js";
+
+const MIB = 1024 * 1024;
+
+export interface CapacityDeps {
+  cfg: ControllerConfig;
+  store: Store;
+  provisioner: Provisioner;
+}
+
+export interface CapacityView {
+  nodes: Array<{
+    id: string;
+    allocatable: ResourceVector;
+    reserved: ResourceVector;
+    available: ResourceVector;
+    eligible: boolean;
+  }>;
+  reservations: {
+    total: number;
+    held: number;
+    allocated: number;
+    suspended: number;
+    releasing: number;
+  };
+  reserved: ResourceVector;
+  available: ResourceVector;
+}
+
+export class CapacityService {
+  private nodeCache: { nodes: NodeCapacity[]; at: number } | null = null;
+
+  constructor(private readonly deps: CapacityDeps) {}
+
+  private async loadNodes(now: number): Promise<NodeCapacity[]> {
+    if (!this.deps.cfg.capacityEnabled) {
+      return [{
+        id: "disabled",
+        allocatable: {
+          cpuMillicores: 1_000_000,
+          memoryBytes: 1_000_000 * MIB,
+          storageBytes: 1_000_000 * MIB,
+        },
+        platformOverhead: ZERO_RESOURCES,
+        labels: { "x402.io/sandbox-pool": "true" },
+        taints: [],
+        ready: true,
+        schedulable: true,
+      }];
+    }
+    if (this.nodeCache && now - this.nodeCache.at < 1_000) return this.nodeCache.nodes;
+    const nodes = await this.deps.provisioner.listNodes();
+    const mapped: NodeCapacity[] = nodes.map((node) => ({
+      id: node.name,
+      allocatable: {
+        cpuMillicores:
+          this.deps.cfg.capacityNodeCpuOverrideMillis > 0
+            ? Math.min(node.allocatableCpuMillis, this.deps.cfg.capacityNodeCpuOverrideMillis)
+            : node.allocatableCpuMillis,
+        memoryBytes:
+          this.deps.cfg.capacityNodeMemoryOverrideMiB > 0
+            ? Math.min(node.allocatableMemoryBytes, this.deps.cfg.capacityNodeMemoryOverrideMiB * MIB)
+            : node.allocatableMemoryBytes,
+        storageBytes: node.allocatableStorageBytes,
+      },
+      platformOverhead: {
+        cpuMillicores: this.deps.cfg.capacityPlatformOverhead.cpuMillicores,
+        memoryBytes: this.deps.cfg.capacityPlatformOverhead.memoryMiB * MIB,
+        storageBytes: this.deps.cfg.capacityPlatformOverhead.storageMiB * MIB,
+      },
+      labels: node.labels,
+      taints: node.taints,
+      ready: node.ready,
+      schedulable: node.schedulable,
+    }));
+    this.nodeCache = { nodes: mapped, at: now };
+    return mapped;
+  }
+
+  private async warmReservationsForSnapshot(
+    nodes: NodeCapacity[],
+    now: number,
+  ): Promise<ReservationRecord[]> {
+    if (this.deps.cfg.warmPoolSize === 0) return [];
+    let warmPods;
+    try {
+      warmPods = await this.deps.provisioner.listWarmPods();
+    } catch {
+      return [];
+    }
+    if (warmPods.length === 0) return [];
+    const tier = this.deps.cfg.tiers[this.deps.cfg.warmPoolTier];
+    if (!tier) return [];
+    const request = requestForLimits({
+      cpuMillis: tier.cpuMillis,
+      memoryMiB: tier.memoryMiB,
+      diskMiB: tier.diskMiB,
+    });
+    const fallbackNode = nodes[0]?.id ?? "unassigned";
+    return warmPods
+      .filter((pod) => pod.phase !== "Succeeded" && pod.phase !== "Failed")
+      .map((pod) => ({
+        id: `warm_${pod.warmId}`,
+        paymentKey: null,
+        sessionId: null,
+        specHash: null,
+        nodeId: pod.nodeName ?? fallbackNode,
+        podName: pod.name,
+        state: "ALLOCATED" as ReservationState,
+        baseline: request.baseline,
+        peak: request.peak,
+        expiresAt: null,
+        createdAt: pod.createdAt,
+        updatedAt: now,
+      }));
+  }
+
+  private async snapshotWithWarm(): Promise<CapacitySnapshot> {
+    const now = Date.now();
+    const nodes = await this.loadNodes(now);
+    const reservations = this.deps.store.reservations.listActive();
+    const warm = await this.warmReservationsForSnapshot(nodes, now);
+    return { nodes, reservations: [...reservations, ...warm], now };
+  }
+
+  private observe(
+    decision: { admitted: boolean; reason?: string; retryable?: boolean },
+    durationMs: number,
+  ): void {
+    metrics
+      .histogram("sandbox_admission_duration_seconds", "Admission decision latency", LATENCY_BUCKETS)
+      .observe(durationMs / 1000);
+    metrics
+      .counter("sandbox_admission_total", "Capacity admission decisions")
+      .inc({
+        result: decision.admitted ? "admitted" : "rejected",
+        reason: decision.admitted ? "ok" : (decision.reason ?? "unknown"),
+      });
+    if (!decision.admitted) {
+      metrics
+        .counter("sandbox_admission_rejections_total", "Capacity rejections by reason")
+        .inc({ reason: decision.reason ?? "unknown", retryable: String(decision.retryable) });
+    }
+  }
+
+  private publishGauges(snapshot: CapacitySnapshot): void {
+    let reserved = ZERO_RESOURCES;
+    for (const reservation of snapshot.reservations) {
+      if (reservation.state === "RELEASED") continue;
+      const compute = reservation.state === "SUSPENDED"
+        ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: reservation.baseline.storageBytes }
+        : reservation.baseline;
+      reserved = addResources(reserved, compute);
+    }
+    const eligible = new Set(
+      placementCandidates(snapshot, {
+        baseline: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
+        peak: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
+      }).map((candidate) => candidate.node.id),
+    );
+    let available = ZERO_RESOURCES;
+    for (const node of snapshot.nodes) {
+      if (!eligible.has(node.id)) continue;
+      available = addResources(available, availableOnNode(node, snapshot.reservations, snapshot.now));
+    }
+    metrics.gauge("sandbox_capacity_reserved_cpu_millicores", "Reserved CPU millicores").set({}, reserved.cpuMillicores);
+    metrics.gauge("sandbox_capacity_reserved_memory_bytes", "Reserved memory bytes").set({}, reserved.memoryBytes);
+    metrics.gauge("sandbox_capacity_available_cpu_millicores", "Available CPU millicores").set({}, available.cpuMillicores);
+    metrics.gauge("sandbox_capacity_available_memory_bytes", "Available memory bytes").set({}, available.memoryBytes);
+  }
+
+  async preflight(spec: { limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } }): Promise<AdmissionDecision> {
+    const started = Date.now();
+    const snapshot = await this.snapshotWithWarm();
+    const decision = admitCapacity(snapshot, requestForLimits(spec.limits, spec.baseline));
+    this.observe(decision, Date.now() - started);
+    this.publishGauges(snapshot);
+    return decision;
+  }
+
+  async hold(
+    paymentKey: string,
+    specHash: string,
+    spec: { limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } },
+  ): Promise<ReservationAdmission> {
+    const started = Date.now();
+    const snapshot = await this.snapshotWithWarm();
+    const admission = this.deps.store.reservations.admit(
+      snapshot,
+      requestForLimits(spec.limits, spec.baseline),
+      { paymentKey, specHash, ttlMs: this.deps.cfg.capacityHoldTtlMs },
+    );
+    this.observe(admission, Date.now() - started);
+    this.publishGauges(snapshot);
+    return admission;
+  }
+
+  async attach(
+    paymentKey: string,
+    sessionId: string,
+    specHash: string,
+    spec: { limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } },
+  ): Promise<ReservationAdmission> {
+    const started = Date.now();
+    const snapshot = await this.snapshotWithWarm();
+    const admission = this.deps.store.reservations.attachToSession(
+      snapshot,
+      requestForLimits(spec.limits, spec.baseline),
+      paymentKey,
+      sessionId,
+      specHash,
+    );
+    this.observe(admission, Date.now() - started);
+    this.publishGauges(snapshot);
+    return admission;
+  }
+
+  async resume(session: SessionRecord): Promise<ReservationAdmission> {
+    const started = Date.now();
+    const snapshot = await this.snapshotWithWarm();
+    const request = requestForSession(session);
+    if (this.deps.cfg.pinCheckpointNode && session.nodeName) {
+      request.requiredNodeId = session.nodeName;
+    }
+    const existing = this.deps.store.reservations.getBySession(session.id);
+    const admission = !existing || existing.state === "RELEASED"
+      ? this.deps.store.reservations.attachToSession(snapshot, request, session.paymentKey, session.id, "")
+      : this.deps.store.reservations.resume(snapshot, request, session.id);
+    this.observe(admission, Date.now() - started);
+    this.publishGauges(snapshot);
+    return admission;
+  }
+
+  releasePayment(paymentKey: string): boolean {
+    return this.deps.store.reservations.releasePayment(paymentKey);
+  }
+
+  suspend(sessionId: string): boolean {
+    return this.deps.store.reservations.suspendSession(sessionId);
+  }
+
+  beginRelease(sessionId: string, podName: string | null): boolean {
+    if (!podName) return this.deps.store.reservations.releaseSession(sessionId);
+    return this.deps.store.reservations.beginRelease(sessionId, podName);
+  }
+
+  confirmRelease(sessionId: string): boolean {
+    return this.deps.store.reservations.confirmRelease(sessionId);
+  }
+
+  releaseSession(sessionId: string): boolean {
+    return this.deps.store.reservations.releaseSession(sessionId);
+  }
+
+  getReservation(sessionId: string): ReservationRecord | null {
+    return this.deps.store.reservations.getBySession(sessionId);
+  }
+
+  updatePod(sessionId: string, podName: string): void {
+    this.deps.store.reservations.updatePod(sessionId, podName);
+  }
+
+  async reap(): Promise<void> {
+    const now = Date.now();
+    const expired = this.deps.store.reservations.reapExpiredHolds(now);
+    if (expired > 0) {
+      metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "expired_hold" }, expired);
+    }
+    for (const reservation of this.deps.store.reservations.listActive()) {
+      if (!reservation.sessionId) continue;
+      const session = this.deps.store.getSession(reservation.sessionId);
+      if (!session) continue;
+      if (["EXPIRED", "FAILED", "DESTROYED"].includes(session.state) && reservation.state !== "RELEASING") {
+        if (reservation.podName) {
+          this.deps.store.reservations.beginRelease(reservation.sessionId, reservation.podName);
+        } else {
+          this.deps.store.reservations.releaseSession(reservation.sessionId);
+        }
+        metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "terminal_session" });
+      } else if (session.state === "SUSPENDED" && reservation.state === "ALLOCATED") {
+        this.deps.store.reservations.suspendSession(reservation.sessionId);
+        metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "suspended_session" });
+      }
+    }
+    for (const reservation of this.deps.store.reservations.listReleasing()) {
+      if (!reservation.podName) {
+        this.deps.store.reservations.confirmRelease(reservation.sessionId ?? "");
+        continue;
+      }
+      const pod = await this.deps.provisioner.getPod(reservation.podName).catch(() => null);
+      if (!pod || pod.phase === "Succeeded" || pod.phase === "Failed") {
+        this.deps.store.reservations.confirmRelease(reservation.sessionId ?? "");
+        metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "released_pod_gone" });
+      } else if (now - reservation.updatedAt > 60_000) {
+        metrics.counter("sandbox_reservation_leaks_detected_total", "Reservations stuck in RELEASING").inc();
+      }
+    }
+    this.publishGauges(await this.snapshotWithWarm());
+  }
+
+  async summary(): Promise<CapacityView> {
+    const snapshot = await this.snapshotWithWarm();
+    const reservations = snapshot.reservations;
+    const count = (state: ReservationState) => reservations.filter((r) => r.state === state).length;
+    const reserved = reservations.reduce((sum, reservation) => {
+      if (reservation.state === "RELEASED") return sum;
+      return addResources(
+        sum,
+        reservation.state === "SUSPENDED"
+          ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: reservation.baseline.storageBytes }
+          : reservation.baseline,
+      );
+    }, ZERO_RESOURCES);
+    const eligibleIds = new Set(
+      placementCandidates(snapshot, {
+        baseline: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
+        peak: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
+      }).map((candidate) => candidate.node.id),
+    );
+    let available = ZERO_RESOURCES;
+    for (const node of snapshot.nodes) {
+      if (!eligibleIds.has(node.id)) continue;
+      available = addResources(available, availableOnNode(node, reservations, snapshot.now));
+    }
+    return {
+      nodes: snapshot.nodes.map((node) => ({
+        id: node.id,
+        allocatable: node.allocatable,
+        reserved: addResources(
+          reservations
+            .filter((r) => r.nodeId === node.id && r.state !== "RELEASED")
+            .reduce(
+              (sum, r) =>
+                addResources(
+                  sum,
+                  r.state === "SUSPENDED"
+                    ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: r.baseline.storageBytes }
+                    : r.baseline,
+                ),
+              ZERO_RESOURCES,
+            ),
+          node.platformOverhead,
+        ),
+        available: availableOnNode(node, reservations, snapshot.now),
+        eligible: eligibleIds.has(node.id),
+      })),
+      reservations: {
+        total: reservations.length,
+        held: count("HELD"),
+        allocated: count("ALLOCATED"),
+        suspended: count("SUSPENDED"),
+        releasing: count("RELEASING"),
+      },
+      reserved,
+      available,
+    };
+  }
+}

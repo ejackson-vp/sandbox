@@ -13,6 +13,7 @@ export class LifecycleError extends Error {
     readonly code: string,
     message: string,
     readonly status: number = 409,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "LifecycleError";
@@ -110,6 +111,7 @@ export class Lifecycle {
       throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
     }
     await this.ctx.relay.purge(id).catch(() => undefined);
+    this.ctx.capacity.suspend(id);
     metrics.counter("sandbox_sessions_suspended_total", "Sessions suspended").inc();
     log.info("sandbox_suspended", { sessionId: id, suspendedAt });
   }
@@ -165,15 +167,37 @@ export class Lifecycle {
     if (!relayAddr || !proxyAddr) {
       throw new LifecycleError("control_plane_unavailable", "relay or proxy unavailable", 503);
     }
-    await this.ctx.snapshotter.restore(session);
-    const { podName } = await this.provisioning.createPod(session, relayAddr, proxyAddr, {
-      workspacePvc: session.workspacePvc,
-      resume: true,
-      ...(this.ctx.cfg.pinCheckpointNode && session.nodeName ? { nodeName: session.nodeName } : {}),
-    });
+    const admission = await this.ctx.capacity.resume(session);
+    if (!admission.admitted) {
+      throw new LifecycleError(
+        "capacity_unavailable",
+        `cannot resume: ${admission.reason}`,
+        409,
+        {
+          retryable: admission.retryable,
+          requested: admission.requested,
+        },
+      );
+    }
+    let podName: string;
+    try {
+      await this.ctx.snapshotter.restore(session);
+      ({ podName } = await this.provisioning.createPod(session, relayAddr, proxyAddr, {
+        workspacePvc: session.workspacePvc,
+        resume: true,
+        ...(this.ctx.cfg.pinCheckpointNode && session.nodeName ? { nodeName: session.nodeName } : {}),
+      }));
+    } catch (err) {
+      // The compute reservation is no longer usable; return it before the
+      // caller retries. The workspace stays SUSPENDED.
+      this.ctx.capacity.suspend(id);
+      throw err;
+    }
+    this.ctx.capacity.updatePod(id, podName);
     if (!this.ctx.store.markResuming(id, podName)) {
       await this.ctx.provisioner.deletePod(podName, 0).catch(() => undefined);
       await this.ctx.relay.purge(id).catch(() => undefined);
+      this.ctx.capacity.suspend(id);
       throw new LifecycleError("not_suspended", "session changed state while resuming", 409);
     }
     metrics.counter("sandbox_sessions_resumed_total", "Sessions resumed").inc();

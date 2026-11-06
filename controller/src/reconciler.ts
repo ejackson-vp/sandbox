@@ -25,6 +25,7 @@ import { Lifecycle } from "./lifecycle.js";
 import { Termination } from "./termination.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import { NoopSnapshotter, type Snapshotter } from "./snapshotter.js";
+import { CapacityService } from "./capacity/service.js";
 import { log } from "./log.js";
 
 export { LifecycleError } from "./lifecycle.js";
@@ -37,6 +38,8 @@ export interface ReconcilerDeps {
   now?: () => number;
   /** Override for tests or a future Firecracker/Kata checkpoint adapter. */
   snapshotter?: Snapshotter;
+  /** Injectable for tests; defaults to the real capacity service. */
+  capacity?: CapacityService;
   /** Override for tests: resolves service addresses without Kubernetes. */
   serviceAddress?: (name: string) => Promise<{ host: string; port: number } | null>;
 }
@@ -62,11 +65,17 @@ export class Reconciler {
 
   constructor(private readonly deps: ReconcilerDeps) {
     this.now = deps.now ?? (() => Date.now());
+    const capacity = deps.capacity ?? new CapacityService({
+      cfg: deps.cfg,
+      store: deps.store,
+      provisioner: deps.provisioner,
+    });
     this.ctx = {
       cfg: deps.cfg,
       store: deps.store,
       provisioner: deps.provisioner,
       relay: deps.relay,
+      capacity,
       snapshotter: deps.snapshotter ?? new NoopSnapshotter(),
       now: () => this.now(),
       serviceAddress: (name) => this.serviceAddress(name),
@@ -142,6 +151,7 @@ export class Reconciler {
       metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE").set({}, active);
       metrics.gauge("sandbox_provisioning_active", "Sessions in PROVISIONING or RESUMING").set({}, provisioning);
       metrics.gauge("sandbox_provisioning_queued", "PAID sessions waiting for a provisioning slot").set({}, queued);
+      metrics.gauge("sandbox_provisioning_queue_depth", "PAID sessions waiting for a provisioning slot").set({}, queued);
     } catch (err) {
       log.error("reconcile_pass_failed", { error: (err as Error).message });
     } finally {
@@ -165,6 +175,7 @@ export class Reconciler {
       await this.warm.reconcile();
       await this.lifecycle.enforce();
       await this.lifecycle.cleanup();
+      await this.ctx.capacity.reap();
     } catch (err) {
       log.warn("housekeeping_failed", { error: (err as Error).message });
     } finally {

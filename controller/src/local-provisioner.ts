@@ -11,7 +11,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Provisioner, SandboxPodSpec, WarmPodInfo, WarmPodSpec } from "./k8s.js";
+import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodInfo, WarmPodSpec } from "./k8s.js";
 import { GUEST_TOOLS } from "./k8s.js";
 
 interface LocalPod {
@@ -180,6 +180,20 @@ export class LocalProvisioner implements Provisioner {
     rmSync(pod.workDir, { recursive: true, force: true });
   }
 
+  async listNodes(): Promise<NodeInfo[]> {
+    const mib = 1024 * 1024;
+    return [{
+      name: "local",
+      allocatableCpuMillis: Number(process.env.CAPACITY_LOCAL_CPU_MILLICORES ?? 14_000),
+      allocatableMemoryBytes: Number(process.env.CAPACITY_LOCAL_MEMORY_MIB ?? 4_096) * mib,
+      allocatableStorageBytes: Number(process.env.CAPACITY_LOCAL_STORAGE_MIB ?? 20_480) * mib,
+      labels: { "x402.io/sandbox-pool": "true" },
+      taints: [],
+      ready: true,
+      schedulable: true,
+    }];
+  }
+
   async nodeAvailable(): Promise<boolean> {
     return true;
   }
@@ -216,6 +230,7 @@ export class LocalProvisioner implements Provisioner {
         sessionId: p.sessionId,
         createdAt: p.createdAt,
         phase: p.phase,
+        nodeName: "local",
       }));
   }
 
@@ -228,6 +243,7 @@ export class LocalProvisioner implements Provisioner {
         poolId: `warm_${p.warmId}`,
         createdAt: p.createdAt,
         phase: p.phase,
+        nodeName: "local",
       }));
   }
 

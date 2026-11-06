@@ -23,6 +23,7 @@ import { Store } from "../../controller/src/store.js";
 import type { SessionRecord } from "../../controller/src/store.js";
 import type { Snapshotter } from "../../controller/src/snapshotter.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
+import { CapacityService } from "../../controller/src/capacity/service.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import {
   fromBase64,
@@ -154,6 +155,8 @@ beforeAll(async () => {
     workRoot: join(workDir, "sandboxes"),
   });
 
+  const capacity = new CapacityService({ cfg: controllerCfg, store, provisioner });
+
   let suspendFn: ((id: string) => Promise<void>) | undefined;
   let resumeFn: ((id: string) => Promise<void>) | undefined;
   servers.push(
@@ -162,6 +165,7 @@ beforeAll(async () => {
         cfg: controllerCfg,
         store,
         relay: relayClient,
+        capacity,
         suspend: (id) => {
           if (!suspendFn) return Promise.reject(new Error("reconciler not started"));
           return suspendFn(id);
@@ -180,6 +184,7 @@ beforeAll(async () => {
     store,
     provisioner,
     relay: relayClient,
+    capacity,
     snapshotter,
   });
   suspendFn = (id) => reconciler.suspendSession(id);
@@ -690,6 +695,22 @@ describe("checkpoint and resume", () => {
     await client.destroy(handle);
     expect(snapshotter.discarded).toContain(handle.sessionId);
   }, 180_000);
+});
+
+describe("capacity admission", () => {
+  it("rejects an oversized session before payment", async () => {
+    await expect(
+      client.createSession({
+        tier: "custom",
+        durationSeconds: 60,
+        cpuMillis: 1000,
+        memoryMiB: 8192,
+        diskMiB: 1024,
+        baselineCpuMillis: 500,
+        baselineMemoryMiB: 4096,
+      }),
+    ).rejects.toMatchObject({ code: "capacity_unavailable" });
+  }, 60_000);
 });
 
 describe("configuration guards", () => {

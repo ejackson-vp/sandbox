@@ -34,6 +34,8 @@ import {
   operationSchema,
   opLabel,
 } from "./control-api-schemas.js";
+import type { CapacityService } from "./capacity/service.js";
+import { createCapacityRouter } from "./capacity/routes.js";
 
 export interface ControlApiDeps {
   cfg: ControllerConfig;
@@ -44,6 +46,8 @@ export interface ControlApiDeps {
   /** Optional lifecycle actions (the reconciler owns them). */
   suspend?: (id: string) => Promise<void>;
   resume?: (id: string) => Promise<void>;
+  /** Capacity admission and reservation accounting. */
+  capacity: CapacityService;
 }
 
 export function createControlApi(deps: ControlApiDeps): express.Express {
@@ -86,6 +90,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     }
     next();
   });
+  app.use("/internal", createCapacityRouter(deps.capacity));
 
   const describe = (id: string) => {
     const session = store.getSession(id);
@@ -186,7 +191,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     res.json(status);
   });
 
-  app.post("/internal/payment-intents/:paymentKey/complete", (req: Request, res: Response) => {
+  app.post("/internal/payment-intents/:paymentKey/complete", async (req: Request, res: Response) => {
     const paymentKey = String(req.params.paymentKey ?? "");
     const parsed = completeSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -245,6 +250,16 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     const expectedHash = computeSpecHash(spec);
     if (intent.specHash !== expectedHash || expectedHash !== computeSpecHash(resolution.spec)) {
       res.status(409).json({ error: "spec_hash_mismatch" });
+      return;
+    }
+
+    const admission = await deps.capacity.attach(paymentKey, body.sessionId, expectedHash, spec);
+    if (!admission.admitted) {
+      res.status(409).json({
+        error: "capacity_unavailable",
+        retryable: admission.retryable,
+        requested: admission.requested,
+      });
       return;
     }
 
@@ -317,6 +332,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
         res.status(409).json({ error: "payment_already_redeemed", sessionId: existing?.sessionId });
         return;
       }
+      deps.capacity.releaseSession?.(body.sessionId);
       throw err;
     }
     log.info("entitlement_created", {
@@ -362,7 +378,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       res.json(view);
     } catch (err) {
       if (err instanceof LifecycleError) {
-        res.status(err.status).json({ error: err.code, message: err.message });
+        res.status(err.status).json({ error: err.code, message: err.message, ...(err.details ?? {}) });
         return;
       }
       res.status(500).json({ error: "suspend_failed", message: (err as Error).message });
@@ -385,7 +401,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       res.status(202).json(view);
     } catch (err) {
       if (err instanceof LifecycleError) {
-        res.status(err.status).json({ error: err.code, message: err.message });
+        res.status(err.status).json({ error: err.code, message: err.message, ...(err.details ?? {}) });
         return;
       }
       res.status(500).json({ error: "resume_failed", message: (err as Error).message });

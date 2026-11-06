@@ -49,6 +49,7 @@ Usage:
   sandbox agent-demo <file>     # same, purchased through @x402/fetch
   sandbox pricing
   sandbox sessions              # locally stored session handles
+  sandbox admin capacity        # inspect controller capacity/reservations
 
 Common options:
   --api-url <url>               default http://localhost:8080
@@ -168,6 +169,21 @@ async function main(): Promise<number> {
   if (command === "version") {
     process.stdout.write("sandbox 0.2.0\n");
     return 0;
+  }
+
+  if (command === "admin") {
+    if (positionals[1] !== "capacity") {
+      process.stderr.write("usage: sandbox admin capacity\n");
+      return 2;
+    }
+    const controllerUrl = process.env.CONTROLLER_URL ?? "http://localhost:3001";
+    const token = process.env.CONTROLLER_ADMIN_TOKEN ?? process.env.ADMIN_TOKEN ?? "";
+    const res = await fetch(new URL("/internal/capacity", controllerUrl), {
+      headers: { "x-internal-token": token },
+    });
+    const body = await res.json().catch(() => ({}));
+    process.stdout.write(JSON.stringify(body, null, 2) + "\n");
+    return res.ok ? 0 : 1;
   }
 
   if (command === "pricing") {

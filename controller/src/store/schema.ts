@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL;");
@@ -15,6 +15,7 @@ export function migrate(db: DatabaseSync): void {
     ?.user_version ?? 0;
   if (version !== SCHEMA_VERSION) {
     db.exec(`
+    DROP TABLE IF EXISTS reservations;
     DROP TABLE IF EXISTS exec_requests;
     DROP TABLE IF EXISTS sessions;
     DROP TABLE IF EXISTS payment_intents;
@@ -91,6 +92,27 @@ export function migrate(db: DatabaseSync): void {
     node_name TEXT,
     updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS reservations (
+    id TEXT PRIMARY KEY,
+    payment_key TEXT UNIQUE,
+    session_id TEXT UNIQUE,
+    warm_id TEXT UNIQUE,
+    spec_hash TEXT,
+    node_id TEXT NOT NULL,
+    pod_name TEXT,
+    state TEXT NOT NULL,
+    baseline_cpu_millis INTEGER NOT NULL,
+    baseline_memory_bytes INTEGER NOT NULL,
+    baseline_storage_bytes INTEGER NOT NULL,
+    peak_cpu_millis INTEGER NOT NULL,
+    peak_memory_bytes INTEGER NOT NULL,
+    peak_storage_bytes INTEGER NOT NULL,
+    expires_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS reservations_state ON reservations(state);
+    CREATE INDEX IF NOT EXISTS reservations_node ON reservations(node_id);
     CREATE TABLE IF NOT EXISTS exec_requests (
     id TEXT NOT NULL,
     session_id TEXT NOT NULL,

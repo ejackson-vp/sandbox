@@ -24,6 +24,7 @@ make up-2w          # two workers for scheduling/portability tests only
 make demo-session   # the full 11-step session workflow
 make demo-expire    # buy a 5s session, watch it expire and clean up
 make demo-lifecycle # checkpoint a session, resume it, verify the workspace
+make demo-capacity  # capacity reject, suspend, B takes the node, A resume rejected
 make demo-portability # cordon the checkpoint node; prove resume fails fast
 make demo-faults    # delete a suspended PVC; restart the controller mid-suspend
 make demo-http      # run a server in the sandbox and fetch it via the relay
@@ -59,7 +60,9 @@ relay; see [docs/http.md](docs/http.md).
 
 Lifecycle: `make demo-lifecycle` exercises the suspend/resume contract; see
 [docs/lifecycle.md](docs/lifecycle.md) for the state machine, security caveats
-and the AWS Lambda MicroVMs comparison.
+and the AWS Lambda MicroVMs comparison. `make demo-capacity` demonstrates
+admission, suspension and re-admission under a deliberately constrained node;
+see [docs/admission-design.md](docs/admission-design.md).
 
 Other targets: `make demo` (create + run a file + destroy), `make demo-agent`
 (purchase through `@x402/fetch`), `make demo-timeout` (per-command timeout).
@@ -194,6 +197,11 @@ Run: `make test` and `make security-test` (after `make up`).
 - [docs/threat-model.md](docs/threat-model.md)
 - [docs/security-guarantees.md](docs/security-guarantees.md)
 - [docs/aws-microvms-comparison.md](docs/aws-microvms-comparison.md)
+- [docs/capacity-model.md](docs/capacity-model.md)
+- [docs/admission-design.md](docs/admission-design.md)
+- [docs/reservation-lifecycle.md](docs/reservation-lifecycle.md)
+- [docs/scheduling-tradeoffs.md](docs/scheduling-tradeoffs.md)
+- [docs/milestone-4-results.md](docs/milestone-4-results.md)
 - [docs/production-readiness.md](docs/production-readiness.md)
 
 ## Explicit non-goals

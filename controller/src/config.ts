@@ -73,6 +73,15 @@ export interface ControllerConfig {
   maxConcurrentProvisioning: number;
   /** 0 = no queue timeout; otherwise fail a PAID session after this wait. */
   provisionQueueTimeoutMs: number;
+  /** Capacity admission is on by default; disable only for local debugging. */
+  capacityEnabled: boolean;
+  /** Provisional payment hold lifetime. */
+  capacityHoldTtlMs: number;
+  /** Per-node headroom withheld from sandboxes for system workloads. */
+  capacityPlatformOverhead: { cpuMillicores: number; memoryMiB: number; storageMiB: number };
+  /** Optional test/demo ceilings; 0 means use the node's allocatable values. */
+  capacityNodeCpuOverrideMillis: number;
+  capacityNodeMemoryOverrideMiB: number;
 }
 
 /**
@@ -184,6 +193,15 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     pinCheckpointNode: bool(env.PIN_CHECKPOINT_NODE, true),
     maxConcurrentProvisioning: int(env.MAX_CONCURRENT_PROVISIONING, 0, 0, 1_000),
     provisionQueueTimeoutMs: int(env.PROVISION_QUEUE_TIMEOUT_MS, 120_000, 0, 3_600_000),
+    capacityEnabled: bool(env.CAPACITY_ENABLED, true),
+    capacityHoldTtlMs: int(env.CAPACITY_HOLD_TTL_MS, 120_000, 5_000, 900_000),
+    capacityPlatformOverhead: {
+      cpuMillicores: int(env.CAPACITY_PLATFORM_OVERHEAD_CPU_MILLICORES, 250, 0, 64_000),
+      memoryMiB: int(env.CAPACITY_PLATFORM_OVERHEAD_MEMORY_MIB, 256, 0, 1_048_576),
+      storageMiB: int(env.CAPACITY_PLATFORM_OVERHEAD_STORAGE_MIB, 1_024, 0, 1_048_576),
+    },
+    capacityNodeCpuOverrideMillis: int(env.CAPACITY_NODE_CPU_MILLICORES, 0, 0, 1_000_000),
+    capacityNodeMemoryOverrideMiB: int(env.CAPACITY_NODE_MEMORY_MIB, 0, 0, 1_048_576),
   };
 }
 

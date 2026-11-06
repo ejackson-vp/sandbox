@@ -258,8 +258,15 @@ export class WarmPool {
     const relayAddr = await this.ctx.serviceAddress(cfg.relayServiceName);
     const proxyAddr = await this.ctx.serviceAddress(cfg.proxyServiceName);
     if (!relayAddr || !proxyAddr) return;
-    // Bounded per pass so a large pool does not burst the kubelet.
+    // Bounded per pass so a large pool does not burst the kubelet. Capacity is
+    // checked against actual warm pods; replenishment is intentionally slow so
+    // the next housekeeping pass observes the pod we just created.
     for (let i = 0; i < Math.min(missing, 2); i++) {
+      const decision = await this.ctx.capacity.preflight({ limits: this.limits() });
+      if (!decision.admitted) {
+        log.info("warm_pool_capacity_rejected", { reason: decision.reason });
+        break;
+      }
       await this.create(relayAddr, proxyAddr);
     }
   }

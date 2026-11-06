@@ -21,7 +21,7 @@ import {
   type SessionSpec,
 } from "@x402s/shared";
 import type { ApiConfig } from "../config.js";
-import { ControllerError, type ControllerClient } from "../controller-client.js";
+import { ControllerError, type CapacityDecision, type ControllerClient } from "../controller-client.js";
 import { createSchema } from "../schemas.js";
 import { RateLimiter, paymentPayerKey } from "../admission.js";
 import type { SettlementLookup } from "../settlement-lookup.js";
@@ -38,6 +38,16 @@ export interface CreateSessionDeps {
   capabilityFor(key: string): string;
   ipCreateLimiter: RateLimiter;
   createLimiter: RateLimiter;
+}
+
+function rejectCapacity(res: Response, decision: Extract<CapacityDecision, { admitted: false }>): void {
+  res.setHeader("Retry-After", decision.retryable ? "5" : "0");
+  res.status(decision.retryable ? 503 : 409).json({
+    error: "capacity_unavailable",
+    retryable: decision.retryable,
+    reason: decision.reason,
+    requested: decision.requested,
+  });
 }
 
 export function createSessionHandler(deps: CreateSessionDeps) {
@@ -71,6 +81,18 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       return;
     }
     const { spec, priceUsd } = resolution;
+    let preflight: CapacityDecision;
+    try {
+      preflight = await deps.controller.preflightCapacity(spec);
+    } catch (err) {
+      log.error("capacity_preflight_failed", { error: (err as Error).message });
+      res.status(503).json({ error: "admission_unavailable", retryable: true, message: "try again shortly" });
+      return;
+    }
+    if (!preflight.admitted) {
+      rejectCapacity(res, preflight);
+      return;
+    }
     const requirement = await deps.requirementFor(priceUsd, spec);
     const specDigest = specHash(spec);
 
@@ -113,20 +135,40 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     const capability = deps.capabilityFor(key);
     const capabilityHash = sha256Hex(capability);
 
+    // Authoritative capacity hold happens before settlement. The preflight at
+    // 402 time is advisory; this closes the race between the 402 and payment.
+    let hold: CapacityDecision;
+    try {
+      hold = await deps.controller.holdCapacity(key, specDigest, spec);
+    } catch (err) {
+      log.error("capacity_hold_failed", { error: (err as Error).message });
+      res.status(503).json({ error: "admission_unavailable", retryable: true, message: "try again shortly" });
+      return;
+    }
+    if (!hold.admitted) {
+      rejectCapacity(res, hold);
+      return;
+    }
+
     const claim = await deps.controller.claimIntent(key, specDigest, deps.config.intentStaleMs);
     if (claim.status === "in_progress") {
       res.status(409).json({ error: "payment_in_progress", message: "this payment is already being processed" });
       return;
     }
     if (claim.status === "failed") {
+      await deps.controller.releaseCapacity(key);
       await deps.payment402(res, requirement, `payment_intent_failed:${claim.reason ?? "unknown"}`);
       return;
     }
     if (claim.status === "mismatch") {
+      await deps.controller.releaseCapacity(key);
       res.status(409).json({ error: "spec_mismatch", message: "this payment was made for a different session spec" });
       return;
     }
     if (claim.status === "settled") {
+      // A replay must not leave a fresh provisional hold behind. This only
+      // releases HELD rows; an existing session reservation is untouched.
+      await deps.controller.releaseCapacity(key);
       const session = await deps.controller.getSession(claim.sessionId).catch(() => null);
       if (!session) {
         res.status(409).json({ error: "entitlement_missing", sessionId: claim.sessionId });
@@ -177,6 +219,15 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       } catch (err) {
         // A concurrent/recovered completion may have won the race. The
         // capability is derived from the same payment, so return that session.
+        if (err instanceof ControllerError && err.code === "capacity_unavailable") {
+          res.status(503).json({
+            error: "capacity_unavailable",
+            retryable: true,
+            message: "payment settled but capacity is no longer available; retry with the same payment",
+            ...(err.detail && typeof err.detail === "object" ? err.detail : {}),
+          });
+          return false;
+        }
         if (err instanceof ControllerError && err.status === 409) {
           const detail = err.detail as { sessionId?: string } | undefined;
           if (detail?.sessionId) {
@@ -252,10 +303,12 @@ export function createSessionHandler(deps: CreateSessionDeps) {
         .observe(paymentVerifyMs / 1000);
     } catch (err) {
       log.warn("payment_verify_error", { error: (err as Error).message });
+      await deps.controller.releaseCapacity(key);
       await deps.payment402(res, requirement, "payment_verify_failed");
       return;
     }
     if (!verify.isValid) {
+      await deps.controller.releaseCapacity(key);
       await deps.payment402(res, requirement, `payment_invalid:${verify.invalidReason ?? "unknown"}`);
       return;
     }
@@ -265,6 +318,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       if (!health.ok) throw new Error("controller unhealthy");
     } catch {
       await deps.controller.failIntent(key, "control_plane_unavailable").catch(() => undefined);
+      await deps.controller.releaseCapacity(key);
       res.status(503).json({ error: "provisioning_unavailable", message: "try again later; no payment was taken" });
       return;
     }
@@ -278,6 +332,8 @@ export function createSessionHandler(deps: CreateSessionDeps) {
         .histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS)
         .observe(paymentSettleMs / 1000);
     } catch (err) {
+      // Settlement may have succeeded even though the call failed. Keep the
+      // hold until its TTL so recovery cannot over-allocate capacity.
       log.warn("payment_settle_error", { error: (err as Error).message });
       await deps.controller.failIntent(key, "settle_error").catch(() => undefined);
       await deps.payment402(res, requirement, "payment_settle_failed");
@@ -300,6 +356,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
         }
       }
       await deps.controller.failIntent(key, settle.errorReason ?? "settlement_rejected").catch(() => undefined);
+      await deps.controller.releaseCapacity(key);
       await deps.payment402(res, requirement, `payment_settlement_rejected:${settle.errorReason ?? "unknown"}`);
       return;
     }

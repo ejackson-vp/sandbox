@@ -1,7 +1,9 @@
 # Admission control
 
-Status: two-bucket admission is implemented; the burst matrix is measured on
-the local kind rig. A global capacity guard is not implemented yet.
+Status: two-bucket admission and global capacity admission are implemented;
+the burst matrix and constrained-capacity results are measured on the local
+kind rig. See [admission-design.md](admission-design.md) and
+[milestone-4-results.md](milestone-4-results.md).
 
 ## Why two buckets
 
@@ -115,11 +117,18 @@ make benchmark-burst
 npx tsx benchmarks/harness/cli.ts burst --levels 50 --max 50 --yes
 ```
 
+## Capacity admission
+
+Before a `402` the API asks the controller for a capacity preflight. After the
+payment header is validated, but **before settlement**, it creates an
+authoritative hold keyed by payment key and spec hash. A capacity rejection is
+`503 capacity_unavailable` with `retryable` and requested baseline resources;
+no payment is settled. See [admission-design.md](admission-design.md).
+
 ## Not implemented
 
-- **Global capacity guard.** The limiter shapes admission, not total sessions.
-  A payer can still fill the node; a `MAX_ACTIVE_SESSIONS` check at entitlement
-  creation would be the next layer.
+- **Capacity wait queue.** A retryable rejection is immediate; clients retry
+  themselves. A bounded wait queue is the next experiment.
 - **Distributed buckets.** The API is a single replica and the buckets are
   in-memory. Multiple replicas would each allow a full bucket; a shared store or
   consistent hashing is required before scaling the API out.

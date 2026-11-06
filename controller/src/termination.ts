@@ -22,6 +22,9 @@ export class Termination {
     if (session.podName) {
       await this.ctx.provisioner.deletePod(session.podName, 1).catch(() => undefined);
       this.ctx.store.clearPod(session.id);
+      this.ctx.capacity.beginRelease(session.id, session.podName);
+    } else {
+      this.ctx.capacity.beginRelease(session.id, null);
     }
     await this.ctx.snapshotter.discard(session).catch((err) => {
       log.warn("snapshot_discard_failed", { sessionId: session.id, error: (err as Error).message });

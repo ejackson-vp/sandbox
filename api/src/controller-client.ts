@@ -74,6 +74,15 @@ export type IntentClaim =
   | { status: "failed"; reason?: string }
   | { status: "mismatch" };
 
+export type CapacityDecision =
+  | { admitted: true; nodeId: string; reservation: { nodeId: string } }
+  | {
+      admitted: false;
+      reason: string;
+      retryable: boolean;
+      requested: { cpuMillicores: number; memoryBytes: number; storageBytes: number };
+    };
+
 export interface CompleteIntentBody {
   sessionId: string;
   capabilityHash: string;
@@ -163,6 +172,31 @@ export class ControllerClient {
       method: "POST",
       body: JSON.stringify({ reason }),
     });
+  }
+
+  async preflightCapacity(spec: SessionSpec): Promise<CapacityDecision> {
+    return this.call("/internal/capacity/preflight", {
+      method: "POST",
+      body: JSON.stringify({ spec }),
+    });
+  }
+
+  async holdCapacity(paymentKey: string, specHash: string, spec: SessionSpec): Promise<CapacityDecision> {
+    const res = await this.raw("/internal/capacity/holds", {
+      method: "POST",
+      body: JSON.stringify({ paymentKey, specHash, spec }),
+    });
+    const body = (await res.json().catch(() => ({}))) as CapacityDecision & { error?: string; message?: string };
+    if (res.ok || res.status === 409) return body;
+    throw new ControllerError(res.status, body.error ?? "capacity_hold_failed", body.message ?? `controller ${res.status}`, body);
+  }
+
+  async releaseCapacity(paymentKey: string): Promise<void> {
+    await this.call(`/internal/capacity/holds/${encodeURIComponent(paymentKey)}`, { method: "DELETE" }).catch(() => undefined);
+  }
+
+  async capacity(): Promise<unknown> {
+    return this.call("/internal/capacity");
   }
 
   /* ---------------- sessions ---------------- */

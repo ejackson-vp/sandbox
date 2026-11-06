@@ -14,6 +14,7 @@ import { createControlApi } from "./control-api.js";
 import { createRelay } from "./relay.js";
 import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
+import { CapacityService } from "./capacity/service.js";
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
 import { log } from "./log.js";
 
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
 
   const provisioner = makeProvisioner(cfg);
   const relay = makeRelayClient(cfg);
+  const capacity = new CapacityService({ cfg, store, provisioner });
 
   let wake: (() => void) | undefined;
   let suspend: ((id: string) => Promise<void>) | undefined;
@@ -99,6 +101,7 @@ async function main(): Promise<void> {
     cfg,
     store,
     relay,
+    capacity,
     wake: () => wake?.(),
     suspend: (id) => {
       if (!suspend) return Promise.reject(new Error("reconciler not started"));
@@ -119,7 +122,7 @@ async function main(): Promise<void> {
     kubeEnabled: cfg.kubeEnabled,
   });
 
-  const reconciler = new Reconciler({ cfg, store, provisioner, relay });
+  const reconciler = new Reconciler({ cfg, store, provisioner, relay, capacity });
   wake = () => reconciler.wake();
   suspend = (id) => reconciler.suspendSession(id);
   resume = (id) => reconciler.resumeSession(id);

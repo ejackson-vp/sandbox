@@ -14,10 +14,35 @@
 import * as k8s from "@kubernetes/client-node";
 import type { SessionLimits } from "@x402s/shared";
 import { log } from "./log.js";
-import type { Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
+import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
 
-export type { Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
+export type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
 export { NullProvisioner } from "./k8s-null.js";
+
+function parseCpuMillis(value: string | undefined): number {
+  if (!value) return 0;
+  const n = Number(value.endsWith("m") ? value.slice(0, -1) : value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(value.endsWith("m") ? n : n * 1000);
+}
+
+function parseBytes(value: string | undefined): number {
+  if (!value) return 0;
+  const match = /^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|k|M|G|T)?$/.exec(value);
+  if (!match) return 0;
+  const n = Number(match[1]);
+  const unit = match[2] ?? "";
+  const factor =
+    unit === "Ki" ? 1024 :
+    unit === "Mi" ? 1024 ** 2 :
+    unit === "Gi" ? 1024 ** 3 :
+    unit === "Ti" ? 1024 ** 4 :
+    unit === "k" ? 1000 :
+    unit === "M" ? 1000 ** 2 :
+    unit === "G" ? 1000 ** 3 :
+    unit === "T" ? 1000 ** 4 : 1;
+  return Math.max(0, Math.round(n * factor));
+}
 
 const LABEL_APP = "app.kubernetes.io/name";
 const LABEL_SESSION = "x402.io/session";
@@ -500,6 +525,7 @@ export class KubeProvisioner implements Provisioner {
         poolId: `warm_${warmId}`,
         createdAt: pod.metadata?.creationTimestamp ? new Date(pod.metadata.creationTimestamp).getTime() : 0,
         phase: pod.status?.phase ?? "Unknown",
+        ...(pod.spec?.nodeName ? { nodeName: pod.spec.nodeName } : {}),
       };
     });
   }
@@ -519,6 +545,29 @@ export class KubeProvisioner implements Provisioner {
       body: ops as unknown as k8s.V1Pod,
     });
     log.info("sandbox_pod_relabeled", { podName, labels: Object.keys(labels).join(",") });
+  }
+
+  async listNodes(): Promise<NodeInfo[]> {
+    const result = await this.core.listNode();
+    return result.items.map((node) => {
+      const allocatable = node.status?.allocatable ?? {};
+      const ready = node.status?.conditions?.some(
+        (condition) => condition.type === "Ready" && condition.status === "True",
+      ) ?? false;
+      return {
+        name: node.metadata?.name ?? "unknown",
+        allocatableCpuMillis: parseCpuMillis(allocatable.cpu),
+        allocatableMemoryBytes: parseBytes(allocatable.memory),
+        allocatableStorageBytes: parseBytes(allocatable["ephemeral-storage"]),
+        labels: node.metadata?.labels ?? {},
+        taints: (node.spec?.taints ?? []).map((taint) => ({
+          key: taint.key,
+          effect: (taint.effect ?? "NoSchedule") as NodeInfo["taints"][number]["effect"],
+        })),
+        ready,
+        schedulable: node.spec?.unschedulable !== true,
+      };
+    });
   }
 
   async getServiceAddress(name: string): Promise<{ host: string; port: number } | null> {
