@@ -355,6 +355,20 @@ export function sandboxPodCount(): number {
   return out.split("\n").filter(Boolean).length;
 }
 
+/** Per-session checkpoint PVCs. */
+export function workspacePvcCount(): number {
+  const out = kubectlTry([
+    "-n",
+    SANDBOX_NS,
+    "get",
+    "pvc",
+    "-l",
+    "x402.io/pool=workspace",
+    "--no-headers",
+  ]).out;
+  return out.split("\n").filter(Boolean).length;
+}
+
 /** Idle pool pods (not session pods). */
 export function warmPodCount(): number {
   const out = kubectlTry([

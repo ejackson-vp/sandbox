@@ -180,12 +180,17 @@ export class LocalProvisioner implements Provisioner {
     rmSync(pod.workDir, { recursive: true, force: true });
   }
 
+  async nodeAvailable(): Promise<boolean> {
+    return true;
+  }
+
   async getPod(podName: string): Promise<{
     phase: string;
     deleted: boolean;
     createdAt?: number;
     scheduledAt?: number;
     startedAt?: number;
+    nodeName?: string;
   } | null> {
     const pod = this.pods.get(podName);
     if (!pod) return null;

@@ -19,6 +19,7 @@ concrete next step.
 | 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; local-path has no encryption | use an encrypted StorageClass / CSI encryption, document the trust boundary, and expire PVCs aggressively |
 | 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |
 | 11 | **Suspend/resume pricing undefined** | a resume starts a fresh lease in the mock model | bill active time + storage, or charge per resume; decide before charging real money |
+| 12 | **Checkpoints are node-pinned** | local-path PVCs cannot resume after node loss; `resume_unavailable` is fail-fast, not HA | RWX/network storage or Firecracker snapshot/restore before promising node-failure recovery |
 
 ## 2. Security hardening backlog
 

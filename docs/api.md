@@ -283,7 +283,7 @@ GET /healthz
 | 401 | `capability_required` | missing capability |
 | 402 | `payment_required`, `payment_invalid:*`, `payment_settlement_rejected:*` | payment problem |
 | 404 | `session_not_found` | wrong capability or unknown session |
-| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `session_not_usable`, `session_suspended` | conflict; resume first |
+| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `session_not_usable`, `session_suspended`, `resume_unavailable` | conflict; resume first / checkpoint node unavailable |
 | 410 | `lease_expired`, `capability_expired`, `result_expired` | gone |
 | 413 | `payload_too_large` | envelope too big |
 | 429 | `rate_limited` (`scope: payer` or `ip`) | slow down; honour `Retry-After` |

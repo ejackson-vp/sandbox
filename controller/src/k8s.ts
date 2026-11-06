@@ -39,6 +39,8 @@ export interface SandboxPodSpec {
   /** Scheduler reservation; defaults to peak/4. */
   baselineCpuMillis?: number;
   baselineMemoryMiB?: number;
+  /** Pin the pod to a specific node (local-path checkpoint resume). */
+  nodeName?: string;
 }
 
 export interface WarmPodSpec {
@@ -81,7 +83,10 @@ export interface Provisioner {
     createdAt?: number;
     scheduledAt?: number;
     startedAt?: number;
+    nodeName?: string;
   } | null>;
+  /** True when the node exists, is ready, and is not cordoned. */
+  nodeAvailable(nodeName: string): Promise<boolean>;
   listSandboxPods(): Promise<Array<{ name: string; sessionId: string; createdAt: number; phase: string }>>;
   listWarmPods(): Promise<WarmPodInfo[]>;
   /** Relabel a warm pod as a claimed sandbox (or update its session id). */
@@ -111,6 +116,7 @@ interface PodBuild {
   workspacePvc?: string;
   baselineCpuMillis: number;
   baselineMemoryMiB: number;
+  nodeName?: string;
 }
 
 export class KubeProvisioner implements Provisioner {
@@ -194,6 +200,7 @@ export class KubeProvisioner implements Provisioner {
       ...(spec.workspacePvc ? { workspacePvc: spec.workspacePvc } : {}),
       baselineCpuMillis: spec.baselineCpuMillis ?? Math.max(50, Math.floor(spec.limits.cpuMillis / 4)),
       baselineMemoryMiB: spec.baselineMemoryMiB ?? Math.max(64, Math.floor(spec.limits.memoryMiB / 4)),
+      ...(spec.nodeName ? { nodeName: spec.nodeName } : {}),
     });
 
     try {
@@ -325,6 +332,23 @@ export class KubeProvisioner implements Provisioner {
         dnsPolicy: "None",
         dnsConfig: { nameservers: ["127.0.0.1"], searches: [], options: [] },
         nodeSelector: { "x402.io/sandbox-pool": "true" },
+        ...(opts.nodeName
+          ? {
+              affinity: {
+                nodeAffinity: {
+                  requiredDuringSchedulingIgnoredDuringExecution: {
+                    nodeSelectorTerms: [
+                      {
+                        matchFields: [
+                          { key: "metadata.name", operator: "In", values: [opts.nodeName] },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            }
+          : {}),
         tolerations: [{ key: "x402.io/sandbox", operator: "Exists", effect: "NoSchedule" }],
         // Backstop only: the controller enforces the lease independently.
         activeDeadlineSeconds: opts.deadlineSeconds,
@@ -495,9 +519,22 @@ export class KubeProvisioner implements Provisioner {
         createdAt: ms(pod.metadata?.creationTimestamp),
         scheduledAt: ms(scheduled),
         startedAt: ms(started),
+        ...(pod.spec?.nodeName ? { nodeName: pod.spec.nodeName } : {}),
       };
     } catch (err) {
       if ((err as { code?: number }).code === 404) return null;
+      throw err;
+    }
+  }
+
+  async nodeAvailable(nodeName: string): Promise<boolean> {
+    try {
+      const node = await this.core.readNode({ name: nodeName });
+      if (node.spec?.unschedulable) return false;
+      const ready = node.status?.conditions?.find((c) => c.type === "Ready");
+      return ready?.status === "True";
+    } catch (err) {
+      if ((err as { code?: number }).code === 404) return false;
       throw err;
     }
   }
@@ -579,6 +616,9 @@ export class NullProvisioner implements Provisioner {
   async deletePod(): Promise<void> {}
   async getPod(): Promise<null> {
     return null;
+  }
+  async nodeAvailable(): Promise<boolean> {
+    return true;
   }
   async listSandboxPods(): Promise<[]> {
     return [];

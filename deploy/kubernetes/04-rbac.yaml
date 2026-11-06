@@ -60,3 +60,27 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: sandbox-controller-services
+---
+# Read-only node status: a checkpoint on a local-path PVC must fail fast when
+# its node is gone, instead of leaving the resume pod Pending for 90 seconds.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sandbox-controller-nodes
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sandbox-controller-nodes
+subjects:
+  - kind: ServiceAccount
+    name: sandbox-controller
+    namespace: sandbox-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sandbox-controller-nodes

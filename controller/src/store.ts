@@ -14,7 +14,7 @@ import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared";
 
 export type { SessionState };
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 export interface PaymentRecord {
   paymentKey: string;
@@ -66,6 +66,7 @@ export interface SessionRecord {
   workspacePvc: string | null;
   baselineCpuMillis: number | null;
   baselineMemoryMib: number | null;
+  nodeName: string | null;
   updatedAt: number;
 }
 
@@ -118,7 +119,7 @@ const SESSION_COLUMNS = `
   execution_mode, relay_token_hash, active_request_id, relay_purged_at,
   destroy_requested, timings_json, idle_policy_json, max_lifetime_seconds,
   suspended_at, resume_count, last_activity_at, workspace_pvc,
-  baseline_cpu_millis, baseline_memory_mib, updated_at
+  baseline_cpu_millis, baseline_memory_mib, node_name, updated_at
 `;
 
 interface RawSession {
@@ -165,6 +166,7 @@ interface RawSession {
   workspace_pvc: string | null;
   baseline_cpu_millis: number | null;
   baseline_memory_mib: number | null;
+  node_name: string | null;
   updated_at: number;
 }
 
@@ -215,6 +217,7 @@ function mapSession(r: RawSession): SessionRecord {
     workspacePvc: r.workspace_pvc,
     baselineCpuMillis: r.baseline_cpu_millis,
     baselineMemoryMib: r.baseline_memory_mib,
+    nodeName: r.node_name,
     updatedAt: r.updated_at,
   };
 }
@@ -318,6 +321,7 @@ export class Store {
         workspace_pvc TEXT,
         baseline_cpu_millis INTEGER,
         baseline_memory_mib INTEGER,
+        node_name TEXT,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS exec_requests (
@@ -391,6 +395,7 @@ export class Store {
          WHERE id=? AND state='SUSPENDED'`,
       ),
       setWorkspacePvc: this.db.prepare("UPDATE sessions SET workspace_pvc=?, updated_at=? WHERE id=?"),
+      setNodeName: this.db.prepare("UPDATE sessions SET node_name=?, updated_at=? WHERE id=?"),
       clearWorkspacePvc: this.db.prepare("UPDATE sessions SET workspace_pvc=NULL, updated_at=? WHERE id=?"),
       setProvisioning: this.db.prepare(
         "UPDATE sessions SET pod_name = ?, state = 'PROVISIONING', updated_at = ? WHERE id = ? AND state = 'PAID'",
@@ -639,6 +644,10 @@ export class Store {
 
   setWorkspacePvc(id: string, pvcName: string): void {
     this.stmts.setWorkspacePvc!.run(pvcName, Date.now(), id);
+  }
+
+  setNodeName(id: string, nodeName: string): void {
+    this.stmts.setNodeName!.run(nodeName, Date.now(), id);
   }
 
   clearWorkspacePvc(id: string): void {

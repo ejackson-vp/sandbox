@@ -23,6 +23,7 @@ make up             # kind + Cilium + images + deploy (~2 min)
 make demo-session   # the full 11-step session workflow
 make demo-expire    # buy a 5s session, watch it expire and clean up
 make demo-lifecycle # checkpoint a session, resume it, verify the workspace
+make demo-portability # cordon the checkpoint node; prove resume fails fast
 make test           # unit + local integration tests
 make security-test  # packet-level isolation + lifecycle tests on the cluster
 make down

@@ -187,6 +187,23 @@ semantics, not a performance target. The resume is a cold container start plus P
 there is no memory snapshot. Use an encrypted StorageClass in production. See
 [lifecycle.md](lifecycle.md).
 
+### 2.8 Checkpoint portability, workspace size, lifecycle soak
+
+`make benchmark-lifecycle` (2 samples per size) and a 90 s lifecycle soak:
+
+| Test | Result |
+|---|---|
+| Resume vs workspace size | 0 MiB 0.86 s, 32 MiB 0.86 s, 256 MiB 1.78 s p50 |
+| Suspend | 16–29 ms p50 |
+| Lifecycle soak | 12/12 ok, workspace 12/12, suspend p50 24 ms, resume p50 1.91 s |
+| Faults while suspended | 3/3 controller/relay restarts recovered |
+| Final state | 0 session pods, 0 workspace PVCs |
+
+Resume is pod/PVC-bind bound, not data-copy bound (there is no copy). The
+256 MiB point is noisy at n=2. A cordoned node makes resume fail fast with
+`resume_unavailable`; a checkpoint cannot move to another node on local-path
+storage. See [lifecycle.md](lifecycle.md).
+
 ## 3. Concurrency and density
 
 All levels use the 512 MiB / 500 m tier with a 240 s lease. Sessions are created

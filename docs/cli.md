@@ -23,6 +23,12 @@ sandbox create --tier standard
 sandbox create --duration 15m --cpu 2 --memory 2Gi --disk 2Gi
 # --duration 15m maps to the "extended" tier; other values use a custom spec
 
+# steady-state reservation + burst ceiling (default baseline = peak/4)
+sandbox create --duration 15m --cpu 2 --memory 2Gi --baseline-cpu 0.5 --baseline-memory 512Mi
+
+# checkpointed session: suspend after 5 idle minutes, 8h wall clock
+sandbox create --duration 15m --idle 5m --max-lifetime 8h
+
 # run commands in the same sandbox, same filesystem
 sandbox exec <id> -- python3 --version
 sandbox exec <id> -- bash -c "echo hello > /workspace/hello.txt"
@@ -40,8 +46,14 @@ sandbox stat     <id> /workspace/output.txt
 
 # lifecycle
 sandbox status  <id>
+sandbox suspend <id>              # stop compute, keep the workspace PVC
+sandbox resume  <id>              # new guest key, same files
 sandbox destroy <id>
 sandbox sessions                  # locally stored handles
+
+# a checkpoint is disk-only: processes, memory and sockets do not survive.
+# on local-path storage it is node-pinned; resume returns resume_unavailable
+# if that node is cordoned or gone.
 
 # convenience: create + upload + run + destroy
 sandbox run examples/hello.py --duration 5m

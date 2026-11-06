@@ -1,0 +1,91 @@
+{
+  "spec": {
+    "tier": "custom",
+    "durationSeconds": 30,
+    "cpuMillis": 500,
+    "memoryMiB": 512,
+    "diskMiB": 256,
+    "idlePolicy": {
+      "maxIdleSeconds": 300,
+      "suspendedDurationSeconds": 600,
+      "autoResume": false
+    }
+  },
+  "durationSeconds": 90,
+  "rate": 0.5,
+  "faultEverySeconds": 45,
+  "attempts": 12,
+  "ok": 12,
+  "failed": 0,
+  "warmHits": 0,
+  "errorCodes": [],
+  "ready": {
+    "count": 12,
+    "min": 4812.0709160000115,
+    "mean": 4972.770701583334,
+    "p50": 4835.408624999996,
+    "p90": 5245.695084000006,
+    "p95": 5388.102584,
+    "p99": 5388.102584,
+    "max": 5388.102584,
+    "stdev": 190.1117073471932
+  },
+  "faults": [
+    {
+      "at": "2026-11-06T16:30:08.734Z",
+      "kind": "controller_restart",
+      "recovered": true,
+      "durationMs": 6806,
+      "warmAfter": 0,
+      "sandboxPodsAfter": 0
+    },
+    {
+      "at": "2026-11-06T16:30:32.791Z",
+      "kind": "relay_restart",
+      "recovered": true,
+      "durationMs": 2478,
+      "warmAfter": 0,
+      "sandboxPodsAfter": 0
+    },
+    {
+      "at": "2026-11-06T16:30:51.818Z",
+      "kind": "relay_restart",
+      "recovered": true,
+      "durationMs": 6695,
+      "warmAfter": 0,
+      "sandboxPodsAfter": 0
+    }
+  ],
+  "suspendMs": {
+    "count": 12,
+    "min": 18.659874999997555,
+    "mean": 25.51796883333327,
+    "p50": 24.381790999999794,
+    "p90": 30.49383300000045,
+    "p95": 31.83650000000125,
+    "p99": 31.83650000000125,
+    "max": 31.83650000000125,
+    "stdev": 3.985996691803904
+  },
+  "resumeMs": {
+    "count": 12,
+    "min": 870.5776249999908,
+    "mean": 1560.6729099166666,
+    "p50": 1910.7259169999998,
+    "p90": 1959.466167000006,
+    "p95": 2125.5023750000037,
+    "p99": 2125.5023750000037,
+    "max": 2125.5023750000037,
+    "stdev": 504.0522769851154
+  },
+  "workspaceChecks": 12,
+  "workspaceOk": 12,
+  "final": {
+    "warmPods": 0,
+    "sandboxPods": 0,
+    "workspacePvcs": 0,
+    "relaySessions": 0,
+    "controllerDbBytes": 6819840
+  },
+  "measuredAt": "2026-11-06T16:31:49.814Z"
+}

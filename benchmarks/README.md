@@ -23,6 +23,8 @@ make benchmark-startup    # 100 warm create→ready→exec→destroy samples
 make benchmark-startup-pool  # same, with 8 pre-booted sandboxes (restores defaults)
 make benchmark-burst         # 10/25/50 simultaneous creates against the pool
 make benchmark-soak          # 10 min steady traffic + relay/controller/pool faults
+make benchmark-lifecycle      # checkpoint/resume across workspace sizes
+make benchmark-lifecycle-soak # suspend/resume soak with control-plane faults
 make benchmark-density    # 1,5,10,25 concurrent idle sessions
 make benchmark-workloads  # hello, compute, filesystem, pip, multi-command, expiry
 make benchmark-reliability

@@ -58,6 +58,24 @@ from a snapshot. x402 restores disk only. It is enough for notebooks, files and
 installed packages; it is not enough to keep a running server or an in-memory
 job alive across suspend.
 
+## Node affinity and portability
+
+A checkpoint on a local-path PVC is **node-pinned**: the PV only exists on the
+node where the first pod ran. The controller records that node, adds a
+`metadata.name` node affinity on resume, and checks the node is Ready and
+schedulable before creating the pod. If the node is cordoned or gone, resume
+fails fast with `409 resume_unavailable` instead of leaving a Pending pod for
+the 90 s provisioning timeout.
+
+`make demo-portability` proves it locally: create → write → suspend → cordon the
+worker → resume returns `resume_unavailable`; uncordon → resume lands on the
+same node with the workspace intact. Set `PIN_CHECKPOINT_NODE=false` when using
+RWX/network storage, where pinning is unnecessary.
+
+Production consequence: **a checkpoint cannot survive its node.** For node
+failure tolerance use RWX/network storage or a real snapshot/restore; the
+local-path checkpoint is a single-node feature.
+
 ## Security properties
 
 - **Workspace at rest:** suspendable sessions use a PVC, not a memory-backed
@@ -140,6 +158,34 @@ first.
 - The pod mounts the PVC at `/workspace` instead of the memory `emptyDir`.
 - `fsGroup: 65532` makes the volume writable by the unprivileged guest.
 - The PVC is deleted when the session is terminated or its lifetime expires.
+
+## Measured workspace-size behaviour
+
+Two samples per size (`make benchmark-lifecycle`), 0 / 32 / 256 MiB:
+
+| Workspace | READY p50 | Suspend p50 | Resume p50 | Write p50 |
+|---|---:|---:|---:|---:|
+| 0 MiB | 4.97 s | 19 ms | 0.86 s | 12 ms |
+| 32 MiB | 4.97 s | 29 ms | 0.86 s | 22 ms |
+| 256 MiB | 4.75 s | 17 ms | 1.78 s | 65 ms |
+
+Resume is dominated by pod start + PVC bind, not by copying the workspace —
+there is no copy. The 256 MiB point is noisier at n=2; a 4× data increase did not
+produce a 4× resume. This is the number to compare against a Firecracker
+snapshot later.
+
+## Soak
+
+`make benchmark-lifecycle-soak` runs create → write → suspend → (sometimes
+controller/relay restart) → resume → verify → destroy. A 90 s run at 0.5/s:
+
+| Metric | Result |
+|---|---|
+| Sessions | 12/12 ok, workspace verified 12/12 |
+| Suspend | p50 24 ms |
+| Resume | p50 1.91 s (p95 2.13 s) |
+| Faults | 3/3 recovered (controller/relay restarts) |
+| Final state | 0 session pods, **0 workspace PVCs**, 0 relay sessions |
 
 ## AWS comparison
 

@@ -30,12 +30,16 @@ const HELP = `x402 sandbox sessions
 Usage:
   sandbox create [--tier short|standard|extended|long] [--duration 15m]
                  [--cpu 1] [--memory 1Gi] [--disk 1Gi]
+                 [--baseline-cpu 0.25] [--baseline-memory 256Mi]
+                 [--idle 5m] [--max-lifetime 8h]
   sandbox exec <session-id> [--timeout 30s] [--env K=V] -- <command> [args...]
   sandbox upload <session-id> <local-path> <remote-path>
   sandbox download <session-id> <remote-path> <local-path> [--extract]
   sandbox ls <session-id> [path] [--recursive]
   sandbox stat <session-id> <path>
   sandbox status <session-id>
+  sandbox suspend <session-id>
+  sandbox resume <session-id>
   sandbox destroy <session-id>
   sandbox run <file>            # create + upload + exec + destroy (convenience)
   sandbox agent-demo <file>     # same, purchased through @x402/fetch
@@ -124,6 +128,10 @@ async function main(): Promise<number> {
       cpu: { type: "string" },
       memory: { type: "string" },
       disk: { type: "string" },
+      "baseline-cpu": { type: "string" },
+      "baseline-memory": { type: "string" },
+      idle: { type: "string" },
+      "max-lifetime": { type: "string" },
       timeout: { type: "string" },
       env: { type: "string", multiple: true },
       recursive: { type: "boolean", default: false },
@@ -216,6 +224,24 @@ async function main(): Promise<number> {
         ...(values.cpu ? { cpuMillis: parseCpu(values.cpu as string) } : {}),
         ...(values.memory ? { memoryMiB: parseMemory(values.memory as string) } : {}),
         ...(values.disk ? { diskMiB: parseDisk(values.disk as string) } : {}),
+        ...(values["baseline-cpu"]
+          ? { baselineCpuMillis: parseCpu(values["baseline-cpu"] as string) }
+          : {}),
+        ...(values["baseline-memory"]
+          ? { baselineMemoryMiB: parseMemory(values["baseline-memory"] as string) }
+          : {}),
+        ...(values.idle
+          ? {
+              idlePolicy: {
+                maxIdleSeconds: parseDuration(values.idle as string) ?? 300,
+                suspendedDurationSeconds: 28800,
+                autoResume: false,
+              },
+            }
+          : {}),
+        ...(values["max-lifetime"]
+          ? { maxLifetimeSeconds: parseDuration(values["max-lifetime"] as string) }
+          : {}),
       });
       out(`Session: ${handle.sessionId}`, json);
       out(`State: ${handle.status?.state ?? "PAID"}`, json);
@@ -255,6 +281,14 @@ async function main(): Promise<number> {
         if (status.leaseExpiresAt) {
           process.stdout.write(`Expires: ${status.leaseExpiresAt} (${status.remainingSeconds}s remaining)\n`);
         }
+        if (status.baseline) {
+          process.stdout.write(`Baseline: ${status.baseline.cpuMillis}m CPU, ${status.baseline.memoryMiB}Mi RAM\n`);
+        }
+        if (status.idlePolicy) {
+          process.stdout.write(`Idle policy: maxIdle ${status.idlePolicy.maxIdleSeconds}s, autoResume ${status.idlePolicy.autoResume}\n`);
+        }
+        if (status.suspendedAt) process.stdout.write(`Suspended: ${status.suspendedAt}\n`);
+        if (status.resumeCount) process.stdout.write(`Resumes: ${status.resumeCount}\n`);
         if (status.failure) process.stdout.write(`Failure: ${status.failure.code}: ${status.failure.message}\n`);
         process.stdout.write(`Busy: ${status.busy}\n`);
       }
@@ -365,6 +399,22 @@ async function main(): Promise<number> {
         return 1;
       }
       process.stdout.write(JSON.stringify(result.entry, null, 2) + "\n");
+      return 0;
+    }
+
+    case "suspend": {
+      const id = requireArg(positionals[1], "session id");
+      const status = await client.suspend(attach(id));
+      out(`State: ${status.state}`, json);
+      if (json) process.stdout.write(JSON.stringify(status, null, 2) + "\n");
+      return 0;
+    }
+
+    case "resume": {
+      const id = requireArg(positionals[1], "session id");
+      const status = await client.resume(attach(id));
+      out(`State: ${status.state}`, json);
+      if (json) process.stdout.write(JSON.stringify(status, null, 2) + "\n");
       return 0;
     }
 

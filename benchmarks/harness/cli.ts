@@ -24,6 +24,7 @@ import { runWorkloads } from "./scenarios/workloads.js";
 import { runReliability } from "./scenarios/reliability.js";
 import { runBurst } from "./scenarios/burst.js";
 import { runSoak } from "./scenarios/soak.js";
+import { runLifecycle } from "./scenarios/lifecycle.js";
 
 const HELP = `x402 sandbox benchmarks (real cluster, mock payments)
 
@@ -38,6 +39,7 @@ Commands:
   reliability    bounded fault injection (restarts, cancel, disconnect, expiry)
   burst          N simultaneous paid creates (arrival-rate spike)
   soak           steady traffic with periodic control-plane faults
+  lifecycle      checkpoint/resume across workspace sizes
 
 Options:
   --samples <n>        startup iterations (default 100 warm / 10 cold)
@@ -54,6 +56,7 @@ Options:
   --rate <n/s>         soak create rate (default 0.5)
   --fault-every <s>    seconds between soak faults (default 90)
   --pace <ms>          sleep between startup samples (default 0)
+  --lifecycle          soak with suspend/resume cycles
   --max <n>            hard cap on concurrent sandboxes (default 25)
   --yes                required for --max > 25 or --levels above 25
   --no-cleanup         keep sessions/pods for inspection
@@ -80,6 +83,7 @@ function parse(): { command: string; opts: Opts } {
       rate: { type: "string" },
       "fault-every": { type: "string" },
       pace: { type: "string" },
+      lifecycle: { type: "boolean", default: false },
       max: { type: "string" },
       yes: { type: "boolean", default: false },
       "no-cleanup": { type: "boolean", default: false },
@@ -103,7 +107,7 @@ function parse(): { command: string; opts: Opts } {
       levels: String(values.levels ?? "1,5,10,25")
         .split(",")
         .map((v) => Number(v.trim()))
-        .filter((v) => Number.isInteger(v) && v > 0),
+        .filter((v) => Number.isInteger(v) && v >= 0),
       mode,
       tier,
       duration: Number(values.duration ?? 0) || 0,
@@ -116,6 +120,7 @@ function parse(): { command: string; opts: Opts } {
       rate: Math.min(20, Math.max(0.05, Number(values.rate ?? 0.5))),
       faultEvery: Math.max(15, Number(values["fault-every"] ?? 90)),
       paceMs: Math.min(10_000, Math.max(0, Number(values.pace ?? 0))),
+      lifecycle: Boolean(values.lifecycle),
       max: Number(values.max ?? 25),
       yes: Boolean(values.yes),
       cleanup: !values["no-cleanup"],
@@ -143,7 +148,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (!["smoke", "startup", "density", "workloads", "reliability", "burst", "soak"].includes(command)) {
+  if (!["smoke", "startup", "density", "workloads", "reliability", "burst", "soak", "lifecycle"].includes(command)) {
     process.stderr.write(`unknown command ${command}\n\n${HELP}`);
     return 2;
   }
@@ -196,6 +201,9 @@ async function main(): Promise<number> {
         break;
       case "soak":
         code = await runSoak(bench, opts);
+        break;
+      case "lifecycle":
+        code = await runLifecycle(bench, opts);
         break;
     }
   } catch (err) {

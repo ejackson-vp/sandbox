@@ -285,7 +285,7 @@ export class Reconciler {
     session: SessionRecord,
     relayAddr: { host: string; port: number },
     proxyAddr: { host: string; port: number },
-    opts: { workspacePvc?: string; resume?: boolean } = {},
+    opts: { workspacePvc?: string; resume?: boolean; nodeName?: string } = {},
   ): Promise<{ podName: string; createStarted: number }> {
     this.deps.store.mergeTimings(session.id, {
       provisionStartAt: Date.now(),
@@ -330,6 +330,7 @@ export class Reconciler {
       ...(opts.resume ? { resume: true } : {}),
       ...(session.baselineCpuMillis ? { baselineCpuMillis: session.baselineCpuMillis } : {}),
       ...(session.baselineMemoryMib ? { baselineMemoryMiB: session.baselineMemoryMib } : {}),
+      ...(opts.nodeName ? { nodeName: opts.nodeName } : {}),
     });
     return { podName, createStarted };
   }
@@ -361,6 +362,13 @@ export class Reconciler {
       /* relay may already be gone */
     }
     if (session.podName) {
+      if (!session.nodeName && session.workspacePvc) {
+        const pod = await this.deps.provisioner.getPod(session.podName).catch(() => null);
+        if (pod?.nodeName) {
+          this.deps.store.setNodeName(id, pod.nodeName);
+          session.nodeName = pod.nodeName;
+        }
+      }
       await this.deps.provisioner.suspendPod(session.podName);
       this.deps.store.clearPod(id);
     }
@@ -398,6 +406,16 @@ export class Reconciler {
     if (!session.workspacePvc) {
       throw new LifecycleError("not_resumable", "session has no persistent workspace", 409);
     }
+    if (this.deps.cfg.pinCheckpointNode && session.nodeName) {
+      const available = await this.deps.provisioner.nodeAvailable(session.nodeName).catch(() => false);
+      if (!available) {
+        throw new LifecycleError(
+          "resume_unavailable",
+          `the checkpoint's node ${session.nodeName} is unavailable; it cannot be resumed on another node`,
+          409,
+        );
+      }
+    }
     const relayAddr = await this.serviceAddress(this.deps.cfg.relayServiceName);
     const proxyAddr = await this.serviceAddress(this.deps.cfg.proxyServiceName);
     if (!relayAddr || !proxyAddr) {
@@ -406,6 +424,7 @@ export class Reconciler {
     const { podName } = await this.createSandboxPod(session, relayAddr, proxyAddr, {
       workspacePvc: session.workspacePvc,
       resume: true,
+      ...(this.deps.cfg.pinCheckpointNode && session.nodeName ? { nodeName: session.nodeName } : {}),
     });
     if (!this.deps.store.markResuming(id, podName)) {
       await this.deps.provisioner.deletePod(podName, 0).catch(() => undefined);
@@ -786,6 +805,10 @@ export class Reconciler {
 
     if (session.podName) {
       const pod = await this.deps.provisioner.getPod(session.podName).catch(() => null);
+      if (pod?.nodeName && session.workspacePvc && !session.nodeName) {
+        this.deps.store.setNodeName(session.id, pod.nodeName);
+        session.nodeName = pod.nodeName;
+      }
       if (pod && pod.phase === "Running") {
         // Record the first observation of a running container (tick resolution).
         const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};

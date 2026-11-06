@@ -24,10 +24,24 @@ editable assumption and is labelled as such.
 | Failure rate | 2% | assumption |
 | Average egress per session | 10 MiB | assumption (measured pip install ≈ 6 MiB) |
 
+### Checkpoint economics
+
+A suspended session costs storage, not compute. At the modelled gp3 price:
+
+- a 1 GiB workspace is ~**$0.00011/hour** while suspended;
+- a standard-tier baseline share of the m7g.4xlarge (250m / 256Mi) is
+  ~**$0.0135/hour** while running;
+- a 1–2 s resume costs ~$0.00001 of compute.
+
+So suspend is roughly **100× cheaper per idle hour** than keeping a warm pod,
+and the break-even is minutes of idleness — well below the default 5-minute idle
+policy. These are modelled shares, not billed numbers; the resume path is a cold
+container start, not a memory snapshot.
+
 ## 2. Capacity per worker
 
-Kubernetes schedules on requests; the controller sets CPU request = limit/4 and
-memory request = limit/4. "Safe" capacity is bounded by memory **limits**
+Kubernetes schedules on requests; the controller sets requests to the session
+baseline (default: peak/4) and limits to the peak. "Safe" capacity is bounded by memory **limits**
 (no overcommit).
 
 | Tier | Duration | CPU / memory request | CPU / memory limit | Safe sessions/worker | Scheduler-request sessions |

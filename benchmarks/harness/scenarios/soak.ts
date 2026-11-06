@@ -5,6 +5,7 @@ import {
   sandboxPodCount,
   waitForNoSandboxPods,
   warmPodCount,
+  workspacePvcCount,
 } from "../lib/env.js";
 import { fmtMs, sleep, summarize } from "../lib/util.js";
 
@@ -28,6 +29,9 @@ interface SoakIteration {
   warmHit?: boolean;
   execMs?: number;
   destroyMs?: number;
+  suspendMs?: number;
+  resumeMs?: number;
+  workspaceOk?: boolean;
   afterFault: boolean;
 }
 
@@ -38,6 +42,9 @@ function specOf(opts: BenchOptions, durationSeconds: number) {
     cpuMillis: opts.cpuMillis,
     memoryMiB: opts.memoryMiB,
     diskMiB: opts.diskMiB,
+    ...(opts.lifecycle
+      ? { idlePolicy: { maxIdleSeconds: 300, suspendedDurationSeconds: 600, autoResume: false } }
+      : {}),
   };
 }
 
@@ -129,6 +136,26 @@ export async function runSoak(bench: Bench, opts: BenchOptions): Promise<number>
   let nextFault = Date.now() + opts.faultEvery * 1000;
   let lastFaultAt = 0;
 
+  const recordFault = async (kind: FaultKind): Promise<void> => {
+    const t0 = Date.now();
+    bench.note(`fault ${kind}: injecting`);
+    const recovered = await injectFault(kind);
+    const fault: SoakFault = {
+      at: new Date().toISOString(),
+      kind,
+      recovered,
+      durationMs: Date.now() - t0,
+      warmAfter: warmPodCount(),
+      sandboxPodsAfter: sandboxPodCount(),
+    };
+    faults.push(fault);
+    lastFaultAt = Date.now();
+    bench.note(
+      `fault ${kind}: ${recovered ? "recovered" : "NOT recovered"} in ${fmtMs(fault.durationMs)}; ` +
+        `warm ${fault.warmAfter}, session pods ${fault.sandboxPodsAfter}`,
+    );
+  };
+
   bench.note(
     `soak: ${durationSeconds}s at ${opts.rate}/s, fault every ${opts.faultEvery}s ` +
       `(${faultKinds.join(", ")}), spec ${JSON.stringify(spec)}`,
@@ -139,23 +166,7 @@ export async function runSoak(bench: Bench, opts: BenchOptions): Promise<number>
     if (Date.now() >= nextFault) {
       const kind = faultKinds[faultIndex % faultKinds.length]!;
       faultIndex++;
-      const t0 = Date.now();
-      bench.note(`fault ${kind}: injecting`);
-      const recovered = await injectFault(kind);
-      const fault: SoakFault = {
-        at: new Date().toISOString(),
-        kind,
-        recovered,
-        durationMs: Date.now() - t0,
-        warmAfter: warmPodCount(),
-        sandboxPodsAfter: sandboxPodCount(),
-      };
-      faults.push(fault);
-      lastFaultAt = Date.now();
-      bench.note(
-        `fault ${kind}: ${recovered ? "recovered" : "NOT recovered"} in ${fmtMs(fault.durationMs)}; ` +
-          `warm ${fault.warmAfter}, session pods ${fault.sandboxPodsAfter}`,
-      );
+      await recordFault(kind);
       nextFault = Date.now() + opts.faultEvery * 1000;
     }
 
@@ -164,16 +175,40 @@ export async function runSoak(bench: Bench, opts: BenchOptions): Promise<number>
     let row: SoakIteration;
     try {
       const session = await createAndReady(bench, spec, 120_000);
+      let suspendMs: number | undefined;
+      let resumeMs: number | undefined;
+      let workspaceOk: boolean | undefined;
+      if (opts.lifecycle) {
+        const put = await bench.client.putFile(session.handle, {
+          path: "soak.txt",
+          data: Buffer.from("lifecycle-soak"),
+        });
+        const beforeSuspend = performance.now();
+        await bench.client.suspend(session.handle);
+        suspendMs = performance.now() - beforeSuspend;
+        // Every fifth iteration restarts a control plane while suspended.
+        if (i % 5 === 2) {
+          await recordFault(i % 10 === 2 ? "controller_restart" : "relay_restart");
+        }
+        const beforeResume = performance.now();
+        await bench.client.resume(session.handle, 180_000);
+        resumeMs = performance.now() - beforeResume;
+        const read = await bench.client.exec(session.handle, { command: ["cat", "soak.txt"] });
+        workspaceOk = Boolean(read.ok && read.stdout.includes("lifecycle-soak") && "ok" in put && put.ok);
+      }
       const exec = await timedExec(bench, session.handle, ["bash", "-c", "echo soak"], { timeoutMs: 30_000 });
       const destroyed = await timedDestroy(bench, session.handle);
       row = {
         i,
         at,
-        ok: Boolean(exec.result) && destroyed.state === "DESTROYED",
+        ok: Boolean(exec.result) && destroyed.state === "DESTROYED" && (workspaceOk ?? true),
         readyMs: session.readyObservedMs,
         warmHit: session.timings?.warmPoolHit === 1,
         execMs: exec.ms,
         destroyMs: destroyed.totalMs,
+        ...(suspendMs !== undefined ? { suspendMs } : {}),
+        ...(resumeMs !== undefined ? { resumeMs } : {}),
+        ...(workspaceOk !== undefined ? { workspaceOk } : {}),
         afterFault: lastFaultAt > 0 && Date.now() - lastFaultAt < 15_000,
       };
     } catch (err) {
@@ -198,6 +233,7 @@ export async function runSoak(bench: Bench, opts: BenchOptions): Promise<number>
   await sleep(30_000); // let the controller recycle/replenish after a relay restart
   const warmAfter = warmPodCount();
   const sandboxAfter = sandboxPodCount();
+  const pvcAfter = workspacePvcCount();
   const relayCount = relaySessions();
   const dbBytes = controllerDbBytes();
   const ok = iterations.filter((r) => r.ok);
@@ -216,9 +252,14 @@ export async function runSoak(bench: Bench, opts: BenchOptions): Promise<number>
     errorCodes: [...new Set(failed.map((r) => r.errorCode ?? "unknown"))],
     ready,
     faults,
+    suspendMs: summarize(iterations.map((r) => r.suspendMs ?? NaN).filter(Number.isFinite)),
+    resumeMs: summarize(iterations.map((r) => r.resumeMs ?? NaN).filter(Number.isFinite)),
+    workspaceChecks: iterations.filter((r) => r.workspaceOk !== undefined).length,
+    workspaceOk: iterations.filter((r) => r.workspaceOk).length,
     final: {
       warmPods: warmAfter,
       sandboxPods: sandboxAfter,
+      workspacePvcs: pvcAfter,
       relaySessions: relayCount,
       controllerDbBytes: dbBytes,
     },
@@ -235,13 +276,17 @@ export async function runSoak(bench: Bench, opts: BenchOptions): Promise<number>
       warmHit: r.warmHit ?? "",
       execMs: r.execMs?.toFixed(1) ?? "",
       destroyMs: r.destroyMs?.toFixed(0) ?? "",
+      suspendMs: r.suspendMs?.toFixed(0) ?? "",
+      resumeMs: r.resumeMs?.toFixed(0) ?? "",
+      workspaceOk: r.workspaceOk ?? "",
       afterFault: r.afterFault,
     })),
   );
   bench.note(
     `soak done: ${ok.length}/${iterations.length} ok, warm ${ok.filter((r) => r.warmHit).length}, ` +
       `faults ${faults.filter((f) => f.recovered).length}/${faults.length} recovered, ` +
-      `final warm ${warmAfter}, session pods ${sandboxAfter}, relay ${relayCount ?? "?"}, db ${dbBytes ?? "?"}B`,
+      `final warm ${warmAfter}, session pods ${sandboxAfter}, pvcs ${pvcAfter}, ` +
+      `relay ${relayCount ?? "?"}, db ${dbBytes ?? "?"}B`,
   );
-  return sandboxAfter === 0 && warmAfter > 0 ? 0 : 1;
+  return sandboxAfter === 0 && pvcAfter === 0 ? 0 : 1;
 }

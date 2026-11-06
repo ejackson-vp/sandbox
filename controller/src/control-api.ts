@@ -370,6 +370,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
           maxLifetimeSeconds: spec.maxLifetimeSeconds ?? null,
           baselineCpuMillis: spec.baseline?.cpuMillis ?? null,
           baselineMemoryMib: spec.baseline?.memoryMiB ?? null,
+          nodeName: null,
           suspendedAt: null,
           resumeCount: 0,
           lastActivityAt: null,

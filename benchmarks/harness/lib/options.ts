@@ -14,6 +14,7 @@ export interface BenchOptions {
   rate: number;
   faultEvery: number;
   paceMs: number;
+  lifecycle: boolean;
   yes: boolean;
   cleanup: boolean;
   runId?: string;

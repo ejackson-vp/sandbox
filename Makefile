@@ -23,6 +23,7 @@ help:
 	@echo "  make demo-expire    demonstrate lease expiration and cleanup"
 	@echo "  make demo-timeout   demonstrate the per-command timeout"
 	@echo "  make demo-lifecycle checkpoint a session, resume it, verify the workspace"
+	@echo "  make demo-portability prove a node-pinned checkpoint fails fast when cordoned"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
 	@echo "  make benchmark-smoke / benchmark-startup / benchmark-startup-pool"
@@ -77,6 +78,9 @@ demo-expire: cli
 demo-lifecycle:
 	npx tsx scripts/lifecycle-demo.ts
 
+demo-portability:
+	npx tsx scripts/lifecycle-portability.ts
+
 cli:
 	npm run build -w @x402s/shared
 	npm run build -w @x402s/sdk
@@ -114,6 +118,12 @@ benchmark-burst:
 
 benchmark-soak:
 	POOL_SIZE=$(or $(POOL_SIZE),8) DURATION=$(or $(DURATION),600) RATE=$(or $(RATE),0.5) ./scripts/benchmark-soak.sh
+
+benchmark-lifecycle-soak:
+	DURATION=$(or $(DURATION),300) RATE=$(or $(RATE),0.5) ./scripts/benchmark-lifecycle-soak.sh
+
+benchmark-lifecycle:
+	SIZES=$(or $(SIZES),0,32,256) SAMPLES=$(or $(SAMPLES),3) ./scripts/benchmark-lifecycle.sh
 
 benchmark-density:
 	$(BENCH) density --levels $(or $(LEVELS),1,5,10,25) --mode $(or $(MODE),idle) --max $(or $(MAX),25)
