@@ -101,8 +101,11 @@ No cold numbers are estimated here.
 ## 3. Concurrency and density
 
 All levels use the 512 MiB / 500 m tier with a 240 s lease. Sessions are created
-in paced batches (the default API limiter admits ~1/s sustained; see §8.4) and
-all sessions are destroyed after each level.
+in paced batches and all sessions are destroyed after each level.
+
+> Density runs at 25/50 used `CREATE_RATE_BURST=1000`, `CREATE_RATE_REFILL=500`
+> to isolate capacity from admission control. The default deployment remains
+> 30 burst / 1 per second; its measured effect is in §8.3.
 
 ### 3.1 Idle sessions
 
