@@ -278,12 +278,61 @@ export interface FileStatOperation extends OperationBase {
   path: string;
 }
 
+/** Start a long-running process (a local server) inside the sandbox. */
+export interface ServiceStartOperation extends OperationBase {
+  op: "service.start";
+  name: string;
+  command: string[];
+  /** Loopback port the service is expected to listen on (1024-65535). */
+  port: number;
+  env?: Record<string, string>;
+  cwd?: string;
+}
+
+export interface ServiceStopOperation extends OperationBase {
+  op: "service.stop";
+  name: string;
+}
+
+export interface ServiceListOperation extends OperationBase {
+  op: "service.list";
+}
+
+/**
+ * HTTP request to loopback only. The port must belong to a running service;
+ * the guest never accepts a host, so this cannot reach the node or metadata.
+ */
+export interface HttpRequestOperation extends OperationBase {
+  op: "http.request";
+  port: number;
+  method: string;
+  path: string;
+  headers?: Record<string, string>;
+  bodyBase64?: string;
+  timeoutMs?: number;
+}
+
+export interface ServiceInfo {
+  name: string;
+  port: number;
+  pid: number;
+  state: "running" | "exited" | "stopped";
+  startedAt: number;
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
 export type GuestRequest =
   | ExecOperation
   | FilePutOperation
   | FileGetOperation
   | FileListOperation
-  | FileStatOperation;
+  | FileStatOperation
+  | ServiceStartOperation
+  | ServiceStopOperation
+  | ServiceListOperation
+  | HttpRequestOperation;
 
 export interface FileEntry {
   /** Workspace-relative path. */
@@ -352,12 +401,43 @@ export interface OperationError extends ResultBase {
   op: GuestRequest["op"];
 }
 
+export interface ServiceStartResult extends ResultBase {
+  ok: true;
+  op: "service.start";
+  service: ServiceInfo;
+}
+
+export interface ServiceListResult extends ResultBase {
+  ok: true;
+  op: "service.list";
+  services: ServiceInfo[];
+}
+
+export interface ServiceStopResult extends ResultBase {
+  ok: true;
+  op: "service.stop";
+  name: string;
+}
+
+export interface HttpResponseResult extends ResultBase {
+  ok: true;
+  op: "http.request";
+  status: number;
+  headers: Record<string, string>;
+  bodyBase64: string;
+  truncated: boolean;
+}
+
 export type GuestResult =
   | ExecResult
   | FilePutResult
   | FileGetResult
   | FileListResult
   | FileStatResult
+  | ServiceStartResult
+  | ServiceListResult
+  | ServiceStopResult
+  | HttpResponseResult
   | OperationError;
 
 /* ------------------------------------------------------------------ */

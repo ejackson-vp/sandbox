@@ -218,6 +218,7 @@ func runSession(cfg sessionConfig) error {
 		lease:    time.Now().Add(time.Duration(cfg.LeaseSeconds)*time.Second + 2*time.Second),
 		inflight: map[string]context.CancelFunc{},
 		slots:    make(chan struct{}, 1),
+		services: map[string]*runner.Service{},
 		maxFile:  cfg.MaxFileBytes,
 	}
 	logEvent("guest_ready", map[string]any{"sessionId": cfg.SessionID, "leaseDeadline": sup.lease.UTC().Format(time.RFC3339)})
@@ -354,6 +355,9 @@ type supervisor struct {
 	mu       sync.Mutex
 	inflight map[string]context.CancelFunc
 	slots    chan struct{}
+
+	// Long-running local services (HTTP servers) started by the customer.
+	services map[string]*runner.Service
 }
 
 func (s *supervisor) serve(ctx context.Context) error {
@@ -399,6 +403,7 @@ func (s *supervisor) cancel(id string) {
 }
 
 func (s *supervisor) shutdownAll() {
+	s.stopAllServices()
 	s.mu.Lock()
 	fns := make([]context.CancelFunc, 0, len(s.inflight))
 	for _, fn := range s.inflight {
@@ -473,6 +478,14 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 		result = s.list(req)
 	case protocol.OpFileStat:
 		result = s.stat(req)
+	case protocol.OpServiceStart:
+		result = s.startService(ctx, req)
+	case protocol.OpServiceStop:
+		result = s.stopService(req)
+	case protocol.OpServiceList:
+		result = s.listServices(req)
+	case protocol.OpHTTP:
+		result = s.httpRequest(ctx, req)
 	default:
 		result = protocol.ErrorResult(req, "unsupported_operation", "unknown operation")
 	}

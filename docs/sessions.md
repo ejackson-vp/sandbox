@@ -75,6 +75,10 @@ has been used.
 - `DELETE /v1/sessions/{id}/requests/{requestId}` cancels the running command;
   the guest returns a result with `cancelled: true` and the session stays usable.
 - File operations travel through the same single-operation gate.
+- Long-running local services (`service.start`) also use the gate for
+  start/stop/list and HTTP requests; a service process itself persists between
+  operations. Services are stopped on suspend, terminate and lease end, so they
+  do not survive a checkpoint; restart them after resume.
 
 ## Cleanup guarantees
 

@@ -99,6 +99,10 @@ be advertised as provider-blind in dev/Kata.
 - Downloads never export symlinks and are capped at `maxFileBytes`.
 - No hostPath; no shared volume between sessions. Suspendable sessions use a
   per-session PVC, never a shared one.
+- Local HTTP services are reachable only through the sealed relay operation.
+  The guest dials `127.0.0.1:<port>` and the port must belong to a running
+  service; the API never sees a host, and there is no inbound pod route. See
+  [http.md](http.md).
 
 ## 6. Termination guarantees (residual latency)
 

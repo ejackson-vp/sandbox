@@ -483,6 +483,40 @@ describe("session execution", () => {
   }, 60_000);
 });
 
+describe("local services and HTTP data plane", () => {
+  it("starts a loopback server and fetches it through the relay", async () => {
+    const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
+    await client.waitForReady(handle);
+    await client.putFile(handle, { path: "index.html", data: Buffer.from("hello-http\n") });
+
+    const info = await client.startService(handle, {
+      name: "web",
+      command: ["python3", "-m", "http.server", "18080", "--bind", "127.0.0.1"],
+      port: 18080,
+    });
+    expect(info.state).toBe("running");
+    expect(info.port).toBe(18080);
+
+    const services = await client.listServices(handle);
+    expect(services.map((s) => s.name)).toContain("web");
+
+    const response = await client.http(handle, { port: 18080, path: "/", method: "GET" });
+    expect(response.status).toBe(200);
+    expect(response.body.toString()).toContain("hello-http");
+
+    // A port that is not declared by a running service is rejected.
+    await expect(client.http(handle, { port: 18081, path: "/" })).rejects.toMatchObject({
+      code: "service_unavailable",
+    });
+
+    await client.stopService(handle, "web");
+    await expect(client.http(handle, { port: 18080, path: "/" })).rejects.toMatchObject({
+      code: "service_unavailable",
+    });
+    await client.destroy(handle);
+  }, 180_000);
+});
+
 describe("checkpoint and resume", () => {
   it("auto-suspends after the idle policy", async () => {
     const handle = await client.createSession({

@@ -40,6 +40,10 @@ Usage:
   sandbox status <session-id>
   sandbox suspend <session-id>
   sandbox resume <session-id>
+  sandbox serve <session-id> --name web --port 8080 -- python3 -m http.server 8080
+  sandbox services <session-id>
+  sandbox stop-service <session-id> <name>
+  sandbox http <session-id> <port> <path> [--method GET] [--body text]
   sandbox destroy <session-id>
   sandbox run <file>            # create + upload + exec + destroy (convenience)
   sandbox agent-demo <file>     # same, purchased through @x402/fetch
@@ -131,6 +135,10 @@ async function main(): Promise<number> {
       "baseline-cpu": { type: "string" },
       "baseline-memory": { type: "string" },
       idle: { type: "string" },
+      name: { type: "string" },
+      port: { type: "string" },
+      method: { type: "string" },
+      body: { type: "string" },
       "max-lifetime": { type: "string" },
       timeout: { type: "string" },
       env: { type: "string", multiple: true },
@@ -415,6 +423,72 @@ async function main(): Promise<number> {
       const status = await client.resume(attach(id));
       out(`State: ${status.state}`, json);
       if (json) process.stdout.write(JSON.stringify(status, null, 2) + "\n");
+      return 0;
+    }
+
+    case "serve": {
+      const id = requireArg(positionals[1], "session id");
+      const command = positionals.slice(2);
+      if (command.length === 0) {
+        process.stderr.write("error: serve requires -- <command> [args...]\n");
+        return 2;
+      }
+      const name = String(values.name ?? "web");
+      const port = Number(values.port ?? 8080);
+      const info = await client.startService(attach(id), { name, command, port });
+      out(`Service: ${info.name} on 127.0.0.1:${info.port} (pid ${info.pid}, ${info.state})`, json);
+      if (json) process.stdout.write(JSON.stringify(info, null, 2) + "\n");
+      return 0;
+    }
+
+    case "services": {
+      const id = requireArg(positionals[1], "session id");
+      const services = await client.listServices(attach(id));
+      if (json) {
+        process.stdout.write(JSON.stringify(services, null, 2) + "\n");
+      } else if (services.length === 0) {
+        out("No services", json);
+      } else {
+        for (const service of services) {
+          process.stdout.write(
+            `${service.name}\t${service.state}\t127.0.0.1:${service.port}\tpid ${service.pid}\n`,
+          );
+        }
+      }
+      return 0;
+    }
+
+    case "stop-service": {
+      const id = requireArg(positionals[1], "session id");
+      const name = requireArg(positionals[2], "service name");
+      await client.stopService(attach(id), name);
+      out(`Service ${name}: stopped`, json);
+      return 0;
+    }
+
+    case "http": {
+      const id = requireArg(positionals[1], "session id");
+      const port = Number(requireArg(positionals[2], "port"));
+      const path = positionals[3] ?? "/";
+      const response = await client.http(attach(id), {
+        port,
+        path,
+        method: String(values.method ?? "GET"),
+        ...(values.body !== undefined ? { body: String(values.body) } : {}),
+      });
+      if (json) {
+        process.stdout.write(
+          JSON.stringify(
+            { status: response.status, headers: response.headers, body: response.body.toString("base64"), truncated: response.truncated },
+            null,
+            2,
+          ) + "\n",
+        );
+      } else {
+        out(`HTTP ${response.status}`, json);
+        process.stdout.write(response.body);
+        if (response.truncated) process.stderr.write("\n[response truncated]\n");
+      }
       return 0;
     }
 

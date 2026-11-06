@@ -27,7 +27,16 @@ import {
   type FileStatOperation,
   type FileStatResult,
   type GuestResult,
+  type HttpRequestOperation,
+  type HttpResponseResult,
   type OperationError,
+  type ServiceInfo,
+  type ServiceListOperation,
+  type ServiceListResult,
+  type ServiceStartOperation,
+  type ServiceStartResult,
+  type ServiceStopOperation,
+  type ServiceStopResult,
   type SessionStatus,
   type SessionTier,
 } from "@x402s/shared";
@@ -98,6 +107,30 @@ export interface CreateOptions {
   maxLifetimeSeconds?: number;
   /** Persist the handle (default true when a store is configured). */
   save?: boolean;
+}
+
+export interface StartServiceOptions {
+  name: string;
+  command: string[];
+  port: number;
+  env?: Record<string, string>;
+  cwd?: string;
+}
+
+export interface HttpOptions {
+  port: number;
+  method?: string;
+  path?: string;
+  headers?: Record<string, string>;
+  body?: Buffer | Uint8Array | string;
+  timeoutMs?: number;
+}
+
+export interface HttpResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: Buffer;
+  truncated: boolean;
 }
 
 export interface ExecOptions {
@@ -356,6 +389,124 @@ export class SandboxClient {
     return this.waitForReady(handle, timeoutMs);
   }
 
+  /** Start a long-running local server inside the sandbox. */
+  async startService(handle: SessionHandle, opts: StartServiceOptions): Promise<ServiceInfo> {
+    const requestId = randomBytes(16).toString("hex");
+    const operation: ServiceStartOperation = {
+      v: 2,
+      sessionId: handle.sessionId,
+      clientNonce: handle.clientNonce,
+      requestId,
+      op: "service.start",
+      name: opts.name,
+      command: opts.command,
+      port: opts.port,
+      ...(opts.env ? { env: opts.env } : {}),
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    };
+    const result = await this.run<ServiceStartResult | OperationError>(
+      handle,
+      operation,
+      requestId,
+      0,
+      30_000,
+      undefined,
+      "services",
+    );
+    if (!result.ok) {
+      throw new SandboxError(result.error?.code ?? "service_start_failed", result.error?.message ?? "service start failed", undefined, requestId);
+    }
+    return result.service;
+  }
+
+  async stopService(handle: SessionHandle, name: string): Promise<void> {
+    const requestId = randomBytes(16).toString("hex");
+    const operation: ServiceStopOperation = {
+      v: 2,
+      sessionId: handle.sessionId,
+      clientNonce: handle.clientNonce,
+      requestId,
+      op: "service.stop",
+      name,
+    };
+    const result = await this.run<ServiceStopResult | OperationError>(
+      handle,
+      operation,
+      requestId,
+      0,
+      10_000,
+      undefined,
+      "services/stop",
+    );
+    if (!result.ok) {
+      throw new SandboxError(result.error?.code ?? "service_stop_failed", result.error?.message ?? "service stop failed", undefined, requestId);
+    }
+  }
+
+  async listServices(handle: SessionHandle): Promise<ServiceInfo[]> {
+    const requestId = randomBytes(16).toString("hex");
+    const operation: ServiceListOperation = {
+      v: 2,
+      sessionId: handle.sessionId,
+      clientNonce: handle.clientNonce,
+      requestId,
+      op: "service.list",
+    };
+    const result = await this.run<ServiceListResult | OperationError>(
+      handle,
+      operation,
+      requestId,
+      0,
+      10_000,
+      undefined,
+      "services/list",
+    );
+    if (!result.ok) {
+      throw new SandboxError(result.error?.code ?? "service_list_failed", result.error?.message ?? "service list failed", undefined, requestId);
+    }
+    return result.services;
+  }
+
+  /** HTTP to a loopback-only service port; the guest never accepts a host. */
+  async http(handle: SessionHandle, opts: HttpOptions): Promise<HttpResponse> {
+    const requestId = randomBytes(16).toString("hex");
+    const body =
+      opts.body === undefined
+        ? undefined
+        : Buffer.from(typeof opts.body === "string" ? Buffer.from(opts.body) : opts.body);
+    const operation: HttpRequestOperation = {
+      v: 2,
+      sessionId: handle.sessionId,
+      clientNonce: handle.clientNonce,
+      requestId,
+      op: "http.request",
+      port: opts.port,
+      method: (opts.method ?? "GET").toUpperCase(),
+      path: opts.path ?? "/",
+      ...(opts.headers ? { headers: opts.headers } : {}),
+      ...(body ? { bodyBase64: body.toString("base64") } : {}),
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+    };
+    const result = await this.run<HttpResponseResult | OperationError>(
+      handle,
+      operation,
+      requestId,
+      0,
+      opts.timeoutMs ?? 30_000,
+      undefined,
+      "http",
+    );
+    if (!result.ok) {
+      throw new SandboxError(result.error?.code ?? "http_failed", result.error?.message ?? "http request failed", undefined, requestId);
+    }
+    return {
+      status: result.status,
+      headers: result.headers,
+      body: Buffer.from(result.bodyBase64, "base64"),
+      truncated: result.truncated,
+    };
+  }
+
   async destroy(handle: SessionHandle, waitMs = 30_000): Promise<SessionStatus | null> {
     await this.api(`/v1/sessions/${handle.sessionId}`, { method: "DELETE", headers: this.auth(handle) });
     if (this.store) this.forgetLocal(handle.sessionId);
@@ -524,6 +675,7 @@ export class SandboxClient {
     queueMs = 0,
     timeoutMs?: number,
     signal?: AbortSignal,
+    route = "exec",
   ): Promise<T> {
     if (!handle.guestPublicKey) await this.waitForReady(handle);
     const envelope = await sealJsonTo(handle.guestPublicKey!, operation);
@@ -532,7 +684,7 @@ export class SandboxClient {
 
     for (;;) {
       const res = await this.api(
-        `/v1/sessions/${handle.sessionId}/exec`,
+        `/v1/sessions/${handle.sessionId}/${route}`,
         {
           method: "POST",
           headers: this.auth(handle),

@@ -213,6 +213,25 @@ Limits: `maxFileBytes` (8 MiB default) per file/archive, `diskMiB` workspace
 quota, 5000 entries per listing. Paths are confined to the workspace; absolute
 paths must start with the workspace directory (`/workspace`).
 
+## Services and HTTP
+
+```http
+POST /v1/sessions/{id}/services        # service.start envelope
+POST /v1/sessions/{id}/services/list   # service.list envelope
+POST /v1/sessions/{id}/services/stop   # service.stop envelope
+POST /v1/sessions/{id}/http            # http.request envelope
+```
+
+All four use the same `{requestId, envelope, timeoutMs?, waitMs?}` body as
+`/exec`; the operation is inside the sealed envelope. The API never learns the
+service command, port, headers or body. HTTP is loopback-only to a port declared
+by a running service; there is no inbound pod networking. See
+[http.md](http.md).
+
+Common errors: `service_not_found`, `service_exists`, `port_in_use`,
+`service_not_listening`, `too_many_services`, `service_unavailable`,
+`invalid_port`, `invalid_method`, `http_error`.
+
 ## Requests (reconnect / cancel)
 
 ```http

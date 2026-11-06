@@ -709,6 +709,21 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
 
   app.post("/v1/sessions/:id/exec", rejectPlaintextBodies, (req, res) => runOperation(req, res, "exec"));
 
+  // Service and HTTP operations travel in the same opaque envelope. The API
+  // never learns the command, port, headers or body.
+  app.post("/v1/sessions/:id/services", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "service"),
+  );
+  app.post("/v1/sessions/:id/services/list", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "service"),
+  );
+  app.post("/v1/sessions/:id/services/stop", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "service"),
+  );
+  app.post("/v1/sessions/:id/http", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res, "http"),
+  );
+
   app.put("/v1/sessions/:id/files", rejectPlaintextBodies, (req, res) => runOperation(req, res, "file.put"));
 
   // Download/list/stat: the request (path and options) is inside the encrypted

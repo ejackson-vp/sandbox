@@ -51,6 +51,12 @@ sandbox resume  <id>              # new guest key, same files
 sandbox destroy <id>
 sandbox sessions                  # locally stored handles
 
+# local services / HTTP through the relay
+sandbox serve <id> --name web --port 8080 -- python3 -m http.server 8080 --bind 127.0.0.1
+sandbox services <id>
+sandbox http <id> 8080 /
+sandbox stop-service <id> web
+
 # a checkpoint is disk-only: processes, memory and sockets do not survive.
 # on local-path storage it is node-pinned; resume returns resume_unavailable
 # if that node is cordoned or gone.

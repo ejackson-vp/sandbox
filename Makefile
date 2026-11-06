@@ -26,6 +26,7 @@ help:
 	@echo "  make demo-lifecycle checkpoint a session, resume it, verify the workspace"
 	@echo "  make demo-portability prove a node-pinned checkpoint fails fast when cordoned"
 	@echo "  make demo-faults   missing PVC + controller restart while suspended"
+	@echo "  make demo-http     start a local server and fetch it through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
 	@echo "  make benchmark-smoke / benchmark-startup / benchmark-startup-pool"
@@ -92,6 +93,9 @@ demo-portability:
 
 demo-faults:
 	npx tsx scripts/lifecycle-faults.ts
+
+demo-http:
+	npx tsx scripts/http-demo.ts
 
 cli:
 	npm run build -w @x402s/shared

@@ -26,6 +26,7 @@ make demo-expire    # buy a 5s session, watch it expire and clean up
 make demo-lifecycle # checkpoint a session, resume it, verify the workspace
 make demo-portability # cordon the checkpoint node; prove resume fails fast
 make demo-faults    # delete a suspended PVC; restart the controller mid-suspend
+make demo-http      # run a server in the sandbox and fetch it via the relay
 make test           # unit + local integration tests
 make security-test  # packet-level isolation + lifecycle tests on the cluster
 make down
@@ -50,6 +51,9 @@ Sandbox: destroyed
 == 11/11 verifying Kubernetes resources are gone
 no sandbox pods remain
 ```
+
+HTTP: `make demo-http` starts a server in the sandbox and fetches it through the
+relay; see [docs/http.md](docs/http.md).
 
 Lifecycle: `make demo-lifecycle` exercises the suspend/resume contract; see
 [docs/lifecycle.md](docs/lifecycle.md) for the state machine, security caveats

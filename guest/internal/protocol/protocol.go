@@ -19,6 +19,14 @@ type Request struct {
 	Archive     bool              `json:"archive"`
 	Mode        int               `json:"mode"`
 	Recursive   bool              `json:"recursive"`
+
+	// service.start / service.stop
+	Name string `json:"name"`
+	Port int    `json:"port"`
+	// http.request
+	Method     string            `json:"method"`
+	Headers    map[string]string `json:"headers"`
+	BodyBase64 string            `json:"bodyBase64"`
 }
 
 type OpError struct {
@@ -66,6 +74,25 @@ type Result struct {
 	Entries      []FileEntry `json:"entries"`
 	TotalBytes   int64       `json:"totalBytes"`
 	Entry        *FileEntry  `json:"entry"`
+
+	// service.* / http.request
+	Service       *ServiceInfo      `json:"service,omitempty"`
+	Services      []ServiceInfo     `json:"services,omitempty"`
+	Status        int               `json:"status,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	BodyBase64    string            `json:"bodyBase64,omitempty"`
+	BodyTruncated bool              `json:"truncated,omitempty"`
+}
+
+type ServiceInfo struct {
+	Name      string `json:"name"`
+	Port      int    `json:"port"`
+	PID       int    `json:"pid"`
+	State     string `json:"state"`
+	StartedAt int64  `json:"startedAt"`
+	ExitCode  int    `json:"exitCode,omitempty"`
+	Stdout    string `json:"stdout,omitempty"`
+	Stderr    string `json:"stderr,omitempty"`
 }
 
 const (
@@ -74,6 +101,11 @@ const (
 	OpFileGet  = "file.get"
 	OpFileList = "file.list"
 	OpFileStat = "file.stat"
+
+	OpServiceStart = "service.start"
+	OpServiceStop  = "service.stop"
+	OpServiceList  = "service.list"
+	OpHTTP         = "http.request"
 )
 
 func ErrorResult(req *Request, code, message string) *Result {

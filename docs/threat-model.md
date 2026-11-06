@@ -183,6 +183,20 @@ is gone.
 | Replay a capability after resume | The capability is payment-bound and remains valid for `maxLifetimeSeconds`; the client nonce and session id are unchanged, so operations remain bound to the same session. A leaked capability is the same risk as a live session. |
 | Relay state after suspend | Purged at suspend; resume registers a new entry/token. |
 
+### P. Local services and HTTP
+
+A customer can start a long-running process and send HTTP to it through the
+relay.
+
+| Threat | Handling |
+| --- | --- |
+| Reach the node, metadata or another service | The guest ignores the host and dials `127.0.0.1:<port>`; the port must belong to a running service. No host field exists in the protocol. |
+| Redirect to an external host | Redirects are not followed (`ErrUseLastResponse`); the transport has no proxy. |
+| Use HTTP as a general egress tunnel | The request is loopback-only; external egress still goes through the normal proxy policy (and is denied by the pod NetworkPolicy otherwise). |
+| Leak service output/body to the control plane | The command, headers, body and response travel inside the sealed envelope; the API/controller only see ciphertext. |
+| Leave a server running after the lease | Services are process groups; `stop`, suspend, terminate and lease end call `shutdownAll`, which stops them. On Linux `Pdeathsig` is a backstop. |
+| Cross-session access to a service | Services live inside one guest/network namespace; no other session can reach them; the relay entry is capability-bound. |
+
 ## 3. Risk summary
 
 | Risk | Dev | Kata | Future TEE |
@@ -198,4 +212,5 @@ is gone.
 | Filesystem escape | Mitigated | Mitigated | Mitigated |
 | Warm-pool cross-session reuse | Mitigated (claim-once, no reset) | Mitigated | Pool disabled |
 | Suspended workspace at rest | PVC; storage-class encryption needed | PVC | PVC + TEE disk encryption |
+| Local service HTTP escape | Loopback + declared port; no inbound | Same | Same |
 | Side channels | N/A (no claim) | N/A (no claim) | Residual |
