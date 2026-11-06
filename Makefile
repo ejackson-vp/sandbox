@@ -15,6 +15,7 @@ help:
 	@echo "x402 sandbox sessions"
 	@echo ""
 	@echo "  make up             create kind cluster + Cilium + build images + deploy"
+	@echo "  make up-2w          recreate with two workers (portability tests only)"
 	@echo "  make build          build container images and the Go guest"
 	@echo "  make deploy         load images into kind and apply manifests"
 	@echo "  make demo           full paid workflow with a mock payment"
@@ -36,6 +37,13 @@ help:
 
 up:
 	./deploy/kind/up.sh
+	$(MAKE) build
+	$(MAKE) deploy
+
+# Recreate the cluster with two workers. Benchmark density/workloads assume a
+# single worker, so use this for scheduling/portability tests only.
+up-2w: down
+	CLUSTER_CONFIG=$(PWD)/deploy/kind/cluster-2w.yaml ./deploy/kind/up.sh
 	$(MAKE) build
 	$(MAKE) deploy
 

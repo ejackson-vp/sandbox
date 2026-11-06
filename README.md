@@ -20,6 +20,7 @@ Prerequisites: Docker, `kind`, `kubectl`, `cilium` CLI, Node ≥ 24, Go ≥ 1.24
 
 ```bash
 make up             # kind + Cilium + images + deploy (~2 min)
+make up-2w          # two workers for scheduling/portability tests only
 make demo-session   # the full 11-step session workflow
 make demo-expire    # buy a 5s session, watch it expire and clean up
 make demo-lifecycle # checkpoint a session, resume it, verify the workspace

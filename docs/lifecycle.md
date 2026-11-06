@@ -69,8 +69,15 @@ the 90 s provisioning timeout.
 
 `make demo-portability` proves it locally: create → write → suspend → cordon the
 worker → resume returns `resume_unavailable`; uncordon → resume lands on the
-same node with the workspace intact. Set `PIN_CHECKPOINT_NODE=false` when using
-RWX/network storage, where pinning is unnecessary.
+same node with the workspace intact. On the two-worker rig (`make up-2w`) the
+session landed on `x402-sandbox-worker2`, was cordoned there, failed fast, then
+resumed on worker2 after uncordon — the affinity, not single-node luck, is what
+pins it. Set `PIN_CHECKPOINT_NODE=false` when using RWX/network storage, where
+pinning is unnecessary.
+
+The two-worker rig is for scheduling/portability tests; the density and
+workload harness assumes a single worker, so return with `make down up` before
+running those benchmarks.
 
 Production consequence: **a checkpoint cannot survive its node.** For node
 failure tolerance use RWX/network storage or a real snapshot/restore; the

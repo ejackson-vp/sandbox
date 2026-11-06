@@ -1,0 +1,55 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: x402-sandbox
+networking:
+  # kind's default CNI (kindnet) does NOT enforce NetworkPolicy. A real
+  # policy-enforcing CNI is installed by deploy/kind/up.sh before workloads.
+  disableDefaultCNI: true
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            # Defence in depth: cap PIDs per pod even if a workload forks wildly.
+            pod-max-pids: "1024"
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
+  - role: worker
+    labels:
+      x402.io/sandbox-pool: "true"
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            pod-max-pids: "1024"
+          # Dedicated node placement: control-plane addons and this project's
+          # control plane do not tolerate this taint, so only sandbox pods land
+          # on the worker.
+          taints:
+            - key: x402.io/sandbox
+              value: "true"
+              effect: NoSchedule
+
+  - role: worker
+    labels:
+      x402.io/sandbox-pool: "true"
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            pod-max-pids: "1024"
+          # Dedicated node placement: control-plane addons and this project's
+          # control plane do not tolerate this taint, so only sandbox pods land
+          # on the worker.
+          taints:
+            - key: x402.io/sandbox
+              value: "true"
+              effect: NoSchedule

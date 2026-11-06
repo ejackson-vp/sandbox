@@ -4,12 +4,13 @@ set -euo pipefail
 
 CLUSTER="${KIND_CLUSTER:-x402-sandbox}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CONFIG="${CLUSTER_CONFIG:-${ROOT}/deploy/kind/cluster.yaml}"
 
 if kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then
   echo "==> kind cluster '${CLUSTER}' already exists"
 else
   echo "==> creating kind cluster '${CLUSTER}'"
-  kind create cluster --config "${ROOT}/deploy/kind/cluster.yaml"
+  kind create cluster --config "${CONFIG}"
 fi
 
 "${ROOT}/deploy/kind/cni.sh"
