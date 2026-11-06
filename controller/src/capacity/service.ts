@@ -25,6 +25,7 @@ export interface CapacityDeps {
 }
 
 export interface CapacityView {
+  accounting: "baseline" | "peak";
   nodes: Array<{
     id: string;
     allocatable: ResourceVector;
@@ -74,9 +75,10 @@ export class CapacityService {
     let reserved = ZERO_RESOURCES;
     for (const reservation of snapshot.reservations) {
       if (reservation.state === "RELEASED") continue;
+      const commitment = snapshot.accounting === "peak" ? reservation.peak : reservation.baseline;
       const compute = reservation.state === "SUSPENDED"
-        ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: reservation.baseline.storageBytes }
-        : reservation.baseline;
+        ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: commitment.storageBytes }
+        : commitment;
       reserved = addResources(reserved, compute);
     }
     const eligible = new Set(
@@ -88,7 +90,7 @@ export class CapacityService {
     let available = ZERO_RESOURCES;
     for (const node of snapshot.nodes) {
       if (!eligible.has(node.id)) continue;
-      available = addResources(available, availableOnNode(node, snapshot.reservations, snapshot.now));
+      available = addResources(available, availableOnNode(node, snapshot.reservations, snapshot.now, snapshot.accounting));
     }
     metrics.gauge("sandbox_capacity_reserved_cpu_millicores", "Reserved CPU millicores").set({}, reserved.cpuMillicores);
     metrics.gauge("sandbox_capacity_reserved_memory_bytes", "Reserved memory bytes").set({}, reserved.memoryBytes);
@@ -235,11 +237,12 @@ export class CapacityService {
     const count = (state: ReservationState) => reservations.filter((r) => r.state === state).length;
     const reserved = reservations.reduce((sum, reservation) => {
       if (reservation.state === "RELEASED") return sum;
+      const commitment = snapshot.accounting === "peak" ? reservation.peak : reservation.baseline;
       return addResources(
         sum,
         reservation.state === "SUSPENDED"
-          ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: reservation.baseline.storageBytes }
-          : reservation.baseline,
+          ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: commitment.storageBytes }
+          : commitment,
       );
     }, ZERO_RESOURCES);
     const eligibleIds = new Set(
@@ -251,9 +254,10 @@ export class CapacityService {
     let available = ZERO_RESOURCES;
     for (const node of snapshot.nodes) {
       if (!eligibleIds.has(node.id)) continue;
-      available = addResources(available, availableOnNode(node, reservations, snapshot.now));
+      available = addResources(available, availableOnNode(node, reservations, snapshot.now, snapshot.accounting));
     }
     return {
+      accounting: snapshot.accounting,
       nodes: snapshot.nodes.map((node) => ({
         id: node.id,
         allocatable: node.allocatable,
@@ -265,14 +269,18 @@ export class CapacityService {
                 addResources(
                   sum,
                   r.state === "SUSPENDED"
-                    ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: r.baseline.storageBytes }
-                    : r.baseline,
+                    ? {
+                        cpuMillicores: 0,
+                        memoryBytes: 0,
+                        storageBytes: (snapshot.accounting === "peak" ? r.peak : r.baseline).storageBytes,
+                      }
+                    : snapshot.accounting === "peak" ? r.peak : r.baseline,
                 ),
               ZERO_RESOURCES,
             ),
           node.platformOverhead,
         ),
-        available: availableOnNode(node, reservations, snapshot.now),
+        available: availableOnNode(node, reservations, snapshot.now, snapshot.accounting),
         eligible: eligibleIds.has(node.id),
       })),
       reservations: {

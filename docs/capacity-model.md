@@ -31,22 +31,32 @@ SandboxResourceRequest
 
 ## Baseline vs peak
 
-The model reserves the **baseline** against node allocatable capacity. This is
-the same resource Kubernetes schedules on: a sandbox with a 128 MiB baseline
-and a 512 MiB limit consumes 128 MiB of admission capacity, while the limit
-remains the burst ceiling.
+Admission has an explicit accounting mode, set by
+`CAPACITY_ACCOUNTING=baseline|peak`:
 
-Peak is stored with the reservation and exposed in the summary, but it is not
-used for admission in this version. That is a deliberate overcommit decision:
+| Mode | Request vector | Reservation vector | Semantics |
+|---|---|---|---|
+| `baseline` (default) | baseline | baseline | Guarantees Kubernetes scheduler requests; limits remain burst ceilings. |
+| `peak` | peak | peak | Reserves the full limit; no limit overcommit. Density drops sharply. |
 
-- baseline is guaranteed to fit at admission time,
-- peak is **not** guaranteed, and the cluster can be oversubscribed relative to
-  limits,
-- measured runtime utilization is never used as schedulable capacity.
+Measured runtime utilization is never used as schedulable capacity. The default
+is `baseline` because it matches Kubernetes scheduling and preserves the
+measured density; `peak` is the strict mode for workloads where the limit is
+the real commitment. The reservation table always stores both vectors, so the
+mode can change without a schema migration.
 
-This keeps the first version simple and conservative in the sense that it never
-counts observed idleness as free capacity. A future policy can add a peak
-overcommit ratio without changing the reservation table.
+## Configuration
+
+| Env | Default | Meaning |
+|---|---:|---|
+| `CAPACITY_ENABLED` | `true` | master switch |
+| `CAPACITY_ACCOUNTING` | `baseline` | `baseline` or `peak` reservation vector |
+| `CAPACITY_HOLD_TTL_MS` | `120000` | provisional payment hold lifetime |
+| `CAPACITY_PLATFORM_OVERHEAD_CPU_MILLICORES` | `250` | withheld per node |
+| `CAPACITY_PLATFORM_OVERHEAD_MEMORY_MIB` | `256` | withheld per node |
+| `CAPACITY_PLATFORM_OVERHEAD_STORAGE_MIB` | `1024` | withheld per node |
+| `CAPACITY_NODE_CPU_MILLICORES` | `0` | optional test/demo ceiling |
+| `CAPACITY_NODE_MEMORY_MIB` | `0` | optional test/demo ceiling |
 
 ## Node accounting
 

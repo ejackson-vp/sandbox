@@ -65,18 +65,13 @@ not conflated.
 
 ## Where it is weaker than it could be
 
-### 1. Baseline is not conservative against peak
+### 1. Baseline vs peak is now a policy, not a caveat
 
-The model reserves baseline, not peak. This is Kubernetes semantics and keeps
-density, but it means a cluster can be substantially oversubscribed against
-limits. The documentation says so, but a stricter policy would offer:
-
-- `CAPACITY_ACCOUNTING=baseline|peak`,
-- a peak overcommit ratio with an explicit rejection when exceeded,
-- a per-tier reserve/limit policy.
-
-This is the largest semantic gap between “correct admission” and “guaranteed
-capacity”.
+**Addressed in the follow-up.** `CAPACITY_ACCOUNTING=baseline|peak` selects the
+reservation vector; `peak` rejects the same workload that `baseline` admits when
+limits exceed allocatable capacity. Property tests cover both modes. A peak
+overcommit ratio and per-tier policy are still future work; the default remains
+baseline to keep density and benchmark comparability.
 
 ### 2. Multiple controllers are not supported, only documented
 

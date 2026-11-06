@@ -107,6 +107,6 @@ export class CapacitySnapshotBuilder {
     const nodes = await this.loadNodes(now);
     const reservations = this.store.reservations.listActive();
     const warm = await this.warmReservationsForSnapshot(nodes, now);
-    return { nodes, reservations: [...reservations, ...warm], now };
+    return { nodes, reservations: [...reservations, ...warm], now, accounting: this.cfg.capacityAccounting };
   }
 }

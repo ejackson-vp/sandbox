@@ -66,6 +66,7 @@ const snapshotArb = (nodes: fc.Arbitrary<NodeCapacity[]>) =>
     nodes,
     reservations: fc.array(reservationArb, { maxLength: 20 }),
     now: fc.integer({ min: 0, max: 100_000 }),
+    accounting: fc.constantFrom("baseline" as const, "peak" as const),
   });
 
 const requestArb: fc.Arbitrary<SandboxResourceRequest> = fc
@@ -126,12 +127,13 @@ describe("pure capacity admission", () => {
               addResources(
                 sum,
                 holdsCompute(r.state)
-                  ? r.baseline
+                  ? snapshot.accounting === "peak" ? r.peak : r.baseline
                   : { cpuMillicores: 0, memoryBytes: 0, storageBytes: r.baseline.storageBytes },
               ),
             { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },
           );
-        const used = addResources(addResources(node.platformOverhead, reserved), request.baseline);
+        const need = snapshot.accounting === "peak" ? request.peak : request.baseline;
+        const used = addResources(addResources(node.platformOverhead, reserved), need);
         expect(used.cpuMillicores).toBeLessThanOrEqual(node.allocatable.cpuMillicores);
         expect(used.memoryBytes).toBeLessThanOrEqual(node.allocatable.memoryBytes);
         expect(used.storageBytes).toBeLessThanOrEqual(node.allocatable.storageBytes);
@@ -230,6 +232,24 @@ describe("pure capacity admission", () => {
       }),
       { numRuns: 100 },
     );
+  });
+
+  it("peak accounting rejects when baseline accounting admits", () => {
+    const node: NodeCapacity = {
+      id: "node",
+      allocatable: { cpuMillicores: 1_000, memoryBytes: 512 * MiB, storageBytes: 10_240 * MiB },
+      platformOverhead: { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },
+      labels: { "x402.io/sandbox-pool": "true" },
+      taints: [],
+      ready: true,
+      schedulable: true,
+    };
+    const request: SandboxResourceRequest = {
+      baseline: { cpuMillicores: 100, memoryBytes: 128 * MiB, storageBytes: 256 * MiB },
+      peak: { cpuMillicores: 1_000, memoryBytes: 513 * MiB, storageBytes: 256 * MiB },
+    };
+    expect(admitCapacity({ nodes: [node], reservations: [], now: 0, accounting: "baseline" }, request).admitted).toBe(true);
+    expect(admitCapacity({ nodes: [node], reservations: [], now: 0, accounting: "peak" }, request).admitted).toBe(false);
   });
 
   it("placement candidates are sorted deterministically by score", () => {

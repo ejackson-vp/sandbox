@@ -7,6 +7,7 @@ import {
   type AdmissionDecision,
   type AdmissionRejectionReason,
   type CapacitySnapshot,
+  type ResourceVector,
   type SandboxResourceRequest,
 } from "./types.js";
 import {
@@ -17,27 +18,27 @@ import {
 
 function reject(
   reason: AdmissionRejectionReason,
-  request: SandboxResourceRequest,
+  requested: ResourceVector,
 ): AdmissionDecision {
   return {
     admitted: false,
     reason,
     retryable: reason !== "invalid_request",
-    requested: request.baseline,
+    requested,
   };
 }
 
 function insufficientReason(
   candidates: readonly PlacementCandidate[],
-  request: SandboxResourceRequest,
+  need: ResourceVector,
 ): AdmissionRejectionReason {
   let cpu = false;
   let memory = false;
   let storage = false;
   for (const candidate of candidates) {
-    if (candidate.available.cpuMillicores < request.baseline.cpuMillicores) cpu = true;
-    if (candidate.available.memoryBytes < request.baseline.memoryBytes) memory = true;
-    if (candidate.available.storageBytes < request.baseline.storageBytes) storage = true;
+    if (candidate.available.cpuMillicores < need.cpuMillicores) cpu = true;
+    if (candidate.available.memoryBytes < need.memoryBytes) memory = true;
+    if (candidate.available.storageBytes < need.storageBytes) storage = true;
   }
   if (memory) return "insufficient_memory";
   if (cpu) return "insufficient_cpu";
@@ -62,19 +63,18 @@ export function admitCapacity(
       request.baseline.memoryBytes === 0 &&
       request.baseline.storageBytes === 0
   ) {
-    return reject("invalid_request", request);
+    return reject("invalid_request", request.baseline);
   }
 
+  const need = snapshot.accounting === "peak" ? request.peak : request.baseline;
   const candidates = placementCandidates(snapshot, request);
   if (candidates.length === 0) {
-    return reject(noEligibleNodeReason(snapshot, request), request);
+    return reject(noEligibleNodeReason(snapshot, request), need);
   }
 
-  const selected = candidates.find((candidate) =>
-    fitsWithin(request.baseline, candidate.available),
-  );
+  const selected = candidates.find((candidate) => fitsWithin(need, candidate.available));
   if (!selected) {
-    return reject(insufficientReason(candidates, request), request);
+    return reject(insufficientReason(candidates, need), need);
   }
 
   return {
@@ -87,9 +87,9 @@ export function admitCapacity(
       state: "HELD",
     },
     availableAfter: {
-      cpuMillicores: selected.available.cpuMillicores - request.baseline.cpuMillicores,
-      memoryBytes: selected.available.memoryBytes - request.baseline.memoryBytes,
-      storageBytes: selected.available.storageBytes - request.baseline.storageBytes,
+      cpuMillicores: selected.available.cpuMillicores - need.cpuMillicores,
+      memoryBytes: selected.available.memoryBytes - need.memoryBytes,
+      storageBytes: selected.available.storageBytes - need.storageBytes,
     },
   };
 }

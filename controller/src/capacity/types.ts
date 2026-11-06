@@ -74,10 +74,14 @@ export interface NodeCapacity {
   schedulable: boolean;
 }
 
+export type AccountingMode = "baseline" | "peak";
+
 export interface CapacitySnapshot {
   nodes: readonly NodeCapacity[];
   reservations: readonly CapacityReservation[];
   now: number;
+  /** baseline = guarantee scheduler requests; peak = no limit overcommit. */
+  accounting: AccountingMode;
 }
 
 export interface SandboxResourceRequest {
@@ -122,6 +126,7 @@ export type AdmissionDecision =
     };
 
 export interface CapacitySummary {
+  accounting: AccountingMode;
   nodes: Array<{
     id: string;
     allocatable: ResourceVector;

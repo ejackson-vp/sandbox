@@ -119,7 +119,9 @@ npx tsx benchmarks/harness/cli.ts burst --levels 50 --max 50 --yes
 
 ## Capacity admission
 
-Before a `402` the API asks the controller for a capacity preflight. After the
+Capacity accounting is `baseline` by default; set `CAPACITY_ACCOUNTING=peak`
+to reserve limits instead. Before a `402` the API asks the controller for a
+capacity preflight. After the
 payment header is validated, but **before settlement**, it creates an
 authoritative hold keyed by payment key and spec hash. A capacity rejection is
 `503 capacity_unavailable` with `retryable` and requested baseline resources;

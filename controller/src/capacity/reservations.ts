@@ -11,8 +11,6 @@ import { randomBytes } from "node:crypto";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { admitCapacity } from "./admission.js";
 import {
-  addResources,
-  holdsCompute,
   type AdmissionDecision,
   type CapacityReservation,
   type CapacitySnapshot,
@@ -458,33 +456,5 @@ export class ReservationRepository {
     return Number(this.stmts.expireHolds!.run(now, now).changes ?? 0);
   }
 
-  summary(): {
-    total: number;
-    held: number;
-    allocated: number;
-    suspended: number;
-    releasing: number;
-    reserved: ResourceVector;
-  } {
-    const active = this.active();
-    const count = (state: ReservationState) => active.filter((r) => r.state === state).length;
-    const reserved = active.reduce(
-      (sum, reservation) =>
-        addResources(
-          sum,
-          holdsCompute(reservation.state)
-            ? reservation.baseline
-            : { cpuMillicores: 0, memoryBytes: 0, storageBytes: reservation.baseline.storageBytes },
-        ),
-      { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },
-    );
-    return {
-      total: active.length,
-      held: count("HELD"),
-      allocated: count("ALLOCATED"),
-      suspended: count("SUSPENDED"),
-      releasing: count("RELEASING"),
-      reserved,
-    };
-  }
+
 }

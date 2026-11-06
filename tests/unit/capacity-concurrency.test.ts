@@ -29,6 +29,7 @@ function snapshot(): CapacitySnapshot {
     }],
     reservations: [],
     now: Date.now(),
+    accounting: "baseline",
   };
 }
 

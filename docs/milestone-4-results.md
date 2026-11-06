@@ -117,7 +117,8 @@ the admin-only summary; it requires the internal controller token.
 
 ## Economics
 
-At 50 baseline sessions (128 MiB baseline, 512 MiB limit):
+At 50 baseline sessions (128 MiB baseline, 512 MiB limit), accounting mode
+`baseline` (the default):
 
 - reserved memory: 6.4 GiB of ~7.75 GiB allocatable (~83%),
 - reserved CPU: 6.25 cores of 13.75 (~45%),
@@ -177,7 +178,7 @@ Do not add an autoscaler or distributed scheduler before those measurements.
 
 - `npm run build` — clean
 - `npm run lint:structure` — clean
-- Full suite — 147 passed, 3 skipped (including an eight-process SQLite concurrency test)
+- Full suite — 149 passed, 3 skipped (including an eight-process SQLite concurrency test)
 - Security suite on kind — 12 passed, 3 skipped
 - `make demo-capacity` — passed end to end on the final deployment
 - `sandbox admin capacity` — returns capacity only with the internal token;

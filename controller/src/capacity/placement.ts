@@ -11,6 +11,7 @@ import {
   type NodeCapacity,
   type ResourceVector,
   type SandboxResourceRequest,
+  type AccountingMode,
 } from "./types.js";
 
 export const SANDBOX_POOL_LABEL = "x402.io/sandbox-pool";
@@ -35,6 +36,7 @@ export function reservedOnNode(
   reservations: readonly CapacityReservation[],
   nodeId: string,
   now: number,
+  accounting: AccountingMode = "baseline",
 ): ResourceVector {
   let cpu = 0;
   let memory = 0;
@@ -46,8 +48,9 @@ export function reservedOnNode(
       continue;
     }
     if (holdsCompute(reservation.state)) {
-      cpu += reservation.baseline.cpuMillicores;
-      memory += reservation.baseline.memoryBytes;
+      const committed = accounting === "peak" ? reservation.peak : reservation.baseline;
+      cpu += committed.cpuMillicores;
+      memory += committed.memoryBytes;
     }
     // Suspended sessions release compute but keep their workspace.
     storage += reservation.baseline.storageBytes;
@@ -59,8 +62,9 @@ export function availableOnNode(
   node: NodeCapacity,
   reservations: readonly CapacityReservation[],
   now: number,
+  accounting: AccountingMode = "baseline",
 ): ResourceVector {
-  const reserved = reservedOnNode(reservations, node.id, now);
+  const reserved = reservedOnNode(reservations, node.id, now, accounting);
   const available = subtractResources(
     subtractResources(node.allocatable, node.platformOverhead),
     reserved,
@@ -94,7 +98,7 @@ export function placementCandidates(
   return snapshot.nodes
     .filter((node) => isNodeEligible(node, request))
     .map((node) => {
-      const available = availableOnNode(node, snapshot.reservations, snapshot.now);
+      const available = availableOnNode(node, snapshot.reservations, snapshot.now, snapshot.accounting);
       const used = subtractResources(node.allocatable, available);
       return { node, available, score: utilization(node, used) };
     })

@@ -15,6 +15,24 @@ describe("production config guards", () => {
     ).toThrow(/GUEST_IMAGE_DIGEST/);
   });
 
+  it("validates capacity accounting mode", () => {
+    const cfg = loadControllerConfig({
+      ADMIN_TOKEN: "test-admin-token-0123456789",
+      EXECUTION_MODE: "dev",
+      ALLOW_INSECURE_DEV: "true",
+      CAPACITY_ACCOUNTING: "peak",
+    });
+    expect(cfg.capacityAccounting).toBe("peak");
+    expect(() =>
+      loadControllerConfig({
+        ADMIN_TOKEN: "test-admin-token-0123456789",
+        EXECUTION_MODE: "dev",
+        ALLOW_INSECURE_DEV: "true",
+        CAPACITY_ACCOUNTING: "sometimes",
+      }),
+    ).toThrow(/CAPACITY_ACCOUNTING/);
+  });
+
   it("accepts a pinned digest", () => {
     const cfg = loadControllerConfig({
       ...base,

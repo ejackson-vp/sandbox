@@ -75,6 +75,8 @@ export interface ControllerConfig {
   provisionQueueTimeoutMs: number;
   /** Capacity admission is on by default; disable only for local debugging. */
   capacityEnabled: boolean;
+  /** baseline = guarantee requests; peak = reserve limits (no overcommit). */
+  capacityAccounting: "baseline" | "peak";
   /** Provisional payment hold lifetime. */
   capacityHoldTtlMs: number;
   /** Per-node headroom withheld from sandboxes for system workloads. */
@@ -194,6 +196,13 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     maxConcurrentProvisioning: int(env.MAX_CONCURRENT_PROVISIONING, 0, 0, 1_000),
     provisionQueueTimeoutMs: int(env.PROVISION_QUEUE_TIMEOUT_MS, 120_000, 0, 3_600_000),
     capacityEnabled: bool(env.CAPACITY_ENABLED, true),
+    capacityAccounting: (() => {
+      const mode = env.CAPACITY_ACCOUNTING ?? "baseline";
+      if (mode !== "baseline" && mode !== "peak") {
+        throw new Error(`invalid CAPACITY_ACCOUNTING ${mode}`);
+      }
+      return mode;
+    })(),
     capacityHoldTtlMs: int(env.CAPACITY_HOLD_TTL_MS, 120_000, 5_000, 900_000),
     capacityPlatformOverhead: {
       cpuMillicores: int(env.CAPACITY_PLATFORM_OVERHEAD_CPU_MILLICORES, 250, 0, 64_000),
