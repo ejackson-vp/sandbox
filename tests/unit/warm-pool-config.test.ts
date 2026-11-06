@@ -39,6 +39,7 @@ describe("warm pool configuration", () => {
         EXECUTION_MODE: "confidential",
         ALLOW_INSECURE_DEV: "false",
         RUNTIME_CLASS: "kata-qemu-snp",
+        GUEST_IMAGE_DIGEST: `sha256:${"a".repeat(64)}`,
         WARM_POOL_SIZE: "2",
       }),
     ).toThrow(/WARM_POOL_SIZE is not supported in confidential mode/);

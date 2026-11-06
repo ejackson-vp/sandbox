@@ -14,7 +14,7 @@ concrete next step.
 | 4 | **Relay is a single in-memory pod** | restart loses pending ciphertext and sessions in flight | Redis/NATS with per-session queues and TTLs (ciphertext only) |
 | 5 | **Settlement recovery is mock-only** | only the mock facilitator exposes a settlement lookup | add on-chain/testnet reconciliation (nonce used ⇒ settled) or facilitator webhooks; until then the API fails closed with `409 reconciliation_pending` |
 | 6 | **No refunds** | a settled payment whose provisioning fails is not returned | define policy: automatic refund job or credit; requires a settlement ledger |
-| 7 | **Image not pinned by digest** | a compromised controller could run another image | pin `GUEST_IMAGE` by digest + Kyverno/sigstore admission; CoCo encrypted images for Mode C |
+| 7 | **Image not pinned by digest** | a compromised controller could run another image | config now refuses a non-`sha256` digest when `ALLOW_INSECURE_DEV=false`; add Kyverno/sigstore admission and CoCo encrypted images for Mode C |
 | 8 | **Secrets in the repo (dev)** | dev attestation key, admin/capability/proxy secrets | external secret manager; remove the dev key entirely in production |
 | 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; local-path has no encryption | use an encrypted StorageClass / CSI encryption, document the trust boundary, and expire PVCs aggressively |
 | 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |

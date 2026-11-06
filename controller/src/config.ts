@@ -107,6 +107,13 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     throw new Error("ADMIN_TOKEN must be set (>=16 chars) for controller roles");
   }
 
+  const guestImageDigest = env.GUEST_IMAGE_DIGEST ?? "sha256:unpinned-dev-image";
+  if (!allowInsecureDev && !/^sha256:[0-9a-f]{64}$/.test(guestImageDigest)) {
+    throw new Error(
+      "GUEST_IMAGE_DIGEST must be a pinned sha256 digest when ALLOW_INSECURE_DEV is false",
+    );
+  }
+
   const tiers = loadTiers(env);
   const warmPoolSize = int(env.WARM_POOL_SIZE, 0, 0, 50);
   const warmPoolTier = (env.WARM_POOL_TIER ?? "short") as keyof TierTable;
@@ -134,7 +141,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",
     controlNamespace: env.CONTROL_NAMESPACE ?? "sandbox-system",
     guestImage: env.GUEST_IMAGE ?? "x402-sandbox/guest:dev",
-    guestImageDigest: env.GUEST_IMAGE_DIGEST ?? "sha256:unpinned-dev-image",
+    guestImageDigest,
     runtimeClass,
     executionMode,
     allowInsecureDev,

@@ -86,7 +86,8 @@ job alive across suspend.
 - Suspend is fast because it is a pod delete plus a wait for the pod to vanish;
   in a busy cluster the wait dominates.
 - `maxLifetimeSeconds` defaults to 8 h for suspendable sessions; the maximum is
-  8 h. Suspended time counts toward it.
+  8 h. Suspended time counts toward it. Both suspended expiry and max lifetime
+  finalise as `EXPIRED`; an integration test covers a 1 s suspended expiry.
 - `autoResume` is advisory today: the server returns `409 session_suspended` and
   the client must call `resume()`. A future client can honor the hint
   automatically.

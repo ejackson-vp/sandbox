@@ -664,7 +664,13 @@ export class Store {
     if (!session || session.state !== "TERMINATING") return null;
     const reason = session.terminationReason ?? "";
     let final: SessionState = "DESTROYED";
-    if (reason.startsWith("lease_expired")) final = "EXPIRED";
+    if (
+      reason.startsWith("lease_expired") ||
+      reason.startsWith("suspended_expired") ||
+      reason.startsWith("max_lifetime")
+    ) {
+      final = "EXPIRED";
+    }
     else if (reason.startsWith("failure") || reason.startsWith("pod_")) final = "FAILED";
     else if (reason.startsWith("client_destroy")) final = "DESTROYED";
     this.stmts.finalize!.run(final, Date.now(), Date.now(), id);

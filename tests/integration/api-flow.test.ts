@@ -498,6 +498,22 @@ describe("checkpoint and resume", () => {
     await client.destroy(handle);
   }, 120_000);
 
+  it("expires a session that stays suspended too long", async () => {
+    const handle = await client.createSession({
+      tier: "custom",
+      durationSeconds: 60,
+      idlePolicy: { maxIdleSeconds: 300, suspendedDurationSeconds: 1, autoResume: false },
+    });
+    await client.waitForReady(handle);
+    await client.suspend(handle);
+    const terminal = await pollStatus(
+      handle,
+      (s) => s.state === "EXPIRED" || s.state === "FAILED" || s.state === "DESTROYED",
+      15_000,
+    );
+    expect(terminal.state).toBe("EXPIRED");
+  }, 120_000);
+
   it("exposes the pinned image digest", async () => {
     const res = await fetch(`${apiUrl}/v1/images`);
     expect(res.ok).toBe(true);
