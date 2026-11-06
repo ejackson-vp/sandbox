@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:unit
+
+  integration:
+    name: integration (local guest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: guest/go.mod
+          cache-dependency-path: guest/go.sum
+      - run: npm ci
+      - run: npm run build
+      - run: make guest
+      - name: integration tests
+        env:
+          GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
+        run: npm run test:integration
+
+  # Cluster-backed tests (network isolation, warm pool, checkpoint portability)
+  # need kind + Cilium and are intentionally run locally:
+  #   make up && make security-test
+  #   make demo-portability
