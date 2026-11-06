@@ -87,6 +87,20 @@ This is a placement demo, not a multi-node load benchmark. The two-worker rig is
 created with `make up-2w` and the standard benchmark rig must be restored with
 `make down up` afterwards.
 
+A directional two-worker burst was then run with a **2500 MiB logical cap per
+node** (5 GiB total), because both kind workers share one 7.75 GiB Docker VM:
+
+| Level | 1 worker READY p50 / p95 | 2 workers READY p50 / p95 | 2-worker throughput |
+|---:|---:|---:|---:|
+| 10 | 755 ms / 2.24 s | 1.04 s / 2.88 s | 3.5/s |
+| 25 | 3.18 s / 6.23 s | **3.08 s / 4.27 s** | **5.9/s** |
+
+At 25 creates, the two-worker p95 improved and throughput rose from ~3.6/s to
+~5.9/s; p50 was essentially unchanged. This is not a clean scaling result:
+the logical memory cap differs and both workers share the same Docker VM CPU
+and disk. It shows placement and parallelism help the tail, not that memory is
+additive.
+
 ## Provisioning concurrency
 
 Fresh 50-create burst, pool=8, capacity enabled:
@@ -206,6 +220,7 @@ Raw runs:
 - capacity-enabled burst: `benchmarks/results/2026-11-06T19-29-44-074Z-adf0370/`
 - constrained burst: `benchmarks/results/2026-11-06T19-33-17-304Z-adf0370/`
 - provisioning cap 4: `benchmarks/results/2026-11-06T19-33-46-587Z-adf0370/`
+- two-worker directional burst: `benchmarks/results/2026-11-06T20-42-05-414Z-e17441a/`
 
 ## Limitations
 

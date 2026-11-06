@@ -26,6 +26,7 @@ make demo-expire    # buy a 5s session, watch it expire and clean up
 make demo-lifecycle # checkpoint a session, resume it, verify the workspace
 make demo-capacity  # capacity reject, suspend, B takes the node, A resume rejected
 make demo-placement # two-worker least-allocated placement (make up-2w)
+make benchmark-multinode # two-worker burst (make up-2w; shared Docker VM)
 make demo-portability # cordon the checkpoint node; prove resume fails fast
 make demo-faults    # delete a suspended PVC; restart the controller mid-suspend
 make demo-http      # run a server in the sandbox and fetch it via the relay
