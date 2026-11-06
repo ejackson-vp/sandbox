@@ -43,7 +43,9 @@ PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
   "diskMiB": 1024,                          // custom only
   // optional checkpoint/resume opt-in:
   "idlePolicy": { "maxIdleSeconds": 300, "suspendedDurationSeconds": 28800, "autoResume": false },
-  "maxLifetimeSeconds": 28800               // wall clock, includes suspended time
+  "maxLifetimeSeconds": 28800,              // wall clock, includes suspended time
+  "baselineCpuMillis": 250,                 // optional scheduler reservation
+  "baselineMemoryMiB": 256                  // default: peak/4
 }
 ```
 
@@ -100,6 +102,7 @@ GET /v1/sessions/{id}
   "resumeCount": 1,               // present after resume
   "maxLifetimeSeconds": 28800,
   "idlePolicy": { "maxIdleSeconds": 300, "suspendedDurationSeconds": 28800, "autoResume": false },
+  "baseline": { "cpuMillis": 250, "memoryMiB": 256 }, // limits are the burst ceiling,
   "clientNonce": "…",
   "guestPublicKey": "<base64>",   // present once READY
   "attestation": { "...": "…" },  // signed evidence (simulated in dev)

@@ -21,13 +21,25 @@ raised by a request. `ALLOW_CUSTOM_DURATIONS` exists for development and tests.
 | Limit | Enforcement |
 | --- | --- |
 | Lease duration | controller deadline (authoritative), guest watchdog, `activeDeadlineSeconds` |
-| CPU / memory | Kubernetes container `resources.limits` (mirrored from the tier) |
+| CPU / memory | Kubernetes `requests` = **baseline** (scheduler reservation), `limits` = **peak** (burst ceiling); default baseline = peak/4 |
 | Disk | `emptyDir` `sizeLimit` (tier + 32 MiB) **and** the guest's own quota (`diskMiB`); suspendable sessions use a per-session PVC of `diskMiB` + 64 MiB |
 | Output | guest truncates stdout/stderr at `maxOutputBytes` (256 KiB default) |
 | File size | guest rejects payloads/archives above `maxFileBytes` (8 MiB default) |
 | Processes | pod-level `pod-max-pids` (1024) per sandbox; `maxProcesses` is advisory (a per-UID `RLIMIT_NPROC` would be node-wide because all sandboxes share a UID) |
 | Command time | guest watchdog (`min(requested, remaining lease, maxCommandSeconds)`) |
 | Concurrency | one active operation per session (controller gate) |
+
+## Baseline and burst
+
+Every session spec has a `baseline` (`cpuMillis`, `memoryMiB`) and a peak
+(`limits`). The scheduler packs by baseline; the container may burst to peak,
+which is enforced by cgroup limits. The default baseline is a quarter of the
+peak, matching the historical pod request. Custom sessions may set
+`baselineCpuMillis` / `baselineMemoryMiB` explicitly (must be ≤ peak).
+
+This is the AWS Lambda MicroVMs baseline-plus-consumption shape, but without
+baseline-aware pricing yet: the tier price is unchanged and the cost model's
+`requests` capacity already uses the same quarter-of-peak default.
 
 ## Cost model (operator view)
 

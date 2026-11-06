@@ -50,6 +50,8 @@ const createSchema = z.object({
   diskMiB: z.number().int().positive().optional(),
   clientPublicKey: z.string().min(40).max(64),
   clientNonce: z.string().min(40).max(64),
+  baselineCpuMillis: z.number().int().min(50).optional(),
+  baselineMemoryMiB: z.number().int().min(64).optional(),
   idlePolicy: z
     .object({
       maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
@@ -246,6 +248,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     ...(s.resumeCount ? { resumeCount: s.resumeCount } : {}),
     ...(s.maxLifetimeSeconds ? { maxLifetimeSeconds: s.maxLifetimeSeconds } : {}),
     ...(s.idlePolicy ? { idlePolicy: s.idlePolicy } : {}),
+    ...(s.baseline ? { baseline: s.baseline } : {}),
     ...(s.terminatingAt ? { terminatingAt: new Date(s.terminatingAt).toISOString() } : {}),
     ...(s.destroyedAt ? { destroyedAt: new Date(s.destroyedAt).toISOString() } : {}),
     clientNonce: s.clientNonce,
@@ -280,6 +283,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     tier: session.tier,
     durationSeconds: session.durationSeconds,
     limits,
+    ...(session.baseline ? { baseline: session.baseline } : {}),
     capabilityExpiresAt: new Date(session.capabilityExpiresAt).toISOString(),
     clientNonce: session.clientNonce,
     payment: toStatus(session).payment,

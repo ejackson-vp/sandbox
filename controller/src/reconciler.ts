@@ -328,6 +328,8 @@ export class Reconciler {
       workspaceDir: this.deps.cfg.workspaceDir,
       ...(opts.workspacePvc ? { workspacePvc: opts.workspacePvc } : {}),
       ...(opts.resume ? { resume: true } : {}),
+      ...(session.baselineCpuMillis ? { baselineCpuMillis: session.baselineCpuMillis } : {}),
+      ...(session.baselineMemoryMib ? { baselineMemoryMiB: session.baselineMemoryMib } : {}),
     });
     return { podName, createStarted };
   }
@@ -449,7 +451,16 @@ export class Reconciler {
   ): Promise<boolean> {
     const cfg = this.deps.cfg;
     if (cfg.warmPoolSize === 0) return false;
-    if (!this.warmLimitsFit(session.limits, this.warmPoolLimits())) {
+    const poolLimits = this.warmPoolLimits();
+    const poolBaseline = {
+      cpuMillis: Math.max(50, Math.floor(poolLimits.cpuMillis / 4)),
+      memoryMiB: Math.max(64, Math.floor(poolLimits.memoryMiB / 4)),
+    };
+    if (
+      !this.warmLimitsFit(session.limits, poolLimits) ||
+      (session.baselineCpuMillis ?? 0) > poolBaseline.cpuMillis ||
+      (session.baselineMemoryMib ?? 0) > poolBaseline.memoryMiB
+    ) {
       metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "miss_limits" });
       return false;
     }

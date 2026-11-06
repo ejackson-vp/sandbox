@@ -79,10 +79,18 @@ export interface IdlePolicy {
   autoResume?: boolean;
 }
 
+export interface SessionBaseline {
+  /** Scheduler reservation (steady-state). */
+  cpuMillis: number;
+  memoryMiB: number;
+}
+
 export interface SessionSpec {
   tier: SessionTier;
   durationSeconds: number;
   limits: SessionLimits;
+  /** Steady-state reservation; `limits` is the burst ceiling. */
+  baseline?: SessionBaseline;
   /** Present when the session is suspendable. */
   idlePolicy?: IdlePolicy;
   /** Wall-clock cap, including suspended time. */
@@ -104,6 +112,9 @@ export interface CreateSessionRequest {
   idlePolicy?: IdlePolicy;
   /** Wall-clock cap, including suspended time (default 8h for suspendable). */
   maxLifetimeSeconds?: number;
+  /** Optional steady-state reservation; defaults to a quarter of the peak. */
+  baselineCpuMillis?: number;
+  baselineMemoryMiB?: number;
 }
 
 export interface PaymentSummary {
@@ -131,6 +142,7 @@ export interface CreateSessionResponse {
   tier: SessionTier;
   durationSeconds: number;
   limits: SessionLimits;
+  baseline?: SessionBaseline;
   capabilityExpiresAt: string;
   clientNonce: string;
   payment: PaymentSummary;
@@ -197,6 +209,8 @@ export interface SessionStatus {
   maxLifetimeSeconds?: number;
   /** Present for suspendable sessions. */
   idlePolicy?: IdlePolicy;
+  /** Steady-state reservation (limits are the burst ceiling). */
+  baseline?: SessionBaseline;
   terminatingAt?: string;
   destroyedAt?: string;
   clientNonce: string;

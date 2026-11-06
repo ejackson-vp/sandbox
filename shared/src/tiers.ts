@@ -190,12 +190,32 @@ export function resolveSessionSpec(
     }
   }
 
+  // Baseline is the scheduler reservation; peak stays in `limits`. Default is
+  // the historical pod request (peak/4) so existing tiers keep their density.
+  const baselineCpuMillis = Math.trunc(req.baselineCpuMillis ?? Math.max(50, cpuMillis / 4));
+  const baselineMemoryMiB = Math.trunc(req.baselineMemoryMiB ?? Math.max(64, memoryMiB / 4));
+  if (baselineCpuMillis < 50 || baselineCpuMillis > cpuMillis) {
+    return {
+      ok: false,
+      code: "invalid_baseline",
+      message: "baselineCpuMillis must be between 50 and the peak cpuMillis",
+    };
+  }
+  if (baselineMemoryMiB < 64 || baselineMemoryMiB > memoryMiB) {
+    return {
+      ok: false,
+      code: "invalid_baseline",
+      message: "baselineMemoryMiB must be between 64 and the peak memoryMiB",
+    };
+  }
+
   return {
     ok: true,
     spec: {
       tier,
       durationSeconds,
       limits: sessionLimits,
+      baseline: { cpuMillis: baselineCpuMillis, memoryMiB: baselineMemoryMiB },
       ...(idlePolicy ? { idlePolicy } : {}),
       ...(maxLifetimeSeconds !== undefined ? { maxLifetimeSeconds } : {}),
     },

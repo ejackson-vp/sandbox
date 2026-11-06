@@ -36,6 +36,9 @@ export interface SandboxPodSpec {
   workspacePvc?: string;
   /** True when this pod is a resume of a suspended session. */
   resume?: boolean;
+  /** Scheduler reservation; defaults to peak/4. */
+  baselineCpuMillis?: number;
+  baselineMemoryMiB?: number;
 }
 
 export interface WarmPodSpec {
@@ -106,6 +109,8 @@ interface PodBuild {
   guestEnv: k8s.V1EnvVar[];
   initEnv: k8s.V1EnvVar[];
   workspacePvc?: string;
+  baselineCpuMillis: number;
+  baselineMemoryMiB: number;
 }
 
 export class KubeProvisioner implements Provisioner {
@@ -187,6 +192,8 @@ export class KubeProvisioner implements Provisioner {
       guestEnv,
       initEnv,
       ...(spec.workspacePvc ? { workspacePvc: spec.workspacePvc } : {}),
+      baselineCpuMillis: spec.baselineCpuMillis ?? Math.max(50, Math.floor(spec.limits.cpuMillis / 4)),
+      baselineMemoryMiB: spec.baselineMemoryMiB ?? Math.max(64, Math.floor(spec.limits.memoryMiB / 4)),
     });
 
     try {
@@ -274,6 +281,8 @@ export class KubeProvisioner implements Provisioner {
       deadlineSeconds: Math.ceil(spec.ttlMs / 1000) + 3600,
       guestEnv,
       initEnv,
+      baselineCpuMillis: Math.max(50, Math.floor(spec.limits.cpuMillis / 4)),
+      baselineMemoryMiB: Math.max(64, Math.floor(spec.limits.memoryMiB / 4)),
     });
 
     try {
@@ -371,8 +380,8 @@ export class KubeProvisioner implements Provisioner {
             },
             resources: {
               requests: {
-                cpu: `${Math.max(50, Math.floor(opts.limits.cpuMillis / 4))}m`,
-                memory: `${Math.max(64, Math.floor(opts.limits.memoryMiB / 4))}Mi`,
+                cpu: `${opts.baselineCpuMillis}m`,
+                memory: `${opts.baselineMemoryMiB}Mi`,
                 "ephemeral-storage": "16Mi",
               },
               limits: {

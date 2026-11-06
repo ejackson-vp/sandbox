@@ -114,6 +114,9 @@ describe.skipIf(!available)("workload hardening (real cluster)", () => {
     expect(["1", "1000m"]).toContain(container.resources.limits.cpu);
     expect(["1024Mi", "1Gi"]).toContain(container.resources.limits.memory);
     expect(container.resources.limits["ephemeral-storage"]).toBeTruthy();
+    // The scheduler packs by the baseline; the limits remain the burst ceiling.
+    expect(container.resources.requests.cpu).toBe("250m");
+    expect(container.resources.requests.memory).toBe("256Mi");
 
     const envNames = (container.env ?? []).map((e: { name: string }) => e.name);
     for (const forbidden of ["GUEST_TOKEN", "DEV_ATTESTATION_KEY", "PROXY_TOKEN"]) {

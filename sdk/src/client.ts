@@ -85,6 +85,9 @@ export interface CreateOptions {
   cpuMillis?: number;
   memoryMiB?: number;
   diskMiB?: number;
+  /** Steady-state reservation (defaults to a quarter of the peak). */
+  baselineCpuMillis?: number;
+  baselineMemoryMiB?: number;
   /** Opt into checkpointed suspend/resume. */
   idlePolicy?: {
     maxIdleSeconds?: number;
@@ -159,6 +162,8 @@ export class SandboxClient {
       ...(opts.cpuMillis === undefined ? {} : { cpuMillis: opts.cpuMillis }),
       ...(opts.memoryMiB === undefined ? {} : { memoryMiB: opts.memoryMiB }),
       ...(opts.diskMiB === undefined ? {} : { diskMiB: opts.diskMiB }),
+      ...(opts.baselineCpuMillis === undefined ? {} : { baselineCpuMillis: opts.baselineCpuMillis }),
+      ...(opts.baselineMemoryMiB === undefined ? {} : { baselineMemoryMiB: opts.baselineMemoryMiB }),
       ...(opts.idlePolicy ? { idlePolicy: opts.idlePolicy } : {}),
       ...(opts.maxLifetimeSeconds === undefined ? {} : { maxLifetimeSeconds: opts.maxLifetimeSeconds }),
       clientPublicKey: toBase64(keys.publicKey),
@@ -193,6 +198,7 @@ export class SandboxClient {
         tier: created.tier,
         durationSeconds: created.durationSeconds,
         limits: created.limits,
+        ...(created.baseline ? { baseline: created.baseline } : {}),
         createdAt: new Date().toISOString(),
         remainingSeconds: created.durationSeconds,
         clientNonce,

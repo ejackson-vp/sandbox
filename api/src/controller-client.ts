@@ -39,6 +39,7 @@ export interface SessionView {
     suspendedDurationSeconds?: number;
     autoResume?: boolean;
   };
+  baseline?: { cpuMillis: number; memoryMiB: number };
   failureCode?: string;
   failureMessage?: string;
   runtimeClass?: string;

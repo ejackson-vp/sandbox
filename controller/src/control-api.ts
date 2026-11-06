@@ -53,6 +53,12 @@ const specSchema = z.object({
   durationSeconds: z.number().int().min(1).max(MAX_LEASE_SECONDS),
   idlePolicy: idlePolicySchema.optional(),
   maxLifetimeSeconds: z.number().int().min(1).max(28800).optional(),
+  baseline: z
+    .object({
+      cpuMillis: z.number().int().min(50),
+      memoryMiB: z.number().int().min(64),
+    })
+    .optional(),
   limits: z.object({
     cpuMillis: z.number().int().positive(),
     memoryMiB: z.number().int().positive(),
@@ -188,6 +194,10 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       resumeCount: session.resumeCount,
       maxLifetimeSeconds: session.maxLifetimeSeconds ?? undefined,
       idlePolicy: session.idlePolicyJson ? JSON.parse(session.idlePolicyJson) : undefined,
+      baseline:
+        session.baselineCpuMillis && session.baselineMemoryMib
+          ? { cpuMillis: session.baselineCpuMillis, memoryMiB: session.baselineMemoryMib }
+          : undefined,
       timings: session.timingsJson ? JSON.parse(session.timingsJson) : undefined,
       payment: {
         paymentKey: payment?.paymentKey ?? session.paymentKey,
@@ -286,6 +296,12 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
         ...(body.spec.maxLifetimeSeconds !== undefined
           ? { maxLifetimeSeconds: body.spec.maxLifetimeSeconds }
           : {}),
+        ...(body.spec.baseline
+          ? {
+              baselineCpuMillis: body.spec.baseline.cpuMillis,
+              baselineMemoryMiB: body.spec.baseline.memoryMiB,
+            }
+          : {}),
       },
       cfg.tiers,
       cfg.platformLimits,
@@ -352,6 +368,8 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
           timingsJson: null,
           idlePolicyJson: spec.idlePolicy ? JSON.stringify(spec.idlePolicy) : null,
           maxLifetimeSeconds: spec.maxLifetimeSeconds ?? null,
+          baselineCpuMillis: spec.baseline?.cpuMillis ?? null,
+          baselineMemoryMib: spec.baseline?.memoryMiB ?? null,
           suspendedAt: null,
           resumeCount: 0,
           lastActivityAt: null,

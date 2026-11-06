@@ -14,7 +14,7 @@ import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared";
 
 export type { SessionState };
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 export interface PaymentRecord {
   paymentKey: string;
@@ -64,6 +64,8 @@ export interface SessionRecord {
   resumeCount: number;
   lastActivityAt: number | null;
   workspacePvc: string | null;
+  baselineCpuMillis: number | null;
+  baselineMemoryMib: number | null;
   updatedAt: number;
 }
 
@@ -115,7 +117,8 @@ const SESSION_COLUMNS = `
   attestation_json, guest_public_key, payment_key, pod_name, runtime_class,
   execution_mode, relay_token_hash, active_request_id, relay_purged_at,
   destroy_requested, timings_json, idle_policy_json, max_lifetime_seconds,
-  suspended_at, resume_count, last_activity_at, workspace_pvc, updated_at
+  suspended_at, resume_count, last_activity_at, workspace_pvc,
+  baseline_cpu_millis, baseline_memory_mib, updated_at
 `;
 
 interface RawSession {
@@ -160,6 +163,8 @@ interface RawSession {
   resume_count: number;
   last_activity_at: number | null;
   workspace_pvc: string | null;
+  baseline_cpu_millis: number | null;
+  baseline_memory_mib: number | null;
   updated_at: number;
 }
 
@@ -208,6 +213,8 @@ function mapSession(r: RawSession): SessionRecord {
     resumeCount: r.resume_count,
     lastActivityAt: r.last_activity_at,
     workspacePvc: r.workspace_pvc,
+    baselineCpuMillis: r.baseline_cpu_millis,
+    baselineMemoryMib: r.baseline_memory_mib,
     updatedAt: r.updated_at,
   };
 }
@@ -309,6 +316,8 @@ export class Store {
         resume_count INTEGER NOT NULL DEFAULT 0,
         last_activity_at INTEGER,
         workspace_pvc TEXT,
+        baseline_cpu_millis INTEGER,
+        baseline_memory_mib INTEGER,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS exec_requests (
@@ -366,7 +375,8 @@ export class Store {
       ),
       initLifecycle: this.db.prepare(
         `UPDATE sessions SET idle_policy_json=?, max_lifetime_seconds=?, last_activity_at=?,
-           workspace_pvc=?, suspended_at=?, resume_count=?, updated_at=? WHERE id=?`,
+           workspace_pvc=?, suspended_at=?, resume_count=?, baseline_cpu_millis=?,
+           baseline_memory_mib=?, updated_at=? WHERE id=?`,
       ),
       touchActivity: this.db.prepare(
         "UPDATE sessions SET last_activity_at=?, updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')",
@@ -530,6 +540,8 @@ export class Store {
         session.workspacePvc ?? null,
         session.suspendedAt ?? null,
         session.resumeCount ?? 0,
+        session.baselineCpuMillis ?? null,
+        session.baselineMemoryMib ?? null,
         session.updatedAt,
         session.id,
       );
