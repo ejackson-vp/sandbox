@@ -52,6 +52,12 @@ spec:
             - name: RELAY_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: relay-admin-token}
+            # Speculative readiness wake. The relay holds only this low-privilege
+            # token, not the controller admin token.
+            - {name: CONTROLLER_URL, value: "http://controller.sandbox-system.svc.cluster.local:3001"}
+            - name: WAKE_TOKEN
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: wake-token}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

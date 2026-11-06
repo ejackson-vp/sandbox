@@ -75,6 +75,9 @@ spec:
             - name: RELAY_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: relay-admin-token}
+            - name: WAKE_TOKEN
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: wake-token}
             - name: PROXY_TOKEN_SECRET
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: proxy-token-secret}

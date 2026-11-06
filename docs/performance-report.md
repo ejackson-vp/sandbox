@@ -11,7 +11,7 @@ clocks, sample sizes and threats to validity. Raw data:
 |---|---|
 | Cold start p50 / p95 / p99 | **not available in this environment** (no registry-backed image; see §2.3) |
 | Warm start (create → client-ready) p50 / p95 / p99 | **1.80 s / 1.82 s / 2.37 s** baseline (n=100); **2.10 s** after optimizations, in a run where container startup was 0.44 s slower (see §7) |
-| Warm start with warm pool (dev, pool=8) p50 / p90 / p95 / p99 | **285 ms / 366 ms / 424 ms / 1.51 s** (n=100, 98/100 pool hits; see §2.4) |
+| Warm start with warm pool (dev, pool=8) p50 / p90 / p95 / p99 | **101 ms / 110 ms / 125 ms** (n=100, 100/100 pool hits, 1 s pacing; see §2.4) |
 | Warm start (server entitlement → READY) p50 / p95 | **1.61 s / 1.73 s** (n=99) |
 | Existing-session exec p50 / p95 | **10.6 ms / 13.1 ms** (n=100) |
 | Maximum tested concurrency | **50 sessions, 50/50 READY, 0 failures** (idle); 25 for CPU and mixed workloads |
@@ -106,22 +106,23 @@ over the relay instead of creating a pod, so container startup is paid in
 advance rather than per session. Full design and security notes:
 [warm-pool.md](warm-pool.md).
 
-100 sequential samples, same spec as §2.1, pool size 8:
+100 samples, same spec as §2.1, pool size 8, **1 s between samples** so the pool
+can replenish (un-paced depletion is the burst case in §2.5):
 
 | Stage | n | p50 | p90 | p95 | p99 |
 |---|---:|---:|---:|---:|---:|
-| create (payment verify+settle+entitlement) | 100 | 15.8 ms | 17.8 ms | 19.8 ms | 38.6 ms |
-| claim handshake (API received → warm claimed) | 98 | 33 ms | 67 ms | 100 ms | 166 ms |
-| guest hello → READY (controller tick) | 100 | 214 ms | 275 ms | 308 ms | 356 ms |
-| READY → client observed (SDK poll) | 100 | 51 ms | 87 ms | 89 ms | 138 ms |
-| **create → client READY** | 100 | **285 ms** | **366 ms** | **424 ms** | **1.51 s** |
-| first exec | 100 | 8.6 ms | 10.1 ms | 11.9 ms | 41.3 ms |
+| create (payment verify+settle+entitlement) | 100 | 17.6 ms | 22.4 ms | 25.7 ms | 29.3 ms |
+| claim handshake (API received → warm claimed) | 100 | 26 ms | 31 ms | 34 ms | 48 ms |
+| guest hello → READY (relay wake) | 100 | **5 ms** | 7 ms | 8 ms | 10 ms |
+| READY → client observed (SDK poll) | 100 | 72.3 ms | 76.4 ms | 77.0 ms | 96.9 ms |
+| **create → client READY** | 100 | **100.7 ms** | **105.5 ms** | **109.8 ms** | **124.9 ms** |
+| first exec | 100 | 7.7 ms | 9.4 ms | 9.9 ms | 25.2 ms |
 
-- **98/100 samples hit the pool.** The two cold fallbacks (pool empty under a
-  ~1.2 create/s sample rate) are the entire p99 tail; one was a 9.8 s outlier.
-- The claim itself is ~33 ms p50. The remaining ~214 ms is the controller's
-  250 ms reconcile tick, not guest work. A relay→controller wake on hello would
-  remove most of it.
+- **100/100 samples hit the pool** at this paced rate. Without pacing the pool
+  depletes and p95 becomes a cold start (see §2.5).
+- A relay→controller wake on the guest hello cut `hello → READY` from 214 ms
+  (250 ms tick) to **5 ms**. The claim itself is 26 ms.
+- The largest remaining term is the SDK's ~72 ms readiness poll, not server work.
 - Idle pool cost is ~3.4 MiB current / 1.8 MiB anon per pod (`128Mi` request,
   `512Mi` limit). The real cost is scheduler requests, not resident memory.
 - With sub-second starts the default API limiter (30 burst / 1 per s) becomes the
@@ -129,6 +130,44 @@ advance rather than per session. Full design and security notes:
 
 The pool is off by default and is rejected in confidential mode (a warm guest
 has no session to attest to yet).
+
+### 2.5 Burst behaviour (pool = 8)
+
+The sequential startup numbers above are the best case. Firing N paid creates
+simultaneously (all admission buckets raised to isolate capacity) shows what
+the pool actually absorbs:
+
+| Simultaneous creates | Ready | Warm hits | Cold fallbacks | READY p50 | p95 | Throughput |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10 | 10/10 | 8 | 2 | 412 ms | 2.04 s | 4.9/s |
+| 25 | 25/25 | 8 | 17 | 2.78 s | 5.85 s | 3.7/s |
+| 50 | 50/50 | 8 | 42 | **18.92 s** | 24.72 s | 1.9/s |
+
+The pool absorbs exactly its size; beyond that, cold-start contention is
+superlinear (50 concurrent cold starts → 18.9 s p50 on this VM). Warm claims
+serialize in the single-threaded controller (claim p50 80–231 ms under burst,
+vs 26 ms sequential). With the default per-payer limit (30 burst / 1/s), the
+same 50-create burst would admit 30 and return 20 immediate 429s instead of an
+~19 s p50 — the intended backpressure. See [admission-control.md](admission-control.md) for the two-bucket
+model and the sizing implications.
+
+### 2.6 Soak and faults (3 min, pool = 8)
+
+A 180 s soak at 1 create/s with a relay restart, controller restart and warm-pod
+kill:
+
+| Metric | Result |
+|---|---|
+| Sessions | **174/174 ok**, 172 warm hits, 0 failures |
+| Relay restart | recovered in **1.87 s** |
+| Controller restart | recovered in **2.37 s** |
+| Warm pod kill | recovered in **100 ms** |
+| Final state | 8 warm pods, **0 session pods**, 9 relay entries, DB 6.77 MB |
+| READY | p50 100 ms, p90 104 ms, p99 1.47 s (2 cold fallbacks) |
+
+This is a short run, not a multi-hour leak test. The two drift indicators to
+watch are the residual relay entry (9 vs 8 pool entries) and DB growth
+(~10 KB/session).
 
 ## 3. Concurrency and density
 
@@ -521,6 +560,8 @@ make down && make up
 make benchmark-smoke
 make benchmark-startup                 # 100 warm samples
 make benchmark-startup-pool            # same, with 8 pre-booted sandboxes
+make benchmark-burst                   # 10/25/50 simultaneous creates
+make benchmark-soak                    # steady traffic + control-plane faults
 make benchmark-density MODE=idle LEVELS=1,5,10,25
 make benchmark-density MODE=cpu LEVELS=1,5,10
 make benchmark-density MODE=mixed LEVELS=1,5,10

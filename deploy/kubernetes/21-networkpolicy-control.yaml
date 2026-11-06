@@ -67,6 +67,10 @@ spec:
     - from:
         - podSelector:
             matchLabels: {app: api}
+        # The relay holds only the low-privilege wake token: a hello nudges the
+        # reconciler and cannot reach any other internal endpoint.
+        - podSelector:
+            matchLabels: {app: relay}
       ports:
         - protocol: TCP
           port: 3001
@@ -121,7 +125,27 @@ spec:
       ports:
         - protocol: TCP
           port: 8443
-  egress: []
+  egress:
+    # Speculative readiness wake only (POST /internal/wake).
+    - to:
+        - podSelector:
+            matchLabels: {app: controller}
+      ports:
+        - protocol: TCP
+          port: 3001
+    # Resolve the controller Service name.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

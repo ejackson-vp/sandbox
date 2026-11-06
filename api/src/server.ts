@@ -37,6 +37,7 @@ import {
   type SessionSpec,
 } from "@x402s/shared";
 import { loadConfig, type ApiConfig } from "./config.js";
+import { RateLimiter, paymentPayerKey } from "./admission.js";
 import { ControllerClient, ControllerError, type SessionView } from "./controller-client.js";
 import { HttpSettlementLookup, UnsupportedSettlementLookup, type SettlementLookup } from "./settlement-lookup.js";
 import { log } from "./log.js";
@@ -94,29 +95,6 @@ function rejectPlaintextBodies(req: Request, res: Response, next: NextFunction):
     }
   }
   next();
-}
-
-class RateLimiter {
-  private buckets = new Map<string, { tokens: number; updated: number }>();
-  constructor(
-    private readonly capacity: number,
-    private readonly refillPerSecond: number,
-  ) {}
-  take(key: string): boolean {
-    const now = Date.now();
-    const b = this.buckets.get(key) ?? { tokens: this.capacity, updated: now };
-    const elapsed = (now - b.updated) / 1000;
-    b.tokens = Math.min(this.capacity, b.tokens + elapsed * this.refillPerSecond);
-    b.updated = now;
-    if (b.tokens < 1) {
-      this.buckets.set(key, b);
-      return false;
-    }
-    b.tokens -= 1;
-    this.buckets.set(key, b);
-    if (this.buckets.size > 10_000) this.buckets.clear();
-    return true;
-  }
 }
 
 async function retry<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -211,9 +189,10 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     return requirement;
   };
 
-  // Defaults: a 30-request burst and 1/s refill per source. Configurable for
-  // deployments (and for density benchmarks that must not conflate admission
-  // control with capacity).
+  // Coarse per-IP guard before the payment is decoded, then a per-payer bucket
+  // once the payload is available. The per-payer limit is the product limit;
+  // the IP limit only bounds unauthenticated abuse.
+  const ipCreateLimiter = new RateLimiter(config.createIpRateBurst, config.createIpRateRefill);
   const createLimiter = new RateLimiter(config.createRateBurst, config.createRateRefill);
   const readLimiter = new RateLimiter(600, 40);
 
@@ -351,8 +330,10 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
         .counter("sandbox_sessions_created_total", "Session create requests by outcome")
         .inc({ result: res.statusCode < 300 ? "ok" : res.statusCode === 402 ? "payment_required" : "error" });
     });
-    if (!createLimiter.take(req.ip ?? "unknown")) {
-      res.status(429).json({ error: "rate_limited" });
+    const sourceIp = req.ip ?? "unknown";
+    if (!ipCreateLimiter.take(sourceIp)) {
+      res.setHeader("Retry-After", String(ipCreateLimiter.retryAfterSeconds(sourceIp)));
+      res.status(429).json({ error: "rate_limited", scope: "ip" });
       return;
     }
     const parsed = createSchema.safeParse(req.body);
@@ -389,6 +370,19 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     }
     if (payload.accepted?.network !== config.network || payload.accepted?.amount !== requirement.amount) {
       await payment402(res, requirement, "payment_requirements_mismatch");
+      return;
+    }
+
+    // Per-payer admission happens before the payment intent is claimed or the
+    // payment is settled, so a throttled payer is never charged.
+    const payerKey = paymentPayerKey(payload, sourceIp);
+    if (!createLimiter.take(payerKey)) {
+      res.setHeader("Retry-After", String(createLimiter.retryAfterSeconds(payerKey)));
+      res.status(429).json({
+        error: "rate_limited",
+        scope: "payer",
+        message: "this payer is creating sessions too quickly; retry after the advertised delay",
+      });
       return;
     }
 

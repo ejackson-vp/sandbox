@@ -64,6 +64,9 @@ export interface RelayOptions {
   adminToken: string;
   maxSessions?: number;
   responseTtlMs?: number;
+  /** When set, a guest hello nudges the controller's reconciler. */
+  controllerUrl?: string;
+  wakeToken?: string;
 }
 
 export function createRelay(opts: RelayOptions): RelayServer {
@@ -373,6 +376,20 @@ export function createRelay(opts: RelayOptions): RelayServer {
     });
   });
 
+  /**
+   * Event-driven readiness: a hello means the session may now be READY, so
+   * stop waiting for the next 250 ms reconcile tick. Fire-and-forget; a lost
+   * wake only costs one tick.
+   */
+  function wakeController(): void {
+    if (!opts.controllerUrl || !opts.wakeToken) return;
+    void fetch(`${opts.controllerUrl.replace(/\/$/, "")}/internal/wake`, {
+      method: "POST",
+      headers: { "x-wake-token": opts.wakeToken },
+      signal: AbortSignal.timeout(1_000),
+    }).catch(() => undefined);
+  }
+
   function resolvePending(entry: Entry, id: string, value: { envelope: string }): void {
     const pending = entry.pending.get(id);
     entry.pending.delete(id);
@@ -422,6 +439,8 @@ export function createRelay(opts: RelayOptions): RelayServer {
           entry.hello = evidence;
           entry.helloAt = Date.now();
           clearTimeout(helloTimer);
+          // Pool hellos are not customer readiness; don't wake for them.
+          if (!entry.sessionId.startsWith("warm_")) wakeController();
           log.info("relay_guest_ready", {
             sessionId: entry.sessionId,
             evidenceType: evidence.evidenceType,

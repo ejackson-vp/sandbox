@@ -33,7 +33,11 @@ async function main(): Promise<void> {
   metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE");
 
   if (cfg.role === "relay") {
-    const relay = createRelay({ adminToken: cfg.relayAdminToken });
+    const relay = createRelay({
+      adminToken: cfg.relayAdminToken,
+      controllerUrl: cfg.controllerUrl,
+      wakeToken: cfg.wakeToken,
+    });
     await listen(relay.server, cfg.relayPort);
     log.info("relay_listening", { port: cfg.relayPort });
     installShutdown(async () => relay.close());
@@ -64,7 +68,11 @@ async function main(): Promise<void> {
   const shutdown: Array<() => Promise<void>> = [];
 
   if (cfg.relayEnabled) {
-    const relay = createRelay({ adminToken: cfg.relayAdminToken });
+    const relay = createRelay({
+      adminToken: cfg.relayAdminToken,
+      controllerUrl: cfg.controllerUrl,
+      wakeToken: cfg.wakeToken,
+    });
     await listen(relay.server, cfg.relayPort);
     log.info("relay_listening", { port: cfg.relayPort });
     shutdown.push(() => relay.close());

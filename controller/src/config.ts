@@ -30,6 +30,9 @@ export interface ControllerConfig {
   proxyPort: number;
   adminToken: string;
   relayAdminToken: string;
+  /** Low-privilege token the relay uses to nudge the reconciler. */
+  wakeToken: string;
+  controllerUrl: string;
   proxyTokenSecret: string;
   dbPath: string;
   sandboxNamespace: string;
@@ -124,6 +127,8 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     proxyPort: int(env.X402_PROXY_PORT ?? env.PROXY_PORT, 3128, 1, 65535),
     adminToken,
     relayAdminToken: env.RELAY_ADMIN_TOKEN ?? adminToken,
+    wakeToken: env.WAKE_TOKEN ?? adminToken,
+    controllerUrl: env.CONTROLLER_URL ?? "http://127.0.0.1:3001",
     proxyTokenSecret: env.PROXY_TOKEN_SECRET ?? env.ADMIN_TOKEN ?? "",
     dbPath: env.DB_PATH ?? "/data/controller.db",
     sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",

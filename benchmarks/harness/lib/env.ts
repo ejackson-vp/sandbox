@@ -355,6 +355,20 @@ export function sandboxPodCount(): number {
   return out.split("\n").filter(Boolean).length;
 }
 
+/** Idle pool pods (not session pods). */
+export function warmPodCount(): number {
+  const out = kubectlTry([
+    "-n",
+    SANDBOX_NS,
+    "get",
+    "pods",
+    "-l",
+    "app.kubernetes.io/name=x402-sandbox,x402.io/pool=warm",
+    "--no-headers",
+  ]).out;
+  return out.split("\n").filter(Boolean).length;
+}
+
 export function podFor(sessionId: string): { phase: string; ready: boolean } | null {
   const res = kubectlTry([
     "-n",

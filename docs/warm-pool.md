@@ -60,25 +60,26 @@ TEE-aware warm handshake first.
 
 ## Measured result
 
-Same rig and scenario as the baseline (`startup`, sequential, custom
-500 m / 512 MiB / 256 MiB, 60 s lease), pool size 8, 100 samples:
+Same rig and scenario as the baseline (`startup`, custom 500 m / 512 MiB /
+256 MiB, 60 s lease), pool size 8, 100 samples, **1 s between samples** so the
+pool can replenish:
 
 | Metric | Baseline (no pool) | Warm pool | Change |
 |---|---:|---:|---:|
-| READY p50 | 2 099 ms | **285 ms** | **7.4× faster** |
-| READY p90 | 2 116 ms | 366 ms | 5.8× |
-| READY p95 | 2 119 ms | 424 ms | 5.0× |
-| READY p99 | 2 130 ms | 1 510 ms | 1.4× |
-| first exec p50 | 10.6 ms | 8.6 ms | — |
-| destroy p50 | 518 ms | 114 ms | (earlier optimization) |
+| READY p50 | 2 099 ms | **100.7 ms** | **20.8× faster** |
+| READY p90 | 2 116 ms | 105.5 ms | 20.1× |
+| READY p95 | 2 119 ms | 109.8 ms | 19.3× |
+| READY p99 | 2 130 ms | 124.9 ms | 17.1× |
+| first exec p50 | 10.6 ms | 7.7 ms | — |
+| destroy p50 | 518 ms | 112 ms | (earlier optimization) |
 
-- **98/100 samples were served by the pool.** Two cold fallbacks (empty pool)
-  produced the 1.5 s p99; one of them was a 9.8 s outlier. The honest summary is
-  fast p50/p90 with a cold-path tail when the pool is undersized for the arrival
-  rate.
-- Claim handshake (`apiReceivedAt → warmClaimAt`) p50 **33 ms**.
-- Guest reconnect + session hello → READY p50 **214 ms**, dominated by the
-  controller's 250 ms reconcile tick, not by the guest.
+- **100/100 samples were served by the pool** at this paced rate. Un-paced
+  runs deplete the pool and turn the tail into cold starts — that is the burst
+  case below, and the reason admission control matters.
+- Claim handshake (`apiReceivedAt → warmClaimAt`) p50 **26 ms**.
+- A relay→controller wake on the guest hello cut `hello → READY` from 214 ms
+  (250 ms reconcile tick) to **5 ms**.
+- The largest remaining term is the SDK's ~72 ms readiness poll, not server work.
 - Idle cost per warm pod: **~3.4 MiB current / 1.8 MiB anon**, `128Mi` request,
   `512Mi` limit. Eight pods used ~27 MiB actual memory; the pool's real cost is
   scheduler *requests*, not resident memory.
@@ -94,7 +95,7 @@ Run it:
 kubectl -n sandbox-system set env deploy/controller WARM_POOL_SIZE=8 WARM_POOL_TIER=short
 kubectl -n sandbox-system set env deploy/api CREATE_RATE_BURST=1000 CREATE_RATE_REFILL=500
 
-npx tsx benchmarks/harness/cli.ts startup --samples 100
+npx tsx benchmarks/harness/cli.ts startup --samples 100 --pace 1000
 
 # restore defaults
 kubectl -n sandbox-system set env deploy/controller WARM_POOL_SIZE- WARM_POOL_TIER-
@@ -122,6 +123,60 @@ relay as a control frame. The relay is a trusted control-plane component that
 already handles encrypted envelopes; it cannot decrypt customer payloads. A
 future hardening is to seal the claim to a guest public key announced in the
 pool hello.
+
+## Burst and soak
+
+A pool absorbs exactly its size; it is not a queue. With pool=8, 10/25/50
+simultaneous paid creates produced 8/8/8 warm hits and READY p50
+412 ms / 2.78 s / **18.92 s** (42 cold fallbacks at 50). No failures, no
+orphans. With the default per-payer admission limit (30 burst / 1/s), the same
+50-create burst would admit the first 30 and return 20 immediate 429s instead —
+the intended backpressure.
+See [admission-control.md](admission-control.md) and
+[performance-report.md §2.5](performance-report.md#25-burst-behaviour-pool--8).
+
+The soak scenario runs steady create/exec/destroy traffic and injects
+relay/controller restarts and warm-pod kills. A 180 s run at 1/s with a fault
+every 45 s (pool 8) produced:
+
+| Metric | Result |
+|---|---|
+| Sessions | **174/174 ok**, 172 warm hits, 0 failures |
+| Relay restart | recovered in **1.87 s** (8/8 warm pods after) |
+| Controller restart | recovered in **2.37 s** (8/8 warm pods after) |
+| Warm pod kill | recovered in **100 ms** |
+| Final state | 8 warm pods, **0 session pods**, 9 relay entries, DB 6.77 MB |
+| READY | p50 100 ms, p90 104 ms, p99 1.47 s (2 cold fallbacks) |
+
+The 9 relay entries vs 8 pool entries (one residual session entry) and the DB
+growth (~10 KB/session) are the drift indicators to watch in a multi-hour run.
+Run it with:
+
+```bash
+make benchmark-soak                 # 10 min, 0.5/s, fault every 90s
+DURATION=14400 make benchmark-soak  # 4 h
+```
+
+## Security regression
+
+`tests/security/warm-pool.test.ts` asserts, when the pool is enabled:
+
+- a warm pod has `WARM_MODE`, `POOL_ID`, and no `SESSION_ID`,
+  `CLIENT_PUBLIC_KEY`, `CLIENT_NONCE`, `LEASE_SECONDS`, or `GUEST_TOKEN` in the
+  guest container;
+- a sandbox can reach the relay but the claim route returns 401 without the
+  admin token;
+- two sessions get different guest keys, and each attestation binds its own
+  session id (never the `warm_*` pool id).
+
+Run it against a pool:
+
+```bash
+kubectl -n sandbox-system set env deploy/controller WARM_POOL_SIZE=2
+kubectl -n sandbox-system rollout status deploy/controller
+npx vitest run tests/security/warm-pool.test.ts
+kubectl -n sandbox-system set env deploy/controller WARM_POOL_SIZE-
+```
 
 ## Not solved
 

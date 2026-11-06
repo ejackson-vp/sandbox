@@ -111,7 +111,14 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   });
 
   app.post("/internal/wake", (req, res) => {
-    if (!cfg.adminToken || !constantTimeEqual(req.header("x-internal-token") ?? "", cfg.adminToken)) {
+    // The relay holds only this token; it can nudge the reconciler but cannot
+    // reach any other internal endpoint.
+    const token = req.header("x-wake-token") ?? req.header("x-internal-token") ?? "";
+    // The API holds the admin token; the relay holds only the wake token.
+    const authorized =
+      (Boolean(cfg.wakeToken) && constantTimeEqual(token, cfg.wakeToken)) ||
+      (Boolean(cfg.adminToken) && constantTimeEqual(token, cfg.adminToken));
+    if (!authorized) {
       res.status(401).json({ error: "unauthorized" });
       return;
     }

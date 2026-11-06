@@ -48,6 +48,8 @@ export interface ApiConfig {
   intentStaleMs: number;
   createRateBurst: number;
   createRateRefill: number;
+  createIpRateBurst: number;
+  createIpRateRefill: number;
   tiers: TierTable;
   platformLimits: PlatformLimits;
 }
@@ -114,6 +116,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     intentStaleMs: int(env.PAYMENT_INTENT_STALE_MS, 30_000, 1000, 600_000),
     createRateBurst: int(env.CREATE_RATE_BURST, 30, 1, 100_000),
     createRateRefill: int(env.CREATE_RATE_REFILL, 1, 1, 100_000),
+    createIpRateBurst: int(env.CREATE_IP_RATE_BURST, 120, 1, 100_000),
+    createIpRateRefill: int(env.CREATE_IP_RATE_REFILL, 10, 1, 100_000),
     tiers: loadTiers(env),
     platformLimits: loadPlatformLimits(env),
   };

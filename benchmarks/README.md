@@ -21,6 +21,8 @@ make up                   # kind + Cilium + images + deploy
 make benchmark-smoke      # 1 session, safe on a laptop
 make benchmark-startup    # 100 warm create→ready→exec→destroy samples
 make benchmark-startup-pool  # same, with 8 pre-booted sandboxes (restores defaults)
+make benchmark-burst         # 10/25/50 simultaneous creates against the pool
+make benchmark-soak          # 10 min steady traffic + relay/controller/pool faults
 make benchmark-density    # 1,5,10,25 concurrent idle sessions
 make benchmark-workloads  # hello, compute, filesystem, pip, multi-command, expiry
 make benchmark-reliability
@@ -46,6 +48,8 @@ benchmarks/results/<run-id>/
   startup.jsonl             one row per sample (client + server stages)
   startup.summary.json      distributions + error codes
   startup.csv
+  burst.summary.json        simultaneous-create levels (+ CSV)
+  soak.summary.json         steady traffic + fault injection (+ CSV)
   density.summary.json      one row per concurrency level (+ infra snapshots)
   density.csv
   workloads.summary.json    W1..W6 metrics

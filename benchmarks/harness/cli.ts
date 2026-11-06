@@ -22,6 +22,8 @@ import { runStartup } from "./scenarios/startup.js";
 import { runDensity } from "./scenarios/density.js";
 import { runWorkloads } from "./scenarios/workloads.js";
 import { runReliability } from "./scenarios/reliability.js";
+import { runBurst } from "./scenarios/burst.js";
+import { runSoak } from "./scenarios/soak.js";
 
 const HELP = `x402 sandbox benchmarks (real cluster, mock payments)
 
@@ -34,10 +36,12 @@ Commands:
   density        concurrent sessions: idle | cpu | mixed
   workloads      representative workloads (hello, compute, fs, pip, multi, expiry)
   reliability    bounded fault injection (restarts, cancel, disconnect, expiry)
+  burst          N simultaneous paid creates (arrival-rate spike)
+  soak           steady traffic with periodic control-plane faults
 
 Options:
   --samples <n>        startup iterations (default 100 warm / 10 cold)
-  --levels <csv>       density levels (default 1,5,10,25)
+  --levels <csv>       density/burst levels (default 1,5,10,25)
   --mode <m>           density mode: idle | cpu | mixed (default idle)
   --tier <t>           short|standard|extended|long|custom (default custom)
   --duration <s>       lease seconds (default 180 for density, 60 for startup)
@@ -47,6 +51,9 @@ Options:
   --cold               cold-image startup mode (requires a registry-backed image)
   --image-ref <ref>    registry image ref for cold tests (patches the controller)
   --concurrency <n>    parallelism for setup/teardown (default 10)
+  --rate <n/s>         soak create rate (default 0.5)
+  --fault-every <s>    seconds between soak faults (default 90)
+  --pace <ms>          sleep between startup samples (default 0)
   --max <n>            hard cap on concurrent sandboxes (default 25)
   --yes                required for --max > 25 or --levels above 25
   --no-cleanup         keep sessions/pods for inspection
@@ -70,6 +77,9 @@ function parse(): { command: string; opts: Opts } {
       cold: { type: "boolean", default: false },
       "image-ref": { type: "string" },
       concurrency: { type: "string" },
+      rate: { type: "string" },
+      "fault-every": { type: "string" },
+      pace: { type: "string" },
       max: { type: "string" },
       yes: { type: "boolean", default: false },
       "no-cleanup": { type: "boolean", default: false },
@@ -103,6 +113,9 @@ function parse(): { command: string; opts: Opts } {
       cold: Boolean(values.cold),
       imageRef: values["image-ref"] as string | undefined,
       concurrency: Math.min(50, Math.max(1, Number(values.concurrency ?? 10))),
+      rate: Math.min(20, Math.max(0.05, Number(values.rate ?? 0.5))),
+      faultEvery: Math.max(15, Number(values["fault-every"] ?? 90)),
+      paceMs: Math.min(10_000, Math.max(0, Number(values.pace ?? 0))),
       max: Number(values.max ?? 25),
       yes: Boolean(values.yes),
       cleanup: !values["no-cleanup"],
@@ -130,7 +143,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (!["smoke", "startup", "density", "workloads", "reliability"].includes(command)) {
+  if (!["smoke", "startup", "density", "workloads", "reliability", "burst", "soak"].includes(command)) {
     process.stderr.write(`unknown command ${command}\n\n${HELP}`);
     return 2;
   }
@@ -138,7 +151,7 @@ async function main(): Promise<number> {
   const bench = new Bench(command, opts.runId);
 
   // Safety gate: refuse large loads unless explicitly acknowledged.
-  const highest = command === "density" ? Math.max(...opts.levels, 0) : 0;
+  const highest = command === "density" || command === "burst" ? Math.max(...opts.levels, 0) : 0;
   if (highest > opts.max) {
     if (!opts.yes) {
       const alloc = allocatedRequests();
@@ -177,6 +190,12 @@ async function main(): Promise<number> {
         break;
       case "reliability":
         code = await runReliability(bench, opts);
+        break;
+      case "burst":
+        code = await runBurst(bench, opts);
+        break;
+      case "soak":
+        code = await runSoak(bench, opts);
         break;
     }
   } catch (err) {

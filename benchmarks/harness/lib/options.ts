@@ -11,6 +11,9 @@ export interface BenchOptions {
   imageRef?: string;
   concurrency: number;
   max: number;
+  rate: number;
+  faultEvery: number;
+  paceMs: number;
   yes: boolean;
   cleanup: boolean;
   runId?: string;

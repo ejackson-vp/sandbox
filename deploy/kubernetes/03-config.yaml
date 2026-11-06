@@ -15,9 +15,12 @@ data:
   # --- api ----------------------------------------------------------------
   PUBLIC_BASE_URL: "http://localhost:8080"
   CAPABILITY_GRACE_SECONDS: "900"
-  # Admission control: 30-request burst, 1/s sustained per source.
+  # Admission control: 30-request burst, 1/s sustained per payer.
+  # The per-IP guard is coarser and only bounds unauthenticated abuse.
   CREATE_RATE_BURST: "30"
   CREATE_RATE_REFILL: "1"
+  CREATE_IP_RATE_BURST: "120"
+  CREATE_IP_RATE_REFILL: "10"
 
   # --- controller ---------------------------------------------------------
   CONTROLLER_URL: "http://controller.sandbox-system.svc.cluster.local:3001"

@@ -24,8 +24,9 @@ help:
 	@echo "  make demo-timeout   demonstrate the per-command timeout"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
-	@echo "  make benchmark-smoke / benchmark-startup / benchmark-density / benchmark-workloads"
-	@echo "  make benchmark-reliability / benchmark-report"
+	@echo "  make benchmark-smoke / benchmark-startup / benchmark-startup-pool"
+	@echo "  make benchmark-burst / benchmark-soak / benchmark-density"
+	@echo "  make benchmark-workloads / benchmark-reliability / benchmark-report"
 	@echo "  make logs           tail control-plane logs"
 	@echo "  make down           delete the kind cluster"
 	@echo ""
@@ -103,6 +104,12 @@ benchmark-startup-cold:
 
 benchmark-startup-pool:
 	POOL_SIZE=$(or $(POOL_SIZE),8) SAMPLES=$(or $(SAMPLES),100) ./scripts/benchmark-warm-pool.sh
+
+benchmark-burst:
+	POOL_SIZE=$(or $(POOL_SIZE),8) LEVELS=$(or $(LEVELS),10,25,50) ./scripts/benchmark-warm-pool-burst.sh
+
+benchmark-soak:
+	POOL_SIZE=$(or $(POOL_SIZE),8) DURATION=$(or $(DURATION),600) RATE=$(or $(RATE),0.5) ./scripts/benchmark-soak.sh
 
 benchmark-density:
 	$(BENCH) density --levels $(or $(LEVELS),1,5,10,25) --mode $(or $(MODE),idle) --max $(or $(MAX),25)

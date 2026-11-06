@@ -69,8 +69,13 @@ PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
 ```
 
 Errors: `400` invalid spec/tier mismatch, `402` payment required/rejected,
-`409` `payment_in_progress` or `spec_mismatch`, `429` rate limited,
-`503` provisioning unavailable (no payment was taken).
+`409` `payment_in_progress` or `spec_mismatch`, `429` rate limited (see
+below), `503` provisioning unavailable (no payment was taken).
+
+A `429` is returned before the payment is claimed or settled, so a throttled
+payer is not charged. The body carries `{"error":"rate_limited","scope":"payer"|"ip"}`
+and a `Retry-After` header. `CREATE_RATE_*` is per payer; `CREATE_IP_RATE_*` is
+the coarse per-IP guard. See [admission-control.md](admission-control.md).
 
 ## Session status
 
@@ -243,5 +248,5 @@ GET /healthz
 | 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `session_not_usable` | conflict |
 | 410 | `lease_expired`, `capability_expired`, `result_expired` | gone |
 | 413 | `payload_too_large` | envelope too big |
-| 429 | `rate_limited` | slow down |
+| 429 | `rate_limited` (`scope: payer` or `ip`) | slow down; honour `Retry-After` |
 | 503 | `control_plane_unavailable`, `provisioning_unavailable` | transient |

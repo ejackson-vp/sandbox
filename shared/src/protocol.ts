@@ -141,6 +141,11 @@ export interface SessionTimings {
   warmClaimAt?: number;
   /** 1 when the session was served by the warm pool. */
   warmPoolHit?: number;
+  provisionBeginAt?: number;
+  warmPickMs?: number;
+  warmRegisterMs?: number;
+  warmClaimCallMs?: number;
+  warmRelabelMs?: number;
   terminationStartedAt?: number;
   podDeletedAt?: number;
   /** Controller: TERMINATING -> final state. */

@@ -173,6 +173,7 @@ export async function runStartup(bench: Bench, opts: BenchOptions): Promise<numb
     }
     bench.append(row);
     rows.push(row);
+    if (opts.paceMs > 0) await sleep(opts.paceMs);
     bench.note(
       `${i + 1}/${samples}: create ${fmtMs(row.createMs)} ready ${fmtMs(row.readyObservedMs)} ` +
         `serverReady ${fmtMs(row.derived?.serverReadyMs)} exec ${fmtMs(row.firstExecMs)} destroy ${fmtMs(row.destroyMs)}`,
@@ -214,7 +215,7 @@ export async function runStartup(bench: Bench, opts: BenchOptions): Promise<numb
     samples: rows.length,
     ok: ok.length,
     failed: rows.length - ok.length,
-    warmHits: ok.filter((r) => r.timings?.warmPoolHit === 1).length,
+    warmHits: ok.filter((r) => r.server?.warmPoolHit === 1).length,
     errorCodes: [...new Set(rows.filter((r) => !r.ok).map((r) => r.errorCode))],
     distributions: Object.fromEntries(
       Object.entries(metrics).map(([k, v]) => [k, summarize(v.filter((n) => Number.isFinite(n)))]),

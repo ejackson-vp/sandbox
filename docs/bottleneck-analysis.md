@@ -19,12 +19,14 @@ VM. Its run-to-run variance (1.32 vs 1.76 s, tight within each run) tracks
 image-layer page-cache state, not application code. **This dominates the
 lifecycle and cannot be removed from the control plane — only paid in advance.**
 
-Measured fix (dev mode, pool size 8, n=100): pre-booted warm pods claimed over
-the relay reduce create→READY p50 from **2.10 s to 285 ms** (p90 366 ms, p95
-424 ms), with 98/100 pool hits. The remaining bottleneck is the 250 ms reconcile
-tick between the guest hello and READY; a relay→controller wake on hello would
-remove most of it. The tail (p99 1.51 s) comes from two empty-pool fallbacks, so
-pool sizing to arrival rate is now the operational lever. See
+Measured fix (dev mode, pool size 8, n=100, 1 s pacing): pre-booted warm pods
+claimed over the relay plus a relay→controller wake reduce create→READY p50 from
+**2.10 s to 100.7 ms** (p90 105.5 ms, p95 109.8 ms, p99 124.9 ms), with 100/100
+pool hits. The claim is 26 ms; `hello → READY` is 5 ms after the wake. The
+largest remaining term is the SDK's ~72 ms readiness poll, not server work. The
+un-paced tail is different: a pool absorbs its size, then cold starts stampede
+(50 simultaneous → 18.9 s p50), so pool sizing and admission shaping are the
+operational levers. See
 [performance-report.md §2.4](performance-report.md#24-warm-pool-measured-dev-mode)
 and [warm-pool.md](warm-pool.md). This does **not** transfer to Kata/TEE cold
 start or real-node density, which still need a KVM host.
@@ -43,6 +45,14 @@ control-plane work on 14 shared vCPUs. Throughput is fine (all 50 became ready,
 0 failures) but tail latency grows. CPU-active load shows the same effect:
 per-command latency 213 ms at 1 session → 361 ms at 25 (+69%) while throughput
 scales 4.7 → 69.2 ops/s.
+
+With the warm pool enabled (8 pods), a simultaneous burst is bimodal: the first
+8 claims are fast, the rest cold-start. 10/25/50 simultaneous paid creates gave
+READY p50 1.12 s / 3.01 s / **21.51 s**, with 8/9/8 warm hits and 2/16/42 cold
+fallbacks (0 failures, 0 orphans). The controller is single-threaded, so even
+warm claims serialize (claim p50 ~450 ms at 10–25 simultaneous). A pool absorbs
+its size, not a queue: size it to the expected burst or admit-shape above it.
+See [admission-control.md](admission-control.md).
 
 A 25-session mixed run after repeated 25–50 pod churn reported a 12.4 s ready
 p50 (all sessions eventually ready, 0 errors). That outlier is attributed to

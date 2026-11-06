@@ -33,14 +33,20 @@ export interface ReconcilerDeps {
 
 export class Reconciler {
   private timer: NodeJS.Timeout | null = null;
+  private housekeepingTimer: NodeJS.Timeout | null = null;
+  private housekeepingRunning = false;
   private running = false;
   private wakeRequested = false;
   /** Last pod-health probe per session (guards K8s API traffic). */
   private readonly healthCheckedAt = new Map<string, number>();
   /** Consecutive *successful* probes reporting a missing/terminal pod. */
   private readonly healthStrikes = new Map<string, number>();
+  /** ClusterIPs are stable; avoid two K8s Service reads on every provision. */
+  private readonly serviceCache = new Map<string, { host: string; port: number; at: number }>();
   /** Warm pods claimed in this tick, before their labels are patched. */
   private readonly warmClaimed = new Set<string>();
+  /** Short-lived cache of pool pods, refreshed by the 1s housekeeping pass. */
+  private warmCache: { pods: WarmPodInfo[]; at: number } | null = null;
   private readonly now: () => number;
 
   constructor(private readonly deps: ReconcilerDeps) {
@@ -52,12 +58,21 @@ export class Reconciler {
     this.timer = setInterval(() => {
       void this.tick();
     }, this.deps.cfg.reconcileIntervalMs);
+    // Pool replenishment and orphan sweeping are deliberately on a slower,
+    // separate timer: they must never sit in front of a paid session's
+    // readiness tick (the wake path is measured in single-digit ms).
+    this.housekeepingTimer = setInterval(() => {
+      void this.housekeeping();
+    }, 1_000);
     void this.tick();
+    void this.housekeeping();
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
+    if (this.housekeepingTimer) clearInterval(this.housekeepingTimer);
     this.timer = null;
+    this.housekeepingTimer = null;
   }
 
   /**
@@ -94,8 +109,6 @@ export class Reconciler {
         await this.deps.provisioner.deletePod(session.podName, 0).catch(() => undefined);
         this.deps.store.clearPod(session.id);
       }
-      await this.sweepOrphanPods();
-      await this.reconcileWarmPool();
       const active = this.deps.store
         .listNonTerminal()
         .filter((s) => s.state === "READY" || s.state === "ACTIVE").length;
@@ -111,6 +124,20 @@ export class Reconciler {
         this.wakeRequested = false;
         void this.tick();
       }
+    }
+  }
+
+  /** Slow path: pool replenishment and orphan reaping, off the readiness tick. */
+  private async housekeeping(): Promise<void> {
+    if (this.housekeepingRunning) return;
+    this.housekeepingRunning = true;
+    try {
+      await this.sweepOrphanPods();
+      await this.reconcileWarmPool();
+    } catch (err) {
+      log.warn("housekeeping_failed", { error: (err as Error).message });
+    } finally {
+      this.housekeepingRunning = false;
     }
   }
 
@@ -135,11 +162,19 @@ export class Reconciler {
   }
 
   private async serviceAddress(name: string): Promise<{ host: string; port: number } | null> {
-    if (this.deps.serviceAddress) return this.deps.serviceAddress(name);
-    return this.deps.provisioner.getServiceAddress(name);
+    const cached = this.serviceCache.get(name);
+    if (cached && this.now() - cached.at < 30_000) {
+      return { host: cached.host, port: cached.port };
+    }
+    const addr = this.deps.serviceAddress
+      ? await this.deps.serviceAddress(name)
+      : await this.deps.provisioner.getServiceAddress(name);
+    if (addr) this.serviceCache.set(name, { ...addr, at: this.now() });
+    return addr;
   }
 
   private async provision(session: SessionRecord): Promise<void> {
+    const provisionBeginAt = this.now();
     const relayAddr = await this.serviceAddress(this.deps.cfg.relayServiceName);
     const proxyAddr = await this.serviceAddress(this.deps.cfg.proxyServiceName);
     if (!relayAddr || !proxyAddr) {
@@ -151,7 +186,7 @@ export class Reconciler {
       return;
     }
 
-    if (await this.tryWarmClaim(session, relayAddr, proxyAddr)) return;
+    if (await this.tryWarmClaim(session, relayAddr, proxyAddr, provisionBeginAt)) return;
 
     this.deps.store.mergeTimings(session.id, {
       provisionStartAt: Date.now(),
@@ -239,6 +274,7 @@ export class Reconciler {
     session: SessionRecord,
     relayAddr: { host: string; port: number },
     proxyAddr: { host: string; port: number },
+    provisionBeginAt: number,
   ): Promise<boolean> {
     const cfg = this.deps.cfg;
     if (cfg.warmPoolSize === 0) return false;
@@ -247,7 +283,9 @@ export class Reconciler {
       return false;
     }
 
+    const pickStarted = this.now();
     const warm = await this.pickWarmPod();
+    const warmPickMs = this.now() - pickStarted;
     if (!warm) {
       metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "miss_empty" });
       return false;
@@ -255,6 +293,7 @@ export class Reconciler {
     // Reserve it immediately so a second session in this tick cannot take it.
     this.warmClaimed.add(warm.warmId);
 
+    const registerStarted = this.now();
     const guestToken = newOpaqueToken(32);
     const tokenHash = sha256Hex(guestToken);
     const ttlMs = cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
@@ -268,6 +307,7 @@ export class Reconciler {
       }
     }
     this.deps.store.setRelayToken(session.id, tokenHash);
+    const warmRegisterMs = this.now() - registerStarted;
 
     const claim: WarmClaim = {
       sessionId: session.id,
@@ -289,6 +329,7 @@ export class Reconciler {
       tools: GUEST_TOOLS.join(","),
     };
 
+    const claimCallStarted = this.now();
     try {
       await this.deps.relay.claim(warm.poolId, claim);
     } catch (err) {
@@ -299,8 +340,10 @@ export class Reconciler {
       return false;
     }
 
+    const warmClaimCallMs = this.now() - claimCallStarted;
     // The guest accepted the claim and is reconnecting as the real session.
     // Relabel before the next sweep so the pod is owned by that session.
+    const relabelStarted = this.now();
     try {
       await this.deps.provisioner.patchPodLabels(warm.name, {
         "x402.io/pool": "sandbox",
@@ -328,8 +371,16 @@ export class Reconciler {
       provisionStartAt: claimedAt,
       podRequestedAt: claimedAt,
       warmClaimAt: claimedAt,
+      provisionBeginAt,
       warmPoolHit: 1,
+      warmPickMs,
+      warmRegisterMs,
+      warmClaimCallMs,
+      warmRelabelMs: this.now() - relabelStarted,
     });
+    if (this.warmCache) {
+      this.warmCache.pods = this.warmCache.pods.filter((p) => p.warmId !== warm.warmId);
+    }
     this.warmClaimed.delete(warm.warmId);
     // The pooled identity is dead the moment the guest reconnects.
     await this.deps.relay.purge(warm.poolId).catch(() => undefined);
@@ -343,14 +394,19 @@ export class Reconciler {
   }
 
   private async pickWarmPod(): Promise<WarmPodInfo | null> {
-    let pods: WarmPodInfo[];
-    try {
-      pods = await this.deps.provisioner.listWarmPods();
-    } catch (err) {
-      log.warn("warm_pool_list_failed", { error: (err as Error).message });
-      return null;
-    }
     const now = this.now();
+    let pods: WarmPodInfo[];
+    if (this.warmCache && now - this.warmCache.at < 2_000) {
+      pods = this.warmCache.pods;
+    } else {
+      try {
+        pods = await this.deps.provisioner.listWarmPods();
+        this.warmCache = { pods, at: now };
+      } catch (err) {
+        log.warn("warm_pool_list_failed", { error: (err as Error).message });
+        return null;
+      }
+    }
     for (const pod of pods) {
       if (!pod.warmId || this.warmClaimed.has(pod.warmId)) continue;
       if (pod.phase !== "Running" && pod.phase !== "Pending") continue;
