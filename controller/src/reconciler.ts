@@ -185,6 +185,18 @@ export class Reconciler {
 
   /** Idle suspension, suspended expiry, and the wall-clock lifetime cap. */
   private async reconcileSession(session: SessionRecord): Promise<void> {
+    // A client destroy must win from every non-terminal state. Previously the
+    // flag was only checked for READY/ACTIVE, so a session destroyed while
+    // SUSPENDED or SUSPENDING was left behind with its workspace.
+    if (session.destroyRequested && session.state !== "TERMINATING") {
+      if (this.ctx.store.requestTermination(session.id, "client_destroy")) {
+        const updated = this.ctx.store.getSession(session.id);
+        if (updated) {
+          await this.terminate(updated);
+          return;
+        }
+      }
+    }
     switch (session.state) {
       case "PAID":
         await this.provisioning.provision(session);
@@ -236,11 +248,6 @@ export class Reconciler {
   }
 
   private async enforceLease(session: SessionRecord): Promise<void> {
-    if (session.destroyRequested) {
-      this.ctx.store.requestTermination(session.id, "client_destroy");
-      return;
-    }
-
     // Detect a dead guest/pod between operations (crash, OOM, relay loss).
     // Probed at most every 2s per session to bound Kubernetes API traffic.
     //

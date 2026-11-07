@@ -4,7 +4,7 @@
  * Only Kubernetes pod creation is substituted; tests/security covers the real
  * cluster.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -32,7 +32,7 @@ import {
   toBase64,
   type SessionStatus,
 } from "../../shared/src/index.js";
-import { SandboxClient, FileSessionStore, SandboxError } from "../../sdk/src/index.js";
+import { SandboxClient, FileSessionStore, SandboxError, type SessionHandle } from "../../sdk/src/index.js";
 import { createSessionPayment, requestChallenge } from "../helpers/x402.js";
 import { makeTar } from "../helpers/tar.js";
 
@@ -227,6 +227,10 @@ afterAll(async () => {
   facilitator?.close();
   store?.close();
   await rm(workDir, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("payments and entitlements", () => {
@@ -741,6 +745,141 @@ describe("checkpoint and resume", () => {
     await client.destroy(handle);
     expect(snapshotter.discarded).toContain(handle.sessionId);
   }, 180_000);
+});
+
+describe("lifecycle races", () => {
+  async function suspendableSession(): Promise<SessionHandle> {
+    const handle = await client.createSession({
+      tier: "custom",
+      durationSeconds: 60,
+      idlePolicy: { maxIdleSeconds: 300, suspendedDurationSeconds: 600, autoResume: false },
+    });
+    await client.waitForReady(handle);
+    return handle;
+  }
+
+  async function expectNoPods(sessionId: string): Promise<void> {
+    const pods = await provisioner.listSandboxPods();
+    expect(pods.filter((pod) => pod.sessionId === sessionId)).toHaveLength(0);
+  }
+
+  async function waitForDestroyRequested(sessionId: string): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (store.getSession(sessionId)?.destroyRequested === 1) return;
+      await sleep(50);
+    }
+    throw new Error("destroy request was not recorded");
+  }
+
+  it("destroys a suspended session instead of orphaning it", async () => {
+    const handle = await suspendableSession();
+    await client.suspend(handle);
+    expect(store.getSession(handle.sessionId)?.state).toBe("SUSPENDED");
+
+    const destroyed = await client.destroy(handle, 20_000);
+    expect(destroyed?.state).toBe("DESTROYED");
+    const row = store.getSession(handle.sessionId);
+    expect(row?.state).toBe("DESTROYED");
+    expect(row?.workspacePvc).toBeNull();
+    await expectNoPods(handle.sessionId);
+  }, 60_000);
+
+  it("serialises concurrent suspend requests without leaving a pod", async () => {
+    const handle = await suspendableSession();
+    const results = await Promise.allSettled([client.suspend(handle), client.suspend(handle)]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    expect((rejected?.reason as SandboxError).code).toBe("not_suspendable");
+    expect(store.getSession(handle.sessionId)?.state).toBe("SUSPENDED");
+    await expectNoPods(handle.sessionId);
+
+    await client.destroy(handle, 20_000);
+    expect(store.getSession(handle.sessionId)?.state).toBe("DESTROYED");
+  }, 60_000);
+
+  it("lets destroy win while a suspend is between SUSPENDING and SUSPENDED", async () => {
+    const handle = await suspendableSession();
+    const originalSuspend = provisioner.suspendPod.bind(provisioner);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(provisioner, "suspendPod").mockImplementation(async (podName) => {
+      await gate;
+      return originalSuspend(podName);
+    });
+
+    let destroyed: SessionStatus | null | undefined;
+    try {
+      const suspend = client.suspend(handle).then(
+        () => null,
+        (err: Error) => err,
+      );
+      await pollStatus(handle, (status) => status.state === "SUSPENDING", 10_000);
+      const destroy = client.destroy(handle, 20_000);
+      await waitForDestroyRequested(handle.sessionId);
+      release();
+      destroyed = await destroy;
+      await suspend;
+    } finally {
+      release();
+      await client.destroy(handle, 10_000).catch(() => undefined);
+    }
+
+    expect(destroyed?.state).toBe("DESTROYED");
+    expect(store.getSession(handle.sessionId)?.state).toBe("DESTROYED");
+    await expectNoPods(handle.sessionId);
+  }, 60_000);
+
+  it("lets destroy win while a resume is between SUSPENDED and RESUMING", async () => {
+    const handle = await suspendableSession();
+    await client.suspend(handle);
+    const provisioning = (reconciler as unknown as {
+      provisioning: { awaitReady: (session: SessionRecord) => Promise<void> };
+    }).provisioning;
+    const originalAwaitReady = provisioning.awaitReady.bind(provisioning);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(provisioning, "awaitReady").mockImplementation(async (session) => {
+      await gate;
+      return originalAwaitReady(session);
+    });
+
+    let destroyed: SessionStatus | null | undefined;
+    try {
+      const resume = client.resume(handle).then(
+        () => null,
+        (err: Error) => err,
+      );
+      await pollStatus(handle, (status) => status.state === "RESUMING", 10_000);
+      const destroy = client.destroy(handle, 20_000);
+      await waitForDestroyRequested(handle.sessionId);
+      release();
+      destroyed = await destroy;
+      await resume;
+    } finally {
+      release();
+      await client.destroy(handle, 10_000).catch(() => undefined);
+    }
+
+    expect(destroyed?.state).toBe("DESTROYED");
+    expect(store.getSession(handle.sessionId)?.state).toBe("DESTROYED");
+    await expectNoPods(handle.sessionId);
+  }, 60_000);
+
+  it("accepts duplicate destroys and still reaches a single terminal state", async () => {
+    const handle = await suspendableSession();
+    const results = await Promise.allSettled([
+      client.destroy(handle, 20_000),
+      client.destroy(handle, 20_000),
+    ]);
+    expect(results.some((result) => result.status === "fulfilled")).toBe(true);
+    expect(store.getSession(handle.sessionId)?.state).toBe("DESTROYED");
+    await expectNoPods(handle.sessionId);
+  }, 60_000);
 });
 
 describe("capacity admission", () => {

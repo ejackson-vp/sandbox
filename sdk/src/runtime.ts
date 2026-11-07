@@ -120,16 +120,33 @@ export class ClientRuntime {
   async waitForReady(handle: SessionHandle, timeoutMs = 180_000): Promise<SessionStatus> {
     const deadline = Date.now() + timeoutMs;
     let last: SessionStatus | undefined;
+    let lastTransportError: unknown;
     let polls = 0;
     while (Date.now() < deadline) {
       try {
         last = await this.status(handle);
+        lastTransportError = undefined;
       } catch (err) {
-        if (err instanceof SandboxError && err.code === "rate_limited") {
-          await sleep(250);
-          continue;
+        if (err instanceof SandboxError) {
+          if (err.code === "rate_limited") {
+            await sleep(250);
+            continue;
+          }
+          // A restarting API can answer 502/503 before its routes are live.
+          // Retry server-side failures, but surface real client errors.
+          if (err.status !== undefined && err.status >= 500) {
+            lastTransportError = err;
+            await sleep(polls++ < 8 ? 75 : 200);
+            continue;
+          }
+          throw err;
         }
-        throw err;
+        // The API may be restarting or briefly unreachable. Treat transport
+        // failures as retryable so callers can wait through a control-plane
+        // restart instead of surfacing a transient "fetch failed".
+        lastTransportError = err;
+        await sleep(polls++ < 8 ? 75 : 200);
+        continue;
       }
       if (last.state === "READY" || last.state === "ACTIVE") break;
       if (last.state === "EXPIRED" || last.state === "DESTROYED") {
@@ -143,7 +160,11 @@ export class ClientRuntime {
       }
       await sleep(polls++ < 8 ? 75 : 200);
     }
-    if (!last || (last.state !== "READY" && last.state !== "ACTIVE")) {
+    if (!last) {
+      if (lastTransportError) throw lastTransportError;
+      throw new SandboxError("ready_timeout", "sandbox did not become ready in time");
+    }
+    if (last.state !== "READY" && last.state !== "ACTIVE") {
       throw new SandboxError("ready_timeout", "sandbox did not become ready in time");
     }
     if (!last.attestation || !last.guestPublicKey) {

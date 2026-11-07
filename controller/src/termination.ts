@@ -84,12 +84,24 @@ export class Termination {
         !session || ["DESTROYED", "EXPIRED", "FAILED", "TERMINATING"].includes(session.state);
       const tooOld = pod.createdAt > 0 && now - pod.createdAt > this.ctx.cfg.maxPodAgeMs;
       if (terminal || tooOld) {
-        await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
-        log.warn("orphan_pod_reaped", {
-          podName: pod.name,
-          sessionId: pod.sessionId || undefined,
-          reason: terminal ? "no_live_session" : "max_age",
-        });
+        let deleted = true;
+        try {
+          await this.ctx.provisioner.deletePod(pod.name, 0);
+        } catch (err) {
+          deleted = false;
+          log.warn("orphan_pod_delete_failed", {
+            podName: pod.name,
+            sessionId: pod.sessionId || undefined,
+            error: (err as Error).message,
+          });
+        }
+        if (deleted) {
+          log.warn("orphan_pod_reaped", {
+            podName: pod.name,
+            sessionId: pod.sessionId || undefined,
+            reason: terminal ? "no_live_session" : "max_age",
+          });
+        }
         if (session && session.state !== "TERMINATING") {
           this.ctx.store.requestTermination(session.id, "failure:reaped", {
             code: "reaped",

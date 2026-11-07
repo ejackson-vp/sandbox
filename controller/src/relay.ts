@@ -39,6 +39,11 @@ interface CachedResponse {
   at: number;
 }
 
+interface CachedError {
+  message: string;
+  at: number;
+}
+
 interface Entry {
   sessionId: string;
   tokenHash: string;
@@ -49,6 +54,7 @@ interface Entry {
   helloAt: number | null;
   pending: Map<string, { at: number; waiter?: (v: { envelope: string } | { error: string } | null) => void }>;
   responses: Map<string, CachedResponse>;
+  errors: Map<string, CachedError>;
   lastError: { code: string; message: string } | null;
 }
 
@@ -97,10 +103,18 @@ export function createRelay(opts: RelayOptions): RelayServer {
     for (const [id, value] of entry.responses) {
       if (now - value.at > responseTtlMs) entry.responses.delete(id);
     }
+    for (const [id, value] of entry.errors) {
+      if (now - value.at > responseTtlMs) entry.errors.delete(id);
+    }
     while (entry.responses.size > MAX_CACHED_RESPONSES) {
       const oldest = entry.responses.keys().next().value;
       if (oldest === undefined) break;
       entry.responses.delete(oldest);
+    }
+    while (entry.errors.size > MAX_CACHED_RESPONSES) {
+      const oldest = entry.errors.keys().next().value;
+      if (oldest === undefined) break;
+      entry.errors.delete(oldest);
     }
   };
 
@@ -144,6 +158,7 @@ export function createRelay(opts: RelayOptions): RelayServer {
       helloAt: existing?.helloAt ?? null,
       pending: existing?.pending ?? new Map(),
       responses: existing?.responses ?? new Map(),
+      errors: existing?.errors ?? new Map(),
       lastError: null,
     });
     res.status(201).json({ ok: true });
@@ -179,6 +194,12 @@ export function createRelay(opts: RelayOptions): RelayServer {
     }
     if (typeof envelope !== "string" || envelope.length === 0 || envelope.length > MAX_FRAME_BYTES) {
       res.status(400).json({ error: "invalid_envelope" });
+      return;
+    }
+    if (entry.responses.has(id) || entry.errors.has(id)) {
+      // The outcome is already cached. A retried request must not re-execute
+      // the operation; the controller can read the cached result or error.
+      res.status(202).json({ ok: true, cached: true });
       return;
     }
     if (entry.pending.has(id)) {
@@ -285,6 +306,11 @@ export function createRelay(opts: RelayOptions): RelayServer {
     }
     const id = String(req.params.requestId ?? "");
     pruneResponses(entry);
+    const cachedError = entry.errors.get(id);
+    if (cachedError) {
+      res.status(409).json({ error: "guest_error", message: cachedError.message });
+      return;
+    }
     const cached = entry.responses.get(id);
     if (cached) {
       res.json({ envelope: cached.envelope });
@@ -453,6 +479,13 @@ export function createRelay(opts: RelayOptions): RelayServer {
             ws.close(1009, "bad response");
             return;
           }
+          if (entry.responses.has(msg.id) || entry.errors.has(msg.id)) {
+            // First outcome wins. A delayed duplicate must never replace a
+            // result or error the controller may already have handed to the
+            // client.
+            log.warn("relay_duplicate_response", { sessionId: entry.sessionId, requestId: msg.id });
+            break;
+          }
           entry.responses.set(msg.id, { envelope: msg.envelope, at: Date.now() });
           pruneResponses(entry);
           entry.lastError = null;
@@ -465,6 +498,11 @@ export function createRelay(opts: RelayOptions): RelayServer {
           break;
         }
         case "error": {
+          const message = String(msg.message ?? msg.code ?? "guest_error");
+          if (typeof msg.id === "string" && (entry.responses.has(msg.id) || entry.errors.has(msg.id))) {
+            log.warn("relay_duplicate_error", { sessionId: entry.sessionId, requestId: msg.id });
+            break;
+          }
           entry.lastError = { code: String(msg.code ?? "guest_error"), message: String(msg.message ?? "") };
           log.warn("relay_guest_error", {
             sessionId: entry.sessionId,
@@ -472,9 +510,11 @@ export function createRelay(opts: RelayOptions): RelayServer {
             requestId: msg.id,
           });
           if (typeof msg.id === "string") {
+            entry.errors.set(msg.id, { message, at: Date.now() });
+            pruneResponses(entry);
             const pending = entry.pending.get(msg.id);
             entry.pending.delete(msg.id);
-            pending?.waiter?.({ error: entry.lastError.message || entry.lastError.code });
+            pending?.waiter?.({ error: message });
           }
           break;
         }

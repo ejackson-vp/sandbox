@@ -226,7 +226,10 @@ export class CapacityService {
         continue;
       }
       const pod = await this.deps.provisioner.getPod(reservation.podName).catch(() => null);
-      if (!pod || pod.phase === "Succeeded" || pod.phase === "Failed") {
+      // Only a missing Pod object confirms release. A Succeeded/Failed Pod
+      // still exists until Kubernetes deletes it, so freeing capacity here
+      // would hide a persistent deletion failure.
+      if (!pod) {
         this.reservations.confirmRelease(reservation.sessionId ?? "");
         metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "released_pod_gone" });
       } else if (now - reservation.updatedAt > 60_000) {
