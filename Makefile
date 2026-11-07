@@ -126,7 +126,7 @@ test-transfers:
 	npx vitest run tests/transfers
 
 test-control-faults:
-	TARGET=$(or $(TARGET),controller) SESSIONS=$(or $(SESSIONS),) SCENARIO=$(or $(SCENARIO),provisioning) npx tsx scripts/control-faults.ts
+	TARGET=$(or $(TARGET),controller) SESSIONS=$(or $(SESSIONS),) SCENARIO=$(or $(SCENARIO),provisioning) ACTION=$(or $(ACTION),kill) PAUSE_MS=$(or $(PAUSE_MS),3000) REPEAT=$(or $(REPEAT),1) npx tsx scripts/control-faults.ts
 
 benchmark-transfers:
 	npx tsx benchmarks/transfers/bench.ts

@@ -21,6 +21,9 @@ const NS = process.env.NAMESPACE ?? "sandbox-system";
 const WORKLOADS = "sandbox-workloads";
 const TARGET = process.env.TARGET ?? "controller";
 const SCENARIO = process.env.SCENARIO ?? "provisioning";
+const ACTION = process.env.ACTION ?? "kill";
+const PAUSE_MS = Number(process.env.PAUSE_MS ?? 3_000);
+const REPEAT = Math.max(1, Number(process.env.REPEAT ?? 1));
 const COUNT = Number(process.env.SESSIONS ?? (TARGET === "controller" ? 50 : 20));
 const CONVERGENCE_BUDGET_MS = Number(
   process.env.CONVERGENCE_BUDGET_MS ?? (TARGET === "api" ? 30_000 : SCENARIO === "lifecycle" ? 120_000 : 60_000),
@@ -177,18 +180,33 @@ async function kill(target: string): Promise<void> {
   kubectl(["-n", NS, "rollout", "status", `deploy/${target}`, "--timeout=180s"]);
 }
 
+async function pause(target: string): Promise<void> {
+  const pod = kubectl(["-n", NS, "get", "pod", "-l", `app=${target}`, "-o", "jsonpath={.items[0].metadata.name}"]);
+  if (!pod) throw new Error(`${target} pod not found`);
+  console.log(`pausing ${target}/${pod} for ${PAUSE_MS}ms`);
+  kubectl(["-n", NS, "exec", pod, "--", "kill", "-STOP", "1"]);
+  await sleep(PAUSE_MS);
+  kubectl(["-n", NS, "exec", pod, "--", "kill", "-CONT", "1"]);
+}
+
+async function inject(target: string): Promise<void> {
+  if (ACTION === "pause") return pause(target);
+  return kill(target);
+}
+
 /** Kill the control plane while provisioning; all sessions must still converge. */
-async function provisioningKill(): Promise<void> {
+async function provisioningKill(): Promise<number> {
   const clients = makeClients(COUNT);
   const handles: Array<{ client: SandboxClient; handle: SessionHandle }> = [];
   let killedAt = 0;
+  let convergedMs = 0;
   try {
     console.log(`creating ${COUNT} paid sessions...`);
     await createAll(clients, handles);
-    console.log(`created ${handles.length}; waiting for provisioning before killing ${TARGET}`);
+    console.log(`created ${handles.length}; waiting for provisioning before ${ACTION === "pause" ? "pausing" : "killing"} ${TARGET}`);
     await waitForProvisioning(handles);
     killedAt = Date.now();
-    await kill(TARGET);
+    await inject(TARGET);
 
     const failures: string[] = [];
     await Promise.all(handles.map(async ({ client, handle }) => {
@@ -198,7 +216,7 @@ async function provisioningKill(): Promise<void> {
         failures.push(`${handle.sessionId}: ${(err as Error).message}`);
       }
     }));
-    const convergedMs = Date.now() - killedAt;
+    convergedMs = Date.now() - killedAt;
     const pods = await podCount();
     const reservations = await capacity();
     const statuses = await Promise.all(handles.map(({ client, handle }) => client.status(handle).catch(() => null)));
@@ -226,6 +244,7 @@ async function provisioningKill(): Promise<void> {
     console.log(`cleanup: pods=${drained.pods} reservations=${JSON.stringify(drained.reservations)}`);
     if (drained.pods !== 0 || drained.reservations.total !== 0) process.exitCode = 1;
   }
+  return convergedMs;
 }
 
 /**
@@ -234,10 +253,11 @@ async function provisioningKill(): Promise<void> {
  * correct outcome is fail-closed: every operation errors, every guest exits,
  * every session becomes FAILED, and Pods/reservations drain without a leak.
  */
-async function relayKill(): Promise<void> {
+async function relayKill(): Promise<number> {
   const clients = makeClients(COUNT);
   const handles: Array<{ client: SandboxClient; handle: SessionHandle }> = [];
   let killedAt = 0;
+  let convergedMs = 0;
   try {
     console.log(`creating ${COUNT} paid sessions...`);
     await createAll(clients, handles);
@@ -271,7 +291,7 @@ async function relayKill(): Promise<void> {
       if (Date.now() >= deadline) break;
       await sleep(250);
     }
-    const convergedMs = Date.now() - killedAt;
+    convergedMs = Date.now() - killedAt;
     const statuses = await Promise.all(handles.map(({ client, handle }) => client.status(handle).catch(() => null)));
     const paid = statuses.filter((s) => Boolean(s?.paidAt)).length;
     const terminal = statuses.filter((s) => ["EXPIRED", "FAILED", "DESTROYED"].includes(s?.state ?? "")).length;
@@ -313,15 +333,95 @@ async function relayKill(): Promise<void> {
     console.log(`cleanup: pods=${drained.pods} reservations=${JSON.stringify(drained.reservations)}`);
     if (drained.pods !== 0 || drained.reservations.total !== 0) process.exitCode = 1;
   }
+  return convergedMs;
 }
 
-async function lifecycleRestart(): Promise<void> {
+/**
+ * Pause the relay with operations in flight. Unlike a restart, a paused relay
+ * keeps every registration and pending envelope, so the operations must
+ * complete after SIGCONT and no session may fail.
+ */
+async function relayPause(): Promise<number> {
+  const clients = makeClients(COUNT);
+  const handles: Array<{ client: SandboxClient; handle: SessionHandle }> = [];
+  let pausedAt = 0;
+  let convergedMs = 0;
+  try {
+    console.log(`creating ${COUNT} paid sessions...`);
+    await createAll(clients, handles);
+    console.log("waiting for all sessions to be ready...");
+    await Promise.all(handles.map(({ client, handle }) => client.waitForReady(handle, 120_000)));
+
+    const execs = handles.map(({ client, handle }, index) => client
+      .exec(handle, { command: ["sleep", "5"], timeoutMs: 30_000, requestId: `relay-pause-${index}` })
+      .then(
+        (result) => ({ ok: result.ok, error: result.ok ? "" : (result.error?.code ?? "operation_failed") }),
+        (err: Error) => ({ ok: false, error: err.message }),
+      ));
+    const pendingDeadline = Date.now() + 10_000;
+    let pendingAtPause = 0;
+    while (Date.now() < pendingDeadline) {
+      pendingAtPause = await relayPending(handles.map(({ handle }) => handle.sessionId));
+      if (pendingAtPause >= handles.length) break;
+      await sleep(50);
+    }
+
+    console.log(`pausing relay with ${pendingAtPause}/${handles.length} operations in flight`);
+    pausedAt = Date.now();
+    await pause("relay");
+    const outcomes = await Promise.all(execs);
+    await waitForStatuses(handles, (status) =>
+      (status.state === "READY" || status.state === "ACTIVE") && !status.busy, 30_000, "sessions after relay pause");
+    convergedMs = Date.now() - pausedAt;
+
+    const statuses = await Promise.all(handles.map(({ client, handle }) => client.status(handle).catch(() => null)));
+    const terminal = statuses.filter((s) => ["EXPIRED", "FAILED", "DESTROYED"].includes(s?.state ?? "")).length;
+    const pods = await podCount();
+    const reservations = await capacity();
+
+    console.log(JSON.stringify({
+      scenario: "relay-pause",
+      target: "relay",
+      count: handles.length,
+      convergedMs,
+      convergenceBudgetMs: CONVERGENCE_BUDGET_MS,
+      pendingAtPause,
+      operationsSucceeded: outcomes.filter((outcome) => outcome.ok).length,
+      terminal,
+      podCount: pods,
+      reservations,
+      execErrors: Object.entries(outcomes.reduce<Record<string, number>>((acc, outcome) => {
+        const key = outcome.error.split(":")[0] ?? "unknown";
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {})).map(([error, count]) => ({ error, count })),
+    }, null, 2));
+
+    if (pendingAtPause !== handles.length) process.exitCode = 1;
+    if (outcomes.some((outcome) => !outcome.ok)) process.exitCode = 1;
+    if (terminal !== 0 || pods !== COUNT || reservations.total !== COUNT) process.exitCode = 1;
+    if (convergedMs > CONVERGENCE_BUDGET_MS) {
+      console.error(`convergence ${convergedMs}ms exceeded budget ${CONVERGENCE_BUDGET_MS}ms`);
+      process.exitCode = 1;
+    }
+  } finally {
+    console.log("destroying sessions...");
+    await destroyAll(handles);
+    const drained = await waitForDrain(Date.now() + 60_000);
+    console.log(`cleanup: pods=${drained.pods} reservations=${JSON.stringify(drained.reservations)}`);
+    if (drained.pods !== 0 || drained.reservations.total !== 0) process.exitCode = 1;
+  }
+  return convergedMs;
+}
+
+async function lifecycleRestart(): Promise<number> {
   const clients = makeClients(COUNT);
   const entries: Array<Entry & { kind: "ready" | "active" | "suspended" }> = [];
   const suspendCount = Math.max(1, Math.floor(COUNT * 0.2));
   const activeCount = Math.max(1, Math.floor(COUNT * 0.2));
   const readyCount = COUNT - suspendCount - activeCount;
   let killedAt = 0;
+  let convergedMs = 0;
   try {
     const groups: Array<{ kind: "ready" | "active" | "suspended"; count: number; suspendable: boolean }> = [
       { kind: "ready", count: readyCount, suspendable: false },
@@ -368,9 +468,9 @@ async function lifecycleRestart(): Promise<void> {
     await Promise.all(suspendedEntries.map(({ client, handle }) => client.suspend(handle)));
     await waitForStatuses(suspendedEntries, (status) => status.state === "SUSPENDED", 30_000, "SUSPENDED sessions");
 
-    console.log(`killing controller with ${readyCount} READY, ${activeCount} ACTIVE, ${suspendCount} SUSPENDED sessions`);
+    console.log(`${ACTION === "pause" ? "pausing" : "killing"} controller with ${readyCount} READY, ${activeCount} ACTIVE, ${suspendCount} SUSPENDED sessions`);
     killedAt = Date.now();
-    await kill("controller");
+    await inject("controller");
 
     await waitForStatuses(entries, (status) => !status.busy, 60_000, "operation gates to clear");
     await Promise.all(activeRequests.map(({ client, handle, requestId }) =>
@@ -405,7 +505,7 @@ async function lifecycleRestart(): Promise<void> {
       status.state === "READY" || status.state === "ACTIVE", 30_000, "resumed sessions");
     const podsAfterResume = await podCount();
     const reservationsAfter = await capacity();
-    const convergedMs = Date.now() - killedAt;
+    convergedMs = Date.now() - killedAt;
 
     console.log(JSON.stringify({
       scenario: "lifecycle",
@@ -442,12 +542,32 @@ async function lifecycleRestart(): Promise<void> {
     console.log(`cleanup: pods=${drained.pods} reservations=${JSON.stringify(drained.reservations)}`);
     if (drained.pods !== 0 || drained.reservations.total !== 0) process.exitCode = 1;
   }
+  return convergedMs;
 }
 
 async function main(): Promise<void> {
-  if (TARGET === "relay") return relayKill();
-  if (SCENARIO === "lifecycle") return lifecycleRestart();
-  return provisioningKill();
+  const samples: number[] = [];
+  for (let run = 1; run <= REPEAT; run += 1) {
+    if (REPEAT > 1) console.log(`\n=== fault run ${run}/${REPEAT} ===`);
+    if (TARGET === "relay") {
+      samples.push(ACTION === "pause" ? await relayPause() : await relayKill());
+    } else if (SCENARIO === "lifecycle") {
+      samples.push(await lifecycleRestart());
+    } else {
+      samples.push(await provisioningKill());
+    }
+  }
+  if (REPEAT > 1) {
+    const sorted = [...samples].sort((a, b) => a - b);
+    const percentile = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!;
+    console.log(JSON.stringify({
+      runs: samples,
+      min: sorted[0],
+      p50: percentile(0.5),
+      p95: percentile(0.95),
+      max: sorted[sorted.length - 1],
+    }, null, 2));
+  }
 }
 
 main().catch((err) => {

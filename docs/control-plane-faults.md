@@ -37,9 +37,12 @@ tests. Full suite: 175 passed, 3 skipped.
 
 Each run records time from injection to convergence, terminal states, Pod count
 and reservation counts, then destroys all sessions and requires an empty
-workload namespace and zero reservations. `CONVERGENCE_BUDGET_MS` defaults to
-30 s for `TARGET=api` and 60 s for the controller/relay targets; a run that
-exceeds its budget exits nonzero.
+workload namespace and zero reservations. `ACTION=pause` freezes the target
+process with `SIGSTOP` for `PAUSE_MS` (default 3 s) and resumes it with
+`SIGCONT`; `REPEAT` runs the selected scenario multiple times and prints
+min/p50/p95/max convergence. `CONVERGENCE_BUDGET_MS` defaults to 30 s for
+`TARGET=api` and 60 s for the controller/relay targets (120 s for the lifecycle
+scenario); a run that exceeds its budget exits nonzero.
 
 ### Observed results
 
@@ -49,6 +52,10 @@ exceeds its budget exits nonzero.
 | API killed during provisioning | 20 | 6.6 s / 6.8 s | 20/20 READY, 20 Pods, 20 allocated reservations, 0 harness failures |
 | Relay killed with one in-flight operation per session | 3–5 | 6.7 s–27.2 s (dominated by relay rollout readiness) | all sessions `FAILED`, all operations failed or reported indeterminate, payment preserved, 0 Pods, 0 reservations |
 | Controller killed with 50 live sessions: 30 READY, 10 ACTIVE, 10 SUSPENDED | 50 | 7.6 s restart; 2.2 s resume | all operation gates cleared, 40 non-suspended sessions executed after restart, 10 stayed `SUSPENDED` and then resumed; 40 Pods → 50 Pods, 40 allocated + 10 suspended → 50 allocated, 0 failures |
+| Controller paused during provisioning | 5 | 3.21–3.23 s across 3 runs | 5/5 READY, 5 Pods, 5 allocated, 0 failures |
+| API paused during provisioning | 5 | 3.25 s | 5/5 READY, 5 Pods, 5 allocated, 0 failures |
+| Relay paused with 5 operations in flight | 5 | 4.92 s | all 5 operations succeeded, 0 terminal sessions, 5 Pods, 5 allocated |
+| Controller paused with 50 live sessions | 50 | 12.3 s total; 10.2 s to post-restart state; 2.0 s resume | same 40 allocated + 10 suspended → 50 allocated result as the kill case, 0 failures |
 
 The earlier API-kill run reported 18 `fetch failed` errors while Pods and
 reservations were already correct. That was a client bug: `waitForReady`
@@ -104,8 +111,6 @@ The Pod-adoption case required two earlier product fixes:
 
 ## Still required
 
-- A process-level pause/resume fault controller at named boundaries (the
-  current harness only kills processes).
 - Controller restart with sessions in transient SUSPENDING/RESUMING/
   TERMINATING states.
 - Duplicate/delayed Kubernetes API responses against the real provisioner.
