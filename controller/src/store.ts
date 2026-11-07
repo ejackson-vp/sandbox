@@ -142,6 +142,13 @@ export class Store {
       clearActive: this.db.prepare(
         "UPDATE sessions SET active_request_id = NULL, updated_at = ? WHERE id = ? AND active_request_id = ?",
       ),
+      abandonPendingRequests: this.db.prepare(
+        "UPDATE exec_requests SET state = 'abandoned', updated_at = ? WHERE state = 'pending'",
+      ),
+      clearAllActiveRequests: this.db.prepare(
+        `UPDATE sessions SET active_request_id = NULL, updated_at = ?
+         WHERE active_request_id IS NOT NULL AND state NOT IN ('EXPIRED','FAILED','DESTROYED')`,
+      ),
       countSessions: this.db.prepare("SELECT COUNT(*) AS n FROM sessions"),
       countPayments: this.db.prepare("SELECT COUNT(*) AS n FROM payments"),
       insertRequest: this.db.prepare(
@@ -428,6 +435,26 @@ export class Store {
   }
 
   /* ---------------- operations ---------------- */
+
+  /**
+   * Startup recovery: the previous controller process may have died with an
+   * operation in flight. Its outcome is unknown, so mark the request
+   * abandoned and clear the single-operation gate. A later lookup still
+   * returns the cached relay envelope if one exists, otherwise result_expired.
+   */
+  recoverInterruptedOperations(): { requests: number; sessions: number } {
+    const now = Date.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const requests = this.stmts.abandonPendingRequests!.run(now).changes;
+      const sessions = this.stmts.clearAllActiveRequests!.run(now).changes;
+      this.db.exec("COMMIT");
+      return { requests: Number(requests), sessions: Number(sessions) };
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
 
   /**
    * Atomically claim the single operation slot for a session.

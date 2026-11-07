@@ -4,7 +4,7 @@ Status: control-plane fault slice implemented. In-process fault tests cover
 settlement, Pod adoption, deletion failure and lifecycle races; the real
 harness kills the API, controller or relay on a kind cluster and measures
 time-to-convergence. Relay request/response idempotency has dedicated unit
-tests. Full suite: 173 passed, 3 skipped.
+tests. Full suite: 175 passed, 3 skipped.
 
 ## Invariants
 
@@ -67,6 +67,7 @@ finalizer lets Kubernetes finish deletion and the Pod disappear.
 | Destroy during `SUSPENDING` | `lets destroy win while a suspend is between SUSPENDING and SUSPENDED` | destroy wins; final state `DESTROYED`, no Pod left |
 | Destroy during `RESUMING` | `lets destroy win while a resume is between SUSPENDED and RESUMING` | destroy wins; final state `DESTROYED`, no Pod left |
 | Duplicate destroy | `accepts duplicate destroys and still reaches a single terminal state` | one terminal `DESTROYED` row, no Pod left |
+| In-flight operation at controller crash | `clears an interrupted operation slot after a controller restart` | request is marked `abandoned`, the session gate is cleared, and a new operation succeeds after restart |
 | Replayed relay request | `does not re-execute a completed request and keeps the first response` | retry sees the cached outcome; the guest receives one request; a delayed duplicate response cannot replace the first |
 | Retry of an in-flight relay request | `treats a retry of an in-flight request as pending without re-forwarding` | guest receives one frame |
 | Late success after a guest error | `keeps a guest error terminal for late and duplicate responses` | late/duplicate responses cannot turn the recorded error into success |
@@ -81,6 +82,13 @@ release when `getPod` returned `Succeeded`/`Failed`, even though the Pod object
 still existed. Release now requires the Pod object to be gone, and the orphan
 sweeper reports deletion failures instead of logging that an undeleted Pod was
 reaped.
+
+A controller crash during an operation left `active_request_id` set in SQLite,
+so the paid session stayed `busy` forever. Startup now marks pending requests
+`abandoned` and clears the gate. The old outcome remains available if the relay
+cached the result; otherwise it is explicitly `result_expired`. The guest's own
+single-operation slot still prevents overlapping work if the old command is
+still running.
 
 The Pod-adoption case required two earlier product fixes:
 

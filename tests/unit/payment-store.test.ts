@@ -286,6 +286,22 @@ describe("operation gating", () => {
     }
   });
 
+  it("recovers an operation interrupted by a controller crash", () => {
+    const { store, cleanup } = openStore();
+    try {
+      const id = "sbx_000000000000000000000003";
+      expect(store.claimOperation(id, "request-crash", "exec")).toMatchObject({ ok: true });
+      expect(store.getSession(id)?.activeRequestId).toBe("request-crash");
+
+      expect(store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+      expect(store.getExecRequest(id, "request-crash")?.state).toBe("abandoned");
+      expect(store.getSession(id)?.activeRequestId).toBeNull();
+      expect(store.claimOperation(id, "request-after-restart", "exec")).toMatchObject({ ok: true });
+    } finally {
+      cleanup();
+    }
+  });
+
   it("refuses operations after the lease deadline", () => {
     const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
     const store = new Store(join(dir, "test.db"));

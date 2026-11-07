@@ -64,6 +64,10 @@ async function main(): Promise<void> {
   // controller (or "all": controller + relay + proxy in one process)
   mkdirSync(dirname(cfg.dbPath), { recursive: true });
   const store = new Store(cfg.dbPath);
+  const recovered = store.recoverInterruptedOperations();
+  if (recovered.requests > 0 || recovered.sessions > 0) {
+    log.warn("sandbox_operations_recovered", recovered);
+  }
 
   const shutdown: Array<() => Promise<void>> = [];
 

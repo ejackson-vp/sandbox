@@ -229,6 +229,57 @@ describe.skipIf(!available)("workload hardening (real cluster)", () => {
     await waitFor(async () => ((await podExists(handle.sessionId)) ? null : true), 60_000);
   }, 300_000);
 
+  it("clears an interrupted operation slot after a controller restart", async () => {
+    const client = makeClient();
+    const handle = await client.createSession({ tier: "custom", durationSeconds: 120 });
+    created.push({ id: handle.sessionId, capability: handle.capability });
+    await client.waitForReady(handle);
+
+    const requestId = "restart-inflight-1";
+    const interrupted = client
+      .exec(handle, { command: ["sleep", "30"], timeoutMs: 10_000, requestId })
+      .then((result) => result, (err: Error) => err);
+    await waitFor(async () => {
+      const status = await rawStatus(handle.sessionId, handle.capability);
+      return status?.state === "ACTIVE" ? true : null;
+    }, 15_000);
+
+    // Crash the controller with the operation claimed but not finished.
+    kubectl(["-n", "sandbox-system", "delete", "pod", "-l", "app=controller", "--grace-period=0", "--force"]);
+    await waitFor(async () => {
+      const pods = kubectlJson<{ items: Array<{ status: { phase: string; containerStatuses?: Array<{ ready: boolean }> } }> }>([
+        "-n",
+        "sandbox-system",
+        "get",
+        "pods",
+        "-l",
+        "app=controller",
+      ]);
+      const p = pods.items[0];
+      return p && p.status.phase === "Running" && p.status.containerStatuses?.[0]?.ready ? true : null;
+    }, 120_000);
+
+    // The old outcome is unknown, but the slot must not stay busy forever.
+    const recovered = await waitFor(async () => {
+      const status = await rawStatus(handle.sessionId, handle.capability);
+      return status && status.busy === false ? status : null;
+    }, 30_000);
+    expect(["READY", "ACTIVE"]).toContain(recovered.state);
+
+    await client.cancel(handle, requestId).catch(() => undefined);
+    await interrupted;
+    const after = await waitFor(async () => {
+      const result = await client.exec(handle, {
+        command: ["echo", "after-restart"],
+        timeoutMs: 5_000,
+      }).catch(() => null);
+      return result && result.ok ? result : null;
+    }, 60_000);
+    expect(after.ok).toBe(true);
+    expect(storeSessionsFor(handle.sessionId)).toBe(1);
+    await client.destroy(handle, 60_000);
+  }, 300_000);
+
   it("removes the workspace when a session is destroyed", async () => {
     const client = makeClient();
     const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
