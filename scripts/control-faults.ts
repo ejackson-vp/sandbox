@@ -20,9 +20,10 @@ const API = process.env.API_URL ?? "http://localhost:8080";
 const NS = process.env.NAMESPACE ?? "sandbox-system";
 const WORKLOADS = "sandbox-workloads";
 const TARGET = process.env.TARGET ?? "controller";
+const SCENARIO = process.env.SCENARIO ?? "provisioning";
 const COUNT = Number(process.env.SESSIONS ?? (TARGET === "controller" ? 50 : 20));
 const CONVERGENCE_BUDGET_MS = Number(
-  process.env.CONVERGENCE_BUDGET_MS ?? (TARGET === "api" ? 30_000 : 60_000),
+  process.env.CONVERGENCE_BUDGET_MS ?? (TARGET === "api" ? 30_000 : SCENARIO === "lifecycle" ? 120_000 : 60_000),
 );
 const secretKind = "sec" + "ret";
 const secretName = "x402-" + "sec" + "rets";
@@ -135,6 +136,40 @@ async function waitForProvisioning(handles: Array<{ client: SandboxClient; handl
     await sleep(50);
   }
   throw new Error("sessions did not enter provisioning before the inject deadline");
+}
+
+type Status = Awaited<ReturnType<SandboxClient["status"]>>;
+type Entry = { client: SandboxClient; handle: SessionHandle };
+
+async function waitForStatuses(
+  entries: Entry[],
+  predicate: (status: Status, index: number) => boolean,
+  timeoutMs: number,
+  label: string,
+): Promise<Status[]> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const statuses = await Promise.all(entries.map(({ client, handle }) =>
+      client.status(handle).catch(() => null)));
+    if (statuses.every((status, index) => status !== null && predicate(status, index))) {
+      return statuses as Status[];
+    }
+    if (Date.now() >= deadline) throw new Error(`timeout waiting for ${label}`);
+    await sleep(100);
+  }
+}
+
+async function execUntilOk(client: SandboxClient, handle: SessionHandle, timeoutMs = 60_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const result = await client.exec(handle, {
+      command: ["echo", "after-restart"],
+      timeoutMs: 5_000,
+    }).catch(() => null);
+    if (result && result.ok) return;
+    if (Date.now() >= deadline) throw new Error(`${handle.sessionId}: operation did not recover`);
+    await sleep(250);
+  }
 }
 
 async function kill(target: string): Promise<void> {
@@ -280,8 +315,138 @@ async function relayKill(): Promise<void> {
   }
 }
 
+async function lifecycleRestart(): Promise<void> {
+  const clients = makeClients(COUNT);
+  const entries: Array<Entry & { kind: "ready" | "active" | "suspended" }> = [];
+  const suspendCount = Math.max(1, Math.floor(COUNT * 0.2));
+  const activeCount = Math.max(1, Math.floor(COUNT * 0.2));
+  const readyCount = COUNT - suspendCount - activeCount;
+  let killedAt = 0;
+  try {
+    const groups: Array<{ kind: "ready" | "active" | "suspended"; count: number; suspendable: boolean }> = [
+      { kind: "ready", count: readyCount, suspendable: false },
+      { kind: "active", count: activeCount, suspendable: false },
+      { kind: "suspended", count: suspendCount, suspendable: true },
+    ];
+    let cursor = 0;
+    for (const group of groups) {
+      const groupClients = clients.slice(cursor, cursor + group.count);
+      cursor += group.count;
+      await Promise.all(groupClients.map(async (client) => {
+        const handle = await client.createSession({
+          tier: "custom",
+          durationSeconds: 300,
+          cpuMillis: 500,
+          memoryMiB: 512,
+          diskMiB: 256,
+          ...(group.suspendable
+            ? { idlePolicy: { maxIdleSeconds: 300, suspendedDurationSeconds: 1_200, autoResume: false } }
+            : {}),
+        });
+        entries.push({ client, handle, kind: group.kind });
+      }));
+      console.log(`created ${group.count} ${group.kind} sessions`);
+    }
+
+    console.log("waiting for all sessions to be ready...");
+    await Promise.all(entries.map(({ client, handle }) => client.waitForReady(handle, 180_000)));
+
+    const activeEntries = entries.filter((entry) => entry.kind === "active");
+    const activeRequests = activeEntries.map((entry, index) => {
+      const requestId = `lifecycle-active-${String(index).padStart(3, "0")}`;
+      return {
+        ...entry,
+        requestId,
+        outcome: entry.client
+          .exec(entry.handle, { command: ["sleep", "30"], timeoutMs: 10_000, requestId })
+          .then(() => null, (err: Error) => err),
+      };
+    });
+    await waitForStatuses(activeEntries, (status) => status.state === "ACTIVE", 15_000, "ACTIVE sessions");
+
+    const suspendedEntries = entries.filter((entry) => entry.kind === "suspended");
+    await Promise.all(suspendedEntries.map(({ client, handle }) => client.suspend(handle)));
+    await waitForStatuses(suspendedEntries, (status) => status.state === "SUSPENDED", 30_000, "SUSPENDED sessions");
+
+    console.log(`killing controller with ${readyCount} READY, ${activeCount} ACTIVE, ${suspendCount} SUSPENDED sessions`);
+    killedAt = Date.now();
+    await kill("controller");
+
+    await waitForStatuses(entries, (status) => !status.busy, 60_000, "operation gates to clear");
+    await Promise.all(activeRequests.map(({ client, handle, requestId }) =>
+      client.cancel(handle, requestId).catch(() => undefined)));
+    await Promise.all(activeRequests.map(({ outcome }) => Promise.race([outcome, sleep(30_000).then(() => null)])));
+
+    await waitForStatuses(entries, (status, index) => {
+      const kind = entries[index]!.kind;
+      if (kind === "suspended") return status.state === "SUSPENDED";
+      return (status.state === "READY" || status.state === "ACTIVE") && !status.busy;
+    }, 60_000, "post-restart session states");
+
+    const failures: string[] = [];
+    await Promise.all(entries
+      .filter((entry) => entry.kind !== "suspended")
+      .map(async (entry) => {
+        try {
+          await execUntilOk(entry.client, entry.handle);
+        } catch (err) {
+          failures.push((err as Error).message);
+        }
+      }));
+
+    const podsBeforeResume = await podCount();
+    const reservationsBefore = await capacity();
+    const restartConvergedMs = Date.now() - killedAt;
+
+    const resumeStarted = Date.now();
+    await Promise.all(suspendedEntries.map(({ client, handle }) => client.resume(handle, 180_000)));
+    const resumeMs = Date.now() - resumeStarted;
+    await waitForStatuses(suspendedEntries, (status) =>
+      status.state === "READY" || status.state === "ACTIVE", 30_000, "resumed sessions");
+    const podsAfterResume = await podCount();
+    const reservationsAfter = await capacity();
+    const convergedMs = Date.now() - killedAt;
+
+    console.log(JSON.stringify({
+      scenario: "lifecycle",
+      target: "controller",
+      count: entries.length,
+      ready: readyCount,
+      active: activeCount,
+      suspended: suspendCount,
+      restartConvergedMs,
+      resumeMs,
+      convergedMs,
+      convergenceBudgetMs: CONVERGENCE_BUDGET_MS,
+      podsBeforeResume,
+      reservationsBefore,
+      podsAfterResume,
+      reservationsAfter,
+      failures,
+    }, null, 2));
+
+    const expectedLive = readyCount + activeCount;
+    if (failures.length) process.exitCode = 1;
+    if (podsBeforeResume !== expectedLive) process.exitCode = 1;
+    if (reservationsBefore.total !== COUNT || reservationsBefore.allocated !== expectedLive || reservationsBefore.suspended !== suspendCount) process.exitCode = 1;
+    if (podsAfterResume !== COUNT) process.exitCode = 1;
+    if (reservationsAfter.total !== COUNT || reservationsAfter.allocated !== COUNT || reservationsAfter.suspended !== 0) process.exitCode = 1;
+    if (convergedMs > CONVERGENCE_BUDGET_MS) {
+      console.error(`convergence ${convergedMs}ms exceeded budget ${CONVERGENCE_BUDGET_MS}ms`);
+      process.exitCode = 1;
+    }
+  } finally {
+    console.log("destroying sessions...");
+    await destroyAll(entries);
+    const drained = await waitForDrain(Date.now() + 120_000);
+    console.log(`cleanup: pods=${drained.pods} reservations=${JSON.stringify(drained.reservations)}`);
+    if (drained.pods !== 0 || drained.reservations.total !== 0) process.exitCode = 1;
+  }
+}
+
 async function main(): Promise<void> {
   if (TARGET === "relay") return relayKill();
+  if (SCENARIO === "lifecycle") return lifecycleRestart();
   return provisioningKill();
 }
 
