@@ -13,7 +13,7 @@ concrete next step.
 | 3 | **SQLite single writer** | one controller, one node's PVC, no HA | Postgres/DynamoDB with conditional writes; keep UNIQUE payment key and conditional transitions |
 | 4 | **Relay is a single in-memory pod** | restart loses pending ciphertext and sessions in flight | Redis/NATS with per-session queues and TTLs (ciphertext only) |
 | 5 | **Settlement recovery is mock-only** | only the mock facilitator exposes a settlement lookup | add on-chain/testnet reconciliation (nonce used ⇒ settled) or facilitator webhooks; until then the API fails closed with `409 reconciliation_pending` |
-| 6 | **No refunds** | a settled payment whose provisioning fails is not returned | define policy: automatic refund job or credit; requires a settlement ledger |
+| 6 | **No refunds (real modes)** | a settled payment whose provisioning fails is not returned | mock mode now auto-refunds terminal-before-READY sessions; real modes record `REFUND_PENDING` and need an on-chain/facilitator refund worker or an explicit credit policy. See [payment-ledger.md](payment-ledger.md) |
 | 7 | **Image not pinned by digest** | a compromised controller could run another image | config now refuses a non-`sha256` digest when `ALLOW_INSECURE_DEV=false`; add Kyverno/sigstore admission and CoCo encrypted images for Mode C |
 | 8 | **Secrets in the repo (dev)** | dev attestation key, admin/capability/proxy secrets | external secret manager; remove the dev key entirely in production |
 | 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; local-path has no encryption | use an encrypted StorageClass / CSI encryption, document the trust boundary, and expire PVCs aggressively |

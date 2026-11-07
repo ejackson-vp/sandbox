@@ -5,13 +5,22 @@
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
 import { log } from "./log.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
+import { RefundService } from "./refunds.js";
 import type { SessionRecord } from "./store.js";
 
 export class Termination {
-  constructor(private readonly ctx: ReconcilerContext) {}
+  private readonly refunds: RefundService;
 
-  async terminate(session: SessionRecord): Promise<void> {
-    const cleanupStarted = session.terminatingAt ?? this.ctx.now();
+  constructor(private readonly ctx: ReconcilerContext) {
+    this.refunds = new RefundService(ctx.store);
+  }
+
+  /** Housekeeping repair for refunds that were interrupted by a crash. */
+  reconcileRefunds(): void {
+    this.refunds.reconcile();
+  }
+
+  async terminate(session: SessionRecord): Promise<void> {    const cleanupStarted = session.terminatingAt ?? this.ctx.now();
     // Ask the guest to stop so it can kill descendants before the pod goes away.
     try {
       await this.ctx.relay.shutdown(session.id, session.terminationReason ?? "terminated");
@@ -57,6 +66,13 @@ export class Termination {
       .histogram("sandbox_cleanup_duration_seconds", "TERMINATING to cleanup complete", LATENCY_BUCKETS)
       .observe(cleanupMs / 1000);
     const finalState = this.ctx.store.finalizeTermination(session.id);
+    if (finalState) {
+      try {
+        this.refunds.refund(session, finalState);
+      } catch (err) {
+        log.warn("payment_refund_failed", { sessionId: session.id, error: (err as Error).message });
+      }
+    }
     if (finalState === "FAILED" || finalState === "EXPIRED") {
       metrics
         .counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED")

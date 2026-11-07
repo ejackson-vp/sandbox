@@ -22,6 +22,7 @@ import {
   type SessionSpec,
 } from "../../shared/src/index.js";
 import { Store, PaymentAlreadyRedeemedError, type PaymentRecord, type SessionRecord } from "../../controller/src/store.js";
+import { RefundService } from "../../controller/src/refunds.js";
 import { mintProxyToken, verifyProxyToken, newOpaqueToken } from "../../controller/src/tokens.js";
 import { extractProxyToken, parseAuthority } from "../../controller/src/egress-proxy.js";
 
@@ -283,6 +284,58 @@ describe("operation gating", () => {
       expect(store.getSession(id)?.state).toBe("ACTIVE");
     } finally {
       cleanup();
+    }
+  });
+
+  it("records a payment ledger and makes refund transitions idempotent", () => {
+    const { store, cleanup } = openStore();
+    try {
+      const id = "sbx_000000000000000000000003";
+      const key = "d".repeat(64);
+      const ledger = store.getLedgerBySession(id);
+      expect(ledger).toMatchObject({
+        paymentKey: key,
+        sessionId: id,
+        amount: "50000",
+        mode: "mock",
+        status: "SETTLED",
+        refundTransaction: null,
+      });
+      expect(store.markRefundPending(key, "no_service")).toBe(true);
+      expect(store.getLedgerByPayment(key)?.status).toBe("REFUND_PENDING");
+      expect(store.markRefundPending(key, "again")).toBe(false);
+      expect(store.markRefunded(key, "mock:refund:1", "no_service")).toBe(true);
+      expect(store.getLedgerByPayment(key)).toMatchObject({
+        status: "REFUNDED",
+        refundTransaction: "mock:refund:1",
+        reason: "no_service",
+      });
+      expect(store.markRefunded(key, "mock:refund:2", "again")).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("repairs a refund left SETTLED after a crash", () => {
+    const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
+    const store = new Store(join(dir, "test.db"));
+    try {
+      const key = "e".repeat(64);
+      const id = "sbx_000000000000000000000005";
+      store.claimPaymentIntent(key, specHash(spec), 30_000);
+      store.completeEntitlement(key, paymentRecord(key), sessionRecord(id, key));
+      store.requestTermination(id, "failure:crash_before_refund");
+      expect(store.finalizeTermination(id)).toBe("FAILED");
+      expect(store.getLedgerBySession(id)?.status).toBe("SETTLED");
+
+      new RefundService(store).reconcile();
+      expect(store.getLedgerBySession(id)).toMatchObject({
+        status: "REFUNDED",
+        sessionId: id,
+      });
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

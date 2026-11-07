@@ -20,7 +20,7 @@ import {
   type SessionState,
 } from "@x402s/shared";
 import type { ControllerConfig } from "./config.js";
-import type { Store } from "./store.js";
+import type { LedgerStatus, Store } from "./store.js";
 import type { RelayClient } from "./relay-client.js";
 import { constantTimeEqual } from "./tokens.js";
 import { PaymentAlreadyRedeemedError } from "./store.js";
@@ -295,6 +295,48 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     store.failPaymentIntent(String(req.params.paymentKey ?? ""), reason);
     log.warn("payment_intent_failed", { reason });
     res.json({ ok: true });
+  });
+
+  /* ---------------- payment ledger ---------------- */
+
+  app.get("/internal/payments", (req: Request, res: Response) => {
+    const status = String(req.query.status ?? "REFUND_PENDING");
+    if (status !== "SETTLED" && status !== "REFUND_PENDING" && status !== "REFUNDED") {
+      res.status(400).json({ error: "invalid_status" });
+      return;
+    }
+    res.json({ payments: store.listLedgerByStatus(status as LedgerStatus) });
+  });
+
+  app.get("/internal/payments/:paymentKey", (req: Request, res: Response) => {
+    const ledger = store.getLedgerByPayment(String(req.params.paymentKey ?? ""));
+    if (!ledger) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json(ledger);
+  });
+
+  app.post("/internal/payments/:paymentKey/refund", (req: Request, res: Response) => {
+    const paymentKey = String(req.params.paymentKey ?? "");
+    const transaction = typeof req.body?.transaction === "string" ? req.body.transaction : "";
+    if (!transaction) {
+      res.status(400).json({ error: "transaction_required" });
+      return;
+    }
+    const ledger = store.getLedgerByPayment(paymentKey);
+    if (!ledger) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const session = store.getSession(ledger.sessionId);
+    if (ledger.status === "SETTLED" && session && session.readyAt !== null) {
+      res.status(409).json({ error: "service_delivered", message: "the session reached READY; manual refund requires review" });
+      return;
+    }
+    const reason = typeof req.body?.reason === "string" ? req.body.reason : "manual_refund";
+    const changed = store.markRefunded(paymentKey, transaction, reason);
+    res.json({ ok: true, changed, payment: store.getLedgerByPayment(paymentKey) });
   });
 
   /* ---------------- sessions ---------------- */

@@ -210,6 +210,7 @@ Run: `make test` and `make security-test` (after `make up`).
 - [docs/transfer-performance.md](docs/transfer-performance.md)
 - [docs/milestone-6-results.md](docs/milestone-6-results.md)
 - [docs/transfer-pipelining-probe.md](docs/transfer-pipelining-probe.md)
+- [docs/payment-ledger.md](docs/payment-ledger.md)
 - [docs/control-plane-faults.md](docs/control-plane-faults.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)

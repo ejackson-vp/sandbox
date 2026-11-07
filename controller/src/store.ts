@@ -13,12 +13,15 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import {
   SESSION_COLUMNS,
   mapIntent,
+  mapLedger,
   mapSession,
   PaymentAlreadyRedeemedError,
   type ClaimOperationResult,
   type ExecRequestRecord,
   type IntentClaimResult,
+  type LedgerStatus,
   type PaymentIntentRecord,
+  type PaymentLedgerRecord,
   type PaymentRecord,
   type RawSession,
   type SessionRecord,
@@ -33,12 +36,20 @@ export type {
   ExecRequestRecord,
   IntentClaimResult,
   IntentStatus,
+  LedgerStatus,
   PaymentIntentRecord,
+  PaymentLedgerRecord,
   PaymentRecord,
   SessionRecord,
   SessionState,
 } from "./store/models.js";
 export { PaymentAlreadyRedeemedError } from "./store/models.js";
+
+const SCHEMA_LOCK = /database is locked|database table is locked|SQLITE_BUSY/i;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
 export class Store {
   private readonly db: DatabaseSync;
@@ -47,7 +58,18 @@ export class Store {
 
   constructor(path: string) {
     this.db = new DatabaseSync(path);
-    migrate(this.db);
+    this.db.exec("PRAGMA busy_timeout = 5000;");
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        migrate(this.db);
+        break;
+      } catch (err) {
+        if (attempt >= 10 || !SCHEMA_LOCK.test((err as Error).message)) throw err;
+        // Concurrent starts (workers, future replicas) can race idempotent DDL.
+        // The statements are safe to replay, so back off and retry.
+        sleepSync(100 * (attempt + 1));
+      }
+    }
     this.reservations = new ReservationRepository(this.db);
 
     this.stmts = {
@@ -67,6 +89,30 @@ export class Store {
       getSession: this.db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = ?`),
       getPayment: this.db.prepare("SELECT * FROM payments WHERE payment_key = ?"),
       getIntent: this.db.prepare("SELECT * FROM payment_intents WHERE payment_key = ?"),
+      insertLedger: this.db.prepare(
+        `INSERT INTO payment_ledger
+           (payment_key, session_id, payer, amount, asset, network, mode, status, reason, refund_tx, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'SETTLED', NULL, NULL, ?, ?)`,
+      ),
+      getLedgerByPayment: this.db.prepare("SELECT * FROM payment_ledger WHERE payment_key = ?"),
+      getLedgerBySession: this.db.prepare("SELECT * FROM payment_ledger WHERE session_id = ?"),
+      listLedgerByStatus: this.db.prepare(
+        "SELECT * FROM payment_ledger WHERE status = ? ORDER BY updated_at ASC",
+      ),
+      listUnrefundedTerminalBeforeReady: this.db.prepare(
+        `SELECT l.* FROM payment_ledger l JOIN sessions s ON s.id = l.session_id
+         WHERE l.status = 'SETTLED' AND s.ready_at IS NULL
+           AND s.state IN ('FAILED','EXPIRED','DESTROYED')
+         ORDER BY l.updated_at ASC LIMIT 100`,
+      ),
+      markRefundPending: this.db.prepare(
+        `UPDATE payment_ledger SET status='REFUND_PENDING', reason=?, updated_at=?
+         WHERE payment_key=? AND status='SETTLED'`,
+      ),
+      markRefunded: this.db.prepare(
+        `UPDATE payment_ledger SET status='REFUNDED', reason=?, refund_tx=?, updated_at=?
+         WHERE payment_key=? AND status IN ('SETTLED','REFUND_PENDING')`,
+      ),
       insertIntent: this.db.prepare(
         `INSERT INTO payment_intents (payment_key, status, session_id, spec_hash, reason, created_at, updated_at)
          VALUES (?, 'claimed', NULL, ?, NULL, ?, ?)`,
@@ -236,6 +282,17 @@ export class Store {
         payment.mode,
         Date.now(),
       );
+      this.stmts.insertLedger!.run(
+        payment.paymentKey,
+        session.id,
+        payment.payer ?? null,
+        payment.amount,
+        payment.asset,
+        payment.network,
+        payment.mode,
+        Date.now(),
+        Date.now(),
+      );
       this.stmts.insertSession!.run(
         session.id,
         session.capabilityHash,
@@ -305,6 +362,33 @@ export class Store {
       transaction: row.tx as string | undefined,
       mode: row.mode as "mock" | "testnet",
     };
+  }
+
+  getLedgerByPayment(paymentKey: string): PaymentLedgerRecord | null {
+    const row = this.stmts.getLedgerByPayment!.get(paymentKey) as Record<string, unknown> | undefined;
+    return row ? mapLedger(row) : null;
+  }
+
+  getLedgerBySession(sessionId: string): PaymentLedgerRecord | null {
+    const row = this.stmts.getLedgerBySession!.get(sessionId) as Record<string, unknown> | undefined;
+    return row ? mapLedger(row) : null;
+  }
+
+  listLedgerByStatus(status: LedgerStatus): PaymentLedgerRecord[] {
+    return (this.stmts.listLedgerByStatus!.all(status) as unknown as Array<Record<string, unknown>>).map(mapLedger);
+  }
+
+  listUnrefundedTerminalBeforeReady(): PaymentLedgerRecord[] {
+    return (this.stmts.listUnrefundedTerminalBeforeReady!.all() as unknown as Array<Record<string, unknown>>)
+      .map(mapLedger);
+  }
+
+  markRefundPending(paymentKey: string, reason: string): boolean {
+    return this.stmts.markRefundPending!.run(reason.slice(0, 500), Date.now(), paymentKey).changes > 0;
+  }
+
+  markRefunded(paymentKey: string, transaction: string, reason: string): boolean {
+    return this.stmts.markRefunded!.run(reason.slice(0, 500), transaction, Date.now(), paymentKey).changes > 0;
   }
 
   listNonTerminal(): SessionRecord[] {

@@ -42,6 +42,12 @@ function waitFor(child: ChildProcess, type: string): Promise<Record<string, unkn
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`worker timeout waiting for ${type}`)), 20_000);
     const handler = (message: Record<string, unknown>) => {
+      if (message.type === "fatal") {
+        clearTimeout(timer);
+        child.off("message", handler);
+        reject(new Error(String(message.error ?? "worker startup failed")));
+        return;
+      }
       if (message.type !== type) return;
       clearTimeout(timer);
       child.off("message", handler);

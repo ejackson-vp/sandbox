@@ -101,7 +101,9 @@ export function placementCandidates(
       const used = subtractResources(node.allocatable, available);
       return { node, available, score: utilization(node, used) };
     })
-    .sort((a, b) => a.score - b.score || a.node.id.localeCompare(b.node.id));
+    .sort((a, b) =>
+      a.score - b.score ||
+      (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0));
 }
 
 export function noEligibleNodeReason(

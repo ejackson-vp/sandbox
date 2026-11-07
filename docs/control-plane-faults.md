@@ -4,7 +4,7 @@ Status: control-plane fault slice implemented. In-process fault tests cover
 settlement, Pod adoption, deletion failure and lifecycle races; the real
 harness kills the API, controller or relay on a kind cluster and measures
 time-to-convergence. Relay request/response idempotency has dedicated unit
-tests. Full suite: 175 passed, 3 skipped.
+tests. Full suite: 180 passed, 3 skipped.
 
 ## Invariants
 

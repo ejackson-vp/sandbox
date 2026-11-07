@@ -30,6 +30,7 @@ async function main(): Promise<void> {
   metrics.counter("sandbox_exec_total", "Operations by result");
   metrics.counter("sandbox_sessions_created_total", "Entitlements created");
   metrics.counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED");
+  metrics.counter("sandbox_refunds_total", "Payment refund outcomes");
   metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE");
 
   if (cfg.role === "relay") {

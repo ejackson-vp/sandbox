@@ -252,6 +252,31 @@ describe("pure capacity admission", () => {
     expect(admitCapacity({ nodes: [node], reservations: [], now: 0, accounting: "peak" }, request).admitted).toBe(false);
   });
 
+  it("orders equal-score nodes bytewise, not by locale", () => {
+    const resources = { cpuMillicores: 1_000, memoryBytes: 1_024 * MiB, storageBytes: 1_024 * MiB };
+    const node = (id: string): NodeCapacity => ({
+      id,
+      allocatable: resources,
+      platformOverhead: { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },
+      labels: { "x402.io/sandbox-pool": "true" },
+      taints: [],
+      ready: true,
+      schedulable: true,
+    });
+    const request: SandboxResourceRequest = {
+      baseline: { cpuMillicores: 100, memoryBytes: 128 * MiB, storageBytes: 128 * MiB },
+      peak: { cpuMillicores: 100, memoryBytes: 128 * MiB, storageBytes: 128 * MiB },
+    };
+    const candidates = placementCandidates({
+      nodes: [node("a"), node("B")],
+      reservations: [],
+      now: 0,
+      accounting: "baseline",
+    }, request);
+    // "B" (0x42) sorts before "a" (0x61) bytewise; localeCompare disagrees.
+    expect(candidates.map((candidate) => candidate.node.id)).toEqual(["B", "a"]);
+  });
+
   it("placement candidates are sorted deterministically by score", () => {
     fc.assert(
       fc.property(snapshotArb(fc.array(nodeArb, { maxLength: 3 })), requestArb, (snapshot, request) => {

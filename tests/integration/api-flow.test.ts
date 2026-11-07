@@ -882,6 +882,43 @@ describe("lifecycle races", () => {
   }, 60_000);
 });
 
+describe("payment ledger and refunds", () => {
+  it("refunds a paid session that never becomes ready", async () => {
+    const original = provisioner.createPod.bind(provisioner);
+    provisioner.createPod = async () => {
+      throw new Error("simulated provisioning failure before READY");
+    };
+    try {
+      const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
+      expect(store.getLedgerBySession(handle.sessionId)?.status).toBe("SETTLED");
+      store.requestTermination(handle.sessionId, "failure:simulated_provisioning");
+      reconciler.wake();
+      const terminal = await pollStatus(
+        handle,
+        (status) => status.state === "FAILED" || status.state === "EXPIRED" || status.state === "DESTROYED",
+        15_000,
+      );
+      expect(terminal.state).toBe("FAILED");
+      const ledger = store.getLedgerBySession(handle.sessionId);
+      expect(ledger).toMatchObject({
+        status: "REFUNDED",
+        sessionId: handle.sessionId,
+      });
+      expect(ledger?.refundTransaction).toMatch(/^mock:refund:/);
+    } finally {
+      provisioner.createPod = original;
+    }
+  }, 60_000);
+
+  it("does not refund a session that reached READY", async () => {
+    const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
+    await client.waitForReady(handle);
+    const destroyed = await client.destroy(handle, 30_000);
+    expect(destroyed?.state).toBe("DESTROYED");
+    expect(store.getLedgerBySession(handle.sessionId)?.status).toBe("SETTLED");
+  }, 60_000);
+});
+
 describe("capacity admission", () => {
   it("rejects an oversized session before payment", async () => {
     await expect(

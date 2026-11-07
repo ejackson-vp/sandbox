@@ -18,6 +18,7 @@ export function migrate(db: DatabaseSync): void {
     DROP TABLE IF EXISTS reservations;
     DROP TABLE IF EXISTS exec_requests;
     DROP TABLE IF EXISTS sessions;
+    DROP TABLE IF EXISTS payment_ledger;
     DROP TABLE IF EXISTS payment_intents;
     DROP TABLE IF EXISTS payments;
     `);
@@ -45,6 +46,22 @@ export function migrate(db: DatabaseSync): void {
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS payment_ledger (
+    payment_key TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    payer TEXT,
+    amount TEXT NOT NULL,
+    asset TEXT NOT NULL,
+    network TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    refund_tx TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS payment_ledger_status ON payment_ledger(status);
+    CREATE INDEX IF NOT EXISTS payment_ledger_session ON payment_ledger(session_id);
     CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     capability_hash TEXT NOT NULL,

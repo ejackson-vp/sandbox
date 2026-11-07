@@ -16,7 +16,14 @@ interface Init {
 
 process.on("message", (message: Init) => {
   if (message.type !== "init") return;
-  const store = new Store(message.dbPath);
+  let store: Store;
+  try {
+    store = new Store(message.dbPath);
+  } catch (err) {
+    process.send?.({ type: "fatal", error: `startup: ${(err as Error).message}` });
+    process.exit(1);
+    return;
+  }
   process.send?.({ type: "ready" });
   process.on("message", (next: { type: "go" }) => {
     if (next.type !== "go") return;

@@ -175,6 +175,7 @@ export class Reconciler {
       await this.warm.reconcile();
       await this.lifecycle.enforce();
       await this.lifecycle.cleanup();
+      this.termination.reconcileRefunds();
       await this.ctx.capacity.reap();
     } catch (err) {
       log.warn("housekeeping_failed", { error: (err as Error).message });

@@ -71,6 +71,23 @@ export interface ExecRequestRecord {
 
 export type IntentStatus = "claimed" | "settled" | "failed";
 
+export type LedgerStatus = "SETTLED" | "REFUND_PENDING" | "REFUNDED";
+
+export interface PaymentLedgerRecord {
+  paymentKey: string;
+  sessionId: string;
+  payer: string | null;
+  amount: string;
+  asset: string;
+  network: string;
+  mode: "mock" | "testnet";
+  status: LedgerStatus;
+  reason: string | null;
+  refundTransaction: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface PaymentIntentRecord {
   paymentKey: string;
   status: IntentStatus;
@@ -219,6 +236,23 @@ export function mapIntent(r: Record<string, unknown>): PaymentIntentRecord {
     sessionId: (r.session_id as string | null) ?? null,
     specHash: (r.spec_hash as string) ?? "",
     reason: (r.reason as string | null) ?? null,
+    createdAt: r.created_at as number,
+    updatedAt: r.updated_at as number,
+  };
+}
+
+export function mapLedger(r: Record<string, unknown>): PaymentLedgerRecord {
+  return {
+    paymentKey: r.payment_key as string,
+    sessionId: r.session_id as string,
+    payer: (r.payer as string | null) ?? null,
+    amount: r.amount as string,
+    asset: r.asset as string,
+    network: r.network as string,
+    mode: r.mode as "mock" | "testnet",
+    status: r.status as LedgerStatus,
+    reason: (r.reason as string | null) ?? null,
+    refundTransaction: (r.refund_tx as string | null) ?? null,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
   };
