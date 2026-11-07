@@ -21,6 +21,9 @@ const NS = process.env.NAMESPACE ?? "sandbox-system";
 const WORKLOADS = "sandbox-workloads";
 const TARGET = process.env.TARGET ?? "controller";
 const COUNT = Number(process.env.SESSIONS ?? (TARGET === "controller" ? 50 : 20));
+const CONVERGENCE_BUDGET_MS = Number(
+  process.env.CONVERGENCE_BUDGET_MS ?? (TARGET === "api" ? 30_000 : 60_000),
+);
 const secretKind = "sec" + "ret";
 const secretName = "x402-" + "sec" + "rets";
 const ADMIN = execFileSync("kubectl", ["-n", NS, "get", secretKind, secretName, "-o", "jsonpath={.data.admin-token}"], { encoding: "utf8" }).trim();
@@ -170,12 +173,17 @@ async function provisioningKill(): Promise<void> {
       target: TARGET,
       count: handles.length,
       convergedMs,
+      convergenceBudgetMs: CONVERGENCE_BUDGET_MS,
       podCount: pods,
       reservations,
       terminal,
       failures,
     }, null, 2));
     if (failures.length || terminal.length || pods !== COUNT || reservations.total !== COUNT) process.exitCode = 1;
+    if (convergedMs > CONVERGENCE_BUDGET_MS) {
+      console.error(`convergence ${convergedMs}ms exceeded budget ${CONVERGENCE_BUDGET_MS}ms`);
+      process.exitCode = 1;
+    }
   } finally {
     console.log("destroying sessions...");
     await destroyAll(handles);
@@ -240,6 +248,7 @@ async function relayKill(): Promise<void> {
       target: "relay",
       count: handles.length,
       convergedMs,
+      convergenceBudgetMs: CONVERGENCE_BUDGET_MS,
       terminal,
       failed,
       paid,
@@ -258,6 +267,10 @@ async function relayKill(): Promise<void> {
     if (pendingAtKill !== handles.length) process.exitCode = 1;
     if (operationsFailed !== handles.length) process.exitCode = 1;
     if (drained.pods !== 0 || drained.reservations.total !== 0) process.exitCode = 1;
+    if (convergedMs > CONVERGENCE_BUDGET_MS) {
+      console.error(`convergence ${convergedMs}ms exceeded budget ${CONVERGENCE_BUDGET_MS}ms`);
+      process.exitCode = 1;
+    }
   } finally {
     console.log("destroying sessions...");
     await destroyAll(handles);

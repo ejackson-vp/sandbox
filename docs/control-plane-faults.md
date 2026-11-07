@@ -32,7 +32,9 @@ tests. Full suite: 173 passed, 3 skipped.
 
 Each run records time from injection to convergence, terminal states, Pod count
 and reservation counts, then destroys all sessions and requires an empty
-workload namespace and zero reservations.
+workload namespace and zero reservations. `CONVERGENCE_BUDGET_MS` defaults to
+30 s for `TARGET=api` and 60 s for the controller/relay targets; a run that
+exceeds its budget exits nonzero.
 
 ### Observed results
 
@@ -92,7 +94,6 @@ The Pod-adoption case required two earlier product fixes:
   current harness only kills processes).
 - 50 sessions across every lifecycle state at controller restart.
 - Duplicate/delayed Kubernetes API responses against the real provisioner.
-- A convergence-time SLO/regression gate rather than documented measurements.
 
 ## Non-goals
 
