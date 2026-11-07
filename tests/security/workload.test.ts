@@ -288,6 +288,53 @@ spec:
     expect(res.out.toLowerCase()).toMatch(/forbidden|violat|podsecurity|restricted/);
   }, 60_000);
 
+  it("keeps a Pod terminating under a finalizer until the finalizer is removed", async () => {
+    const client = makeClient();
+    const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
+    created.push({ id: handle.sessionId, capability: handle.capability });
+    await client.waitForReady(handle);
+
+    const podName = `sbx-${handle.sessionId.replace(/^sbx_/, "")}`;
+    const finalizer = "x402.io/fault-hold";
+    kubectl([
+      "-n",
+      "sandbox-workloads",
+      "patch",
+      "pod",
+      podName,
+      "--type=merge",
+      "-p",
+      JSON.stringify({ metadata: { finalizers: [finalizer] } }),
+    ]);
+    try {
+      const destroyed = await client.destroy(handle, 30_000);
+      expect(destroyed?.state).toBe("DESTROYED");
+
+      const pod = kubectlJson<{
+        metadata: { deletionTimestamp?: string; finalizers?: string[] };
+      }>(["-n", "sandbox-workloads", "get", "pod", podName]);
+      expect(pod.metadata.deletionTimestamp).toBeTruthy();
+      expect(pod.metadata.finalizers).toContain(finalizer);
+
+      // The Pod object still exists, so its reservation must stay releasing.
+      const reservations = capacityReservations();
+      expect(reservations.releasing).toBeGreaterThanOrEqual(1);
+    } finally {
+      kubectlTry([
+        "-n",
+        "sandbox-workloads",
+        "patch",
+        "pod",
+        podName,
+        "--type=merge",
+        "-p",
+        '{"metadata":{"finalizers":null}}',
+      ]);
+    }
+
+    await waitFor(async () => ((await podExists(handle.sessionId)) ? null : true), 60_000);
+  }, 120_000);
+
   it("rejects operations without the session capability", async () => {
     const client = makeClient();
     const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
@@ -324,4 +371,27 @@ function storeSessionsFor(sessionId: string): number {
     "--no-headers",
   ]).trim();
   return pods.split("\n").filter(Boolean).length;
+}
+
+function capacityReservations(): {
+  total: number;
+  held: number;
+  allocated: number;
+  suspended: number;
+  releasing: number;
+} {
+  const code = [
+    'fetch("http://127.0.0.1:3001/internal/capacity",',
+    '{headers:{"x-internal-token":process.env.ADMIN_TOKEN}})',
+    ".then((r)=>r.json()).then((b)=>process.stdout.write(JSON.stringify(b.reservations)))",
+  ].join("");
+  return JSON.parse(
+    kubectl(["-n", "sandbox-system", "exec", "deploy/controller", "--", "node", "-e", code]),
+  ) as {
+    total: number;
+    held: number;
+    allocated: number;
+    suspended: number;
+    releasing: number;
+  };
 }

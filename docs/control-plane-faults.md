@@ -4,7 +4,7 @@ Status: control-plane fault slice implemented. In-process fault tests cover
 settlement, Pod adoption, deletion failure and lifecycle races; the real
 harness kills the API, controller or relay on a kind cluster and measures
 time-to-convergence. Relay request/response idempotency has dedicated unit
-tests. Full suite: 172 passed, 3 skipped.
+tests. Full suite: 173 passed, 3 skipped.
 
 ## Invariants
 
@@ -47,6 +47,11 @@ reservations were already correct. That was a client bug: `waitForReady`
 treated a restarting API as a session failure. It now retries transport errors
 and 5xx responses until its deadline.
 
+A cluster-backed finalizer case (`keeps a Pod terminating under a finalizer
+until the finalizer is removed`) holds a real sandbox Pod in `Terminating`
+after destroy and expects the reservation to stay `RELEASING`; removing the
+finalizer lets Kubernetes finish deletion and the Pod disappear.
+
 ## In-process fault cases
 
 | Fault | Test | Observed behavior |
@@ -87,7 +92,6 @@ The Pod-adoption case required two earlier product fixes:
   current harness only kills processes).
 - 50 sessions across every lifecycle state at controller restart.
 - Duplicate/delayed Kubernetes API responses against the real provisioner.
-- Persistent Pod-deletion failure with the real Kubernetes provisioner.
 - A convergence-time SLO/regression gate rather than documented measurements.
 
 ## Non-goals
