@@ -54,6 +54,11 @@ Chunk-size sweep at 32 MiB:
 | 256 KiB | 13.43 MiB/s | 14.91 MiB/s |
 | 512 KiB | **16.28 MiB/s** | **18.36 MiB/s** |
 
+Window>1 pipelining was probed separately:
+[docs/transfer-pipelining-probe.md](transfer-pipelining-probe.md). The stack is
+near a 20–24 MiB/s per-byte ceiling, and an ideal window of 8 projects only
+1.18–1.33× at 1 MiB chunks, so the protocol complexity is not justified yet.
+
 Memory:
 
 - SDK chunks are read/written one at a time; no whole-file buffer.

@@ -40,6 +40,7 @@ make demo-ws        # WebSocket echo through the relay
 make test           # unit + local integration tests
 make test-workloads # workload fixtures and compatibility probes
 make test-transfers  # streaming transfer protocol checks
+make benchmark-pipeline-probe # transfer window=1 ceiling + concurrency gate probe
 make test-control-faults # controller/API/relay kill + mixed lifecycle restart on kind
 make security-test  # packet-level isolation + lifecycle tests on the cluster
 make down
@@ -208,6 +209,7 @@ Run: `make test` and `make security-test` (after `make up`).
 - [docs/transfer-security.md](docs/transfer-security.md)
 - [docs/transfer-performance.md](docs/transfer-performance.md)
 - [docs/milestone-6-results.md](docs/milestone-6-results.md)
+- [docs/transfer-pipelining-probe.md](docs/transfer-pipelining-probe.md)
 - [docs/control-plane-faults.md](docs/control-plane-faults.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)

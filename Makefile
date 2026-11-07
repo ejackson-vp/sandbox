@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up down build deploy demo demo-agent demo-timeout demo-capacity demo-placement demo-python demo-browser demo-large-file demo-directory demo-http-basic test-workloads test-transfers test-control-faults benchmark-transfers benchmark-transfer-stress test test-unit test-integration security-test security-network guest guest-load logs clean fmt images benchmark-capacity benchmark-multinode
+.PHONY: help up down build deploy demo demo-agent demo-timeout demo-capacity demo-placement demo-python demo-browser demo-large-file demo-directory demo-http-basic test-workloads test-transfers test-control-faults benchmark-transfers benchmark-pipeline-probe benchmark-transfer-stress test test-unit test-integration security-test security-network guest guest-load logs clean fmt images benchmark-capacity benchmark-multinode
 
 help:
 	@echo "x402 sandbox sessions"
@@ -36,6 +36,7 @@ help:
 	@echo "  make benchmark-smoke / benchmark-startup / benchmark-startup-pool"
 	@echo "  make benchmark-burst / benchmark-capacity / benchmark-multinode / benchmark-soak / benchmark-density"
 	@echo "  make benchmark-workloads / benchmark-reliability / benchmark-report"
+	@echo "  make benchmark-transfers / benchmark-pipeline-probe"
 	@echo "  make logs           tail control-plane logs"
 	@echo "  make down           delete the kind cluster"
 	@echo ""
@@ -130,6 +131,9 @@ test-control-faults:
 
 benchmark-transfers:
 	npx tsx benchmarks/transfers/bench.ts
+
+benchmark-pipeline-probe:
+	npx tsx benchmarks/transfers/pipeline-probe.ts
 
 benchmark-transfer-stress:
 	SIZE_MIB=256 npx tsx examples/large-file.ts
