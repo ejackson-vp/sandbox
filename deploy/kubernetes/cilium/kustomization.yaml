@@ -1,0 +1,6 @@
+# Cilium-only resources. Not part of ../kubernetes because a cluster running
+# flannel cannot apply a CiliumNetworkPolicy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - controller-apiserver.yaml
