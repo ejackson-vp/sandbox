@@ -99,3 +99,37 @@ npm install --proxy "$HTTP_PROXY" --https-proxy "$HTTPS_PROXY" left-pad
 
 Large installs count against the workspace disk quota and the session's
 duration. Nothing persists after the session ends.
+
+## Service addressing inside a microVM
+
+Sandboxes run in a Kata microVM with their own kernel. **A ClusterIP is not
+reachable from inside it.**
+
+Cilium implements Kubernetes Services with eBPF at the socket/connect layer and on
+the pod's veth. Traffic originating in the guest never traverses either: the
+guest has its own TCP stack, so the service VIP arrives at the host as an
+ordinary packet addressed to an address no endpoint owns, and it is routed into
+a dead end. Nothing logs a policy drop, because policy is evaluated against a
+backend identity that is never resolved.
+
+Measured on a two-node cluster, same namespace, same policies:
+
+| From | To relay pod IP | To relay ClusterIP |
+| --- | --- | --- |
+| `runc` pod | OK | OK |
+| `kata` pod | OK | **timeout** |
+
+The controller therefore resolves Services to a **ready EndpointSlice address**
+and hands that to the guest (`getServiceAddress` in `controller/src/k8s.ts`).
+Pod IPs are routed normally in every runtime, so this works for both `runc` and
+Kata. It falls back to the ClusterIP when no endpoint is ready.
+
+Consequences worth knowing:
+
+- The guest is pinned to one replica for the life of the process; the controller
+  caches the address for 30 s.
+- The controller's Role needs `get`/`list` on `endpointslices` in
+  `discovery.k8s.io`. Without it every reconcile fails with 403, which surfaces
+  as a paid session stuck in `PAID` until it times out.
+- This is also why sandbox pods are given no usable DNS: nothing inside needs a
+  name, and a working resolver would only widen the egress surface.
