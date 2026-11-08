@@ -98,8 +98,7 @@ Placement is **least allocated**:
 
 This spreads sessions and avoids a hot first worker. First-fit would pack more
 tightly, and best-fit would reduce fragmentation, but both make one-node
-concentration more likely under burst. The tradeoff is documented in
-[scheduling-tradeoffs.md](scheduling-tradeoffs.md).
+concentration more likely under burst.
 
 The chosen node is a **planning intent**. Kubernetes remains the scheduler. Cold
 pods are pinned to the chosen node with required node affinity; a mismatch or a

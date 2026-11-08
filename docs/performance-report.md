@@ -4,8 +4,8 @@ Status: measurements on the reference workstation (macOS arm64, Docker Desktop).
 See [benchmark-methodology.md](benchmark-methodology.md) for environment,
 clocks, sample sizes and threats to validity. Raw data:
 `benchmarks/results/<run-id>/`; generated tables: `benchmarks/analysis/output/`.
-The Milestone 4 capacity-admission results are in
-[milestone-4-results.md](milestone-4-results.md).
+Capacity-admission measurements are summarised in
+[admission-control.md](admission-control.md).
 
 ## A. Performance summary
 
@@ -474,7 +474,7 @@ drops by ~78%.
 
 ## 8. Bottlenecks
 
-Ranked, with the full analysis in [bottleneck-analysis.md](bottleneck-analysis.md):
+Ranked:
 
 1. **Container/init startup** — 1.3–1.8 s of every warm start; outside the
    application, must be measured on native Linux/Kata.

@@ -3,8 +3,8 @@
 Status: **implemented in dev/local and on the kind cluster.** This is a
 filesystem checkpoint, not a Firecracker memory snapshot. The contract is
 inspired by AWS Lambda MicroVMs; the storage and isolation model is deliberately
-different. See [aws-microvms-comparison.md](aws-microvms-comparison.md) for the
-full comparison and what we would borrow next.
+different: a checkpoint is a filesystem snapshot on a per-session volume, not a
+memory snapshot, so a resume is a cold start with a warm disk.
 
 ## Contract
 

@@ -8,7 +8,7 @@ default.
 > no reuse, no autoscaler, no Redis pool state. Do not add warm-VM reuse or
 > autoscaling. On a KVM host the fast path should be a Firecracker snapshot
 > restore per session; at that point this module should be deleted, not
-> extended. See [aws-microvms-comparison.md](aws-microvms-comparison.md).
+> extended.
 
 ## Why
 

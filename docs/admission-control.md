@@ -2,8 +2,7 @@
 
 Status: two-bucket admission and global capacity admission are implemented;
 the burst matrix and constrained-capacity results are measured on the local
-kind rig. See [admission-design.md](admission-design.md) and
-[milestone-4-results.md](milestone-4-results.md).
+kind rig.
 
 ## Why two buckets
 
@@ -125,7 +124,7 @@ capacity preflight. After the
 payment header is validated, but **before settlement**, it creates an
 authoritative hold keyed by payment key and spec hash. A capacity rejection is
 `503 capacity_unavailable` with `retryable` and requested baseline resources;
-no payment is settled. See [admission-design.md](admission-design.md).
+no payment is settled.
 
 ## Not implemented
 
