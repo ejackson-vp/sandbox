@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLI="node ${ROOT}/cli/dist/index.js"
 API_URL="${API_URL:-http://localhost:8080}"
 CONTEXT="${KUBECTL_CONTEXT:-kind-${KIND_CLUSTER:-x402-sandbox}}"
-COMMON=(--api-url "${API_URL}" --allow-insecure-dev --payment-mode mock --quiet)
+COMMON=(--api-url "${API_URL}" --payment-mode mock --quiet)
 json_field() { node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);console.log(process.argv[1].split('.').reduce((o,k)=>o?.[k],j)??'')})" "$1"; }
 
 echo "== creating a 5-second session"

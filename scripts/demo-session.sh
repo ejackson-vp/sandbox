@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLI="node ${ROOT}/cli/dist/index.js"
 API_URL="${API_URL:-http://localhost:8080}"
 CONTEXT="${KUBECTL_CONTEXT:-kind-${KIND_CLUSTER:-x402-sandbox}}"
-COMMON=(--api-url "${API_URL}" --allow-insecure-dev --payment-mode mock --quiet)
+COMMON=(--api-url "${API_URL}" --payment-mode mock --quiet)
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 

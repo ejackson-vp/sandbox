@@ -1,0 +1,13 @@
+{
+  "runId": "2026-11-08T05-54-47-333Z-99d876c",
+  "scenario": "smoke",
+  "finishedAt": "2026-11-08T05:54:51.994Z",
+  "notes": [
+    "2026-11-08T05:54:47.350Z start smoke; host=Darwin 27.2.0/arm64 docker=14cpu/7.7GiB kvm=false",
+    "2026-11-08T05:54:47.350Z smoke: creating {\"tier\":\"custom\",\"durationSeconds\":60,\"cpuMillis\":500,\"memoryMiB\":512,\"diskMiB\":256}",
+    "2026-11-08T05:54:51.181Z ready in 3.83s (server 3.67s); limits {\"cpuMillis\":500,\"memoryMiB\":512,\"diskMiB\":256,\"maxOutputBytes\":262144,\"maxFileBytes\":8388608,\"maxCommandSeconds\":60,\"maxProcesses\":256}",
+    "2026-11-08T05:54:51.873Z exec: python -c 179.8ms, hello.py 144.1ms (n=2, p50 144.1ms); usage anon=8.9MiB; destroy 136.8ms",
+    "2026-11-08T05:54:51.993Z cleanup: swept 0 leftover sandbox pod(s)"
+  ],
+  "exitCode": 0
+}
