@@ -30,14 +30,6 @@ patches:
         path: /data/EXECUTION_MODE
         value: kata
   - target:
-      kind: ConfigMap
-      name: control-config
-      namespace: sandbox-system
-    patch: |-
-      - op: replace
-        path: /data/RUNTIME_CLASS
-        value: x402-sandbox
-  - target:
       kind: RuntimeClass
       name: x402-sandbox
     patch: |-
