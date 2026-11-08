@@ -37,5 +37,8 @@ patches:
         path: /handler
         value: kata
       - op: replace
+        path: /metadata/annotations/x402.io~1isolation
+        value: microvm
+      - op: replace
         path: /metadata/annotations/x402.io~1warning
         value: "KATA microVM (Cloud Hypervisor): separate guest kernel, no hardware root of trust"
