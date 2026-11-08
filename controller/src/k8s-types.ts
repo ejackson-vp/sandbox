@@ -18,7 +18,7 @@ export interface SandboxPodSpec {
   image: string;
   imageDigest: string;
   runtimeClass: string;
-  executionMode: "dev" | "kata" | "confidential";
+  executionMode: "dev" | "kata";
   workspaceDir: string;
   /** Mount a persistent workspace (checkpoint/resume) instead of emptyDir. */
   workspacePvc?: string;
@@ -43,7 +43,7 @@ export interface WarmPodSpec {
   image: string;
   imageDigest: string;
   runtimeClass: string;
-  executionMode: "dev" | "kata" | "confidential";
+  executionMode: "dev" | "kata";
   workspaceDir: string;
   tools: string;
 }

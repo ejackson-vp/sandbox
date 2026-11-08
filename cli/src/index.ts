@@ -54,9 +54,6 @@ Usage:
 Common options:
   --api-url <url>               default http://localhost:8080
   --payment-mode mock|testnet   default mock
-  --allow-insecure-dev          required to accept simulated attestation
-  --require-hardware            reject non-hardware-attested execution
-  --expected-measurement <hex>  pin the guest measurement
   --json                        machine-readable output
   --quiet                       suppress progress notes
   -h, --help
@@ -125,9 +122,6 @@ async function main(): Promise<number> {
     options: {
       "api-url": { type: "string", default: "http://localhost:8080" },
       "payment-mode": { type: "string", default: "mock" },
-      "allow-insecure-dev": { type: "boolean", default: false },
-      "require-hardware": { type: "boolean", default: false },
-      "expected-measurement": { type: "string" },
       tier: { type: "string" },
       duration: { type: "string" },
       cpu: { type: "string" },
@@ -159,8 +153,6 @@ async function main(): Promise<number> {
   const json = Boolean(values.json);
   const quiet = Boolean(values.quiet);
   const apiUrl = String(values["api-url"]);
-  const allowInsecureDev = Boolean(values["allow-insecure-dev"]);
-  const requireHardware = Boolean(values["require-hardware"]);
 
   if (values.help || command === "help") {
     process.stdout.write(HELP);
@@ -209,14 +201,6 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (!allowInsecureDev && !requireHardware) {
-    process.stderr.write(
-      "refusing to run: simulated attestation requires --allow-insecure-dev\n" +
-        "(or pass --require-hardware to demand SEV-SNP/TDX evidence, which this deployment does not provide)\n",
-    );
-    return 2;
-  }
-
   const paymentMode = String(values["payment-mode"]);
   if (paymentMode !== "mock" && paymentMode !== "testnet") {
     process.stderr.write(`invalid --payment-mode: ${paymentMode}\n`);
@@ -227,9 +211,6 @@ async function main(): Promise<number> {
   const client = new SandboxClient({
     apiUrl,
     paymentMode,
-    allowInsecureDev,
-    requireHardware,
-    ...(values["expected-measurement"] ? { expectedMeasurement: String(values["expected-measurement"]) } : {}),
     ...(agent
       ? { payer: await createAgentPayer(paymentMode, apiUrl, (l) => err(l, quiet)) }
       : {}),
@@ -281,7 +262,7 @@ async function main(): Promise<number> {
 
       if (!values["no-wait"]) {
         const status = await client.waitForReady(handle);
-        out(`Attestation: ${status.attestation?.insecureDevOnly ? "INSECURE_DEV_ONLY" : "HARDWARE-VERIFIED"} (${status.attestation?.evidenceType})`, json);
+        out(`Evidence: ${status.attestation?.evidenceType ?? "none"} (session key binding, no hardware root of trust)`, json);
         out(`State: ${status.state}`, json);
         out(`Expires: ${status.leaseExpiresAt ?? "?"} (${status.remainingSeconds}s remaining)`, json);
       }
@@ -587,7 +568,7 @@ async function runFile(
   try {
     const status = await client.waitForReady(handle);
     out(`Session: ${handle.sessionId}`, opts.json);
-    out(`Attestation: ${status.attestation?.insecureDevOnly ? "INSECURE_DEV_ONLY" : "HARDWARE-VERIFIED"} (${status.attestation?.evidenceType})`, opts.json);
+    out(`Evidence: ${status.attestation?.evidenceType ?? "none"} (session key binding, no hardware root of trust)`, opts.json);
     const put = await client.putFile(handle, { path: remote, data: code });
     if (!put.ok) {
       process.stderr.write(`upload failed: ${put.error?.code}: ${put.error?.message}\n`);

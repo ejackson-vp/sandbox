@@ -982,18 +982,6 @@ describe("configuration guards", () => {
       loadConfig({ PAYMENT_MODE: "mock", ALLOW_INSECURE_DEV: "false", CAPABILITY_SECRET: "capability-secret-0123456789" }),
     ).toThrow(/insecure/i);
   });
-
-  it("refuses confidential mode without a confidential runtime class", () => {
-    expect(() =>
-      loadControllerConfig({
-        ROLE: "controller",
-        EXECUTION_MODE: "confidential",
-        RUNTIME_CLASS: "runc",
-        ALLOW_INSECURE_DEV: "false",
-        ADMIN_TOKEN: ADMIN,
-      }),
-    ).toThrow(/confidential/i);
-  });
 });
 
 void requestChallenge;

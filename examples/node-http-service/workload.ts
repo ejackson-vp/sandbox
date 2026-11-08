@@ -33,7 +33,6 @@ async function main(): Promise<void> {
   const client = new SandboxClient({
     apiUrl: API,
     paymentMode: "mock",
-    allowInsecureDev: true,
     log: (line) => console.log(line),
   });
   const here = (name: string) => fileURLToPath(new URL(name, import.meta.url));

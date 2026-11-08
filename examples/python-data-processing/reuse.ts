@@ -11,7 +11,6 @@ import { makeCsv } from "./lib.js";
 const client = new SandboxClient({
   apiUrl: process.env.API_URL ?? "http://localhost:8080",
   paymentMode: "mock",
-  allowInsecureDev: true,
 });
 const here = (name: string) => fileURLToPath(new URL(name, import.meta.url));
 const input = makeCsv();

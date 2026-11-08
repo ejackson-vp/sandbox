@@ -76,10 +76,10 @@ deploy:
 demo: cli
 	@echo "==> waiting for the API"
 	@for i in $$(seq 1 60); do curl -fsS $(API_URL)/healthz >/dev/null 2>&1 && break; sleep 1; done
-	node cli/dist/index.js run examples/hello.py --duration 5m --allow-insecure-dev --payment-mode mock --api-url $(API_URL)
+	node cli/dist/index.js run examples/hello.py --duration 5m --payment-mode mock --api-url $(API_URL)
 
 demo-agent: cli
-	node cli/dist/index.js agent-demo examples/hello.py --duration 5m --allow-insecure-dev --payment-mode mock --api-url $(API_URL)
+	node cli/dist/index.js agent-demo examples/hello.py --duration 5m --payment-mode mock --api-url $(API_URL)
 
 demo-timeout: cli
 	-./scripts/demo-timeout.sh

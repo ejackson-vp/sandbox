@@ -40,7 +40,7 @@ export interface ControllerConfig {
   guestImage: string;
   guestImageDigest: string;
   runtimeClass: string;
-  executionMode: "dev" | "kata" | "confidential";
+  executionMode: "dev" | "kata";
   allowInsecureDev: boolean;
   kubeEnabled: boolean;
   relayEnabled: boolean;
@@ -88,8 +88,6 @@ export interface ControllerConfig {
 
 /**
  * Fail-closed configuration validation.
- * - confidential mode demands genuine hardware evidence and a CoCo runtime class.
- * - dev/kata never masquerade as confidential.
  */
 export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): ControllerConfig {
   const role = (env.ROLE ?? "controller") as Role;
@@ -97,27 +95,16 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     throw new Error(`invalid ROLE ${role}`);
   }
 
-  const executionMode = (env.EXECUTION_MODE ?? "dev") as "dev" | "kata" | "confidential";
-  if (!["dev", "kata", "confidential"].includes(executionMode)) {
+  const executionMode = (env.EXECUTION_MODE ?? "dev") as "dev" | "kata";
+  if (!["dev", "kata"].includes(executionMode)) {
     throw new Error(`invalid EXECUTION_MODE ${executionMode}`);
   }
 
   const runtimeClass = env.RUNTIME_CLASS ?? "x402-sandbox";
-  const allowInsecureDev = bool(env.ALLOW_INSECURE_DEV, executionMode !== "confidential");
-
-  if (executionMode === "confidential") {
-    if (allowInsecureDev) {
-      throw new Error("ALLOW_INSECURE_DEV must be false in confidential mode");
-    }
-    if (!/coco|sev|tdx|kata/.test(runtimeClass)) {
-      throw new Error(
-        `confidential mode requires a confidential RuntimeClass (got ${runtimeClass}); refusing to downgrade`,
-      );
-    }
-  }
-  if (executionMode !== "confidential" && !allowInsecureDev) {
-    throw new Error("non-confidential modes require ALLOW_INSECURE_DEV=true (explicit acknowledgement)");
-  }
+  // Retained only for guest-image digest enforcement. It no longer gates
+  // execution: there is nothing to acknowledge, because no mode is
+  // hardware-backed and the documentation says so plainly.
+  const allowInsecureDev = bool(env.ALLOW_INSECURE_DEV, true);
 
   const adminToken = env.ADMIN_TOKEN ?? "";
   if (["controller", "all"].includes(role) && adminToken.length < 16) {
@@ -137,13 +124,6 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   if (!(warmPoolTier in tiers)) {
     throw new Error(`invalid WARM_POOL_TIER ${String(warmPoolTier)}`);
   }
-  if (warmPoolSize > 0 && executionMode === "confidential") {
-    // A warm guest announces itself before it has a session to attest to.
-    // Enabling the pool here would put non-hardware evidence on a relay entry;
-    // keep the confidential path strict until a TEE-aware warm handshake exists.
-    throw new Error("WARM_POOL_SIZE is not supported in confidential mode");
-  }
-
   return {
     role,
     controllerPort: int(env.X402_CONTROLLER_PORT ?? env.CONTROLLER_PORT, 3001, 1, 65535),

@@ -8,13 +8,13 @@ concrete next step.
 
 | # | Gap | Why it matters | Next step |
 | --- | --- | --- | --- |
-| 1 | **No hardware attestation** | dev/Kata evidence is signed by a published key | implement the TEE verifier + guest attestation-agent integration (Mode C) |
-| 2 | **Shared host kernel in dev mode** | container escape is possible for hostile code | require Kata (Mode B) minimum; validate before launch |
+| 1 | **No hardware attestation** | dev/Kata evidence is signed by a published key | out of scope for this repository; it needs TEE hardware and an independent verifier |
+| 2 | **Shared host kernel in dev mode** | container escape is possible for hostile code | require Kata minimum; validate before launch |
 | 3 | **SQLite single writer** | one controller, one node's PVC, no HA | Postgres/DynamoDB with conditional writes; keep UNIQUE payment key and conditional transitions |
 | 4 | **Relay is a single in-memory pod** | restart loses pending ciphertext and sessions in flight | Redis/NATS with per-session queues and TTLs (ciphertext only) |
 | 5 | **Settlement recovery is mock-only** | only the mock facilitator exposes a settlement lookup | add on-chain/testnet reconciliation (nonce used ⇒ settled) or facilitator webhooks; until then the API fails closed with `409 reconciliation_pending` |
 | 6 | **No refunds (real modes)** | a settled payment whose provisioning fails is not returned | mock mode now auto-refunds terminal-before-READY sessions; real modes record `REFUND_PENDING` and need an on-chain/facilitator refund worker or an explicit credit policy. See [payment-ledger.md](payment-ledger.md) |
-| 7 | **Image not pinned by digest** | a compromised controller could run another image | config now refuses a non-`sha256` digest when `ALLOW_INSECURE_DEV=false`; add Kyverno/sigstore admission and CoCo encrypted images for Mode C |
+| 7 | **Image not pinned by digest** | a compromised controller could run another image | config refuses a non-`sha256` digest when `ALLOW_INSECURE_DEV=false`; add Kyverno or sigstore admission control for a second layer |
 | 8 | **Secrets in the repo (dev)** | dev attestation key, admin/capability/proxy secrets | external secret manager; remove the dev key entirely in production |
 | 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; local-path has no encryption | use an encrypted StorageClass / CSI encryption, document the trust boundary, and expire PVCs aggressively |
 | 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |
@@ -90,33 +90,23 @@ concrete next step.
   wallet:
   ```bash
   EVM_PRIVATE_KEY=0x… ./cli/dist/index.js create --tier short \
-    --payment-mode testnet --allow-insecure-dev --api-url https://api.example
+    --payment-mode testnet --api-url https://api.example
   ```
 - Before mainnet: production facilitator, pinned network id, settlement
   reconciliation, refunds for failed provisioning, per-payer spend caps,
   and a documented incident path for double-charge disputes.
 - Mainnet is rejected at startup (`api/src/config.ts`).
 
-## 6. Isolated production target (Kata)
+## 6. Isolated target (Kata)
 
-- Deploy on Linux hosts with KVM, install the CoCo chart, use
-  `kata-qemu-coco-dev` (or `kata-clh` on kind).
-- Re-run `make security-test` against the Kata deployment and record:
-  guest kernel differs from host, no hostPath/host namespaces, network isolation
-  unchanged, attestation labelled as non-hardware.
-- Do **not** advertise provider-blind execution: Kata gives VM isolation, not
-  hardware-rooted confidentiality.
-
-## 7. Definition of "production confidential"
-
-Only when all of the following are evidenced:
-
-1. `kata-qemu-snp`/`kata-qemu-tdx` on real TEE hardware.
-2. Evidence comes from the TEE, bound to the session key and nonce.
-3. The client verifies it through an independent verifier and checks measurements.
-4. Simulated, stale, wrong-`report_data` and downgraded evidence are rejected.
-5. KBS releases image/secret keys only to an attested guest.
-6. A negative test shows a modified image fails attestation.
-
-Until then the honest description is: *encrypted in transit and opaque to the
-provider's control plane; execution is not hardware-confidential.*
+- Deploy on hosts with KVM enabled and a Kata runtime installed. On Talos use the
+  `kata-containers` system extension with `deploy/talos`; elsewhere use
+  `deploy/kata` and set the handler to whatever `kubectl get runtimeclass`
+  reports.
+- Re-run `make security-test` against that deployment and confirm: the guest
+  kernel differs from the host, there is no hostPath or host namespace, and
+  network isolation is unchanged.
+- Budget the RuntimeClass overhead: 130Mi and 250m per sandbox.
+- Do not advertise provider-blind execution. Kata gives VM isolation, not a
+  hardware root of trust, and a malicious operator can still run a modified
+  guest.

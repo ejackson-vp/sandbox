@@ -10,7 +10,6 @@ import { SandboxClient } from "@x402s/sdk";
 const client = new SandboxClient({
   apiUrl: process.env.API_URL ?? "http://localhost:8080",
   paymentMode: "mock",
-  allowInsecureDev: true,
   log: (line) => console.log(line),
 });
 const here = (name: string) => fileURLToPath(new URL(name, import.meta.url));

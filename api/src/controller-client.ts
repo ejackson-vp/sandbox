@@ -44,7 +44,7 @@ export interface SessionView {
   failureCode?: string;
   failureMessage?: string;
   runtimeClass?: string;
-  executionMode?: "dev" | "kata" | "confidential";
+  executionMode?: "dev" | "kata";
   busy: boolean;
   timings?: SessionTimings;
   payment: PaymentSummary & { paymentKey: string };

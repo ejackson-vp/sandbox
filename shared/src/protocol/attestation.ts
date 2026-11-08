@@ -2,9 +2,9 @@
  * Execution mode and attestation evidence shapes.
  */
 
-export type ExecutionMode = "dev" | "kata" | "confidential";
+export type ExecutionMode = "dev" | "kata";
 
-export type EvidenceType = "dev-simulated" | "kata-dev-no-hw-attestation" | "sev-snp" | "tdx";
+export type EvidenceType = "dev-simulated" | "kata-dev-no-hw-attestation";
 
 export interface AttestationClaims {
   /** Digest of the guest executable actually running. */

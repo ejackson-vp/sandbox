@@ -1,18 +1,18 @@
-# Dev-mode RuntimeClass.
+# Base RuntimeClass — ordinary containers, not a VM.
 #
-# The handler is `runc`: this is an ordinary container, NOT a VM and NOT
-# confidential. The RuntimeClass is mandatory (the controller always sets
-# runtimeClassName) so that switching environments is a one-field change:
+# The RuntimeClass is mandatory: the controller always sets runtimeClassName, so
+# changing the isolation level is a one-field change:
 #
-#   deploy/kata/runtimeclass-patch.yaml          -> handler: kata-qemu
-#   deploy/kata/runtimeclass-coco-patch.yaml     -> handler: kata-qemu-coco-dev
-#   deploy/confidential/runtimeclass-sev-snp.yaml-> handler: kata-qemu-sev-snp
+#   deploy/kata/kustomization.yaml   -> handler: kata  (microVM, own guest kernel)
+#   deploy/talos/kustomization.yaml  -> kata + published images (real cluster)
 #
+# This base is for development and tests only: no VM, no guest kernel, no
+# isolation from the host. See docs/security-guarantees.md.
 apiVersion: node.k8s.io/v1
 kind: RuntimeClass
 metadata:
   name: x402-sandbox
   annotations:
-    x402.io/confidential: "false"
-    x402.io/warning: "DEV MODE (runc): no VM, no hardware isolation, no real attestation"
+    x402.io/isolation: "shared-kernel"
+    x402.io/warning: "DEV MODE (runc): no VM, no guest kernel, no isolation from the host"
 handler: runc

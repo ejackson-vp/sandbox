@@ -75,7 +75,7 @@ async function main(): Promise<void> {
   const inputBytes = (await stat(localInput)).size;
   console.log(`input: ${ROWS} rows, ${(inputBytes / 1024 ** 2).toFixed(2)} MiB`);
   const started = performance.now();
-  const client = new SandboxClient({ apiUrl: API, paymentMode: "mock", allowInsecureDev: true, log: (line) => console.log(line) });
+  const client = new SandboxClient({ apiUrl: API, paymentMode: "mock", log: (line) => console.log(line) });
   let handle: SessionHandle | undefined;
   try {
     handle = await client.createSession({ tier: "custom", durationSeconds: 600, cpuMillis: 1_000, memoryMiB: 1_024, diskMiB: 1_024 });

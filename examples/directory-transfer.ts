@@ -19,7 +19,7 @@ for (let i = 0; i < 80; i += 1) {
   hashes.push(createHash("sha256").update(data).digest("hex"));
 }
 
-const client = new SandboxClient({ apiUrl: process.env.API_URL ?? "http://localhost:8080", paymentMode: "mock", allowInsecureDev: true });
+const client = new SandboxClient({ apiUrl: process.env.API_URL ?? "http://localhost:8080", paymentMode: "mock" });
 let sandbox;
 try {
   sandbox = await client.create({ durationSeconds: 300, cpuMillis: 1000, memoryMiB: 1024, diskMiB: 1024 });

@@ -1,19 +1,22 @@
 /**
- * Attestation evidence verification.
+ * Session key-binding verification.
  *
- * The verifier is a pure function of (envelope, expected session bindings,
- * policy). It fails closed on any structural or cryptographic problem and has
- * no way to "fall back" to accepting unverified evidence.
+ * The guest signs a statement binding its ephemeral public key to the session
+ * id, the client nonce and the client's public key. The verifier is a pure
+ * function of (envelope, expected bindings, policy) and fails closed on any
+ * structural or cryptographic problem.
+ *
+ * What this proves: the guest holds the private key for the key the client is
+ * about to seal commands to, and that key is bound to this session.
+ *
+ * What this does NOT prove: which software is running in the guest. There is no
+ * hardware root of trust here, so a malicious cluster operator could run a
+ * different guest and sign the same statement. Isolation comes from the VM
+ * boundary (Kata), not from this signature.
  *
  * Modes:
- *   dev          - simulated Ed25519 evidence from the published dev key.
- *                  Requires explicit allowInsecureDev.
- *   kata         - simulated evidence produced inside a Kata VM. Still no
- *                  hardware root of trust; requires allowInsecureDev.
- *   confidential - requires hardware evidence (SEV-SNP / TDX) verified through
- *                  the Trustee-backed verifier. Not implemented locally:
- *                  `verifyHardwareEvidence` throws unless a verifier plugin is
- *                  installed, which is intentional fail-closed behaviour.
+ *   dev  - simulated Ed25519 evidence from the published dev key.
+ *   kata - simulated evidence produced inside a Kata VM.
  */
 import { createPublicKey, verify as edVerify } from "node:crypto";
 import type { AttestationEnvelope, EvidenceType, ExecutionMode } from "./protocol.js";
@@ -22,7 +25,6 @@ import { DEV_ATTESTATION_KEY_ID, DEV_ATTESTATION_PUBLIC_KEY } from "./dev-attest
 
 export interface AttestationPolicy {
   mode: ExecutionMode;
-  allowInsecureDev: boolean;
   expectedSessionId: string;
   expectedClientNonce: string;
   expectedClientPublicKey: string;
@@ -48,8 +50,6 @@ export type AttestationResult =
       warnings: string[];
     }
   | { ok: false; code: string; message: string };
-
-const HARDWARE_EVIDENCE_TYPES: readonly EvidenceType[] = ["sev-snp", "tdx"];
 
 export function canonicalEvidenceBytes(env: AttestationEnvelope): Uint8Array {
   const unsigned = { ...env, signature: undefined };
@@ -134,37 +134,16 @@ export function verifyAttestation(env: unknown, policy: AttestationPolicy): Atte
   if (!sigOk) return fail("bad_signature", "evidence signature verification failed");
 
   // --- simulated-vs-hardware separation ---
-  const hardware = e.evidenceType === "sev-snp" || e.evidenceType === "tdx";
+  // There is no hardware evidence path in this product: any claim of hardware
+  // backing is rejected outright rather than downgraded.
   const hardwareClaim = e.hardwareBacked === true;
-
-  if (hardware !== hardwareClaim) {
-    return fail("inconsistent_evidence", "evidence type and hardwareBacked claim disagree");
+  if (hardwareClaim) {
+    return fail("inconsistent_evidence", "simulated evidence cannot claim hardware backing");
   }
 
-  if (policy.mode === "confidential") {
-    if (!hardware) {
-      return fail("not_hardware_backed", "confidential mode requires SEV-SNP or TDX evidence");
-    }
-    if (!HARDWARE_EVIDENCE_TYPES.includes(e.evidenceType)) {
-      return fail("not_hardware_backed", "confidential mode requires hardware evidence");
-    }
-    if (!e.report || typeof e.report !== "string" || e.report.length < 256) {
-      return fail("missing_report", "hardware evidence report is missing");
-    }
-    // Hardware evidence must be verified by a Trustee-backed verifier. We never
-    // accept a signature-only claim of hardware backing.
-    return verifyHardwareEvidence(e, policy);
-  }
-
-  // Dev/kata modes: simulated evidence must be explicitly labelled and opted in.
+  // Dev/kata modes: simulated evidence must be explicitly labelled.
   if (!e.insecureDevOnly) {
     return fail("unexpected_hardware_claim", "non-hardware execution must be labelled insecureDevOnly");
-  }
-  if (e.evidenceType === "sev-snp" || e.evidenceType === "tdx") {
-    return fail("downgrade", "hardware evidence presented in simulated mode");
-  }
-  if (!policy.allowInsecureDev) {
-    return fail("insecure_dev_not_allowed", "simulated attestation requires --allow-insecure-dev");
   }
   if (policy.mode === "kata" && e.evidenceType !== "kata-dev-no-hw-attestation") {
     return fail("evidence_type_not_allowed", "kata mode expects kata-dev-no-hw-attestation evidence");
@@ -182,7 +161,7 @@ export function verifyAttestation(env: unknown, policy: AttestationPolicy): Atte
   }
 
   const warnings: string[] = [
-    "SIMULATED ATTESTATION: no hardware root of trust; confidentiality is not enforced.",
+    "NO HARDWARE ROOT OF TRUST: this binds the guest's session key, it does not prove which software the guest is running.",
   ];
   if (policy.mode === "kata") {
     warnings.push("Kata VM detected via guest kernel, but evidence is not hardware-backed.");
@@ -200,21 +179,4 @@ export function verifyAttestation(env: unknown, policy: AttestationPolicy): Atte
     guestMeasurement: e.claims.guestMeasurement,
     warnings,
   };
-}
-
-/**
- * Production hardware evidence verification hook.
- *
- * Intentionally unimplemented in this repository. A real implementation talks
- * to Trustee / a SEV-SNP or TDX verifier and checks the report data against the
- * envelope's guest key and nonce. Returning a failure here (instead of a
- * signature-only success) is what makes "never downgrade" true.
- */
-function verifyHardwareEvidence(env: AttestationEnvelope, policy: AttestationPolicy): AttestationResult {
-  void env;
-  void policy;
-  return fail(
-    "hardware_verifier_unavailable",
-    "no SEV-SNP/TDX verifier is installed; refusing to accept hardware evidence (fail closed)",
-  );
 }

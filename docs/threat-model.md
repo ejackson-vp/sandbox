@@ -19,21 +19,21 @@ implemented **and** covered by tests in this repository.
 
 ### A. Malicious customer running arbitrary code
 
-| Threat | Dev (Mode A) | Kata (Mode B) | Future TEE |
-| --- | --- | --- | --- |
-| Escape to host | Container + seccomp + no caps + PSS restricted, but **shared kernel** → not a boundary | VM boundary | VM + memory encryption |
-| Read supervisor keys | `PR_SET_DUMPABLE=0` blocks ptrace/`/proc/mem`; bootstrap file deleted; env scrubbed. Root on the node can still read memory | Guest kernel isolation | Hardware isolation |
-| Reach Kubernetes API / nodes / metadata / other pods | Default-deny; only relay + proxy pods allowed; packet-tested | Same | Same |
-| Direct internet | Proxy-only; direct egress blocked | Same | Same |
-| Proxy SSRF (private IPs, rebinding, IPv6, metadata) | Proxy resolves + validates every IP, pins the validated IP, denies private/metadata/ULA/link-local/cluster/mapped forms | Same | Same |
-| Exfiltrate via DNS | No usable DNS (`dnsPolicy: None`, black-hole resolver, policy deny) | Same | Same |
-| Persist data / leave processes | Ordinary: memory `emptyDir`; suspendable: per-session PVC deleted at termination; process group killed per command; no hostPath | Same | Same |
-| Fork bomb / disk exhaustion | CPU/memory limits, per-pod `pod-max-pids` cgroup cap, disk quota, per-file cap, per-command timeout, lease cap | Same | Same |
-| Archive traversal / symlink escape | Path canonicalisation, symlink-parent rejection, `O_NOFOLLOW`, tar entry validation | Same | Same |
-| Read another session's data | Separate pod, keys, relay entry, capability; no shared volumes | Same | Same + memory encryption |
-| Guess/replay another capability | 256-bit random-ish HMAC, SHA-256 stored, scoped by session, TTL, constant-time compare | Same | Same |
-| Replay a request id | Controller maps `(session, requestId)` to one execution; retries return the cached result | Same | Same |
-| Abuse the relay as a tunnel | Relay only understands `request/cancel/shutdown` + opaque response; no arbitrary forwarding | Same | Same |
+| Threat | Dev (runc) | Kata VM |
+| --- | --- | --- |
+| Escape to host | Container + seccomp + no caps + PSS restricted, but **shared kernel** → not a boundary | VM boundary |
+| Read supervisor keys | `PR_SET_DUMPABLE=0` blocks ptrace/`/proc/mem`; bootstrap file deleted; env scrubbed. Root on the node can still read memory | Guest kernel isolation |
+| Reach Kubernetes API / nodes / metadata / other pods | Default-deny; only relay + proxy pods allowed; packet-tested | Same |
+| Direct internet | Proxy-only; direct egress blocked | Same |
+| Proxy SSRF (private IPs, rebinding, IPv6, metadata) | Proxy resolves + validates every IP, pins the validated IP, denies private/metadata/ULA/link-local/cluster/mapped forms | Same |
+| Exfiltrate via DNS | No usable DNS (`dnsPolicy: None`, black-hole resolver, policy deny) | Same |
+| Persist data / leave processes | Ordinary: memory `emptyDir`; suspendable: per-session PVC deleted at termination; process group killed per command; no hostPath | Same |
+| Fork bomb / disk exhaustion | CPU/memory limits, per-pod `pod-max-pids` cgroup cap, disk quota, per-file cap, per-command timeout, lease cap | Same |
+| Archive traversal / symlink escape | Path canonicalisation, symlink-parent rejection, `O_NOFOLLOW`, tar entry validation | Same |
+| Read another session's data | Separate pod, keys, relay entry, capability; no shared volumes | Same |
+| Guess/replay another capability | 256-bit random-ish HMAC, SHA-256 stored, scoped by session, TTL, constant-time compare | Same |
+| Replay a request id | Controller maps `(session, requestId)` to one execution; retries return the cached result | Same |
+| Abuse the relay as a tunnel | Relay only understands `request/cancel/shutdown` + opaque response; no arbitrary forwarding | Same |
 
 **Not mitigated:** the customer can always consume the resource they paid for,
 and can run code that is malicious inside its own sandbox.
@@ -69,9 +69,9 @@ and can run code that is malicious inside its own sandbox.
 
 ### E. Malicious cloud infrastructure administrator
 
-- Dev/Kata: can read memory and snapshot the node. Trusted by construction.
-- Future TEE: SEV-SNP/TDX remove the host from the confidentiality/integrity
-  TCB; availability, side channels and policy mistakes remain.
+- Can read memory and snapshot the node. Trusted by construction: there is no
+  hardware root of trust, so the design assumes the operator is honest about
+  which guest it runs.
 - The **control plane** is outside the plaintext TCB even in dev: it never holds
   a decryption key.
 
@@ -121,9 +121,8 @@ admission control.
   validity window (lease + 5 min).
 - Different session → `session_mismatch`; replayed connection → relay refuses a
   second guest; stale evidence → `stale`/`expired`.
-- Simulated evidence rejected unless explicitly opted in; confidential mode
-  rejects it unconditionally; hardware evidence must go through the (absent)
-  verifier → fails closed.
+- Any claim of hardware backing is rejected (`inconsistent_evidence`); there is
+  no hardware evidence path to downgrade to.
 
 ### K. Snapshot or plaintext leakage via logging/storage
 
@@ -167,7 +166,7 @@ identity and keys enter the sandbox, not the isolation boundary.
 | Reuse the pool's keypair/evidence | The pool hello is `evidenceType: "warm-pool"` and is only a readiness signal. The guest generates a fresh keypair and fresh evidence after the claim. |
 | Claim a pod as another customer | Only the controller may call the relay's admin claim endpoint; sandbox pods cannot reach it. |
 | Sniff the claim on the relay | The relay is a trusted control-plane component and already handles ciphertext; it cannot decrypt payloads. The claim carries the session guest token (not the customer capability). Future hardening: seal the claim to a guest key announced in the pool hello. |
-| Controller/relay compromise during claim | Can redirect or deny a session (availability/impersonation) exactly as it can for a cold pod. Dev mode already trusts the controller with the simulated evidence key; confidential mode rejects the pool until a TEE-aware warm handshake exists. |
+| Controller/relay compromise during claim | Can redirect or deny a session (availability/impersonation) exactly as it can for a cold pod. The controller already holds the simulated evidence key, so it can already impersonate a guest; the pool does not widen that. |
 | Pool exhausts node capacity | `WARM_POOL_SIZE` is operator-controlled and bounded (0–50). Idle pods have small real usage (~3.4 MiB) but reserve scheduler requests. |
 
 ### O. Checkpoint workspaces
@@ -201,18 +200,18 @@ relay.
 
 ## 3. Risk summary
 
-| Risk | Dev | Kata | Future TEE |
-| --- | --- | --- | --- |
-| Control plane reads commands/files/output | Mitigated | Mitigated | Mitigated |
-| Storage/logs read plaintext | Mitigated | Mitigated | Mitigated |
-| Host admin reads guest memory | Not mitigated | Not mitigated | Mitigated |
-| Host admin tampers with execution | Not mitigated | Not mitigated | Mitigated |
-| Customer↔customer isolation | Mitigated (network + process) | Mitigated (network + VM) | Mitigated (network + VM + memory) |
-| Kernel escape | Not mitigated | Mitigated (VM) | Mitigated |
-| Payment replay / double charge | Mitigated | Mitigated | Mitigated |
-| Fake attestation accepted | Mitigated (labelled + opt-in) | Mitigated | Fail-closed until implemented |
-| Filesystem escape | Mitigated | Mitigated | Mitigated |
-| Warm-pool cross-session reuse | Mitigated (claim-once, no reset) | Mitigated | Pool disabled |
-| Suspended workspace at rest | PVC; storage-class encryption needed | PVC | PVC + TEE disk encryption |
-| Local service HTTP escape | Loopback + declared port; no inbound | Same | Same |
-| Side channels | N/A (no claim) | N/A (no claim) | Residual |
+| Risk | Dev | Kata |
+| --- | --- | --- |
+| Control plane reads commands/files/output | Mitigated | Mitigated |
+| Storage/logs read plaintext | Mitigated | Mitigated |
+| Host admin reads guest memory | Not mitigated | Not mitigated |
+| Host admin tampers with execution | Not mitigated | Not mitigated |
+| Customer↔customer isolation | Mitigated (network + process) | Mitigated (network + VM) |
+| Kernel escape | Not mitigated | Mitigated (VM) |
+| Payment replay / double charge | Mitigated | Mitigated |
+| Fake key binding accepted | Mitigated (signature + session binding) | Mitigated |
+| Filesystem escape | Mitigated | Mitigated |
+| Warm-pool cross-session reuse | Mitigated (claim-once, no reset) | Mitigated |
+| Suspended workspace at rest | PVC; storage-class encryption needed | PVC |
+| Local service HTTP escape | Loopback + declared port; no inbound | Same |
+| Side channels | N/A (no claim) | N/A (no claim) |

@@ -1,14 +1,25 @@
-# Mode B overlay: Kata VM, still non-confidential.
+# Kata overlay — each sandbox runs in its own microVM with a separate guest
+# kernel.
 #
 #   kubectl apply -k deploy/kata
 #
-# Defaults to kata-qemu-coco-dev (bare metal / VM host with KVM). For
-# kind/minikube change the handler to kata-clh (upstream CoCo docs: QEMU does not
-# work with kind/minikube).
+# This is isolation, not confidentiality: the guest has its own kernel and the
+# host cannot read its memory through normal paths, but there is no hardware
+# root of trust and no attestation. See docs/security-guarantees.md.
+#
+# `handler: kata` is the Cloud Hypervisor handler. Handler names come from
+# whichever Kata distribution is installed — always check first:
+#
+#   kubectl get runtimeclass
+#
+# Talos (kata-containers system extension) provides `kata` and `kata-qemu`.
+# The Confidential Containers Helm chart uses `kata-clh` / `kata-qemu-*`.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+
 resources:
   - ../kubernetes
+
 patches:
   - target:
       kind: ConfigMap
@@ -18,16 +29,21 @@ patches:
       - op: replace
         path: /data/EXECUTION_MODE
         value: kata
+  - target:
+      kind: ConfigMap
+      name: control-config
+      namespace: sandbox-system
+    patch: |-
       - op: replace
-        path: /data/ALLOW_INSECURE_DEV
-        value: "true"
+        path: /data/RUNTIME_CLASS
+        value: x402-sandbox
   - target:
       kind: RuntimeClass
       name: x402-sandbox
     patch: |-
       - op: replace
         path: /handler
-        value: kata-qemu-coco-dev
+        value: kata
       - op: replace
         path: /metadata/annotations/x402.io~1warning
-        value: "KATA VM (kata-qemu-coco-dev): separate guest kernel, NO hardware attestation"
+        value: "KATA microVM (Cloud Hypervisor): separate guest kernel, no hardware root of trust"

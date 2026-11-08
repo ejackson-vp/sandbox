@@ -61,46 +61,28 @@ function makeEvidence(overrides: Partial<AttestationEnvelope> = {}): Attestation
 
 const basePolicy: AttestationPolicy = {
   mode: "dev",
-  allowInsecureDev: true,
   expectedSessionId: SESSION,
   expectedClientNonce: NONCE,
   expectedClientPublicKey: CLIENT_KEY,
 };
 
 describe("attestation verifier", () => {
-  it("accepts correctly bound dev evidence only with the insecure override", () => {
+  it("accepts correctly bound dev evidence", () => {
     const env = makeEvidence();
     const ok = verifyAttestation(env, basePolicy);
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.hardwareBacked).toBe(false);
       expect(ok.insecureDevOnly).toBe(true);
-      expect(ok.warnings.join(" ")).toMatch(/SIMULATED/);
+      expect(ok.warnings.join(" ")).toMatch(/NO HARDWARE ROOT/);
     }
-
-    const refused = verifyAttestation(env, { ...basePolicy, allowInsecureDev: false });
-    expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.code).toBe("insecure_dev_not_allowed");
   });
 
-  it("refuses simulated evidence in confidential mode (no downgrade)", () => {
-    const res = verifyAttestation(makeEvidence(), { ...basePolicy, mode: "confidential" });
+  it("refuses any claim of hardware backing (no such path exists)", () => {
+    const env = makeEvidence({ hardwareBacked: true, insecureDevOnly: false });
+    const res = verifyAttestation(env, basePolicy);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.code).toBe("not_hardware_backed");
-  });
-
-  it("refuses hardware-claimed evidence that was signed with the dev key", () => {
-    const env = makeEvidence({
-      evidenceType: "sev-snp",
-      hardwareBacked: true,
-      insecureDevOnly: false,
-      report: "x".repeat(512),
-    });
-    const res = verifyAttestation(env, { ...basePolicy, mode: "confidential", allowInsecureDev: false });
-    expect(res.ok).toBe(false);
-    // Signature is valid (dev key is pinned) but hardware evidence must be
-    // verified by a Trustee-backed verifier, which is absent: fail closed.
-    if (!res.ok) expect(res.code).toBe("hardware_verifier_unavailable");
+    if (!res.ok) expect(res.code).toBe("inconsistent_evidence");
   });
 
   it("rejects mismatched session, nonce, client key and unknown signers", () => {

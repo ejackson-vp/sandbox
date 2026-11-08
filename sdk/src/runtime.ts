@@ -35,17 +35,11 @@ export class ClientRuntime {
   constructor(opts: SandboxClientOptions) {
     this.apiUrl = opts.apiUrl.replace(/\/$/, "");
     this.payer = opts.payer ?? createPayer(opts.paymentMode ?? "mock");
-    this.allowInsecureDev = opts.allowInsecureDev ?? false;
+    this.allowInsecureDev = opts.allowInsecureDev ?? true;
     this.requireHardware = opts.requireHardware ?? false;
     this.expectedMeasurement = opts.expectedMeasurement;
     this.store = opts.store;
     this.log = opts.log ?? (() => {});
-    if (!this.allowInsecureDev && !this.requireHardware) {
-      throw new SandboxError(
-        "insecure_dev_ack_required",
-        "refusing to run: simulated attestation requires allowInsecureDev (or requireHardware)",
-      );
-    }
   }
 
   auth(handle: SessionHandle): Record<string, string> {
@@ -173,8 +167,7 @@ export class ClientRuntime {
 
     const mode = last.executionMode ?? "dev";
     const verdict = verifyAttestation(last.attestation, {
-      mode: this.requireHardware ? "confidential" : mode,
-      allowInsecureDev: this.allowInsecureDev && mode !== "confidential",
+      mode,
       expectedSessionId: handle.sessionId,
       expectedClientNonce: handle.clientNonce,
       expectedClientPublicKey: toBase64(handle.clientPublicKey),

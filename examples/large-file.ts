@@ -40,7 +40,6 @@ console.log(`fixture: ${statSync(local).size} bytes, sha256 ${expected}`);
 const client = new SandboxClient({
   apiUrl: process.env.API_URL ?? "http://localhost:8080",
   paymentMode: "mock",
-  allowInsecureDev: true,
 });
 let sandbox;
 try {

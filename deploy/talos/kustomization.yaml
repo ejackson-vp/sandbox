@@ -1,0 +1,39 @@
+# Talos overlay — the homelab deployment.
+#
+#   kubectl apply -k deploy/talos
+#
+# Builds on deploy/kata (microVM isolation) and adds what a real, non-kind
+# cluster needs: published images, a real guest image reference, and the public
+# base URL.
+#
+# Node preparation is NOT handled here — a node must be labelled before
+# sandboxes can schedule. See README.md.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../kata
+
+# Published by .github/workflows/release.yml on a v* tag.
+# `kustomize edit set image` or a Flux image policy can bump these.
+images:
+  - name: x402-sandbox/control
+    newName: ghcr.io/ejackson-vp/sandbox-control
+    newTag: v0.1.0
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: control-config
+      namespace: sandbox-system
+    patch: |-
+      - op: replace
+        path: /data/GUEST_IMAGE
+        value: ghcr.io/ejackson-vp/sandbox-guest:v0.1.0
+      # GUEST_IMAGE_DIGEST stays at the dev placeholder until the release
+      # digest is known. The controller only enforces a real digest when
+      # ALLOW_INSECURE_DEV is false — see README.md.
+      - op: replace
+        path: /data/PUBLIC_BASE_URL
+        value: https://sandbox.example.ts.net

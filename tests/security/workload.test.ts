@@ -90,7 +90,6 @@ describe.skipIf(!available)("workload hardening (real cluster)", () => {
 
     const spec = pod.spec;
     expect(pod.metadata.labels["x402.io/session"]).toBe(handle.sessionId);
-    expect(pod.metadata.annotations["x402.io/confidential"]).toBe("false");
     expect(pod.metadata.annotations["x402.io/lease-seconds"]).toBe("300");
     expect(spec.runtimeClassName).toBe("x402-sandbox");
     expect(spec.nodeSelector).toMatchObject({ "x402.io/sandbox-pool": "true" });

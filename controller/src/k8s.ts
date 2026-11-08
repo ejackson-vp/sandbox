@@ -43,7 +43,8 @@ export class KubeProvisioner implements Provisioner {
 
   async createPod(spec: SandboxPodSpec): Promise<{ podName: string }> {
     const podName = `sbx-${spec.sessionId.replace(/^sbx_/, "")}`;
-    const devMode = spec.executionMode !== "confidential";
+    // No hardware-evidence path exists, so the guest always needs the dev key.
+    const devMode = true;
     const baseline = baselineOf(spec.limits, spec.baselineCpuMillis, spec.baselineMemoryMiB);
     const pod = buildPod(this.namespace, {
       name: podName,
@@ -94,7 +95,8 @@ export class KubeProvisioner implements Provisioner {
 
   async createWarmPod(spec: WarmPodSpec): Promise<{ podName: string }> {
     const podName = `warm-${spec.warmId}`;
-    const devMode = spec.executionMode !== "confidential";
+    // No hardware-evidence path exists, so the guest always needs the dev key.
+    const devMode = true;
     const baseline = baselineOf(spec.limits);
     const pod = buildPod(this.namespace, {
       name: podName,

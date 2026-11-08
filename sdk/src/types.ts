@@ -29,7 +29,7 @@ export interface SandboxClientOptions {
   apiUrl: string;
   payer?: Payer;
   paymentMode?: PaymentMode;
-  /** Explicit acknowledgement that simulated attestation is not confidential. */
+  /** @deprecated no longer required; retained for source compatibility. */
   allowInsecureDev?: boolean;
   /** Reject anything that is not hardware-attested. */
   requireHardware?: boolean;

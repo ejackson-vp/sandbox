@@ -11,9 +11,6 @@ const apiUrl = process.env.API_URL ?? "http://localhost:8080";
 const client = new SandboxClient({
   apiUrl,
   paymentMode: "mock",
-  // Simulated dev attestation is not confidential; acknowledging it explicitly
-  // keeps the "never silently downgrade" property.
-  allowInsecureDev: true,
   store: new FileSessionStore(),
 });
 

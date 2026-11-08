@@ -3,9 +3,9 @@ import { loadControllerConfig } from "../../controller/src/config.js";
 
 const base = {
   ADMIN_TOKEN: "test-admin-token-0123456789",
-  EXECUTION_MODE: "confidential",
+  EXECUTION_MODE: "kata",
   ALLOW_INSECURE_DEV: "false",
-  RUNTIME_CLASS: "kata-qemu-snp",
+  RUNTIME_CLASS: "kata",
 };
 
 describe("production config guards", () => {

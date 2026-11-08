@@ -19,7 +19,6 @@ import { SandboxClient } from "@x402s/sdk";
 const client = new SandboxClient({
   apiUrl: "http://localhost:8080",
   paymentMode: "mock",
-  allowInsecureDev: true,
 });
 
 let sandbox;

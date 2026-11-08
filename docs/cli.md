@@ -69,11 +69,10 @@ sandbox agent-demo examples/hello.py          # purchase through @x402/fetch
 sandbox pricing
 ```
 
-Common flags: `--api-url`, `--payment-mode mock|testnet`, `--allow-insecure-dev`,
-`--require-hardware`, `--expected-measurement`, `--json`, `--quiet`.
+Common flags: `--api-url`, `--payment-mode mock|testnet`, `--json`, `--quiet`.
 
-Simulated attestation requires `--allow-insecure-dev`; the CLI refuses to run
-without it (or `--require-hardware`, which this deployment cannot satisfy).
+There is no attestation opt-in flag: every mode is non-hardware-backed, and
+`docs/security-guarantees.md` says so plainly.
 
 ## SDK
 
@@ -85,7 +84,6 @@ import { SandboxClient, FileSessionStore } from "@x402s/sdk";
 const client = new SandboxClient({
   apiUrl: "http://localhost:8080",
   paymentMode: "mock",
-  allowInsecureDev: true,             // explicit acknowledgement
   store: new FileSessionStore(),
 });
 

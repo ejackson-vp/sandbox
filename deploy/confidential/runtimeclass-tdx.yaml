@@ -1,9 +1,0 @@
-# Mode C: Intel TDX through Confidential Containers.
-apiVersion: node.k8s.io/v1
-kind: RuntimeClass
-metadata:
-  name: x402-sandbox
-  annotations:
-    x402.io/confidential: "true"
-    x402.io/tee: "intel-tdx"
-handler: kata-qemu-tdx

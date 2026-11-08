@@ -9,7 +9,6 @@ import { SandboxClient } from "@x402s/sdk";
 const client = new SandboxClient({
   apiUrl: process.env.API_URL ?? "http://localhost:8080",
   paymentMode: "mock",
-  allowInsecureDev: true,
 });
 
 let sandbox: Awaited<ReturnType<SandboxClient["create"]>> | undefined;

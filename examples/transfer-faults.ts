@@ -27,7 +27,7 @@ function digest(): Promise<string> {
   });
 }
 
-const client = new SandboxClient({ apiUrl: process.env.API_URL ?? "http://localhost:8080", paymentMode: "mock", allowInsecureDev: true });
+const client = new SandboxClient({ apiUrl: process.env.API_URL ?? "http://localhost:8080", paymentMode: "mock" });
 let sandbox: Sandbox | undefined;
 try {
   sandbox = await client.create({ durationSeconds: 300, cpuMillis: 1000, memoryMiB: 1024, diskMiB: 1024 });

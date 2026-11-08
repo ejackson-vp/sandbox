@@ -130,8 +130,7 @@ can replenish (un-paced depletion is the burst case in §2.5):
 - With sub-second starts the default API limiter (30 burst / 1 per s) becomes the
   throughput ceiling; the benchmark raised it to 1000/500 and restored it after.
 
-The pool is off by default and is rejected in confidential mode (a warm guest
-has no session to attest to yet).
+The pool is off by default; a warm guest binds its evidence at claim time.
 
 ### 2.5 Burst behaviour (pool = 8)
 
@@ -515,8 +514,8 @@ numbers are reported or estimated.
 
 To produce a comparable dataset on a Linux/KVM host:
 
-1. Install the CoCo chart (`kata-qemu-coco-dev`, non-confidential) or use
-   `kata-clh` for kind/minikube.
+1. Install a Kata runtime on a KVM host (on Talos, the `kata-containers`
+   system extension).
 2. Switch `RuntimeClass` and `EXECUTION_MODE=kata` (see `deploy/kata/`).
 3. Run `make benchmark-startup SAMPLES=50`, `benchmark-density LEVELS=1,5,10`,
    `benchmark-workloads` with identical CPU/memory limits and image.

@@ -22,18 +22,11 @@ export function annotationsFor(
   extra: Record<string, string>,
   warning: string,
 ): Record<string, string> {
-  const annotations: Record<string, string> = {
+  return {
     "x402.io/mode": mode,
     ...extra,
-    "x402.io/confidential": "false",
+    "x402.io/warning": warning,
   };
-  if (mode === "confidential") {
-    annotations["x402.io/confidential"] = "true";
-    delete annotations["x402.io/warning"];
-  } else {
-    annotations["x402.io/warning"] = warning;
-  }
-  return annotations;
 }
 
 export function guestEnvFor(

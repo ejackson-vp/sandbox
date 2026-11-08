@@ -3,7 +3,7 @@ kind: Namespace
 metadata:
   name: sandbox-system
   labels:
-    app.kubernetes.io/part-of: x402-confidential-sandbox
+    app.kubernetes.io/part-of: sandbox
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
     pod-security.kubernetes.io/audit: restricted
@@ -14,7 +14,7 @@ kind: Namespace
 metadata:
   name: sandbox-workloads
   labels:
-    app.kubernetes.io/part-of: x402-confidential-sandbox
+    app.kubernetes.io/part-of: sandbox
     x402.io/role: sandbox-workloads
     # No customer workload may escape the restricted profile.
     pod-security.kubernetes.io/enforce: restricted

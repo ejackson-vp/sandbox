@@ -1,7 +1,7 @@
 # Warm pool
 
-Status: **implemented and measured in dev mode on the local kind rig.** Not
-enabled by default; not available in confidential mode (fail-closed).
+Status: **implemented and measured on the local kind rig.** Not enabled by
+default.
 
 > **Position:** this pool is a development stand-in for snapshot restore, not a
 > scaling strategy. It is deliberately simpler than FES: fixed size, claim-once,
@@ -60,10 +60,10 @@ A session may claim a warm pod only if its `cpuMillis`, `memoryMiB`, and
 are re-sent in the claim and enforced by the guest. Sessions that do not fit
 (custom large tiers, or an empty pool) take the normal cold path.
 
-`EXECUTION_MODE=confidential` rejects `WARM_POOL_SIZE>0`: a warm guest announces
-itself before it has a session to attest to, so enabling the pool would put
-non-hardware evidence on a relay entry. The confidential path needs a
-TEE-aware warm handshake first.
+A warm guest announces itself before it has a session, so its evidence is bound
+at claim time rather than at boot. That is acceptable here because the evidence
+is not hardware-backed in the first place: the pool does not weaken a guarantee
+that does not exist.
 
 ## Measured result
 
