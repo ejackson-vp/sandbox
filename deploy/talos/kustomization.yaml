@@ -1,6 +1,9 @@
 # Talos overlay — the homelab deployment.
 #
-#   kubectl apply -k deploy/talos
+#   kubectl kustomize deploy/talos   # render
+#
+# In the homelab this path is reconciled by Flux (apps/sandbox/release.yaml),
+# not applied by hand.
 #
 # Builds on deploy/kata (microVM isolation) and adds what a real, non-kind
 # cluster needs: published images, a real guest image reference, and the public
@@ -15,12 +18,14 @@ kind: Kustomization
 resources:
   - ../kata
 
-# Published by .github/workflows/release.yml on a v* tag.
-# `kustomize edit set image` or a Flux image policy can bump these.
+# Published by .github/workflows/release.yml on a git tag v*.
+# NOTE: the workflow uses semver pattern {{version}}, so the IMAGE tag has no
+# `v` prefix: git tag v0.1.0 -> image tag 0.1.0. Getting this wrong is an
+# ImagePullBackOff, not an error at apply time.
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: v0.1.0
+    newTag: 0.1.0
 
 patches:
   - target:
@@ -30,10 +35,13 @@ patches:
     patch: |-
       - op: replace
         path: /data/GUEST_IMAGE
-        value: ghcr.io/ejackson-vp/sandbox-guest:v0.1.0
-      # GUEST_IMAGE_DIGEST stays at the dev placeholder until the release
-      # digest is known. The controller only enforces a real digest when
-      # ALLOW_INSECURE_DEV is false — see README.md.
+        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.0
+      # Real digest from the v0.1.0 release. The controller only *enforces* it
+      # when ALLOW_INSECURE_DEV=false, but pinning it means a moved tag cannot
+      # change what runs inside the sandbox.
+      - op: replace
+        path: /data/GUEST_IMAGE_DIGEST
+        value: sha256:c69461c003e9f484b4803d517529d9544b2385584a57fa082ee01b3a0e14fdca
       - op: replace
         path: /data/PUBLIC_BASE_URL
         value: https://sandbox.example.ts.net

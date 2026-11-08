@@ -1,7 +1,12 @@
 # Deploying to a real cluster (Talos)
 
+In the homelab this path is **reconciled by Flux** from `ejackson-vp/homelab`
+(`apps/sandbox/release.yaml`); nothing here is applied by hand. Standalone, or to
+preview exactly what Flux will apply:
+
 ```bash
-kubectl apply -k deploy/talos
+kubectl kustomize deploy/talos   # render only
+kubectl apply -k deploy/talos    # only if you are not running Flux
 ```
 
 This is the overlay used for a two-node Talos cluster with the
