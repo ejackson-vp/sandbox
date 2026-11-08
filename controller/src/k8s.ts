@@ -30,6 +30,7 @@ export const GUEST_TOOLS = ["python3", "node", "bash", "tar", "curl", "git"];
 
 export class KubeProvisioner implements Provisioner {
   private readonly core: k8s.CoreV1Api;
+  private readonly discovery: k8s.DiscoveryV1Api;
 
   constructor(
     private readonly namespace: string,
@@ -39,6 +40,7 @@ export class KubeProvisioner implements Provisioner {
     const kc = kubeconfig ?? new k8s.KubeConfig();
     if (!kubeconfig) kc.loadFromDefault();
     this.core = kc.makeApiClient(k8s.CoreV1Api);
+    this.discovery = kc.makeApiClient(k8s.DiscoveryV1Api);
   }
 
   async createPod(spec: SandboxPodSpec): Promise<{ podName: string }> {
@@ -324,12 +326,35 @@ export class KubeProvisioner implements Provisioner {
     return listNodes(this.core);
   }
 
+  /**
+   * Resolve a Service to an address a sandbox can actually dial.
+   *
+   * Returns a ready endpoint address, not the ClusterIP. A Kata sandbox runs its
+   * own kernel, so Cilium's eBPF service translation never sees its packets: a
+   * ClusterIP is simply an unroutable address inside the microVM, and connects
+   * hang until timeout. Pod IPs are routed normally, so an endpoint works.
+   *
+   * Falls back to the ClusterIP only when no endpoint is ready, which preserves
+   * the previous behaviour for container runtimes that can use it.
+   */
   async getServiceAddress(name: string): Promise<{ host: string; port: number } | null> {
     try {
       const svc = await this.core.readNamespacedService({ name, namespace: this.controlNamespace });
-      const ip = svc.spec?.clusterIP;
       const port = svc.spec?.ports?.[0]?.port;
-      if (!ip || ip === "None" || !port) return null;
+      if (!port) return null;
+
+      const slices = await this.discovery.listNamespacedEndpointSlice({
+        namespace: this.controlNamespace,
+        labelSelector: `kubernetes.io/service-name=${name}`,
+      });
+      const endpointIp = (slices.items ?? [])
+        .flatMap((slice) => slice.endpoints ?? [])
+        .filter((endpoint) => endpoint.conditions?.ready !== false)
+        .flatMap((endpoint) => endpoint.addresses ?? [])[0];
+      if (endpointIp) return { host: endpointIp, port };
+
+      const ip = svc.spec?.clusterIP;
+      if (!ip || ip === "None") return null;
       return { host: ip, port };
     } catch (err) {
       if ((err as { code?: number }).code === 404) return null;
