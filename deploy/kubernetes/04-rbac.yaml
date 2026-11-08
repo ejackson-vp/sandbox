@@ -46,6 +46,12 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list"]
+  # Resolve a Service to a ready endpoint address. A Kata sandbox runs its own
+  # kernel, so Cilium's service translation never sees its packets and a
+  # ClusterIP is unreachable from inside the microVM.
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
