@@ -66,14 +66,8 @@ nodes.
 
 ## Next experiments
 
-The 486 ms gap between server and client is the product target. Trace one
-create end to end (SDK, 402, payment, capacity, claim, readiness, receipt),
-then attack only the largest contributors:
-
-1. readiness polling (the SDK polls at 250 ms; a pushed READY event or long-poll)
-2. the x402 challenge round trip (preflight and pre-sign for repeat creates)
-3. the controller claim/reconcile path (250 ms tick, SQLite bookkeeping)
-
-Provisional targets: **server warm p50 100–150 ms**, **client warm p50
-400–500 ms**, with the same p95 discipline. Do not remove correctness checks for
-latency.
+The 486 ms gap between server and client is the product target. The ranked list,
+the burst analysis and the reasoning are in
+[engineering-notes.md](engineering-notes.md). Provisional targets: **server warm
+p50 100–150 ms**, **client warm p50 400–500 ms**, with the same p95 discipline.
+Do not remove correctness checks for latency.

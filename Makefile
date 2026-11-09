@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration security-test security-network logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration verify typecheck lint-structure test-property docs-check assets demo-gif security-test security-network logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -32,6 +32,10 @@ help:
 	@echo "  make demo-sse      stream SSE chunks through the relay"
 	@echo "  make demo-ws       WebSocket echo through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
+	@echo "  make verify         build, typecheck, structure lint, unit + property tests"
+	@echo "  make docs-check     markdownlint + internal link check"
+	@echo "  make assets         re-render docs/assets/social-preview.png"
+	@echo "  make demo-gif       record docs/assets/demo.gif with vhs (needs a cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
 	@echo "  benchmarks live in the sandbox-bench repository"
 	@echo "  make logs           tail control-plane logs"
@@ -151,6 +155,36 @@ test-unit:
 
 test-integration: cli guest
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest npx vitest run tests/integration
+
+# Everything a reviewer can run without a cluster.
+verify: build typecheck lint-structure test-unit test-property
+
+typecheck:
+	npm run typecheck
+
+lint-structure:
+	npm run lint:structure
+
+test-property:
+	npx vitest run tests/property
+
+# Markdown lint always; link check when lychee is installed (CI always runs it).
+docs-check:
+	npx --yes markdownlint-cli2 "*.md" "docs/**/*.md"
+	@if command -v lychee >/dev/null 2>&1; then \
+		lychee --offline --no-progress --exclude-path node_modules "*.md" "docs/**/*.md"; \
+	else \
+		echo "lychee not installed: skipping link check (CI runs it)"; \
+	fi
+
+assets: docs/assets/social-preview.png
+
+docs/assets/social-preview.png: docs/assets/social-preview.svg scripts/render-assets.sh
+	./scripts/render-assets.sh docs/assets/social-preview.svg docs/assets/social-preview.png
+
+demo-gif:
+	@command -v vhs >/dev/null 2>&1 || { echo "vhs not found: brew install vhs"; exit 1; }
+	vhs docs/assets/demo.tape
 
 security-test: security-network
 
