@@ -30,8 +30,9 @@ resources:
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: 0.1.1
-  # The guest image did not change in 0.1.1; only the controller did.
+    newTag: 0.1.2
+  # 0.1.2 changes the control image only (API credential separation and HTTP
+  # receipt timeouts). The guest binary is unchanged, so it stays on 0.1.0.
 
 patches:
   - target:
