@@ -24,6 +24,8 @@ interface LocalPod {
   stderr: string;
   warm: boolean;
   warmId?: string;
+  identity?: string;
+  imageDigest?: string;
 }
 
 export interface LocalProvisionerOptions {
@@ -147,6 +149,8 @@ export class LocalProvisioner implements Provisioner {
       stderr: "",
       warm: true,
       warmId: spec.warmId,
+      identity: spec.identity,
+      imageDigest: spec.imageDigest,
     };
     proc.stderr?.on("data", (chunk: Buffer) => {
       pod.stderr = (pod.stderr + chunk.toString()).slice(-4096);
@@ -248,6 +252,8 @@ export class LocalProvisioner implements Provisioner {
         poolId: `warm_${p.warmId}`,
         createdAt: p.createdAt,
         phase: p.phase,
+        identity: p.identity ?? "",
+        imageDigest: p.imageDigest ?? "",
         nodeName: "local",
       }));
   }

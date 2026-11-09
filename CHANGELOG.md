@@ -7,6 +7,13 @@ the container registry.
 
 ## Unreleased
 
+### Security
+
+- Warm-pool claims are bound to the guest image and boot identity. A pod from an
+  older image is never claimed and is drained on the next reconcile pass; the
+  guest rejects a claim whose digest differs from its own and attests only its
+  own value (#49).
+
 ## 0.1.16
 
 ### Added

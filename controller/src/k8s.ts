@@ -14,6 +14,7 @@
 import * as k8s from "@kubernetes/client-node";
 import { log } from "@x402s/shared";
 import { annotationsFor, baselineOf, bootstrapEnvFor, buildPod, guestEnvFor } from "./k8s-pod.js";
+import { WARM_IDENTITY_ANNOTATION, WARM_IMAGE_DIGEST_ANNOTATION } from "./warm-pool-identity.js";
 import { listNodes } from "./k8s-nodes.js";
 import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
 
@@ -111,6 +112,8 @@ export class KubeProvisioner implements Provisioner {
         spec.executionMode,
         {
           "x402.io/warm-pool": "true",
+          [WARM_IDENTITY_ANNOTATION]: spec.identity,
+          [WARM_IMAGE_DIGEST_ANNOTATION]: spec.imageDigest,
           "x402.io/cpu-millis": String(spec.limits.cpuMillis),
           "x402.io/memory-mib": String(spec.limits.memoryMiB),
           "x402.io/disk-mib": String(spec.limits.diskMiB),
@@ -300,6 +303,8 @@ export class KubeProvisioner implements Provisioner {
         poolId: `warm_${warmId}`,
         createdAt: pod.metadata?.creationTimestamp ? new Date(pod.metadata.creationTimestamp).getTime() : 0,
         phase: pod.status?.phase ?? "Unknown",
+        identity: pod.metadata?.annotations?.[WARM_IDENTITY_ANNOTATION] ?? "",
+        imageDigest: pod.metadata?.annotations?.[WARM_IMAGE_DIGEST_ANNOTATION] ?? "",
         ...(pod.spec?.nodeName ? { nodeName: pod.spec.nodeName } : {}),
       };
     });

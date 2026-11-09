@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { metrics, type SessionLimits, type WarmClaim } from "@x402s/shared";
 import { GUEST_TOOLS, type WarmPodInfo } from "./k8s.js";
 import { proxyTokenFor } from "./config.js";
+import { warmPoolIdentity } from "./warm-pool-identity.js";
 import { newOpaqueToken, sha256Hex } from "./tokens.js";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
@@ -32,6 +33,18 @@ export class WarmPool {
       maxCommandSeconds: Math.min(platform.maxCommandSeconds, def.durationSeconds),
       maxProcesses: platform.maxProcesses,
     };
+  }
+
+  /** The identity a warm pod must carry to be claimable right now. */
+  private identity(): string {
+    const cfg = this.ctx.cfg;
+    return warmPoolIdentity({
+      imageDigest: cfg.guestImageDigest,
+      runtimeClass: cfg.runtimeClass,
+      executionMode: cfg.executionMode,
+      workspaceDir: cfg.workspaceDir,
+      limits: this.limits(),
+    });
   }
 
   /**
@@ -184,6 +197,7 @@ export class WarmPool {
 
   private async pick(): Promise<WarmPodInfo | null> {
     const now = this.ctx.now();
+    const identity = this.identity();
     let pods: WarmPodInfo[];
     if (this.cache && now - this.cache.at < 2_000) {
       pods = this.cache.pods;
@@ -200,6 +214,9 @@ export class WarmPool {
       if (!pod.warmId || this.claimed.has(pod.warmId)) continue;
       if (pod.phase !== "Running" && pod.phase !== "Pending") continue;
       if (pod.createdAt > 0 && now - pod.createdAt > this.ctx.cfg.warmPoolTtlMs) continue;
+      // A pod from an older image/config must never be claimed: the guest would
+      // run stale code and could attest the claim's digest instead of its own.
+      if (pod.identity !== identity || pod.imageDigest !== this.ctx.cfg.guestImageDigest) continue;
       try {
         const state = await this.ctx.relay.state(pod.poolId);
         // `attestation` here is the *pool* hello, not customer evidence. The
@@ -225,6 +242,7 @@ export class WarmPool {
     if (pods.length === 0 && cfg.warmPoolSize === 0) return;
 
     const now = this.ctx.now();
+    const identity = this.identity();
     let live = 0;
     for (const pod of pods) {
       if (!pod.warmId) continue;
@@ -232,15 +250,17 @@ export class WarmPool {
         live++;
         continue;
       }
+      const staleIdentity =
+        pod.identity !== identity || pod.imageDigest !== cfg.guestImageDigest;
       const dead = pod.phase === "Failed" || pod.phase === "Succeeded";
       const tooOld = pod.createdAt > 0 && now - pod.createdAt > cfg.warmPoolTtlMs;
       const scaleDown = cfg.warmPoolSize === 0;
-      if (dead || tooOld || scaleDown) {
+      if (staleIdentity || dead || tooOld || scaleDown) {
         await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
         await this.ctx.relay.purge(pod.poolId).catch(() => undefined);
         log.info("warm_pod_recycled", {
           podName: pod.name,
-          reason: scaleDown ? "scale_down" : dead ? "dead" : "ttl",
+          reason: staleIdentity ? "identity" : scaleDown ? "scale_down" : dead ? "dead" : "ttl",
         });
         continue;
       }
@@ -305,6 +325,7 @@ export class WarmPool {
         proxyToken: proxyTokenFor(cfg, poolId),
         image: cfg.guestImageRef,
         imageDigest: cfg.guestImageDigest,
+        identity: this.identity(),
         runtimeClass: cfg.runtimeClass,
         executionMode: cfg.executionMode,
         workspaceDir: cfg.workspaceDir,

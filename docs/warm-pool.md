@@ -120,6 +120,13 @@ kubectl -n sandbox-system set env deploy/api CREATE_RATE_BURST- CREATE_RATE_REFI
   session end. There is no reset path to get wrong and no cross-session data.
 - **Fresh keys per session.** The guest generates a new keypair after the claim
   and sends fresh evidence bound to the session id, client key, and nonce.
+- **Image identity is bound to every claim.** Each warm pod carries
+  `x402.io/warm-identity`, a hash of the image digest, runtime class, execution
+  mode, workspace and pod-shaped limits, plus the raw `x402.io/image-digest`.
+  `pick()` and `reconcile()` compare the hash with the controller's current
+  config; a mismatch is never claimed and is deleted on the next pass. The guest
+  compares the claim's digest with its own `GUEST_IMAGE_DIGEST` and attests only
+  its own value.
 - **Pool evidence is labelled.** The pool hello is `evidenceType: "warm-pool"`
   and is only used as a readiness signal; the session is judged on its own hello.
 - **Minimal RBAC change.** The controller gains `patch` on pods (to relabel a
@@ -173,6 +180,8 @@ POOL_SIZE=8 DURATION=14400 RATE=0.5 ./scripts/benchmark-soak.sh  # 4 h
 - a warm pod has `WARM_MODE`, `POOL_ID`, and no `SESSION_ID`,
   `CLIENT_PUBLIC_KEY`, `CLIENT_NONCE`, `LEASE_SECONDS`, or `GUEST_TOKEN` in the
   guest container;
+- every warm pod carries `x402.io/warm-identity` and an
+  `x402.io/image-digest` annotation matching its `GUEST_IMAGE_DIGEST`;
 - a sandbox can reach the relay but the claim route returns 401 without the
   admin token;
 - two sessions get different guest keys, and each attestation binds its own

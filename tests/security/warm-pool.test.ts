@@ -25,7 +25,11 @@ const available = clusterAvailable() && (await (async () => {
 })());
 
 interface WarmPod {
-  metadata: { name: string; labels?: Record<string, string> };
+  metadata: {
+    name: string;
+    labels?: Record<string, string>;
+    annotations?: Record<string, string>;
+  };
   spec: {
     containers: Array<{ name: string; env?: Array<{ name: string; value?: string }> }>;
     initContainers?: Array<{ name: string; env?: Array<{ name: string; value?: string }> }>;
@@ -82,6 +86,9 @@ describe.skipIf(!available || pool.length === 0)("warm pool (real cluster)", () 
       const env = new Map((guest?.env ?? []).map((e) => [e.name, e.value]));
       expect(env.get("WARM_MODE")).toBe("true");
       expect(env.get("POOL_ID")).toMatch(/^warm_[0-9a-f]{12}$/);
+      expect(env.get("GUEST_IMAGE_DIGEST")).toMatch(/^sha256:/);
+      expect(pod.metadata.annotations?.["x402.io/warm-identity"]).toMatch(/^[0-9a-f]{64}$/);
+      expect(pod.metadata.annotations?.["x402.io/image-digest"]).toBe(env.get("GUEST_IMAGE_DIGEST"));
       for (const forbidden of ["SESSION_ID", "CLIENT_PUBLIC_KEY", "CLIENT_NONCE", "LEASE_SECONDS", "GUEST_TOKEN"]) {
         expect(env.has(forbidden)).toBe(false);
       }

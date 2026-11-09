@@ -166,6 +166,16 @@ func runSession(cfg sessionConfig) error {
 	return sup.serve(ctx)
 }
 
+// checkWarmClaimImage binds a warm claim to the image this guest actually
+// booted. The controller also filters stale pods, but the guest must never
+// attest a digest supplied by the claim.
+func checkWarmClaimImage(ownDigest, claimDigest string) error {
+	if ownDigest != claimDigest {
+		return fmt.Errorf("warm claim image digest mismatch: own %q, claim %q", ownDigest, claimDigest)
+	}
+	return nil
+}
+
 // runWarm boots the guest without a session. It connects to a pooled relay
 // entry, announces readiness, and waits for the controller's claim. Nothing
 // customer-specific exists in the pod before that frame arrives.
@@ -179,6 +189,7 @@ func runWarm() error {
 		return fmt.Errorf("could not apply process hardening: %w", err)
 	}
 	workspaceDir := getEnv("WORKSPACE_DIR", defaultWorkspace)
+	imageDigest := getEnv("GUEST_IMAGE_DIGEST", "")
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		return fmt.Errorf("prepare workspace: %w", err)
 	}
@@ -238,6 +249,16 @@ func runWarm() error {
 				continue
 			}
 			claim := frame.Claim
+			if err := checkWarmClaimImage(imageDigest, claim.ImageDigest); err != nil {
+				logEvent("guest_warm_claim_rejected", map[string]any{
+					"poolId":           poolID,
+					"sessionId":        claim.SessionID,
+					"ownImageDigest":   imageDigest,
+					"claimImageDigest": claim.ImageDigest,
+				})
+				_ = client.SendError(ctx, "", "image_mismatch", err.Error())
+				return err
+			}
 			logEvent("guest_warm_claimed", map[string]any{"poolId": poolID, "sessionId": claim.SessionID})
 			client.Close()
 			return runSession(sessionConfig{
@@ -249,7 +270,7 @@ func runWarm() error {
 				LeaseSeconds:      claim.LeaseSeconds,
 				ExecutionMode:     claim.ExecutionMode,
 				RuntimeClass:      claim.RuntimeClass,
-				ImageDigest:       claim.ImageDigest,
+				ImageDigest:       imageDigest,
 				DevKey:            devKey,
 				DevKeyID:          devKeyID,
 				ProxyURL:          claim.ProxyURL,

@@ -42,6 +42,8 @@ export interface WarmPodSpec {
   proxyToken: string;
   image: string;
   imageDigest: string;
+  /** Hash of the boot identity; a claim requires an exact match. */
+  identity: string;
   runtimeClass: string;
   executionMode: "dev" | "kata";
   workspaceDir: string;
@@ -54,6 +56,9 @@ export interface WarmPodInfo {
   poolId: string;
   createdAt: number;
   phase: string;
+  /** Empty on pods created before identity annotations existed. */
+  identity: string;
+  imageDigest: string;
   nodeName?: string;
 }
 
