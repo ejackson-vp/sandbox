@@ -12,6 +12,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 kubectl --context "${CONTEXT}" apply -k "${ROOT}/deploy/kubernetes"
 
+# The shipped Service is ClusterIP: nothing outside the cluster should reach the
+# API over plaintext. kind's extraPortMapping (host :8080 -> node :30080) is a
+# local convenience, so opt back into a NodePort here — and only here. Removing
+# this patch is what makes `kind` match production exposure.
+kubectl --context "${CONTEXT}" -n sandbox-system patch svc api --type merge -p \
+  '{"spec":{"type":"NodePort","ports":[{"name":"http","port":3000,"targetPort":3000,"nodePort":30080}]}}'
+
 if kubectl --context "${CONTEXT}" get crd ciliumnetworkpolicies.cilium.io >/dev/null 2>&1; then
   echo "==> Cilium detected: applying entity-based apiserver egress policy"
   kubectl --context "${CONTEXT}" apply -f "${ROOT}/deploy/kubernetes/cilium/controller-apiserver.yaml"

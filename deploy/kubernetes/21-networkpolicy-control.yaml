@@ -13,8 +13,10 @@ spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
 ---
-# Public API: reachable via NodePort. Sandbox pods cannot reach it because
-# their egress policy has no rule for it.
+# Public API: reachable from the ingress proxy (and any in-cluster caller) on
+# 3000. The ingress rule below deliberately has no `from:` — the port is the
+# boundary — but sandbox pods still cannot reach it because their egress policy
+# has no rule for this namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

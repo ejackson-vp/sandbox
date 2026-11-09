@@ -5,13 +5,16 @@ metadata:
   namespace: sandbox-system
   labels: {app: api}
 spec:
-  type: NodePort
+  # ClusterIP only. External access is the Tailscale Ingress, which terminates
+  # TLS on a *.ts.net certificate; local development uses a port-forward (or the
+  # kind patch in deploy/kind/apply.sh). A NodePort here would publish an
+  # unauthenticated, plaintext API on every node's LAN address for no benefit.
+  type: ClusterIP
   selector: {app: api}
   ports:
     - name: http
       port: 3000
       targetPort: 3000
-      nodePort: 30080
 ---
 apiVersion: apps/v1
 kind: Deployment
