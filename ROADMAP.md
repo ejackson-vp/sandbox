@@ -9,29 +9,26 @@ file-level backlog is in issues; this page keeps the order. The gap analysis is
 The issue tracker is the detailed, file-level backlog. This list keeps the order
 of risk.
 
-1. **Bind warm-pool claims to the image identity.** A warm pod from an older
-   image can be claimed and attest the new digest: `pick()` does not check the
-   image and the guest trusts the claim. (#49)
-2. **Make payment-ledger backups real.** F-03 (merged) made migrations
+1. **Make payment-ledger backups real.** F-03 (merged) made migrations
    additive, so payment records survive schema changes; the remaining gap is
    automated backup/restore and point-in-time recovery. (#18)
-3. **Fence recovery.** A restarted controller clears the operation gate without
+2. **Fence recovery.** A restarted controller clears the operation gate without
    proving the old guest operation stopped, and intent claims use a stale
    timeout without a fencing token. Both can hand a session to a second worker.
    (#19, #20)
-4. **Close the relay restart window.** A create that lands during a relay
+3. **Close the relay restart window.** A create that lands during a relay
    replacement can lose its registration (#17). Re-register before the guest's
    dial deadline, or drain creates while the relay is not ready.
-5. **Push readiness instead of polling.** 0.1.16 moved client p50 665 → 395 ms
+4. **Push readiness instead of polling.** 0.1.16 moved client p50 665 → 395 ms
    and server p50 179 → 127 ms. The remaining ~268 ms is payment/create
    (~175 ms) plus polling and network; p95 is 708 / 286 ms. A pushed `READY`
    event or long-poll removes the tick; folding the post-create `getSession`
    into the completion response is the smaller first cut. (#26, #27)
-6. **Move the store behind an adapter tested against a second backend.**
+5. **Move the store behind an adapter tested against a second backend.**
    SQLite is the single writer and therefore the HA ceiling. Postgres or
    DynamoDB with conditional writes, preserving the unique payment key and
    guarded transitions. (#25)
-7. **Relay state out of process.** One in-memory relay pod loses pending
+6. **Relay state out of process.** One in-memory relay pod loses pending
    ciphertext on restart. Redis or NATS with per-session queues and TTLs,
    ciphertext only. (#24)
 
