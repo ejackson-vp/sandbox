@@ -30,9 +30,9 @@ resources:
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: 0.1.2
-  # 0.1.2 changes the control image only (API credential separation and HTTP
-  # receipt timeouts). The guest binary is unchanged, so it stays on 0.1.0.
+    newTag: 0.1.6
+  # 0.1.6 is the first release with a green image scan (npm removed from the
+  # runtime, Go 1.27.3 + x/crypto 0.58.0 in the guest).
 
 patches:
   - target:
@@ -42,13 +42,13 @@ patches:
     patch: |-
       - op: replace
         path: /data/GUEST_IMAGE
-        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.0
-      # Real digest from the v0.1.0 release. The controller only *enforces* it
-      # when ALLOW_INSECURE_DEV=false, but pinning it means a moved tag cannot
-      # change what runs inside the sandbox.
+        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.6
+      # Index digest from the v0.1.6 release. The controller pulls
+      # `repo@sha256:…` whenever a digest is set (dev mode or not), so a moved
+      # tag cannot change what runs inside the sandbox.
       - op: replace
         path: /data/GUEST_IMAGE_DIGEST
-        value: sha256:c69461c003e9f484b4803d517529d9544b2385584a57fa082ee01b3a0e14fdca
+        value: sha256:bd69f2b14f001c6b03d1a31be31a1b70c8a2a042a6036aabfcdcba5f60975b8a
       - op: replace
         path: /data/PUBLIC_BASE_URL
         value: https://sandbox.example.ts.net
