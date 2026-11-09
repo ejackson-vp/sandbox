@@ -15,7 +15,7 @@ concrete next step.
 | 5 | **Settlement recovery is mock-only** | only the mock facilitator exposes a settlement lookup | add on-chain/testnet reconciliation (nonce used ⇒ settled) or facilitator webhooks; until then the API fails closed with `409 reconciliation_pending` |
 | 6 | **No refunds (real modes)** | a settled payment whose provisioning fails is not returned | mock mode now auto-refunds terminal-before-READY sessions; real modes record `REFUND_PENDING` and need an on-chain/facilitator refund worker or an explicit credit policy. See [payment-ledger.md](payment-ledger.md) |
 | 7 | **Image not pinned by digest** | a compromised controller could run another image | config refuses a non-`sha256` digest when `ALLOW_INSECURE_DEV=false`; add Kyverno or sigstore admission control for a second layer |
-| 8 | **Secrets in the repo (dev)** | dev attestation key, admin/capability/proxy secrets | external secret manager; remove the dev key entirely in production. The API now refuses to start if `CAPABILITY_SECRET` is missing or equal to the admin token |
+| 8 | **Dev attestation key is public by design** | anyone can forge dev evidence, so it is only safe while `ALLOW_INSECURE_DEV=true` | hardware attestation. The other credentials are no longer in the public repo: local runs generate them, and the homelab injects its own from SOPS |
 | 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; local-path has no encryption | use an encrypted StorageClass / CSI encryption, document the trust boundary, and expire PVCs aggressively |
 | 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |
 | 11 | **Suspend/resume pricing undefined** | a resume starts a fresh lease in the mock model | bill active time + storage, or charge per resume; decide before charging real money |
@@ -24,6 +24,10 @@ concrete next step.
 
 ## 2. Security hardening backlog
 
+- **The app repo ships no credentials.** Local runs generate a git-ignored
+  Secret (`scripts/dev-secrets.sh`); the homelab applies its own from the
+  private repo, SOPS-encrypted. The one committed key is the dev attestation
+  seed, which is published by design and labelled `insecureDevOnly` everywhere.
 - **Credential separation** is enforced at startup: `CAPABILITY_SECRET` must be
   present and must differ from `CONTROLLER_ADMIN_TOKEN`, and an empty admin token
   is a startup error rather than a 401 on the first request. The capability key
