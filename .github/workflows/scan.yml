@@ -36,6 +36,7 @@ jobs:
         with:
           image-ref: ghcr.io/${{ github.repository }}-${{ matrix.name }}:${{ inputs.tag }}
           format: table
+          scanners: vuln,secret
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "0"

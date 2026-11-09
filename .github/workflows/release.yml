@@ -103,6 +103,7 @@ jobs:
           image-ref: ghcr.io/${{ github.repository }}-${{ matrix.name }}:${{ steps.ver.outputs.tag }}
           format: sarif
           output: trivy-${{ matrix.name }}.sarif
+          scanners: vuln
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
