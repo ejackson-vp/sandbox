@@ -300,7 +300,7 @@ export class WarmPool {
         relayUrl: `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(poolId)}`,
         proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
         proxyToken: proxyTokenFor(cfg, poolId),
-        image: cfg.guestImage,
+        image: cfg.guestImageRef,
         imageDigest: cfg.guestImageDigest,
         runtimeClass: cfg.runtimeClass,
         executionMode: cfg.executionMode,

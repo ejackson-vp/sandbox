@@ -184,7 +184,7 @@ export class Provisioning {
       relayPort: relayAddr.port,
       proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
       proxyToken: proxyTokenFor(this.ctx.cfg, session.id),
-      image: this.ctx.cfg.guestImage,
+      image: this.ctx.cfg.guestImageRef,
       imageDigest: this.ctx.cfg.guestImageDigest,
       runtimeClass: this.ctx.cfg.runtimeClass,
       executionMode: this.ctx.cfg.executionMode,

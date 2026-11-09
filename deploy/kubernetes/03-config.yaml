@@ -21,6 +21,9 @@ data:
   CREATE_RATE_REFILL: "1"
   CREATE_IP_RATE_BURST: "120"
   CREATE_IP_RATE_REFILL: "10"
+  # 0 keeps req.ip as the socket peer. Set to 1 only when exactly one reverse
+  # proxy is the sole path to the API (see docs/runbook 04 in the homelab).
+  TRUST_PROXY_HOPS: "0"
 
   # --- controller ---------------------------------------------------------
   CONTROLLER_URL: "http://controller.sandbox-system.svc.cluster.local:3001"

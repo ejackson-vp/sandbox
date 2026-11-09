@@ -48,6 +48,11 @@ export interface ApiConfig {
   httpHeadersTimeoutMs: number;
   /** Time allowed to receive a complete request (headers + body). */
   httpRequestTimeoutMs: number;
+  /**
+   * Trusted proxy hops for `req.ip`. 0 disables it (direct clients only). Set to
+   * 1 only when the API is reachable exclusively through one reverse proxy.
+   */
+  trustProxyHops: number;
   intentStaleMs: number;
   createRateBurst: number;
   createRateRefill: number;
@@ -149,6 +154,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     // limiting handler time, so a long-poll exec is unaffected.
     httpHeadersTimeoutMs: int(env.HTTP_HEADERS_TIMEOUT_MS, 15_000, 1_000, 120_000),
     httpRequestTimeoutMs: int(env.HTTP_REQUEST_TIMEOUT_MS, 60_000, 5_000, 600_000),
+    trustProxyHops: int(env.TRUST_PROXY_HOPS, 0, 0, 8),
     intentStaleMs: int(env.PAYMENT_INTENT_STALE_MS, 30_000, 1000, 600_000),
     createRateBurst: int(env.CREATE_RATE_BURST, 30, 1, 100_000),
     createRateRefill: int(env.CREATE_RATE_REFILL, 1, 1, 100_000),

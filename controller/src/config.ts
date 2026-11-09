@@ -39,6 +39,8 @@ export interface ControllerConfig {
   controlNamespace: string;
   guestImage: string;
   guestImageDigest: string;
+  /** Image reference actually used in the pod spec: `repo@sha256:…` when pinned. */
+  guestImageRef: string;
   runtimeClass: string;
   executionMode: "dev" | "kata";
   allowInsecureDev: boolean;
@@ -111,12 +113,26 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     throw new Error("ADMIN_TOKEN must be set (>=16 chars) for controller roles");
   }
 
+  const PINNED_DIGEST = /^sha256:[0-9a-f]{64}$/;
+  const guestImage = env.GUEST_IMAGE ?? "x402-sandbox/guest:dev";
   const guestImageDigest = env.GUEST_IMAGE_DIGEST ?? "sha256:unpinned-dev-image";
-  if (!allowInsecureDev && !/^sha256:[0-9a-f]{64}$/.test(guestImageDigest)) {
+  const devPlaceholder = /^sha256:(dev-)?unpinned/.test(guestImageDigest);
+  if (!devPlaceholder && !PINNED_DIGEST.test(guestImageDigest)) {
+    throw new Error("GUEST_IMAGE_DIGEST must be sha256:<64 hex> or the dev placeholder");
+  }
+  if (!allowInsecureDev && !PINNED_DIGEST.test(guestImageDigest)) {
     throw new Error(
       "GUEST_IMAGE_DIGEST must be a pinned sha256 digest when ALLOW_INSECURE_DEV is false",
     );
   }
+
+  // Pull by digest whenever one is configured, dev mode or not. ALLOW_INSECURE_DEV
+  // decides whether a digest is *required*; it must not decide whether a
+  // configured digest is honoured. Honouring it is what stops a moved tag — or a
+  // compromised controller — from changing the image running inside the VM.
+  const guestImageRef = PINNED_DIGEST.test(guestImageDigest)
+    ? `${guestImage.replace(/:[^/:]+$/, "")}@${guestImageDigest}`
+    : guestImage;
 
   const tiers = loadTiers(env);
   const warmPoolSize = int(env.WARM_POOL_SIZE, 0, 0, 50);
@@ -137,8 +153,9 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     dbPath: env.DB_PATH ?? "/data/controller.db",
     sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",
     controlNamespace: env.CONTROL_NAMESPACE ?? "sandbox-system",
-    guestImage: env.GUEST_IMAGE ?? "x402-sandbox/guest:dev",
+    guestImage,
     guestImageDigest,
+    guestImageRef,
     runtimeClass,
     executionMode,
     allowInsecureDev,
