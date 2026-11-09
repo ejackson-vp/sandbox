@@ -53,8 +53,11 @@ data:
   WARM_CLAIM_TIMEOUT_MS: "8000"
   MAX_LEASE_SECONDS: "1800"
   ALLOW_CUSTOM_DURATIONS: "true"
-  MAX_CPU_MILLIS: "4000"
-  MAX_MEMORY_MIB: "8192"
+  # Custom requests are capped at the largest published tier ("long": 2 CPU /
+  # 4 GiB). The previous 4 CPU / 8 GiB let one customer take most of a node with
+  # 7.5 CPU and ~13 GiB allocatable, which is an eviction, not a fair share.
+  MAX_CPU_MILLIS: "2000"
+  MAX_MEMORY_MIB: "4096"
   MAX_DISK_MIB: "8192"
   MAX_COMMAND_SECONDS: "300"
   MAX_OUTPUT_BYTES: "262144"
