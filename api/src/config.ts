@@ -53,7 +53,7 @@ export interface ApiConfig {
   platformLimits: PlatformLimits;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
+function parsePayment(env: NodeJS.ProcessEnv): Pick<ApiConfig, "paymentMode" | "network" | "payTo" | "facilitatorUrl"> {
   const paymentMode = (env.PAYMENT_MODE ?? "mock") as PaymentMode;
   if (paymentMode !== "mock" && paymentMode !== "testnet") {
     throw new Error(`PAYMENT_MODE must be "mock" or "testnet", got ${paymentMode}`);
@@ -89,7 +89,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   if (paymentMode === "testnet" && payTo === "0x0000000000000000000000000000000000000402") {
     throw new Error("PAY_TO must be a real receiving address in testnet mode");
   }
+  return { paymentMode, network: requestedNetwork, payTo, facilitatorUrl };
+}
 
+function parseCredentials(env: NodeJS.ProcessEnv): Pick<ApiConfig, "controllerAdminToken" | "capabilitySecret"> {
   const controllerAdminToken = env.CONTROLLER_ADMIN_TOKEN ?? env.ADMIN_TOKEN ?? "";
   if (controllerAdminToken.length < 16) {
     throw new Error("CONTROLLER_ADMIN_TOKEN (or ADMIN_TOKEN) must be at least 16 characters");
@@ -106,11 +109,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   if (capabilitySecret === controllerAdminToken) {
     throw new Error("CAPABILITY_SECRET must differ from CONTROLLER_ADMIN_TOKEN");
   }
+  return { controllerAdminToken, capabilitySecret };
+}
 
-  const port = int(env.PORT, 3000, 1, 65535);
-
-  // Absolute http(s) URL, no trailing slash: the 402 challenge appends
-  // `/v1/sessions` to it, and a stray slash produces a URL with a double slash.
+function parsePublicBaseUrl(env: NodeJS.ProcessEnv, port: number): string {
   const rawPublicBaseUrl = env.PUBLIC_BASE_URL ?? `http://localhost:${port}`;
   let publicBaseUrl: string;
   try {
@@ -122,8 +124,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   } catch {
     throw new Error(`PUBLIC_BASE_URL must be an absolute http(s) URL, got ${rawPublicBaseUrl}`);
   }
+  return publicBaseUrl;
+}
 
-  const controllerUrl = env.CONTROLLER_URL ?? "http://127.0.0.1:3001";
+function parseControllerTls(env: NodeJS.ProcessEnv, controllerUrl: string): ApiConfig["controllerTls"] {
   const tlsCertFile = env.CONTROLLER_TLS_CERT_FILE;
   const tlsKeyFile = env.CONTROLLER_TLS_KEY_FILE;
   const tlsCaFile = env.CONTROLLER_TLS_CA_FILE;
@@ -140,17 +144,29 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     tlsSet === 3
       ? { certFile: tlsCertFile!, keyFile: tlsKeyFile!, caFile: tlsCaFile! }
       : undefined;
+  return controllerTls;
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
+  const payment = parsePayment(env);
+
+  const credentials = parseCredentials(env);
+
+  const port = int(env.PORT, 3000, 1, 65535);
+
+  // Absolute http(s) URL, no trailing slash: the 402 challenge appends
+  // `/v1/sessions` to it, and a stray slash produces a URL with a double slash.
+  const publicBaseUrl = parsePublicBaseUrl(env, port);
+
+  const controllerUrl = env.CONTROLLER_URL ?? "http://127.0.0.1:3001";
+  const controllerTls = parseControllerTls(env, controllerUrl);
 
   return {
     port,
-    paymentMode,
-    network: requestedNetwork,
-    payTo,
-    facilitatorUrl,
+    ...payment,
+    ...credentials,
     controllerUrl,
     ...(controllerTls ? { controllerTls } : {}),
-    controllerAdminToken,
-    capabilitySecret,
     capabilityTtlSeconds: int(env.CAPABILITY_GRACE_SECONDS, 900, 60, 7200),
     maxBodyBytes: int(env.MAX_BODY_BYTES, 32 * 1024 * 1024, 1024, 64 * 1024 * 1024),
     publicBaseUrl,
