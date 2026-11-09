@@ -121,6 +121,341 @@ async function extractTar(data: Buffer, destination: string): Promise<void> {
   execFileSync("tar", ["-xzf", tarPath, "-C", destination]);
 }
 
+type CommandContext = {
+  values: Record<string, string | boolean | string[] | undefined>;
+  positionals: string[];
+  apiUrl: string;
+  json: boolean;
+  quiet: boolean;
+  paymentMode: "mock" | "testnet";
+  client: SandboxClient;
+  attach: (id: string) => SessionHandle;
+};
+
+const commands: Record<string, (ctx: CommandContext) => Promise<number>> = {
+  "create": async (ctx) => {
+    const { values, json, client, paymentMode } = ctx;
+      const durationSeconds = parseDuration(values.duration as string | undefined);
+      const tier = inferTier(values.tier as string | undefined, durationSeconds);
+      const handle = await client.createSession({
+        ...(tier ? { tier } : {}),
+        ...(durationSeconds === undefined ? {} : { durationSeconds }),
+        ...(values.cpu ? { cpuMillis: parseCpu(values.cpu as string) } : {}),
+        ...(values.memory ? { memoryMiB: parseMemory(values.memory as string) } : {}),
+        ...(values.disk ? { diskMiB: parseDisk(values.disk as string) } : {}),
+        ...(values["baseline-cpu"]
+          ? { baselineCpuMillis: parseCpu(values["baseline-cpu"] as string) }
+          : {}),
+        ...(values["baseline-memory"]
+          ? { baselineMemoryMiB: parseMemory(values["baseline-memory"] as string) }
+          : {}),
+        ...(values.idle
+          ? {
+              idlePolicy: {
+                maxIdleSeconds: parseDuration(values.idle as string) ?? 300,
+                suspendedDurationSeconds: 28800,
+                autoResume: false,
+              },
+            }
+          : {}),
+        ...(values["max-lifetime"]
+          ? { maxLifetimeSeconds: parseDuration(values["max-lifetime"] as string) }
+          : {}),
+      });
+      out(`Session: ${handle.sessionId}`, json);
+      out(`State: ${handle.status?.state ?? "PAID"}`, json);
+      if (handle.status) {
+        out(
+          `Tier: ${handle.status.tier} (${handle.status.durationSeconds}s, ${handle.status.limits.cpuMillis}m CPU, ` +
+            `${handle.status.limits.memoryMiB}Mi RAM, ${handle.status.limits.diskMiB}Mi disk)`,
+          json,
+        );
+      }
+      out(`Price: ${handle.status?.payment.priceUsd ?? "?"} (${paymentMode} payment)`, json);
+
+      if (!values["no-wait"]) {
+        const status = await client.waitForReady(handle);
+        out(`Evidence: ${status.attestation?.evidenceType ?? "none"} (session key binding, no hardware root of trust)`, json);
+        out(`State: ${status.state}`, json);
+        out(`Expires: ${status.leaseExpiresAt ?? "?"} (${status.remainingSeconds}s remaining)`, json);
+      }
+      if (json) process.stdout.write(JSON.stringify({ sessionId: handle.sessionId, status: handle.status }, null, 2) + "\n");
+      return 0;
+  },
+  "status": async (ctx) => {
+    const { positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const status = await client.status(attach(id));
+      if (json) {
+        process.stdout.write(JSON.stringify(status, null, 2) + "\n");
+      } else {
+        process.stdout.write(`Session: ${status.sessionId}\n`);
+        process.stdout.write(`State: ${status.state}\n`);
+        process.stdout.write(`Tier: ${status.tier} (${status.durationSeconds}s)\n`);
+        process.stdout.write(
+          `Limits: ${status.limits.cpuMillis}m CPU, ${status.limits.memoryMiB}Mi RAM, ${status.limits.diskMiB}Mi disk\n`,
+        );
+        process.stdout.write(`Created: ${status.createdAt}\n`);
+        if (status.readyAt) process.stdout.write(`Ready: ${status.readyAt}\n`);
+        if (status.leaseExpiresAt) {
+          process.stdout.write(`Expires: ${status.leaseExpiresAt} (${status.remainingSeconds}s remaining)\n`);
+        }
+        if (status.baseline) {
+          process.stdout.write(`Baseline: ${status.baseline.cpuMillis}m CPU, ${status.baseline.memoryMiB}Mi RAM\n`);
+        }
+        if (status.idlePolicy) {
+          process.stdout.write(`Idle policy: maxIdle ${status.idlePolicy.maxIdleSeconds}s, autoResume ${status.idlePolicy.autoResume}\n`);
+        }
+        if (status.suspendedAt) process.stdout.write(`Suspended: ${status.suspendedAt}\n`);
+        if (status.resumeCount) process.stdout.write(`Resumes: ${status.resumeCount}\n`);
+        if (status.failure) process.stdout.write(`Failure: ${status.failure.code}: ${status.failure.message}\n`);
+        process.stdout.write(`Busy: ${status.busy}\n`);
+      }
+      return 0;
+  },
+  "exec": async (ctx) => {
+    const { values, positionals, json, quiet, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const commandArgs = positionals.slice(2);
+      if (commandArgs.length === 0) {
+        process.stderr.write("missing command; use: sandbox exec <id> -- <command> [args...]\n");
+        return 2;
+      }
+      const handle = attach(id);
+      const envFromArgs = parseEnv(values.env as string[] | undefined);
+      const result = await client.exec(handle, {
+        command: commandArgs,
+        ...(envFromArgs ? { env: envFromArgs } : {}),
+        ...(values.timeout ? { timeoutMs: parseDuration(values.timeout as string)! * 1000 } : {}),
+      });
+      if (!result.ok) {
+        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
+        return 1;
+      }
+      if (json) {
+        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      } else {
+        if (result.stdout) process.stdout.write(result.stdout.endsWith("\n") ? result.stdout : result.stdout + "\n");
+        if (result.stderr) process.stderr.write(result.stderr.endsWith("\n") ? result.stderr : result.stderr + "\n");
+        err(
+          `exit ${result.exitCode} (${result.durationMs}ms${result.timedOut ? ", timed out" : ""}${result.cancelled ? ", cancelled" : ""})`,
+          quiet,
+        );
+      }
+      return result.timedOut ? 124 : Math.max(0, Math.min(125, result.exitCode));
+  },
+  "upload": async (ctx) => {
+    const { positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const local = requireArg(positionals[2], "local path");
+      const remote = requireArg(positionals[3], "remote path");
+      const info = await stat(local);
+      const handle = attach(id);
+      let data: Buffer;
+      let archive = false;
+      if (info.isDirectory()) {
+        data = await tarDirectory(local);
+        archive = true;
+      } else {
+        data = await readFile(local);
+      }
+      const result = await client.putFile(handle, { path: remote, data, archive });
+      if (!result.ok) {
+        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
+        return 1;
+      }
+      out(`Uploaded ${result.filesWritten} file(s), ${result.bytesWritten} bytes to ${result.path}`, json);
+      return 0;
+  },
+  "download": async (ctx) => {
+    const { values, positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const remote = requireArg(positionals[2], "remote path");
+      const local = requireArg(positionals[3], "local path");
+      const handle = attach(id);
+      const result = await client.getFile(handle, remote, Boolean(values.archive) || Boolean(values.extract));
+      if (!result.ok) {
+        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
+        return 1;
+      }
+      const data = Buffer.from(result.dataBase64, "base64");
+      if (values.extract) {
+        await extractTar(data, local);
+        out(`Extracted ${data.length} bytes into ${local}`, json);
+      } else {
+        await writeFile(local, data);
+        out(`Downloaded ${data.length} bytes to ${local}`, json);
+      }
+      return 0;
+  },
+  "ls": async (ctx) => {
+    const { values, positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const path = positionals[2] ?? ".";
+      const handle = attach(id);
+      const result = await client.listFiles(handle, path, Boolean(values.recursive));
+      if (!result.ok) {
+        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
+        return 1;
+      }
+      if (json) {
+        process.stdout.write(JSON.stringify(result.entries, null, 2) + "\n");
+      } else {
+        for (const entry of result.entries) {
+          process.stdout.write(`${entry.isDir ? "d" : "-"} ${String(entry.size).padStart(10)}  ${entry.path}\n`);
+        }
+        out(`${result.entries.length} entries, ${result.totalBytes} bytes`, json);
+      }
+      return 0;
+  },
+  "stat": async (ctx) => {
+    const { positionals, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const path = requireArg(positionals[2], "path");
+      const result = await client.statFile(attach(id), path);
+      if (!result.ok) {
+        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
+        return 1;
+      }
+      process.stdout.write(JSON.stringify(result.entry, null, 2) + "\n");
+      return 0;
+  },
+  "suspend": async (ctx) => {
+    const { positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const status = await client.suspend(attach(id));
+      out(`State: ${status.state}`, json);
+      if (json) process.stdout.write(JSON.stringify(status, null, 2) + "\n");
+      return 0;
+  },
+  "resume": async (ctx) => {
+    const { positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const status = await client.resume(attach(id));
+      out(`State: ${status.state}`, json);
+      if (json) process.stdout.write(JSON.stringify(status, null, 2) + "\n");
+      return 0;
+  },
+  "serve": async (ctx) => {
+    const { values, positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const command = positionals.slice(2);
+      if (command.length === 0) {
+        process.stderr.write("error: serve requires -- <command> [args...]\n");
+        return 2;
+      }
+      const name = String(values.name ?? "web");
+      const port = Number(values.port ?? 8080);
+      const info = await client.startService(attach(id), { name, command, port });
+      out(`Service: ${info.name} on 127.0.0.1:${info.port} (pid ${info.pid}, ${info.state})`, json);
+      if (json) process.stdout.write(JSON.stringify(info, null, 2) + "\n");
+      return 0;
+  },
+  "services": async (ctx) => {
+    const { positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const services = await client.listServices(attach(id));
+      if (json) {
+        process.stdout.write(JSON.stringify(services, null, 2) + "\n");
+      } else if (services.length === 0) {
+        out("No services", json);
+      } else {
+        for (const service of services) {
+          process.stdout.write(
+            `${service.name}\t${service.state}\t127.0.0.1:${service.port}\tpid ${service.pid}\n`,
+          );
+        }
+      }
+      return 0;
+  },
+  "stop-service": async (ctx) => {
+    const { positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const name = requireArg(positionals[2], "service name");
+      await client.stopService(attach(id), name);
+      out(`Service ${name}: stopped`, json);
+      return 0;
+  },
+  "http": async (ctx) => {
+    const { values, positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const port = Number(requireArg(positionals[2], "port"));
+      const path = positionals[3] ?? "/";
+      const handle = attach(id);
+      const request = {
+        port,
+        path,
+        method: String(values.method ?? "GET"),
+        ...(values.body !== undefined ? { body: String(values.body) } : {}),
+      };
+      if (values.stream) {
+        const stream = await client.openHttpStream(handle, request);
+        let done = false;
+        while (!done) {
+          const part = await stream.read();
+          if (part.chunk) process.stdout.write(part.chunk);
+          done = part.done;
+        }
+        await stream.close();
+        return 0;
+      }
+      const response = await client.http(handle, request);
+      if (json) {
+        process.stdout.write(
+          JSON.stringify(
+            { status: response.status, headers: response.headers, body: response.body.toString("base64"), truncated: response.truncated },
+            null,
+            2,
+          ) + "\n",
+        );
+      } else {
+        out(`HTTP ${response.status}`, json);
+        process.stdout.write(response.body);
+        if (response.truncated) process.stderr.write("\n[response truncated]\n");
+      }
+      return 0;
+  },
+  "destroy": async (ctx) => {
+    const { positionals, json, client, attach } = ctx;
+      const id = requireArg(positionals[1], "session id");
+      const handle = attach(id);
+      const status = await client.destroy(handle);
+      out(status ? `Sandbox: ${status.state.toLowerCase()}` : "Sandbox: destroyed", json);
+      if (json) process.stdout.write(JSON.stringify({ sessionId: id, state: status?.state ?? "DESTROYED" }, null, 2) + "\n");
+      return 0;
+  },
+  "run": async (ctx) => {
+    const { values, positionals, json, quiet, client } = ctx;
+      const file = requireArg(positionals[1], "file");
+      const durationSeconds = parseDuration(values.duration as string | undefined) ?? 300;
+      const tier = inferTier(values.tier as string | undefined, durationSeconds);
+      return runFile(client, file, {
+        json,
+        quiet,
+        keep: Boolean(values.keep),
+        create: {
+          ...(tier ? { tier } : {}),
+          ...(durationSeconds === undefined ? {} : { durationSeconds }),
+        },
+      });
+  },
+  "agent-demo": async (ctx) => {
+    const { values, positionals, json, quiet, client } = ctx;
+      const file = requireArg(positionals[1], "file");
+      const durationSeconds = parseDuration(values.duration as string | undefined) ?? 300;
+      const tier = inferTier(values.tier as string | undefined, durationSeconds);
+      return runFile(client, file, {
+        json,
+        quiet,
+        keep: Boolean(values.keep),
+        create: {
+          ...(tier ? { tier } : {}),
+          ...(durationSeconds === undefined ? {} : { durationSeconds }),
+        },
+      });
+  },
+};
+
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
@@ -225,318 +560,13 @@ async function main(): Promise<number> {
 
   const attach = (id: string): SessionHandle => client.attach(id);
 
-  switch (command) {
-    case "create": {
-      const durationSeconds = parseDuration(values.duration as string | undefined);
-      const tier = inferTier(values.tier as string | undefined, durationSeconds);
-      const handle = await client.createSession({
-        ...(tier ? { tier } : {}),
-        ...(durationSeconds === undefined ? {} : { durationSeconds }),
-        ...(values.cpu ? { cpuMillis: parseCpu(values.cpu as string) } : {}),
-        ...(values.memory ? { memoryMiB: parseMemory(values.memory as string) } : {}),
-        ...(values.disk ? { diskMiB: parseDisk(values.disk as string) } : {}),
-        ...(values["baseline-cpu"]
-          ? { baselineCpuMillis: parseCpu(values["baseline-cpu"] as string) }
-          : {}),
-        ...(values["baseline-memory"]
-          ? { baselineMemoryMiB: parseMemory(values["baseline-memory"] as string) }
-          : {}),
-        ...(values.idle
-          ? {
-              idlePolicy: {
-                maxIdleSeconds: parseDuration(values.idle as string) ?? 300,
-                suspendedDurationSeconds: 28800,
-                autoResume: false,
-              },
-            }
-          : {}),
-        ...(values["max-lifetime"]
-          ? { maxLifetimeSeconds: parseDuration(values["max-lifetime"] as string) }
-          : {}),
-      });
-      out(`Session: ${handle.sessionId}`, json);
-      out(`State: ${handle.status?.state ?? "PAID"}`, json);
-      if (handle.status) {
-        out(
-          `Tier: ${handle.status.tier} (${handle.status.durationSeconds}s, ${handle.status.limits.cpuMillis}m CPU, ` +
-            `${handle.status.limits.memoryMiB}Mi RAM, ${handle.status.limits.diskMiB}Mi disk)`,
-          json,
-        );
-      }
-      out(`Price: ${handle.status?.payment.priceUsd ?? "?"} (${paymentMode} payment)`, json);
-
-      if (!values["no-wait"]) {
-        const status = await client.waitForReady(handle);
-        out(`Evidence: ${status.attestation?.evidenceType ?? "none"} (session key binding, no hardware root of trust)`, json);
-        out(`State: ${status.state}`, json);
-        out(`Expires: ${status.leaseExpiresAt ?? "?"} (${status.remainingSeconds}s remaining)`, json);
-      }
-      if (json) process.stdout.write(JSON.stringify({ sessionId: handle.sessionId, status: handle.status }, null, 2) + "\n");
-      return 0;
-    }
-
-    case "status": {
-      const id = requireArg(positionals[1], "session id");
-      const status = await client.status(attach(id));
-      if (json) {
-        process.stdout.write(JSON.stringify(status, null, 2) + "\n");
-      } else {
-        process.stdout.write(`Session: ${status.sessionId}\n`);
-        process.stdout.write(`State: ${status.state}\n`);
-        process.stdout.write(`Tier: ${status.tier} (${status.durationSeconds}s)\n`);
-        process.stdout.write(
-          `Limits: ${status.limits.cpuMillis}m CPU, ${status.limits.memoryMiB}Mi RAM, ${status.limits.diskMiB}Mi disk\n`,
-        );
-        process.stdout.write(`Created: ${status.createdAt}\n`);
-        if (status.readyAt) process.stdout.write(`Ready: ${status.readyAt}\n`);
-        if (status.leaseExpiresAt) {
-          process.stdout.write(`Expires: ${status.leaseExpiresAt} (${status.remainingSeconds}s remaining)\n`);
-        }
-        if (status.baseline) {
-          process.stdout.write(`Baseline: ${status.baseline.cpuMillis}m CPU, ${status.baseline.memoryMiB}Mi RAM\n`);
-        }
-        if (status.idlePolicy) {
-          process.stdout.write(`Idle policy: maxIdle ${status.idlePolicy.maxIdleSeconds}s, autoResume ${status.idlePolicy.autoResume}\n`);
-        }
-        if (status.suspendedAt) process.stdout.write(`Suspended: ${status.suspendedAt}\n`);
-        if (status.resumeCount) process.stdout.write(`Resumes: ${status.resumeCount}\n`);
-        if (status.failure) process.stdout.write(`Failure: ${status.failure.code}: ${status.failure.message}\n`);
-        process.stdout.write(`Busy: ${status.busy}\n`);
-      }
-      return 0;
-    }
-
-    case "exec": {
-      const id = requireArg(positionals[1], "session id");
-      const commandArgs = positionals.slice(2);
-      if (commandArgs.length === 0) {
-        process.stderr.write("missing command; use: sandbox exec <id> -- <command> [args...]\n");
-        return 2;
-      }
-      const handle = attach(id);
-      const envFromArgs = parseEnv(values.env as string[] | undefined);
-      const result = await client.exec(handle, {
-        command: commandArgs,
-        ...(envFromArgs ? { env: envFromArgs } : {}),
-        ...(values.timeout ? { timeoutMs: parseDuration(values.timeout as string)! * 1000 } : {}),
-      });
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
-      if (json) {
-        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-      } else {
-        if (result.stdout) process.stdout.write(result.stdout.endsWith("\n") ? result.stdout : result.stdout + "\n");
-        if (result.stderr) process.stderr.write(result.stderr.endsWith("\n") ? result.stderr : result.stderr + "\n");
-        err(
-          `exit ${result.exitCode} (${result.durationMs}ms${result.timedOut ? ", timed out" : ""}${result.cancelled ? ", cancelled" : ""})`,
-          quiet,
-        );
-      }
-      return result.timedOut ? 124 : Math.max(0, Math.min(125, result.exitCode));
-    }
-
-    case "upload": {
-      const id = requireArg(positionals[1], "session id");
-      const local = requireArg(positionals[2], "local path");
-      const remote = requireArg(positionals[3], "remote path");
-      const info = await stat(local);
-      const handle = attach(id);
-      let data: Buffer;
-      let archive = false;
-      if (info.isDirectory()) {
-        data = await tarDirectory(local);
-        archive = true;
-      } else {
-        data = await readFile(local);
-      }
-      const result = await client.putFile(handle, { path: remote, data, archive });
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
-      out(`Uploaded ${result.filesWritten} file(s), ${result.bytesWritten} bytes to ${result.path}`, json);
-      return 0;
-    }
-
-    case "download": {
-      const id = requireArg(positionals[1], "session id");
-      const remote = requireArg(positionals[2], "remote path");
-      const local = requireArg(positionals[3], "local path");
-      const handle = attach(id);
-      const result = await client.getFile(handle, remote, Boolean(values.archive) || Boolean(values.extract));
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
-      const data = Buffer.from(result.dataBase64, "base64");
-      if (values.extract) {
-        await extractTar(data, local);
-        out(`Extracted ${data.length} bytes into ${local}`, json);
-      } else {
-        await writeFile(local, data);
-        out(`Downloaded ${data.length} bytes to ${local}`, json);
-      }
-      return 0;
-    }
-
-    case "ls": {
-      const id = requireArg(positionals[1], "session id");
-      const path = positionals[2] ?? ".";
-      const handle = attach(id);
-      const result = await client.listFiles(handle, path, Boolean(values.recursive));
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
-      if (json) {
-        process.stdout.write(JSON.stringify(result.entries, null, 2) + "\n");
-      } else {
-        for (const entry of result.entries) {
-          process.stdout.write(`${entry.isDir ? "d" : "-"} ${String(entry.size).padStart(10)}  ${entry.path}\n`);
-        }
-        out(`${result.entries.length} entries, ${result.totalBytes} bytes`, json);
-      }
-      return 0;
-    }
-
-    case "stat": {
-      const id = requireArg(positionals[1], "session id");
-      const path = requireArg(positionals[2], "path");
-      const result = await client.statFile(attach(id), path);
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
-      process.stdout.write(JSON.stringify(result.entry, null, 2) + "\n");
-      return 0;
-    }
-
-    case "suspend": {
-      const id = requireArg(positionals[1], "session id");
-      const status = await client.suspend(attach(id));
-      out(`State: ${status.state}`, json);
-      if (json) process.stdout.write(JSON.stringify(status, null, 2) + "\n");
-      return 0;
-    }
-
-    case "resume": {
-      const id = requireArg(positionals[1], "session id");
-      const status = await client.resume(attach(id));
-      out(`State: ${status.state}`, json);
-      if (json) process.stdout.write(JSON.stringify(status, null, 2) + "\n");
-      return 0;
-    }
-
-    case "serve": {
-      const id = requireArg(positionals[1], "session id");
-      const command = positionals.slice(2);
-      if (command.length === 0) {
-        process.stderr.write("error: serve requires -- <command> [args...]\n");
-        return 2;
-      }
-      const name = String(values.name ?? "web");
-      const port = Number(values.port ?? 8080);
-      const info = await client.startService(attach(id), { name, command, port });
-      out(`Service: ${info.name} on 127.0.0.1:${info.port} (pid ${info.pid}, ${info.state})`, json);
-      if (json) process.stdout.write(JSON.stringify(info, null, 2) + "\n");
-      return 0;
-    }
-
-    case "services": {
-      const id = requireArg(positionals[1], "session id");
-      const services = await client.listServices(attach(id));
-      if (json) {
-        process.stdout.write(JSON.stringify(services, null, 2) + "\n");
-      } else if (services.length === 0) {
-        out("No services", json);
-      } else {
-        for (const service of services) {
-          process.stdout.write(
-            `${service.name}\t${service.state}\t127.0.0.1:${service.port}\tpid ${service.pid}\n`,
-          );
-        }
-      }
-      return 0;
-    }
-
-    case "stop-service": {
-      const id = requireArg(positionals[1], "session id");
-      const name = requireArg(positionals[2], "service name");
-      await client.stopService(attach(id), name);
-      out(`Service ${name}: stopped`, json);
-      return 0;
-    }
-
-    case "http": {
-      const id = requireArg(positionals[1], "session id");
-      const port = Number(requireArg(positionals[2], "port"));
-      const path = positionals[3] ?? "/";
-      const handle = attach(id);
-      const request = {
-        port,
-        path,
-        method: String(values.method ?? "GET"),
-        ...(values.body !== undefined ? { body: String(values.body) } : {}),
-      };
-      if (values.stream) {
-        const stream = await client.openHttpStream(handle, request);
-        let done = false;
-        while (!done) {
-          const part = await stream.read();
-          if (part.chunk) process.stdout.write(part.chunk);
-          done = part.done;
-        }
-        await stream.close();
-        return 0;
-      }
-      const response = await client.http(handle, request);
-      if (json) {
-        process.stdout.write(
-          JSON.stringify(
-            { status: response.status, headers: response.headers, body: response.body.toString("base64"), truncated: response.truncated },
-            null,
-            2,
-          ) + "\n",
-        );
-      } else {
-        out(`HTTP ${response.status}`, json);
-        process.stdout.write(response.body);
-        if (response.truncated) process.stderr.write("\n[response truncated]\n");
-      }
-      return 0;
-    }
-
-    case "destroy": {
-      const id = requireArg(positionals[1], "session id");
-      const handle = attach(id);
-      const status = await client.destroy(handle);
-      out(status ? `Sandbox: ${status.state.toLowerCase()}` : "Sandbox: destroyed", json);
-      if (json) process.stdout.write(JSON.stringify({ sessionId: id, state: status?.state ?? "DESTROYED" }, null, 2) + "\n");
-      return 0;
-    }
-
-    case "run":
-    case "agent-demo": {
-      const file = requireArg(positionals[1], "file");
-      const durationSeconds = parseDuration(values.duration as string | undefined) ?? 300;
-      const tier = inferTier(values.tier as string | undefined, durationSeconds);
-      return runFile(client, file, {
-        json,
-        quiet,
-        keep: Boolean(values.keep),
-        create: {
-          ...(tier ? { tier } : {}),
-          ...(durationSeconds === undefined ? {} : { durationSeconds }),
-        },
-      });
-    }
-
-    default:
-      process.stderr.write(`unknown command: ${command}\n\n${HELP}`);
-      return 2;
+  const ctx: CommandContext = { values, positionals, apiUrl, json, quiet, paymentMode, client, attach };
+  const handler = commands[command];
+  if (!handler) {
+    process.stderr.write(`unknown command: ${command}\n\n${HELP}`);
+    return 2;
   }
+  return handler(ctx);
 }
 
 function parseEnv(values: string[] | undefined): Record<string, string> | undefined {
