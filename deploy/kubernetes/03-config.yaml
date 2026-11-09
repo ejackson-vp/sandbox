@@ -27,6 +27,17 @@ data:
 
   # --- controller ---------------------------------------------------------
   CONTROLLER_URL: "http://controller.sandbox-system.svc.cluster.local:3001"
+  # Optional mTLS listener for the API. The plain HTTP port stays for the relay
+  # and kubelet probes. Empty/0 disables TLS (kind); the homelab enables it and
+  # mounts the certificates.
+  CONTROLLER_TLS_PORT: "0"
+  TLS_CERT_FILE: ""
+  TLS_KEY_FILE: ""
+  TLS_CA_FILE: ""
+  # Client side (API -> controller). Set all three together.
+  CONTROLLER_TLS_CERT_FILE: ""
+  CONTROLLER_TLS_KEY_FILE: ""
+  CONTROLLER_TLS_CA_FILE: ""
   RELAY_URL: "http://relay.sandbox-system.svc.cluster.local:8443"
   RELAY_SERVICE_NAME: "relay"
   PROXY_SERVICE_NAME: "egress-proxy"

@@ -2,6 +2,8 @@
  * Internal controller client. The API holds no durable state; the controller
  * owns the single-writer database and the Kubernetes lifecycle.
  */
+import { readFileSync } from "node:fs";
+import { Agent } from "undici";
 import type {
   AttestationEnvelope,
   EntitlementRequest,
@@ -94,21 +96,42 @@ export interface CompleteIntentBody extends EntitlementRequest {
 }
 
 export class ControllerClient {
+  private readonly dispatcher?: Agent;
+  private readonly sendToken: boolean;
+
   constructor(
     private readonly baseUrl: string,
     private readonly adminToken: string,
-  ) {}
+    tls?: { certFile: string; keyFile: string; caFile: string },
+  ) {
+    if (tls) {
+      this.dispatcher = new Agent({
+        connect: {
+          cert: readFileSync(tls.certFile),
+          key: readFileSync(tls.keyFile),
+          ca: readFileSync(tls.caFile),
+        },
+      });
+      // The client certificate is the credential on this path; do not also send
+      // the shared admin token over the wire.
+      this.sendToken = false;
+    } else {
+      this.sendToken = true;
+    }
+  }
 
   private async raw(path: string, init: RequestInit = {}, timeoutMs = 150_000): Promise<Response> {
-    return fetch(new URL(path, this.baseUrl), {
+    const request = {
       ...init,
+      ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}),
       headers: {
         "content-type": "application/json",
-        "x-internal-token": this.adminToken,
+        ...(this.sendToken ? { "x-internal-token": this.adminToken } : {}),
         ...(init.headers ?? {}),
       },
       signal: AbortSignal.timeout(timeoutMs),
-    });
+    } as RequestInit;
+    return fetch(new URL(path, this.baseUrl), request);
   }
 
   private async call<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {

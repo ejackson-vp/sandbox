@@ -21,6 +21,9 @@ spec:
     - name: http
       port: 3001
       targetPort: 3001
+    - name: tls
+      port: 3004
+      targetPort: 3004
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -61,6 +64,7 @@ spec:
           command: ["node", "controller/dist/main.js"]
           ports:
             - containerPort: 3001
+            - containerPort: 3004
           envFrom:
             - configMapRef: {name: control-config}
           env:
@@ -100,6 +104,7 @@ spec:
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
             - {name: data, mountPath: /data}
+            - {name: tls, mountPath: /tls, readOnly: true}
           readinessProbe:
             httpGet: {path: /internal/healthz, port: 3001}
             initialDelaySeconds: 2
@@ -110,3 +115,8 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: controller-data
+        - name: tls
+          secret:
+            secretName: controller-tls
+            optional: true
+            defaultMode: 0444

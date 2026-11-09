@@ -26,6 +26,11 @@ export type Role = "controller" | "relay" | "proxy" | "all";
 export interface ControllerConfig {
   role: Role;
   controllerPort: number;
+  /** Optional HTTPS listener for the API; a client cert with CN=api is required. */
+  tlsPort?: number;
+  tlsCertFile?: string;
+  tlsKeyFile?: string;
+  tlsCaFile?: string;
   relayPort: number;
   proxyPort: number;
   adminToken: string;
@@ -140,9 +145,31 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   if (!(warmPoolTier in tiers)) {
     throw new Error(`invalid WARM_POOL_TIER ${String(warmPoolTier)}`);
   }
+  const tlsPortRaw = env.CONTROLLER_TLS_PORT ?? "0";
+  const tlsPortNum = Number(tlsPortRaw);
+  const tlsPort =
+    Number.isInteger(tlsPortNum) && tlsPortNum > 0 && tlsPortNum <= 65535 ? tlsPortNum : undefined;
+  if (tlsPortRaw !== "0" && !tlsPort) throw new Error(`invalid CONTROLLER_TLS_PORT ${tlsPortRaw}`);
+  const tlsFiles = [env.TLS_CERT_FILE, env.TLS_KEY_FILE, env.TLS_CA_FILE];
+  if (tlsPort && tlsFiles.some((v) => !v)) {
+    throw new Error("CONTROLLER_TLS_PORT requires TLS_CERT_FILE, TLS_KEY_FILE and TLS_CA_FILE");
+  }
+  if (!tlsPort && tlsFiles.some(Boolean)) {
+    throw new Error("TLS_CERT_FILE/TLS_KEY_FILE/TLS_CA_FILE require CONTROLLER_TLS_PORT");
+  }
+  const tls =
+    tlsPort && env.TLS_CERT_FILE && env.TLS_KEY_FILE && env.TLS_CA_FILE
+      ? {
+          tlsPort,
+          tlsCertFile: env.TLS_CERT_FILE,
+          tlsKeyFile: env.TLS_KEY_FILE,
+          tlsCaFile: env.TLS_CA_FILE,
+        }
+      : {};
   return {
     role,
     controllerPort: int(env.X402_CONTROLLER_PORT ?? env.CONTROLLER_PORT, 3001, 1, 65535),
+    ...tls,
     relayPort: int(env.X402_RELAY_PORT ?? env.RELAY_PORT, 8443, 1, 65535),
     proxyPort: int(env.X402_PROXY_PORT ?? env.PROXY_PORT, 3128, 1, 65535),
     adminToken,

@@ -38,6 +38,8 @@ export interface ApiConfig {
   payTo: string;
   facilitatorUrl: string;
   controllerUrl: string;
+  /** Client certificate for the controller's mTLS listener, when enabled. */
+  controllerTls?: { certFile: string; keyFile: string; caFile: string };
   controllerAdminToken: string;
   capabilitySecret: string;
   capabilityTtlSeconds: number;
@@ -135,6 +137,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     throw new Error(`PUBLIC_BASE_URL must be an absolute http(s) URL, got ${rawPublicBaseUrl}`);
   }
 
+  const controllerUrl = env.CONTROLLER_URL ?? "http://127.0.0.1:3001";
+  const tlsCertFile = env.CONTROLLER_TLS_CERT_FILE;
+  const tlsKeyFile = env.CONTROLLER_TLS_KEY_FILE;
+  const tlsCaFile = env.CONTROLLER_TLS_CA_FILE;
+  const tlsSet = [tlsCertFile, tlsKeyFile, tlsCaFile].filter(Boolean).length;
+  if (tlsSet !== 0 && tlsSet !== 3) {
+    throw new Error(
+      "CONTROLLER_TLS_CERT_FILE, CONTROLLER_TLS_KEY_FILE and CONTROLLER_TLS_CA_FILE must be set together",
+    );
+  }
+  if (tlsSet === 3 && !controllerUrl.startsWith("https://")) {
+    throw new Error("CONTROLLER_TLS_* requires an https CONTROLLER_URL");
+  }
+  const controllerTls =
+    tlsSet === 3
+      ? { certFile: tlsCertFile!, keyFile: tlsKeyFile!, caFile: tlsCaFile! }
+      : undefined;
+
   return {
     port,
     paymentMode,
@@ -143,7 +163,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     priceUsd: env.PRICE_USD ?? "$0.05",
     payTo,
     facilitatorUrl,
-    controllerUrl: env.CONTROLLER_URL ?? "http://127.0.0.1:3001",
+    controllerUrl,
+    ...(controllerTls ? { controllerTls } : {}),
     controllerAdminToken,
     capabilitySecret,
     capabilityTtlSeconds: int(env.CAPABILITY_GRACE_SECONDS ?? env.CAPABILITY_TTL_SECONDS, 900, 60, 7200),

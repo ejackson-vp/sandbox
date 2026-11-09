@@ -73,6 +73,7 @@ spec:
             limits: {cpu: "500m", memory: "256Mi", ephemeral-storage: "64Mi"}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
+            - {name: tls, mountPath: /tls, readOnly: true}
           readinessProbe:
             httpGet: {path: /healthz, port: 3000}
             initialDelaySeconds: 2
@@ -84,3 +85,8 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: "64Mi"}
+        - name: tls
+          secret:
+            secretName: api-client-tls
+            optional: true
+            defaultMode: 0444

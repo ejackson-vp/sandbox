@@ -37,6 +37,8 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
+        - protocol: TCP
+          port: 3004
     - to:
         - podSelector:
             matchLabels: {app: facilitator}
@@ -76,6 +78,14 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
+    # The API also has the mTLS listener. In the homelab the 3001 rule above is
+    # narrowed to the relay, so the API can only use the client-certificate path.
+    - from:
+        - podSelector:
+            matchLabels: {app: api}
+      ports:
+        - protocol: TCP
+          port: 3004
   egress:
     # Kubernetes API (in-cluster Service IP).
     - to:

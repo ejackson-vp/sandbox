@@ -8,7 +8,11 @@ import { log } from "./log.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const controller = new ControllerClient(config.controllerUrl, config.controllerAdminToken);
+  const controller = new ControllerClient(
+    config.controllerUrl,
+    config.controllerAdminToken,
+    config.controllerTls,
+  );
   const app = await createApp({ config, controller });
 
   const server = app.listen(config.port, "0.0.0.0", () => {

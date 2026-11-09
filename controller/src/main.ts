@@ -6,7 +6,8 @@
  * NetworkPolicies (ROLE=controller|relay|proxy).
  */
 import http from "node:http";
-import { mkdirSync } from "node:fs";
+import https from "node:https";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadControllerConfig, makeProvisioner, makeRelayClient } from "./config.js";
 import { Store } from "./store.js";
@@ -119,8 +120,27 @@ async function main(): Promise<void> {
   });
   const server = http.createServer(control);
   await listen(server, cfg.controllerPort);
+
+  // Separate listener for the API only. The plain HTTP port stays for the relay
+  // (wake) and for kubelet probes, which cannot present a client certificate.
+  let tlsServer: https.Server | undefined;
+  if (cfg.tlsPort) {
+    tlsServer = https.createServer(
+      {
+        key: readFileSync(cfg.tlsKeyFile!),
+        cert: readFileSync(cfg.tlsCertFile!),
+        ca: readFileSync(cfg.tlsCaFile!),
+        requestCert: true,
+        rejectUnauthorized: true,
+      },
+      control,
+    );
+    await listen(tlsServer, cfg.tlsPort);
+  }
+
   log.info("controller_listening", {
     port: cfg.controllerPort,
+    tlsPort: cfg.tlsPort,
     sandboxNamespace: cfg.sandboxNamespace,
     runtimeClass: cfg.runtimeClass,
     executionMode: cfg.executionMode,
@@ -136,6 +156,7 @@ async function main(): Promise<void> {
   installShutdown(async () => {
     reconciler.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (tlsServer) await new Promise<void>((resolve) => tlsServer!.close(() => resolve()));
     for (const fn of shutdown) await fn();
     store.close();
   });

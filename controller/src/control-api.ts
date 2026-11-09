@@ -59,12 +59,27 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     res.json({ ok: true });
   });
 
+  // A client certificate signed by the internal CA with CN=api is an
+  // authenticated caller. Anything else must present the bearer token, which is
+  // what the relay (wake) and in-cluster tooling use on the HTTP listener.
+  const mtlsCn = (req: Request): string | undefined => {
+    const socket = req.socket as {
+      authorized?: boolean;
+      getPeerCertificate?: () => { subject?: { CN?: string } };
+    };
+    if (socket.authorized !== true || typeof socket.getPeerCertificate !== "function") {
+      return undefined;
+    }
+    return socket.getPeerCertificate().subject?.CN;
+  };
+
   app.post("/internal/wake", (req, res) => {
     // The relay holds only this token; it can nudge the reconciler but cannot
     // reach any other internal endpoint.
     const token = req.header("x-wake-token") ?? req.header("x-internal-token") ?? "";
     // The API holds the admin token; the relay holds only the wake token.
     const authorized =
+      mtlsCn(req) === "api" ||
       (Boolean(cfg.wakeToken) && constantTimeEqual(token, cfg.wakeToken)) ||
       (Boolean(cfg.adminToken) && constantTimeEqual(token, cfg.adminToken));
     if (!authorized) {
@@ -83,7 +98,8 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
 
   app.use("/internal", (req: Request, res: Response, next: NextFunction) => {
     const token = req.header("x-internal-token") ?? "";
-    if (!cfg.adminToken || !constantTimeEqual(token, cfg.adminToken)) {
+    const mtls = mtlsCn(req) === "api";
+    if (!mtls && (!cfg.adminToken || !constantTimeEqual(token, cfg.adminToken))) {
       res.status(401).json({ error: "unauthorized" });
       return;
     }
