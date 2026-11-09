@@ -45,7 +45,7 @@ the final state).
 | `PAID` | payment settled, entitlement durable | none (poll) |
 | `PROVISIONING` | pod scheduled/starting | none (poll) |
 | `READY` | guest connected, attested, lease started | exec/files |
-| `ACTIVE` | at least one operation has run | exec/files |
+| `ACTIVE` | an operation is in flight (single operation slot) | exec/files |
 | `SUSPENDING` | checkpoint in progress; compute still winding down | none |
 | `SUSPENDED` | checkpointed, no compute; workspace PVC retained | none (resume first) |
 | `RESUMING` | restoring the workspace into a fresh guest | none (poll) |
@@ -54,8 +54,13 @@ the final state).
 | `FAILED` | provisioning/guest failure | none |
 | `DESTROYED` | client destroyed it, cleanup done | none |
 
-`READY` and `ACTIVE` are both usable; `ACTIVE` simply records that the sandbox
-has been used.
+`READY` and `ACTIVE` are both usable. `ACTIVE` is **transient**: claiming the
+single operation slot moves READY → ACTIVE, and finishing the operation returns
+to READY. It is not a "has been used" marker.
+
+The transition table is pure (`shared/src/domain/session.ts`). The store's SQL
+guards are generated from its `SOURCE_STATES` map, and a unit test asserts that
+map matches `transition()` for every state/event pair.
 
 ## Timing rules
 
