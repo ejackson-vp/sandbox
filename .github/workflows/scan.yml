@@ -1,0 +1,39 @@
+name: scan
+
+# Manual vulnerability scan for an already-published tag. The release workflow
+# runs the same scanner as a gate; this one is read-only and prints the table,
+# so you can inspect a failure without cutting a new release.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag without the leading v (e.g. 0.1.4)
+        required: true
+        default: latest
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [control, guest]
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan ${{ matrix.name }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}-${{ matrix.name }}:${{ inputs.tag }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
