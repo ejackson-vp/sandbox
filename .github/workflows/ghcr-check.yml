@@ -1,0 +1,32 @@
+name: ghcr-check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Token scope per package
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          for pkg in sandbox-guest sandbox-control; do
+            echo "== $pkg =="
+            tok=$(curl -fsS -u "$ACTOR:$TOKEN" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:ejackson-vp/$pkg:pull,push" \
+              | jq -r .token)
+            python3 - "$tok" <<'PY'
+          import base64, json, sys
+          payload = sys.argv[1].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          print(json.dumps(claims.get("access")))
+          PY
+          done
