@@ -17,7 +17,7 @@ signup — and the control plane never sees what you run.
 
 | Warm session ready | Exec round trip | Host cost per idle guest | Test suite |
 | :---: | :---: | :---: | :---: |
-| **127 ms** p50 | **53 ms** p50 | **~182 MiB** | **180 CI tests** |
+| **127 ms** p50 | **53 ms** p50 | **~182 MiB** | **227 CI tests** |
 
 Kata on two nodes with a 20-guest warm pool, control 0.1.16; p50 unless stated.
 [Method and caveats](docs/performance-cluster.md).

@@ -33,8 +33,10 @@ reconcile observes the Pod absent (or terminal).
 - `expires_at` for holds,
 - `created_at` / `updated_at`.
 
-`SCHEMA_VERSION` was bumped to 7. The prototype schema is destructive on a
-version bump; session state is disposable by design.
+`SCHEMA_VERSION` is 8. Migrations are additive and transactional: payment
+identities, the ledger and refund obligations are never recreated on a version
+bump, and a database from a newer build is refused. Session state remains
+disposable, but it is no longer dropped implicitly.
 
 ## Transactions and idempotency
 
