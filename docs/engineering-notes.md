@@ -1,8 +1,8 @@
 # Engineering notes
 
 Measurements and dead ends that do not fit in a reference doc. Numbers come from
-`benchmarks/results/`; the method is in
-[benchmark-methodology.md](benchmark-methodology.md).
+the run data in [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench); the
+method is in [benchmark-methodology.md](benchmark-methodology.md).
 
 ## The create path is the product, not the VM boot
 

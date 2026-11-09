@@ -2,7 +2,6 @@
 
 > Benchmark tooling and raw results live in the [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench) repository; paths below refer to that repo.
 
-
 Status: **implemented and measured on the local kind rig.** Not enabled by
 default.
 

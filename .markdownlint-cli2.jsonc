@@ -22,8 +22,6 @@
     "node_modules/**",
     "**/dist/**",
     "guest/bin/**",
-    "benchmarks/results/**",
-    "benchmarks/analysis/output/**",
     "docs/assets/**"
   ]
 }

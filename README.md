@@ -200,7 +200,8 @@ registry pull.
 
 Sources: [cluster numbers](docs/performance-cluster.md) ·
 [methodology](docs/benchmark-methodology.md) ·
-[engineering notes](docs/engineering-notes.md).
+[engineering notes](docs/engineering-notes.md). The harness and raw run data
+live in [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench).
 
 ## Design decisions
 
@@ -228,9 +229,8 @@ deploy/kind/          kind + Cilium setup (local dev)
 deploy/kubernetes/    base manifests (runc, dev)
 deploy/kata/          microVM overlay (any Kata-enabled cluster)
 deploy/talos/         real-cluster overlay (Kata + published images)
-benchmarks/           harness, workloads, scenarios, committed results
 examples/             runnable SDK and workload examples
-scripts/              demos, benchmarks, asset rendering, dev secrets
+scripts/              demos, asset rendering, dev secrets
 tests/                unit, property, integration, security
 docs/                 architecture, API, operations, ADRs, guarantees
 ```

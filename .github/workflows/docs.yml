@@ -31,7 +31,6 @@ jobs:
             *.md
             docs/**/*.md
             deploy/**/*.md
-            benchmarks/**/*.md
             .github/**/*.md
 
   links:
@@ -46,7 +45,5 @@ jobs:
           args: >-
             --offline --no-progress --include-fragments
             --exclude-path node_modules
-            --exclude-path benchmarks/results
-            --exclude-path benchmarks/analysis/output
-            "*.md" "docs/**/*.md" "deploy/**/*.md" "benchmarks/**/*.md"
+            "*.md" "docs/**/*.md" "deploy/**/*.md"
           fail: true

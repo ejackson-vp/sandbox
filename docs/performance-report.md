@@ -1,8 +1,7 @@
 # Performance report
 
 > Benchmark tooling and raw results live in the [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench) repository; paths below refer to that repo.
-
-
+>
 > **Scope:** the measurements below come from the kind/Docker dev setup on
 > macOS arm64, not the Talos cluster. For the live two-node Kata numbers see
 > [performance-cluster.md](performance-cluster.md). This document remains the
