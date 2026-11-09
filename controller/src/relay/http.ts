@@ -1,6 +1,6 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import { metrics } from "@x402s/shared";
-import { log } from "../log.js";
+import { log } from "@x402s/shared";
 import { constantTimeEqual } from "../tokens.js";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
 

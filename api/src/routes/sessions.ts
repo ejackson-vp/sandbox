@@ -8,7 +8,7 @@ import { ControllerError, type ControllerClient, type SessionView } from "../con
 import type { ApiConfig } from "../config.js";
 import { operationSchema, requestIdSchema, rejectPlaintextBodies } from "../schemas.js";
 import { toStatus } from "../status.js";
-import { log } from "../log.js";
+import { log } from "@x402s/shared";
 
 export interface SessionsDeps {
   config: ApiConfig;

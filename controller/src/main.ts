@@ -17,7 +17,7 @@ import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
 import { CapacityService } from "./capacity/service.js";
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 
 async function main(): Promise<void> {
   const cfg = loadControllerConfig();

@@ -7,7 +7,7 @@ import { metrics, type SessionLimits, type WarmClaim } from "@x402s/shared";
 import { GUEST_TOOLS, type WarmPodInfo } from "./k8s.js";
 import { proxyTokenFor } from "./config.js";
 import { newOpaqueToken, sha256Hex } from "./tokens.js";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { SessionRecord } from "./store.js";
 

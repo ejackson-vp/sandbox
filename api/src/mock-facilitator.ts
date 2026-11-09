@@ -22,7 +22,7 @@ import {
   sha256Hex,
   type MockNonceStore,
 } from "@x402s/shared";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 
 class SqliteNonceStore implements MockNonceStore {
   constructor(private readonly db: DatabaseSync) {

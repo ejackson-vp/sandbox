@@ -8,7 +8,7 @@ import {
   type SessionSpec,
   type SessionState,
 } from "@x402s/shared";
-import { log } from "../log.js";
+import { log } from "@x402s/shared";
 import { PaymentAlreadyRedeemedError, type LedgerStatus } from "../store.js";
 import { completeSchema, intentClaimSchema } from "../control-api-schemas.js";
 import type { ControlApiDeps } from "./types.js";

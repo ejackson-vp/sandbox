@@ -11,7 +11,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { metrics } from "@x402s/shared";
 import { constantTimeEqual } from "./tokens.js";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 import { createCapacityRouter } from "./capacity/routes.js";
 import { registerPaymentRoutes } from "./control-api/payments.js";
 import { registerSessionRoutes } from "./control-api/sessions.js";

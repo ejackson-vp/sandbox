@@ -1,7 +1,7 @@
 import type { Server } from "node:http";
 import type { WebSocketServer, WebSocket } from "ws";
 import type { AttestationEnvelope, GuestToRelay } from "@x402s/shared";
-import { log } from "../log.js";
+import { log } from "@x402s/shared";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
 
 const HELLO_TIMEOUT_MS = 15_000;

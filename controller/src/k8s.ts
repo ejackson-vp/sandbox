@@ -12,7 +12,7 @@
  * the warm pod's environment.
  */
 import * as k8s from "@kubernetes/client-node";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 import { annotationsFor, baselineOf, bootstrapEnvFor, buildPod, guestEnvFor } from "./k8s-pod.js";
 import { listNodes } from "./k8s-nodes.js";
 import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";

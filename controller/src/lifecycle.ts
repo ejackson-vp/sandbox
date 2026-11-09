@@ -2,7 +2,7 @@
  * Lifecycle use cases: suspend, resume, idle/expiry policy, PVC cleanup.
  */
 import { canResume, canSuspend, idleExpired, lifetimeExpired, metrics, suspendedExpired } from "@x402s/shared";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { SessionRecord } from "./store.js";
 import { snapshotOf } from "./session-snapshot.js";

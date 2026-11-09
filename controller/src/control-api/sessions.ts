@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
 import { LifecycleError } from "../reconciler.js";
-import { log } from "../log.js";
+import { log } from "@x402s/shared";
 import { operationSchema, opLabel } from "../control-api-schemas.js";
 import { describeSession } from "../session-view.js";
 import type { ControlApiDeps } from "./types.js";

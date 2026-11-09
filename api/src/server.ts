@@ -28,7 +28,7 @@ import type { ApiConfig } from "./config.js";
 import { RateLimiter } from "./admission.js";
 import { ControllerClient } from "./controller-client.js";
 import { HttpSettlementLookup, UnsupportedSettlementLookup, type SettlementLookup } from "./settlement-lookup.js";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 import { createSessionHandler } from "./routes/create-session.js";

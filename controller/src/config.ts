@@ -82,12 +82,15 @@ export interface ControllerConfig {
 /**
  * Fail-closed configuration validation.
  */
-export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): ControllerConfig {
+function parseRole(env: NodeJS.ProcessEnv): Role {
   const role = (env.ROLE ?? "controller") as Role;
   if (!["controller", "relay", "proxy", "all"].includes(role)) {
     throw new Error(`invalid ROLE ${role}`);
   }
+  return role;
+}
 
+function parseExecution(env: NodeJS.ProcessEnv): Pick<ControllerConfig, "executionMode" | "runtimeClass" | "allowInsecureDev" | "guestImageDigest" | "guestImageRef"> {
   const executionMode = (env.EXECUTION_MODE ?? "dev") as "dev" | "kata";
   if (!["dev", "kata"].includes(executionMode)) {
     throw new Error(`invalid EXECUTION_MODE ${executionMode}`);
@@ -97,11 +100,6 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   // Gates guest-image digest enforcement only; no execution mode is
   // hardware-backed, so there is nothing else to acknowledge.
   const allowInsecureDev = bool(env.ALLOW_INSECURE_DEV, true);
-
-  const adminToken = env.ADMIN_TOKEN ?? "";
-  if (["controller", "all"].includes(role) && adminToken.length < 16) {
-    throw new Error("ADMIN_TOKEN must be set (>=16 chars) for controller roles");
-  }
 
   const PINNED_DIGEST = /^sha256:[0-9a-f]{64}$/;
   const guestImage = env.GUEST_IMAGE ?? "x402-sandbox/guest:dev";
@@ -123,13 +121,10 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   const guestImageRef = PINNED_DIGEST.test(guestImageDigest)
     ? `${guestImage.replace(/:[^/:]+$/, "")}@${guestImageDigest}`
     : guestImage;
+  return { executionMode, runtimeClass, allowInsecureDev, guestImageDigest, guestImageRef };
+}
 
-  const tiers = loadTiers(env);
-  const warmPoolSize = int(env.WARM_POOL_SIZE, 0, 0, 50);
-  const warmPoolTier = (env.WARM_POOL_TIER ?? "short") as keyof TierTable;
-  if (!(warmPoolTier in tiers)) {
-    throw new Error(`invalid WARM_POOL_TIER ${String(warmPoolTier)}`);
-  }
+function parseTls(env: NodeJS.ProcessEnv): Pick<ControllerConfig, "tlsPort" | "tlsCertFile" | "tlsKeyFile" | "tlsCaFile"> | Record<string, never> {
   const tlsPortRaw = env.CONTROLLER_TLS_PORT ?? "0";
   const tlsPortNum = Number(tlsPortRaw);
   const tlsPort =
@@ -151,6 +146,10 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
           tlsCaFile: env.TLS_CA_FILE,
         }
       : {};
+  return tls;
+}
+
+function parseTokens(env: NodeJS.ProcessEnv, role: Role, adminToken: string): Pick<ControllerConfig, "relayAdminToken" | "wakeToken" | "proxyTokenSecret"> {
   const requireDistinctToken = (name: string, value: string | undefined): string => {
     if (!value || value.length < 16) {
       throw new Error(`${name} must be set (>=16 chars) and must not reuse ADMIN_TOKEN`);
@@ -171,6 +170,26 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   const proxyTokenSecret = needsProxyToken
     ? requireDistinctToken("PROXY_TOKEN_SECRET", env.PROXY_TOKEN_SECRET)
     : (env.PROXY_TOKEN_SECRET ?? "");
+  return { relayAdminToken, wakeToken, proxyTokenSecret };
+}
+
+export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): ControllerConfig {
+  const role = parseRole(env);
+
+  const execution = parseExecution(env);
+  const adminToken = env.ADMIN_TOKEN ?? "";
+  if (["controller", "all"].includes(role) && adminToken.length < 16) {
+    throw new Error("ADMIN_TOKEN must be set (>=16 chars) for controller roles");
+  }
+
+  const tiers = loadTiers(env);
+  const warmPoolSize = int(env.WARM_POOL_SIZE, 0, 0, 50);
+  const warmPoolTier = (env.WARM_POOL_TIER ?? "short") as keyof TierTable;
+  if (!(warmPoolTier in tiers)) {
+    throw new Error(`invalid WARM_POOL_TIER ${String(warmPoolTier)}`);
+  }
+  const tls = parseTls(env);
+  const tokens = parseTokens(env, role, adminToken);
 
   return {
     role,
@@ -179,18 +198,12 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     relayPort: int(env.X402_RELAY_PORT ?? env.RELAY_PORT, 8443, 1, 65535),
     proxyPort: int(env.X402_PROXY_PORT ?? env.PROXY_PORT, 3128, 1, 65535),
     adminToken,
-    relayAdminToken,
-    wakeToken,
+    ...tokens,
     controllerUrl: env.CONTROLLER_URL ?? "http://127.0.0.1:3001",
-    proxyTokenSecret,
     dbPath: env.DB_PATH ?? "/data/controller.db",
     sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",
     controlNamespace: env.CONTROL_NAMESPACE ?? "sandbox-system",
-    guestImageDigest,
-    guestImageRef,
-    runtimeClass,
-    executionMode,
-    allowInsecureDev,
+    ...execution,
     kubeEnabled: bool(env.KUBERNETES_ENABLED, true),
     relayEnabled: bool(env.RELAY_ENABLED, role === "all" || role === "relay"),
     proxyEnabled: bool(env.PROXY_ENABLED, role === "all" || role === "proxy"),

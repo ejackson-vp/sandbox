@@ -3,7 +3,7 @@
  * and reap orphan pods.
  */
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import { RefundService } from "./refunds.js";
 import type { SessionRecord } from "./store.js";

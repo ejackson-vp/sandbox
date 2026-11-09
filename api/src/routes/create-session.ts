@@ -26,7 +26,7 @@ import { createSchema } from "../schemas.js";
 import { RateLimiter, paymentPayerKey } from "../admission.js";
 import type { SettlementLookup } from "../settlement-lookup.js";
 import { createResponseFrom } from "../status.js";
-import { log } from "../log.js";
+import { log } from "@x402s/shared";
 
 export interface CreateSessionDeps {
   config: ApiConfig;

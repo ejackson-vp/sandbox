@@ -26,7 +26,7 @@ import { Termination } from "./termination.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import { NoopSnapshotter, type Snapshotter } from "./snapshotter.js";
 import { CapacityService } from "./capacity/service.js";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 
 export { LifecycleError } from "./lifecycle.js";
 

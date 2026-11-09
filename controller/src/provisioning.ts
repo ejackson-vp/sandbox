@@ -3,7 +3,7 @@
  */
 import { LATENCY_BUCKETS, lifetimeExpired, metrics } from "@x402s/shared";
 import { proxyTokenFor } from "./config.js";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import { newOpaqueToken, sha256Hex } from "./tokens.js";
 import type { SessionRecord } from "./store.js";

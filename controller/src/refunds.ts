@@ -8,7 +8,7 @@
  * conditional, so repeated termination/finalize paths cannot refund twice.
  */
 import { metrics } from "@x402s/shared";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 import type { SessionRecord, SessionState, Store } from "./store.js";
 
 export type RefundOutcome = "refunded" | "pending" | "not_applicable";

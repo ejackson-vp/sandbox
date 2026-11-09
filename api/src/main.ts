@@ -4,7 +4,7 @@
 import { loadConfig } from "./config.js";
 import { createApp } from "./server.js";
 import { ControllerClient } from "./controller-client.js";
-import { log } from "./log.js";
+import { log } from "@x402s/shared";
 
 async function main(): Promise<void> {
   const config = loadConfig();
