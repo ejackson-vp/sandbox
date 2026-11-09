@@ -6,7 +6,8 @@
   <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
   <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/release.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/release.yml/badge.svg" alt="release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
-  <a href="guest/go.mod"><img src="https://img.shields.io/github/go-mod/go-version/ejackson-vp/sandbox?filename=guest/go.mod&logo=go" alt="go 1.26"></a>
+  <a href="guest/go.mod"><img src="https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white" alt="go 1.26"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D24-5FA04E?logo=nodedotjs&logoColor=white" alt="node >= 24"></a>
 </p>
 
 **Pay once with x402, get a temporary Linux machine.** No account, no API key, no
