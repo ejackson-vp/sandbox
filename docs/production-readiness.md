@@ -45,17 +45,21 @@ concrete next step.
   homelab sets it to 1 *and* scopes `allow-api` to the tailscale namespace, so
   no workload can forge `X-Forwarded-For`; kind keeps it at 0.
 - **Image scanning** runs in the release workflow: Trivy on both images, SARIF
-  to the Security tab, and a failure on fixable CRITICAL/HIGH.
+  to the Security tab, and a failure on fixable CRITICAL/HIGH. Note that the
+  image tags are pushed before the scan, so a failed scan blocks the GitHub
+  Release but not the pullable tag; promotion-after-scan is tracked in #42.
 - **API→controller mTLS**: the controller's 3004 listener requires a client
   certificate with `CN=api`; the API presents it and no longer sends the bearer
   token on that path. NetworkPolicy admits the API only on 3004. The relay keeps
   the HTTP port and its low-privilege wake token — moving it to mTLS is the
   remaining half.
-- **Capability derivation trade-off**: capabilities are HMAC(payment key) so a
-  retried request can recover them. A leaked `PAYMENT-SIGNATURE` after settlement
-  could recover the capability. Mitigation options: short capability TTL (already
-  lease+15 min), encrypting the capability at rest for recovery instead of
-  deriving it, or one-time recovery tokens. Document and decide before launch.
+- **Capability derivation**: capabilities are HMAC over the payment key *and* the
+  client commitment. The paying wallet must sign
+  `{paymentKey, clientPublicKey, clientNonce}`, and the commitment is part of the
+  spec hash, so a leaked `PAYMENT-SIGNATURE` cannot recover a capability or bind
+  the session to another client key. Residual: replaying a **complete** captured
+  create request (payment header, body and wallet signature) still recovers the
+  capability; a server-issued freshness nonce would close it (#47).
 - **Evidence validity window** is lease + 5 min so a CLI can re-attach mid-lease.
   If you require very fresh evidence, store the verified guest key client-side and
   skip re-attestation after the first verification.
