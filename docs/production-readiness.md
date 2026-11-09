@@ -14,7 +14,7 @@ concrete next step.
 | 4 | **Relay is a single in-memory pod** | restart loses pending ciphertext and sessions in flight | Redis/NATS with per-session queues and TTLs (ciphertext only) |
 | 5 | **Settlement recovery is mock-only** | only the mock facilitator exposes a settlement lookup | add on-chain/testnet reconciliation (nonce used ⇒ settled) or facilitator webhooks; until then the API fails closed with `409 reconciliation_pending` |
 | 6 | **No refunds (real modes)** | a settled payment whose provisioning fails is not returned | mock mode now auto-refunds terminal-before-READY sessions; real modes record `REFUND_PENDING` and need an on-chain/facilitator refund worker or an explicit credit policy. See [payment-ledger.md](payment-ledger.md) |
-| 7 | **Image not pinned by digest** | a compromised controller could run another image | config refuses a non-`sha256` digest when `ALLOW_INSECURE_DEV=false`; add Kyverno or sigstore admission control for a second layer |
+| 7 | **Image is pinned by digest, not by admission control** | the controller pulls `repo@sha256:…` whenever a digest is configured, dev mode or not, so a moved tag cannot change what runs inside the VM. A compromised *node* can still run anything | add Kyverno or sigstore admission control as a second layer |
 | 8 | **Dev attestation key is public by design** | anyone can forge dev evidence, so it is only safe while `ALLOW_INSECURE_DEV=true` | hardware attestation. The other credentials are no longer in the public repo: local runs generate them, and the homelab injects its own from SOPS |
 | 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; local-path has no encryption | use an encrypted StorageClass / CSI encryption, document the trust boundary, and expire PVCs aggressively |
 | 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |
@@ -40,6 +40,12 @@ concrete next step.
   per-connection concurrency cap is deliberately absent — the API is tailnet-only
   and the per-IP bucket plus these timers is proportionate for one operator; it
   becomes necessary if the API is ever exposed publicly or scaled out.
+- **Client IP behind one reverse proxy**: `TRUST_PROXY_HOPS` (default 0) trusts
+  a forwarded hop, so `req.ip` is the real client instead of the proxy pod. The
+  homelab sets it to 1 *and* scopes `allow-api` to the tailscale namespace, so
+  no workload can forge `X-Forwarded-For`; kind keeps it at 0.
+- **Image scanning** runs in the release workflow: Trivy on both images, SARIF
+  to the Security tab, and a failure on fixable CRITICAL/HIGH.
 - **Per-session mTLS** between API and controller instead of a shared bearer
   token (NetworkPolicy is the only other control).
 - **Capability derivation trade-off**: capabilities are HMAC(payment key) so a
