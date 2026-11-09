@@ -33,7 +33,7 @@ Four deployment profiles are gated separately. "Unverified" is not "passed".
 Profile: `make up` / local processes, `PAYMENT_MODE=mock`, `runc` or local
 `LocalProvisioner`, single operator, no untrusted users, no real money.
 
-**Verdict: READY.** All offline suites pass (225 tests). The fixed issues remove
+**Verdict: READY.** All offline suites pass (227 tests). The fixed issues remove
 the paths that would let one local session exhaust the proxy, replay a mock
 receipt, or lose the local ledger on a schema bump.
 
@@ -105,3 +105,28 @@ Profile: arbitrary internet tenants, real money, untrusted code, SLA.
 | F-15 | Actions pinned to SHAs, images by digest, job-scoped `permissions` |
 | Kata/Cilium | `make security-test` on a disposable kind/Cilium cluster **and** the real Kata class, with image digests recorded |
 | Abuse | Durable per-payer quota with a test that survives a restart |
+
+## Appendix — point-in-time security assessment
+
+Recorded after `dd44e93`, so the rating has the same provenance as the findings.
+This is a code-and-process assessment, not an independent penetration test.
+
+| Profile | Rating | Binding constraint |
+|---|---|---|
+| Local development / trusted private beta | **8 / 10** | Bearer capability within its TTL; dev attestation is insecure by design |
+| Public beta with payment enforcement | **4 / 10 — blocked** | F-10, F-06, unverified isolation |
+| Unrestricted hostile multi-tenant | **3 / 10 — blocked** | Kata/Cilium unexecuted, no HA ledger, no durable quotas |
+
+Dimension grades: design **A-**, audited code paths **B+**, verification **B-**
+(the isolation suites are unexecuted), supply chain **B** (pins landed; release
+promotion open), operations **C** (single-writer, no KMS rotation, no refunds).
+
+Confidence: medium-high on the paths covered by tests; low on every isolation
+claim, because no cluster was available.
+
+The three changes that would move public-beta readiness most:
+
+1. Execute the Kata and Cilium suites in a trusted release gate (#44).
+2. Close the release-promotion and settlement-refund gaps (#42, #31).
+3. Add durable per-payer quotas and a freshness nonce / per-request proof of
+   possession (#48, #47).

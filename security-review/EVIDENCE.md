@@ -5,8 +5,9 @@
 | Item | Value |
 |---|---|
 | Repository | `https://github.com/ejackson-vp/sandbox` (local checkout) |
-| Base revision (`git rev-parse HEAD`) | `9d4bf54dec2f8166c1194152375f605fec47f274` |
-| Working tree | fixes uncommitted; `24 files changed, 565 insertions(+), 147 deletions(-)` plus new test files |
+| Base revision (audit start) | `9d4bf54dec2f8166c1194152375f605fec47f274` |
+| Fixes merged | `381dad3` (PR #36), docs correction `b52a340` (PR #51), pins/tokens `dd44e93` (PR #62) |
+| Patch | 24 files, +565/−147 in #36, plus the new regression suites |
 | Node / npm | `v26.5.0` / `11.17.0` |
 | Go | `go1.26.4 darwin/arm64` |
 | Runtime under test | local processes: API, controller, relay, egress proxy, `LocalProvisioner`, real guest binary (**not** a microVM) |
@@ -105,13 +106,23 @@ commitment no longer covers the modified payment key) instead of the later 402.
 - 500 unique keys keep the table bounded and a fresh key still gets its first
   token.
 
-## Scanner evidence (GitHub, `9d4bf54`)
+## Scanner evidence
 
-| Source | Open | Triage |
+At audit start (`9d4bf54`): 60 open CodeQL alerts — 39 `PinnedDependenciesID`,
+10 `js/missing-rate-limiting`, 3 `TokenPermissionsID`, 1 each `go/zipslip`,
+`go/request-forgery`, `js/resource-exhaustion`, 5 scorecard/process IDs.
+
+After the fixes (`dd44e93`, Scorecard re-run):
+
+| Rule | Open | Resolution |
 |---|---|---|
-| CodeQL | 60 | 39 × `PinnedDependenciesID`, 10 × `js/missing-rate-limiting`, 3 × `TokenPermissionsID`, 1 each `go/zipslip`, `go/request-forgery`, `js/resource-exhaustion`, 4 scorecard hygiene IDs |
-| Dependabot | 0 | Seven PRs merged into the base revision |
-| Secret scanning | 0 | No open alerts |
+| `PinnedDependenciesID` | 0 | all actions pinned to SHAs, images to digests (#62) |
+| `TokenPermissionsID` | 0 | permissions scoped per job (#62) |
+| `VulnerabilitiesID` | 0 | `x/crypto` bumped past GO-2026-5932 (openpgp not imported) |
+| `js/missing-rate-limiting` ×10 | 0 | dismissed as reviewed false positives (F-11) |
+| `go/zipslip`, `go/request-forgery`, `js/resource-exhaustion` | 0 | dismissed with justification (F-12…F-14) |
+| `CodeReviewID`, `MaintainedID`, `CIIBestPracticesID` | 3 | process signals; decision tracked in #64 |
+| Dependabot / secret scanning | 0 | no open alerts |
 
 Alert numbers reviewed: 181–190 (rate limiting), 178 (request forgery),
 179 (zipslip), 180 (resource exhaustion), 131/133/134 (token permissions),
