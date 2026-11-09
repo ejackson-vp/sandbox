@@ -10,6 +10,17 @@ spec:
       storage: 1Gi
 ---
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: controller-backups
+  namespace: sandbox-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: controller
@@ -87,6 +98,9 @@ spec:
             - name: PROXY_TOKEN_SECRET
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: proxy-token-secret}
+            - name: BACKUP_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: backup-encryption-key, optional: true}
             - name: DEV_ATTESTATION_KEY
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: dev-attestation-key}
@@ -104,6 +118,7 @@ spec:
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
             - {name: data, mountPath: /data}
+            - {name: backups, mountPath: /backups}
             - {name: tls, mountPath: /tls, readOnly: true}
           readinessProbe:
             httpGet: {path: /internal/healthz, port: 3001}
@@ -115,6 +130,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: controller-data
+        - name: backups
+          persistentVolumeClaim:
+            claimName: controller-backups
         - name: tls
           secret:
             secretName: controller-tls

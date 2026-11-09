@@ -6,10 +6,10 @@
  * production this becomes Postgres/DynamoDB with the same invariants
  * (UNIQUE payment key, conditional transitions, UNIQUE (session, request)).
  *
- * Schema changes are destructive in this prototype: bump SCHEMA_VERSION and the
- * database is recreated (session state is disposable by design).
+ * Schema changes are additive and transactional; a database from a newer build
+ * is refused rather than downgraded.
  */
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { DatabaseSync, backup as sqliteBackup, type StatementSync } from "node:sqlite";
 import {
   mapIntent,
   mapLedger,
@@ -79,6 +79,11 @@ export class Store {
 
   close(): void {
     this.db.close();
+  }
+
+  /** Consistent online copy for the backup service. */
+  async backupTo(path: string): Promise<void> {
+    await sqliteBackup(this.db, path);
   }
 
   /* ---------------- payment intents (outbox) ---------------- */

@@ -45,6 +45,8 @@ stringData:
   proxy-token-secret: "$(rand)"
   # HMAC key for deriving session capabilities from settled payments.
   capability-secret: "$(rand)"
+  # AES-256 key for encrypted SQLite backups (32 bytes, base64).
+  backup-encryption-key: "$(openssl rand -base64 32)"
   # Ed25519 seed (32 bytes, base64) for simulated attestation. Published test
   # key: the public half is pinned in shared/src/dev-attestation.ts.
   dev-attestation-key: "${ATTESTATION_KEY}"

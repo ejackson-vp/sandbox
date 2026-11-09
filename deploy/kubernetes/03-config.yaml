@@ -40,6 +40,12 @@ data:
   RELAY_URL: "http://relay.sandbox-system.svc.cluster.local:8443"
   RELAY_SERVICE_NAME: "relay"
   PROXY_SERVICE_NAME: "egress-proxy"
+  # Automated SQLite backups. Empty BACKUP_DIR disables them. To enable, set
+  # BACKUP_DIR=/backups and add backup-encryption-key to x402-secrets.
+  # See docs/backup-restore.md.
+  BACKUP_DIR: ""
+  BACKUP_INTERVAL_MS: "21600000"
+  BACKUP_RETENTION: "14"
   SANDBOX_NAMESPACE: "sandbox-workloads"
   CONTROL_NAMESPACE: "sandbox-system"
 
