@@ -16,17 +16,15 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
         run: |
-          set -euo pipefail
           for pkg in sandbox-guest sandbox-control; do
             echo "== $pkg =="
-            tok=$(curl -fsS -u "$ACTOR:$TOKEN" \
-              "https://ghcr.io/token?service=ghcr.io&scope=repository:ejackson-vp/$pkg:pull,push" \
-              | jq -r .token)
-            python3 - "$tok" <<'PY'
-          import base64, json, sys
-          payload = sys.argv[1].split(".")[1]
-          payload += "=" * (-len(payload) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(payload))
-          print(json.dumps(claims.get("access")))
-          PY
+            code=$(curl -sS -o /tmp/token.json -w "%{http_code}" -u "$ACTOR:$TOKEN" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:ejackson-vp/$pkg:pull,push" || true)
+            echo "http=$code"
+            tok=$(jq -r '.token // empty' /tmp/token.json 2>/dev/null)
+            if [ -z "$tok" ]; then
+              head -c 300 /tmp/token.json; echo
+              continue
+            fi
+            python3 -c 'import base64,json,sys; p=sys.argv[1].split(".")[1]; p+="="*(-len(p)%4); print(json.dumps(json.loads(base64.urlsafe_b64decode(p)).get("access")))' "$tok"
           done
