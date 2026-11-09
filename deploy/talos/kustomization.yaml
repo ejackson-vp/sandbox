@@ -30,7 +30,7 @@ resources:
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: 0.1.10
+    newTag: 0.1.11
   # 0.1.9 adds the mTLS controller listener and the inlined release gate. (npm removed from the
   # runtime, Go 1.27.3 + x/crypto 0.58.0 in the guest).
 
