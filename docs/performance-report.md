@@ -1,5 +1,10 @@
 # Performance report
 
+> **Scope:** the measurements below come from the kind/Docker dev setup on
+> macOS arm64, not the Talos cluster. For the live two-node Kata numbers see
+> [performance-cluster.md](performance-cluster.md). This document remains the
+> dev-environment baseline and the methodology reference.
+
 Status: measurements on the reference workstation (macOS arm64, Docker Desktop).
 See [benchmark-methodology.md](benchmark-methodology.md) for environment,
 clocks, sample sizes and threats to validity. Raw data:

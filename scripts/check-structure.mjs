@@ -13,7 +13,7 @@ const ROOT = new URL("..", import.meta.url).pathname;
 // are above it (store.ts, control-api.ts, relay.ts). Lower this as they are
 // split; never raise it again.
 const MAX_LINES = 650;
-const ROOTS = ["shared/src", "sdk/src", "api/src", "controller/src", "guest"];
+const ROOTS = ["shared/src", "sdk/src", "api/src", "controller/src", "cli/src", "scripts", "benchmarks", "guest"];
 
 function* files(dir) {
   for (const entry of readdirSync(dir)) {

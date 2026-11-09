@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { loadControllerConfig } from "../../controller/src/config.js";
 
 const baseEnv: NodeJS.ProcessEnv = {
-  ADMIN_TOKEN: "test-admin-token-0123456789",
+  ADMIN_TOKEN: "a".repeat(24),
+  RELAY_ADMIN_TOKEN: "r".repeat(24),
+  WAKE_TOKEN: "w".repeat(24),
+  PROXY_TOKEN_SECRET: "p".repeat(24),
   EXECUTION_MODE: "dev",
   ALLOW_INSECURE_DEV: "true",
 };

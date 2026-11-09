@@ -41,6 +41,8 @@ const FACILITATOR_PORT = 13302;
 const CONTROLLER_PORT = 13301;
 const RELAY_PORT = 18455;
 const ADMIN = "integration-admin-token-0123456789";
+const RELAY_ADMIN = "r".repeat(24);
+const WAKE = "w".repeat(24);
 const DEV_SEED = "qSgP+dPwGhb/58O0ZD/dSqCMovhhWNIQbT3MeTD35WY=";
 const GUEST_BINARY = process.env.GUEST_BINARY ?? join(process.cwd(), "guest/bin/x402-guest");
 const apiUrl = `http://127.0.0.1:${API_PORT}`;
@@ -127,10 +129,10 @@ beforeAll(async () => {
   facilitator = await createMockFacilitator({ dbPath: join(workDir, "facilitator.db") });
   servers.push(await listen(facilitator.app, FACILITATOR_PORT));
 
-  relay = createRelay({ adminToken: ADMIN, responseTtlMs: 120_000 });
+  relay = createRelay({ adminToken: RELAY_ADMIN, responseTtlMs: 120_000 });
   await new Promise<void>((r) => relay.server.listen(RELAY_PORT, "127.0.0.1", () => r()));
 
-  const relayClient = new RelayClient({ baseUrl: `http://127.0.0.1:${RELAY_PORT}`, adminToken: ADMIN });
+  const relayClient = new RelayClient({ baseUrl: `http://127.0.0.1:${RELAY_PORT}`, adminToken: RELAY_ADMIN });
   store = new Store(join(workDir, "controller.db"));
 
   const controllerCfg = loadControllerConfig({
@@ -141,7 +143,8 @@ beforeAll(async () => {
     KUBERNETES_ENABLED: "false",
     DB_PATH: join(workDir, "controller.db"),
     RELAY_URL: `http://127.0.0.1:${RELAY_PORT}`,
-    RELAY_ADMIN_TOKEN: ADMIN,
+    RELAY_ADMIN_TOKEN: RELAY_ADMIN,
+    WAKE_TOKEN: WAKE,
     PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
     GUEST_IMAGE: "x402-sandbox/guest:dev",
     RECONCILE_INTERVAL_MS: "100",

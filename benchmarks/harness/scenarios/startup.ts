@@ -1,7 +1,4 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { BenchOptions } from "../lib/options.js";
-import { WORKLOADS_DIR } from "../lib/options.js";
 import { Bench, createAndReady, timedDestroy, timedExec, type SampleRow } from "../lib/runner.js";
 import { evictImageFromWorker, kubectl, kubectlTry, waitForPodGone, workerHasImage } from "../lib/env.js";
 import { PodWatcher } from "../lib/watch.js";
@@ -257,8 +254,4 @@ export async function runStartup(bench: Bench, opts: BenchOptions): Promise<numb
     }
   }
   return rows.length > 0 && ok.length === rows.length ? 0 : 1;
-}
-
-export function readWorkload(name: string): Buffer {
-  return readFileSync(join(process.cwd(), WORKLOADS_DIR, name));
 }

@@ -25,10 +25,6 @@ export function isTerminal(state: SessionState): boolean {
   return TERMINAL_STATES.includes(state);
 }
 
-export function isUsable(state: SessionState): boolean {
-  return USABLE_STATES.includes(state);
-}
-
 /** Hard upper bound on any lease, regardless of configuration. */
 export const MAX_LEASE_SECONDS = 3600;
 /** Hard upper bound on a session's wall-clock lifetime, including suspended time. */
@@ -37,13 +33,6 @@ export const MAX_SESSION_LIFETIME_SECONDS = 28800;
 export const MIN_LEASE_SECONDS = 1;
 
 export type SessionTier = "short" | "standard" | "extended" | "long" | "custom";
-
-export const TIER_DURATIONS: Record<Exclude<SessionTier, "custom">, number> = {
-  short: 60,
-  standard: 300,
-  extended: 900,
-  long: 1800,
-};
 
 export interface SessionLimits {
   cpuMillis: number;

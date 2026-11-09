@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Pay-per-execution confidential sandbox service using x402 micropayments",
+  "description": "Pay-per-session sandbox service using x402 micropayments",
   "workspaces": [
     "shared",
     "sdk",
@@ -16,7 +16,7 @@
   },
   "scripts": {
     "build": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && npm run build -w @x402s/api && npm run build -w @x402s/controller && npm run build -w @x402s/cli",
-    "typecheck": "npm run build",
+    "typecheck": "tsc -p shared/tsconfig.json --noEmit && tsc -p sdk/tsconfig.json --noEmit && tsc -p api/tsconfig.json --noEmit && tsc -p controller/tsconfig.json --noEmit && tsc -p cli/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",

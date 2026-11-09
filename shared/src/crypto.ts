@@ -47,10 +47,6 @@ export function fromBase64(value: string): Uint8Array {
   return new Uint8Array(Buffer.from(value, "base64"));
 }
 
-export function bytesToHex(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("hex");
-}
-
 /** Anonymous public-key encryption to `recipientPublicKey`. */
 export async function sealTo(recipientPublicKey: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
   await initCrypto();

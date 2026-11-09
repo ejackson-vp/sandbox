@@ -6,3 +6,10 @@ guest/bin
 .tmp-sandbox
 coverage
 *.log
+tests
+docs
+examples
+benchmarks
+scripts
+.github
+*.md

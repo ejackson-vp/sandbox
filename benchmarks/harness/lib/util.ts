@@ -88,7 +88,3 @@ export function toCsv(rows: Array<Record<string, unknown>>): string {
 export function nowIso(): string {
   return new Date().toISOString();
 }
-
-export function median(values: number[]): number | null {
-  return summarize(values)?.p50 ?? null;
-}

@@ -2,7 +2,7 @@
  * Public SDK types and errors. Kept separate from the client implementation so
  * modules can depend on the contract without importing the facade.
  */
-import type { OperationError, SessionStatus, SessionTier } from "@x402s/shared";
+import type { SessionStatus, SessionTier } from "@x402s/shared";
 import type { Payer, PaymentMode } from "./payment.js";
 import type { FileSessionStore } from "./session-store.js";
 
@@ -146,6 +146,4 @@ export interface FilePutOptions {
   requestId?: string;
   queueMs?: number;
 }
-
-export type FileOutcome<T> = T | OperationError;
 

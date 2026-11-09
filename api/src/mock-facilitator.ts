@@ -16,7 +16,6 @@ import express from "express";
 import { DatabaseSync } from "node:sqlite";
 import { verifyTypedData } from "viem";
 import { x402Facilitator } from "@x402/core/facilitator";
-import { HTTPFacilitatorClient } from "@x402/core/server";
 import {
   MockExactFacilitatorScheme,
   MOCK_NETWORK,
@@ -193,7 +192,3 @@ export async function createMockFacilitator(opts: MockFacilitatorOptions = {}): 
   };
 }
 
-/** Used by integration tests: an in-process facilitator client. */
-export function mockFacilitatorClient(url: string): HTTPFacilitatorClient {
-  return new HTTPFacilitatorClient({ url });
-}

@@ -16,10 +16,7 @@
   },
   "dependencies": {
     "@x402/core": "^2.30.0",
-    "libsodium-wrappers": "^0.8.4",
-    "viem": "^2.57.16"
+    "libsodium-wrappers": "^0.8.4"
   },
-  "devDependencies": {
-    "@types/libsodium-wrappers": "^0.7.14"
-  }
+  "devDependencies": {}
 }

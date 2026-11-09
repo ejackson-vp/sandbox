@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { loadControllerConfig } from "../../controller/src/config.js";
 
+// Low-entropy fixtures: real credentials never look like this.
+const TOKENS = {
+  ADMIN_TOKEN: "a".repeat(24),
+  RELAY_ADMIN_TOKEN: "r".repeat(24),
+  WAKE_TOKEN: "w".repeat(24),
+  PROXY_TOKEN_SECRET: "p".repeat(24),
+};
+
 const base = {
-  ADMIN_TOKEN: "test-admin-token-0123456789",
+  ...TOKENS,
   EXECUTION_MODE: "kata",
   ALLOW_INSECURE_DEV: "false",
   RUNTIME_CLASS: "kata",
 };
+
+const dev = { ...TOKENS, EXECUTION_MODE: "dev", ALLOW_INSECURE_DEV: "true" };
 
 describe("production config guards", () => {
   it("requires a pinned image digest when insecure dev is off", () => {
@@ -15,21 +25,23 @@ describe("production config guards", () => {
     ).toThrow(/GUEST_IMAGE_DIGEST/);
   });
 
+  it("rejects a credential that reuses the admin token", () => {
+    expect(() =>
+      loadControllerConfig({ ...dev, WAKE_TOKEN: TOKENS.ADMIN_TOKEN }),
+    ).toThrow(/key separation/i);
+  });
+
+  it("rejects a missing credential instead of falling back", () => {
+    const { PROXY_TOKEN_SECRET, ...withoutProxy } = dev;
+    void PROXY_TOKEN_SECRET;
+    expect(() => loadControllerConfig(withoutProxy)).toThrow(/PROXY_TOKEN_SECRET/);
+  });
+
   it("validates capacity accounting mode", () => {
-    const cfg = loadControllerConfig({
-      ADMIN_TOKEN: "test-admin-token-0123456789",
-      EXECUTION_MODE: "dev",
-      ALLOW_INSECURE_DEV: "true",
-      CAPACITY_ACCOUNTING: "peak",
-    });
+    const cfg = loadControllerConfig({ ...dev, CAPACITY_ACCOUNTING: "peak" });
     expect(cfg.capacityAccounting).toBe("peak");
     expect(() =>
-      loadControllerConfig({
-        ADMIN_TOKEN: "test-admin-token-0123456789",
-        EXECUTION_MODE: "dev",
-        ALLOW_INSECURE_DEV: "true",
-        CAPACITY_ACCOUNTING: "sometimes",
-      }),
+      loadControllerConfig({ ...dev, CAPACITY_ACCOUNTING: "sometimes" }),
     ).toThrow(/CAPACITY_ACCOUNTING/);
   });
 
@@ -44,9 +56,7 @@ describe("production config guards", () => {
   it("pulls by digest even when insecure dev mode is on", () => {
     const digest = `sha256:${"b".repeat(64)}`;
     const cfg = loadControllerConfig({
-      ADMIN_TOKEN: "test-admin-token-0123456789",
-      EXECUTION_MODE: "dev",
-      ALLOW_INSECURE_DEV: "true",
+      ...dev,
       GUEST_IMAGE: "ghcr.io/example/guest:0.1.0",
       GUEST_IMAGE_DIGEST: digest,
     });
@@ -55,9 +65,7 @@ describe("production config guards", () => {
 
   it("keeps the tag when the dev placeholder digest is used", () => {
     const cfg = loadControllerConfig({
-      ADMIN_TOKEN: "test-admin-token-0123456789",
-      EXECUTION_MODE: "dev",
-      ALLOW_INSECURE_DEV: "true",
+      ...dev,
       GUEST_IMAGE: "x402-sandbox/guest:dev",
       GUEST_IMAGE_DIGEST: "sha256:dev-unpinned-image",
     });
@@ -66,12 +74,7 @@ describe("production config guards", () => {
 
   it("rejects a malformed digest even in dev", () => {
     expect(() =>
-      loadControllerConfig({
-        ADMIN_TOKEN: "test-admin-token-0123456789",
-        EXECUTION_MODE: "dev",
-        ALLOW_INSECURE_DEV: "true",
-        GUEST_IMAGE_DIGEST: "sha256:not-a-digest",
-      }),
+      loadControllerConfig({ ...dev, GUEST_IMAGE_DIGEST: "sha256:not-a-digest" }),
     ).toThrow(/GUEST_IMAGE_DIGEST/);
   });
 });

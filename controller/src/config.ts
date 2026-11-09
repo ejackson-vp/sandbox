@@ -42,7 +42,6 @@ export interface ControllerConfig {
   dbPath: string;
   sandboxNamespace: string;
   controlNamespace: string;
-  guestImage: string;
   guestImageDigest: string;
   /** Image reference actually used in the pod spec: `repo@sha256:…` when pinned. */
   guestImageRef: string;
@@ -58,15 +57,12 @@ export interface ControllerConfig {
   workspaceDir: string;
   provisioningTimeoutMs: number;
   leaseGraceMs: number;
-  shutdownGraceMs: number;
   reconcileIntervalMs: number;
   maxPodAgeMs: number;
   relayResponseWaitMs: number;
   allowedPorts: number[];
   allowedHostSuffixes: string[];
   deniedCidrs: string[];
-  devAttestationKey: string;
-  devAttestationKeyId: string;
   tiers: TierTable;
   platformLimits: PlatformLimits;
   /** Pre-booted, unleased sandboxes kept ready for fast claims (0 = off). */
@@ -166,6 +162,19 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
           tlsCaFile: env.TLS_CA_FILE,
         }
       : {};
+  const requireDistinctToken = (name: string, value: string | undefined): string => {
+    if (!value || value.length < 16) {
+      throw new Error(`${name} must be set (>=16 chars) and must not reuse ADMIN_TOKEN`);
+    }
+    if (value === adminToken) {
+      throw new Error(`${name} must differ from ADMIN_TOKEN (key separation)`);
+    }
+    return value;
+  };
+  const relayAdminToken = requireDistinctToken("RELAY_ADMIN_TOKEN", env.RELAY_ADMIN_TOKEN);
+  const wakeToken = requireDistinctToken("WAKE_TOKEN", env.WAKE_TOKEN);
+  const proxyTokenSecret = requireDistinctToken("PROXY_TOKEN_SECRET", env.PROXY_TOKEN_SECRET);
+
   return {
     role,
     controllerPort: int(env.X402_CONTROLLER_PORT ?? env.CONTROLLER_PORT, 3001, 1, 65535),
@@ -173,14 +182,13 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     relayPort: int(env.X402_RELAY_PORT ?? env.RELAY_PORT, 8443, 1, 65535),
     proxyPort: int(env.X402_PROXY_PORT ?? env.PROXY_PORT, 3128, 1, 65535),
     adminToken,
-    relayAdminToken: env.RELAY_ADMIN_TOKEN ?? adminToken,
-    wakeToken: env.WAKE_TOKEN ?? adminToken,
+    relayAdminToken,
+    wakeToken,
     controllerUrl: env.CONTROLLER_URL ?? "http://127.0.0.1:3001",
-    proxyTokenSecret: env.PROXY_TOKEN_SECRET ?? env.ADMIN_TOKEN ?? "",
+    proxyTokenSecret,
     dbPath: env.DB_PATH ?? "/data/controller.db",
     sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",
     controlNamespace: env.CONTROL_NAMESPACE ?? "sandbox-system",
-    guestImage,
     guestImageDigest,
     guestImageRef,
     runtimeClass,
@@ -195,7 +203,6 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     workspaceDir: env.WORKSPACE_DIR ?? "/workspace",
     provisioningTimeoutMs: int(env.PROVISIONING_TIMEOUT_MS, 90_000, 10_000, 600_000),
     leaseGraceMs: int(env.LEASE_GRACE_MS, 2_000, 0, 60_000),
-    shutdownGraceMs: int(env.SHUTDOWN_GRACE_MS, 2_000, 0, 30_000),
     reconcileIntervalMs: int(env.RECONCILE_INTERVAL_MS, 250, 50, 10_000),
     maxPodAgeMs: int(env.MAX_POD_AGE_MS, 3_600_000, 120_000, 7_200_000),
     relayResponseWaitMs: int(env.RELAY_RESPONSE_WAIT_MS, 25_000, 0, 120_000),
@@ -208,8 +215,6 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
-    devAttestationKey: env.DEV_ATTESTATION_KEY ?? "",
-    devAttestationKeyId: env.DEV_ATTESTATION_KEY_ID ?? "",
     tiers,
     platformLimits: loadPlatformLimits(env),
     warmPoolSize,

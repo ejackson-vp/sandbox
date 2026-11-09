@@ -54,7 +54,6 @@ data:
   WORKSPACE_STORAGE_CLASS: "standard"
   PROVISIONING_TIMEOUT_MS: "90000"
   LEASE_GRACE_MS: "2000"
-  SHUTDOWN_GRACE_MS: "2000"
   # 0 = unlimited. In production cap cold provisioning so a burst cannot
   # stampede the kubelet; the excess stays PAID and retries each tick.
   MAX_CONCURRENT_PROVISIONING: "0"

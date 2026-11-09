@@ -1,6 +1,21 @@
 # Single control-plane image for api / controller / relay / egress-proxy /
 # mock facilitator. Different Deployments run different entrypoints so that
 # NetworkPolicy can separate them.
+#
+# The runtime stage carries production dependencies only, and only the built
+# output of the packages it actually runs. The dev toolchain (TypeScript,
+# vitest, tsx, esbuild/rolldown) and the package sources never reach the image.
+
+FROM node:24-alpine AS prod-deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY shared/package.json shared/package.json
+COPY sdk/package.json sdk/package.json
+COPY api/package.json api/package.json
+COPY controller/package.json controller/package.json
+COPY cli/package.json cli/package.json
+RUN npm ci --omit=dev --no-audit --no-fund
+
 FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
@@ -22,16 +37,16 @@ ENV NODE_ENV=production \
     HOME=/tmp \
     SERVICE_NAME=control-plane
 WORKDIR /app
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/shared ./shared
-COPY --from=build /app/sdk ./sdk
-COPY --from=build /app/api ./api
-COPY --from=build /app/controller ./controller
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/shared/package.json ./shared/package.json
+COPY --from=build /app/shared/dist ./shared/dist
+COPY --from=build /app/api/package.json ./api/package.json
+COPY --from=build /app/api/dist ./api/dist
+COPY --from=build /app/controller/package.json ./controller/package.json
+COPY --from=build /app/controller/dist ./controller/dist
 
-# The runtime executes node only, never a package manager. Dropping the bundled
-# npm also drops its dependency tree (undici, brace-expansion), which was the
-# only source of fixable CVEs in this image.
+# The runtime executes node only, never a package manager.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
     /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 

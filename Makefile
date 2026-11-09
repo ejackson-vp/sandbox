@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up down build deploy demo demo-agent demo-timeout demo-capacity demo-placement demo-python demo-browser demo-large-file demo-directory demo-http-basic test-workloads test-transfers test-control-faults benchmark-transfers benchmark-pipeline-probe benchmark-transfer-stress test test-unit test-integration security-test security-network guest guest-load logs clean fmt images benchmark-capacity benchmark-multinode
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults benchmark-transfers benchmark-pipeline-probe benchmark-transfer-stress test-workloads demo-sse demo-ws cli fmt test test-unit test-integration benchmark-smoke benchmark-startup benchmark-startup-cold benchmark-startup-pool benchmark-burst benchmark-capacity benchmark-multinode benchmark-soak benchmark-lifecycle-soak benchmark-lifecycle benchmark-density benchmark-density-stress benchmark-workloads benchmark-reliability benchmark-report security-test security-network logs clean down
 
 help:
 	@echo "x402 sandbox sessions"

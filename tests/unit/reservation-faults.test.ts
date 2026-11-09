@@ -95,7 +95,10 @@ describe("reservation fault recovery", () => {
       },
     } as unknown as Provisioner;
     const cfg = loadControllerConfig({
-      ADMIN_TOKEN: "fault-test-admin-token",
+      ADMIN_TOKEN: "a".repeat(24),
+      RELAY_ADMIN_TOKEN: "r".repeat(24),
+      WAKE_TOKEN: "w".repeat(24),
+      PROXY_TOKEN_SECRET: "p".repeat(24),
       EXECUTION_MODE: "dev",
       ALLOW_INSECURE_DEV: "true",
     });

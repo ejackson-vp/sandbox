@@ -1,5 +1,9 @@
 # sandbox
 
+[![ci](https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml)
+[![release](https://github.com/ejackson-vp/sandbox/actions/workflows/release.yml/badge.svg)](https://github.com/ejackson-vp/sandbox/actions/workflows/release.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Pay once with x402, get a temporary Linux machine.** No account, no API key, no
 signup. Create a sandbox, run as many commands as you like inside the lease,
 move files in and out, then destroy it or let it expire.
@@ -7,6 +11,11 @@ move files in and out, then destroy it or let it expire.
 ```
 Pay -> Launch sandbox -> Execute repeatedly -> Destroy
 ```
+
+Status: **alpha**, a reference deployment rather than a hosted service. Payments
+are mock or testnet; there is no hardware attestation. See
+[Isolation and trust](#isolation-and-trust) before running anything you would
+not hand to a hosting provider.
 
 Sandboxes run in microVMs on Kubernetes, reach the outside world only through a
 relay and egress proxy, and never receive plaintext commands from the control
@@ -31,7 +40,7 @@ before running anything you would not hand to a hosting provider.
 
 ## Quick start (local)
 
-Prerequisites: Docker, `kind`, `kubectl`, Cilium CLI, Node >= 24, Go >= 1.24.
+Prerequisites: Docker, `kind`, `kubectl`, Cilium CLI, Node >= 24, Go >= 1.26.
 
 ```bash
 make up             # kind + Cilium + images + deploy (~2 min)
@@ -51,6 +60,19 @@ make down
 
 Local runs use ordinary containers (`runc`), not microVMs. Use the Talos overlay
 for anything that matters.
+
+### Use the SDK against a running API
+
+`@x402s/sdk` is a workspace package and is **not published to npm**. Build it
+from source:
+
+```bash
+npm ci
+npm run build
+API_URL=http://localhost:8080 npx tsx examples/sdk-quickstart/index.ts
+```
+
+`make demo-session` drives the same flow through the CLI.
 
 ## Running on a real cluster
 
@@ -168,12 +190,15 @@ docs/                 architecture, API, CLI, operations, guarantees
 
 | Suite | Count | Needs |
 | --- | --- | --- |
-| `npm run test:unit` | 87 | nothing |
+| `npm run test:unit` | 100 | nothing |
 | `npm run test:property` | 23 | nothing |
 | `npm run test:integration` | 48 | Go toolchain (real guest, no cluster) |
 | `make security-test` | 12 | a live cluster (`make up`) |
 
 ## Documentation
+
+Full index: [docs/README.md](docs/README.md). Start with the
+[cluster performance numbers](docs/performance-cluster.md).
 
 - [docs/quickstart.md](docs/quickstart.md)
 - [docs/architecture.md](docs/architecture.md)

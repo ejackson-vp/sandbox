@@ -185,10 +185,6 @@ export function classifyAddress(ip: string, extraDeniedCidrs: string[] = []): Ad
   return "public";
 }
 
-export function isPublicAddress(ip: string, extraDeniedCidrs: string[] = []): boolean {
-  return classifyAddress(ip, extraDeniedCidrs) === "public";
-}
-
 /** Parse a comma-separated CIDR list from configuration. */
 export function parseCidrList(value: string | undefined): string[] {
   if (!value) return [];

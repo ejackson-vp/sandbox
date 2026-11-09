@@ -55,12 +55,6 @@ export interface RelayClaimMessage {
   claim: WarmClaim;
 }
 
-export type RelayToGuest =
-  | RelayRequestMessage
-  | RelayCancelMessage
-  | RelayShutdownMessage
-  | RelayClaimMessage;
-
 export interface GuestHelloMessage {
   type: "hello";
   evidence: AttestationEnvelope;
