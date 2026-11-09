@@ -8,7 +8,7 @@ limit, and the 16 MiB request schema were the hard ceiling.
 
 The streaming path reuses the same transport:
 
-```
+```text
 SDK sealed operation -> API -> controller -> relay -> guest supervisor
 guest sealed result  <- API <- controller <- relay <- supervisor
 ```
@@ -33,7 +33,7 @@ different transfer/path are rejected.
 
 ## States
 
-```
+```text
 TRANSFERRING -> VERIFYING -> COMPLETED
       |              |
       +-> CANCELLED  +-> FAILED

@@ -5,7 +5,7 @@ Base URL (local): `http://localhost:8080`
 There are no accounts, cookies or API keys. A paid session is accessed with a
 short-lived **capability** token that the buyer receives once.
 
-```
+```text
 X-Sandbox-Capability: <capability>
 ```
 

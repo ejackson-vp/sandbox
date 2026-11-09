@@ -27,7 +27,7 @@ handshake rather than a container start.
 
 ## Lifecycle
 
-```
+```text
 controller                          relay                         warm guest
     │                                  │                              │
     ├─ create warm pod (no session) ───┼─────────────────────────────▶│ boot

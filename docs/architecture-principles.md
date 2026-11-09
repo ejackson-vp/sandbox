@@ -46,7 +46,7 @@ performs the effects; the table is the tested contract.
 
 ## Module map
 
-```
+```text
 shared/src/protocol/            wire contract: lifecycle, session, operations,
                                 attestation, relay, control (re-exported by protocol.ts)
 shared/src/domain/session.ts    pure lifecycle: transitions, guards, expiry, final state
@@ -138,6 +138,7 @@ Next slices:
 ## Lessons from FES
 
 Borrow the boundaries, not the god files:
+
 - `protocols.py` (VMExecutor) → our `Provisioner`/`Relay` ports.
 - `pool_state` / `placement` / `autoscaler` split, with pure `compute_desired`
   and `distribute_targets` → our warm-pool/queue policy should be pure too.

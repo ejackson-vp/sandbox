@@ -82,7 +82,7 @@ Failure rate: 0/100. Observations:
 
 ### 2.2 Where the time goes (p50, warm)
 
-```
+```text
 create/payment   18 ms   ▏
 wait for tick   146 ms   ███
 pod object      162 ms   ███
