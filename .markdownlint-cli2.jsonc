@@ -9,7 +9,7 @@
     "MD024": { "siblings_only": true },
     // <details>, <picture> and similar are used deliberately in docs.
     "MD033": {
-      "allowed_elements": ["details", "summary", "br", "sub", "sup", "img", "picture", "source", "kbd", "div", "p"]
+      "allowed_elements": ["details", "summary", "br", "sub", "sup", "img", "picture", "source", "kbd", "div", "p", "a"]
     },
     "MD041": false,
     // Table column padding and alignment are not worth a review comment.
