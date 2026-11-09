@@ -391,14 +391,14 @@ spec:
     created.push({ id: handle.sessionId, capability: handle.capability });
     await client.waitForReady(handle);
 
-    const noCap = await fetch(`${API}/v1/sessions/${handle.sessionId}/exec`, {
+    const noCap = await fetch(`${API}/v1/sessions/${handle.sessionId}/operations`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ requestId: "no-capability-01", envelope: "AAAA" }),
     });
     expect(noCap.status).toBe(401);
 
-    const wrongCap = await fetch(`${API}/v1/sessions/${handle.sessionId}/exec`, {
+    const wrongCap = await fetch(`${API}/v1/sessions/${handle.sessionId}/operations`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
