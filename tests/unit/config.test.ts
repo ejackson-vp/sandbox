@@ -37,6 +37,25 @@ describe("production config guards", () => {
     expect(() => loadControllerConfig(withoutProxy)).toThrow(/PROXY_TOKEN_SECRET/);
   });
 
+  it("requires only the tokens a role actually uses", () => {
+    const proxy = loadControllerConfig({
+      ...dev,
+      ROLE: "proxy",
+      PROXY_TOKEN_SECRET: "p".repeat(24),
+      RELAY_ADMIN_TOKEN: undefined,
+      WAKE_TOKEN: undefined,
+    });
+    expect(proxy.role).toBe("proxy");
+    const relay = loadControllerConfig({
+      ...dev,
+      ROLE: "relay",
+      RELAY_ADMIN_TOKEN: "r".repeat(24),
+      WAKE_TOKEN: "w".repeat(24),
+      PROXY_TOKEN_SECRET: undefined,
+    });
+    expect(relay.role).toBe("relay");
+  });
+
   it("validates capacity accounting mode", () => {
     const cfg = loadControllerConfig({ ...dev, CAPACITY_ACCOUNTING: "peak" });
     expect(cfg.capacityAccounting).toBe("peak");

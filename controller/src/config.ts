@@ -161,9 +161,17 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     }
     return value;
   };
-  const relayAdminToken = requireDistinctToken("RELAY_ADMIN_TOKEN", env.RELAY_ADMIN_TOKEN);
-  const wakeToken = requireDistinctToken("WAKE_TOKEN", env.WAKE_TOKEN);
-  const proxyTokenSecret = requireDistinctToken("PROXY_TOKEN_SECRET", env.PROXY_TOKEN_SECRET);
+  const needsRelayTokens = role === "all" || role === "controller" || role === "relay";
+  const needsProxyToken = role === "all" || role === "controller" || role === "proxy";
+  const relayAdminToken = needsRelayTokens
+    ? requireDistinctToken("RELAY_ADMIN_TOKEN", env.RELAY_ADMIN_TOKEN)
+    : (env.RELAY_ADMIN_TOKEN ?? "");
+  const wakeToken = needsRelayTokens
+    ? requireDistinctToken("WAKE_TOKEN", env.WAKE_TOKEN)
+    : (env.WAKE_TOKEN ?? "");
+  const proxyTokenSecret = needsProxyToken
+    ? requireDistinctToken("PROXY_TOKEN_SECRET", env.PROXY_TOKEN_SECRET)
+    : (env.PROXY_TOKEN_SECRET ?? "");
 
   return {
     role,
