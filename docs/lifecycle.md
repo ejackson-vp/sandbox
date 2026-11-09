@@ -195,7 +195,7 @@ first.
 
 ## Measured workspace-size behaviour
 
-Two samples per size (`make benchmark-lifecycle`), 0 / 32 / 256 MiB:
+Two samples per size (`./scripts/benchmark-lifecycle.sh` in sandbox-bench), 0 / 32 / 256 MiB:
 
 | Workspace | READY p50 | Suspend p50 | Resume p50 | Write p50 |
 |---|---:|---:|---:|---:|
@@ -210,7 +210,7 @@ snapshot later.
 
 ## Soak
 
-`make benchmark-lifecycle-soak` runs create → write → suspend → (sometimes
+`./scripts/benchmark-lifecycle-soak.sh` (sandbox-bench) runs create → write → suspend → (sometimes
 controller/relay restart) → resume → verify → destroy. A 90 s run at 0.5/s:
 
 | Metric | Result |

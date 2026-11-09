@@ -73,7 +73,7 @@ path.
 ## Reproduction
 
 ```bash
-make demo-large-file
-make benchmark-transfers
-make benchmark-transfer-stress   # 256 MiB, explicitly opt-in
+make demo-large-file                          # product repo
+npx tsx benchmarks/transfers/bench.ts        # sandbox-bench
+SIZE_MIB=256 npx tsx examples/large-file.ts  # product repo, 256 MiB opt-in
 ```
