@@ -1,0 +1,52 @@
+name: docs
+
+# Documentation is part of the product surface: broken internal links and
+# malformed Markdown are review failures, not cosmetics.
+
+on:
+  push:
+    paths:
+      - "**/*.md"
+      - ".markdownlint-cli2.jsonc"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "**/*.md"
+      - ".markdownlint-cli2.jsonc"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  markdown:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DavidAnson/markdownlint-cli2-action@v21
+        with:
+          globs: |
+            *.md
+            docs/**/*.md
+            deploy/**/*.md
+            benchmarks/**/*.md
+            .github/**/*.md
+
+  links:
+    name: internal links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          # Offline mode keeps CI deterministic: it verifies every relative link
+          # and anchor target. External URLs are checked on demand locally.
+          args: >-
+            --offline --no-progress --include-fragments
+            --exclude-path node_modules
+            --exclude-path benchmarks/results
+            --exclude-path benchmarks/analysis/output
+            "*.md" "docs/**/*.md" "deploy/**/*.md" "benchmarks/**/*.md"
+          fail: true
