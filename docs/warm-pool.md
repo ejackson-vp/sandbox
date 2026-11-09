@@ -162,8 +162,8 @@ growth (~10 KB/session) are the drift indicators to watch in a multi-hour run.
 Run it with:
 
 ```bash
-make benchmark-soak                 # 10 min, 0.5/s, fault every 90s
-DURATION=14400 make benchmark-soak  # 4 h
+POOL_SIZE=8 DURATION=600 RATE=0.5 ./scripts/benchmark-soak.sh    # 10 min
+POOL_SIZE=8 DURATION=14400 RATE=0.5 ./scripts/benchmark-soak.sh  # 4 h
 ```
 
 ## Security regression

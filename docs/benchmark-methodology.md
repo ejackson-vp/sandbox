@@ -156,14 +156,17 @@ harness sweeps leftover sandbox pods at the end of every run.
 ## 9. Reproducing
 
 ```bash
+# kind environment (sandbox repo)
 make down && make up
-make benchmark-smoke
-make benchmark-startup
-make benchmark-density MODE=idle LEVELS=1,5,10,25
-make benchmark-density MODE=cpu  LEVELS=1,5,10
-make benchmark-workloads
-make benchmark-reliability
-make benchmark-report
+
+# harness and analysis (sandbox-bench repo)
+npx tsx benchmarks/harness/cli.ts smoke
+npx tsx benchmarks/harness/cli.ts startup --samples 100
+npx tsx benchmarks/harness/cli.ts density --levels 1,5,10,25 --mode idle --max 25
+npx tsx benchmarks/harness/cli.ts density --levels 1,5,10 --mode cpu --max 25
+npx tsx benchmarks/harness/cli.ts workloads
+npx tsx benchmarks/harness/cli.ts reliability
+python3 benchmarks/analysis/analyze.py --results benchmarks/results
 python3 benchmarks/analysis/cost_model.py
 ```
 

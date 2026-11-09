@@ -48,7 +48,7 @@ stringData:
   # Ed25519 seed (32 bytes, base64) for simulated attestation. Published test
   # key: the public half is pinned in shared/src/dev-attestation.ts.
   dev-attestation-key: "${ATTESTATION_KEY}"
-  dev-attestation-key-id: "x402-dev-attestation-key"
+  dev-attestation-key-id: "x402-dev-attestation-key-INSECURE-DEV-ONLY"
 EOF
 chmod 600 "${OUT}"
 echo "==> generated deploy/kubernetes/02-secrets-dev.yaml (git-ignored)"

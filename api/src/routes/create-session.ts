@@ -81,23 +81,26 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       return;
     }
     const { spec, priceUsd } = resolution;
-    let preflight: CapacityDecision;
-    try {
-      preflight = await deps.controller.preflightCapacity(spec);
-    } catch (err) {
-      log.error("capacity_preflight_failed", { error: (err as Error).message });
-      res.status(503).json({ error: "admission_unavailable", retryable: true, message: "try again shortly" });
-      return;
-    }
-    if (!preflight.admitted) {
-      rejectCapacity(res, preflight);
-      return;
-    }
     const requirement = await deps.requirementFor(priceUsd, spec);
     const specDigest = specHash(spec);
 
     const header = req.header("PAYMENT-SIGNATURE") ?? req.header("X-PAYMENT");
     if (!header) {
+      // Advisory: fail the quote early when the cluster cannot fit the session.
+      // The paid path skips this and relies on holdCapacity, which is
+      // authoritative, so a create pays for one capacity decision, not two.
+      let preflight: CapacityDecision;
+      try {
+        preflight = await deps.controller.preflightCapacity(spec);
+      } catch (err) {
+        log.error("capacity_preflight_failed", { error: (err as Error).message });
+        res.status(503).json({ error: "admission_unavailable", retryable: true, message: "try again shortly" });
+        return;
+      }
+      if (!preflight.admitted) {
+        rejectCapacity(res, preflight);
+        return;
+      }
       await deps.payment402(res, requirement, "payment_required");
       return;
     }

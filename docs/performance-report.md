@@ -103,7 +103,7 @@ absence, pull on start, restore the controller image) and
 run:
 
 ```bash
-make benchmark-startup-cold IMAGE_REF=<registry>/x402-sandbox/guest:bench SAMPLES=10
+npx tsx benchmarks/harness/cli.ts startup --cold --image-ref <registry>/x402-sandbox/guest:bench --samples 10
 ```
 
 No cold numbers are estimated here.
@@ -203,7 +203,7 @@ there is no memory snapshot. Use an encrypted StorageClass in production. See
 
 ### 2.8 Checkpoint portability, workspace size, lifecycle soak
 
-`make benchmark-lifecycle` (2 samples per size) and a 90 s lifecycle soak:
+`./scripts/benchmark-lifecycle.sh` (2 samples per size) and a 90 s lifecycle soak:
 
 | Test | Result |
 |---|---|
@@ -524,7 +524,7 @@ To produce a comparable dataset on a Linux/KVM host:
 1. Install a Kata runtime on a KVM host (on Talos, the `kata-containers`
    system extension).
 2. Switch `RuntimeClass` and `EXECUTION_MODE=kata` (see `deploy/kata/`).
-3. Run `make benchmark-startup SAMPLES=50`, `benchmark-density LEVELS=1,5,10`,
+3. Run `npx tsx benchmarks/harness/cli.ts startup --samples 50` and `... density --levels 1,5,10`,
    `benchmark-workloads` with identical CPU/memory limits and image.
 4. Record the guest kernel from the attestation claims to prove a separate VM
    kernel, and compare startup, idle memory, throughput and teardown against the
@@ -605,17 +605,20 @@ real money.
 ## 13. Reproduction
 
 ```bash
+# kind environment (sandbox repo)
 make down && make up
-make benchmark-smoke
-make benchmark-startup                 # 100 warm samples
-make benchmark-startup-pool            # same, with 8 pre-booted sandboxes
-make benchmark-burst                   # 10/25/50 simultaneous creates
-make benchmark-soak                    # steady traffic + control-plane faults
-make benchmark-density MODE=idle LEVELS=1,5,10,25
-make benchmark-density MODE=cpu LEVELS=1,5,10
-make benchmark-density MODE=mixed LEVELS=1,5,10
-make benchmark-workloads
-make benchmark-reliability
-make benchmark-report
+
+# harness and analysis (sandbox-bench repo)
+npx tsx benchmarks/harness/cli.ts smoke
+npx tsx benchmarks/harness/cli.ts startup --samples 100
+POOL_SIZE=8 SAMPLES=100 ./scripts/benchmark-warm-pool.sh
+POOL_SIZE=8 LEVELS=10,25,50 ./scripts/benchmark-warm-pool-burst.sh
+POOL_SIZE=8 DURATION=600 RATE=0.5 ./scripts/benchmark-soak.sh
+npx tsx benchmarks/harness/cli.ts density --levels 1,5,10,25 --mode idle --max 25
+npx tsx benchmarks/harness/cli.ts density --levels 1,5,10 --mode cpu --max 25
+npx tsx benchmarks/harness/cli.ts density --levels 1,5,10 --mode mixed --max 25
+npx tsx benchmarks/harness/cli.ts workloads
+npx tsx benchmarks/harness/cli.ts reliability
+python3 benchmarks/analysis/analyze.py --results benchmarks/results
 python3 benchmarks/analysis/cost_model.py
 ```

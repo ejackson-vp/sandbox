@@ -111,8 +111,9 @@ limit to the pool replenishment rate and the worker's cold-start parallelism;
 ## Reproduction
 
 ```bash
-# capacity: raise both buckets, pool 8, levels 10/25/50
-make benchmark-burst
+# in the sandbox-bench repo. Capacity run: raise both buckets, pool 8,
+# levels 10/25/50.
+POOL_SIZE=8 LEVELS=10,25,50 ./scripts/benchmark-warm-pool-burst.sh
 
 # with default admission (no override), the same burst shows the 429 shape
 npx tsx benchmarks/harness/cli.ts burst --levels 50 --max 50 --yes
