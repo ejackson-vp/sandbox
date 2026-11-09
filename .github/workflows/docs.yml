@@ -31,6 +31,7 @@ jobs:
             *.md
             docs/**/*.md
             deploy/**/*.md
+            security-review/**/*.md
             .github/**/*.md
 
   links:
@@ -45,5 +46,5 @@ jobs:
           args: >-
             --offline --no-progress --include-fragments
             --exclude-path node_modules
-            "*.md" "docs/**/*.md" "deploy/**/*.md"
+            "*.md" "docs/**/*.md" "deploy/**/*.md" "security-review/**/*.md"
           fail: true
