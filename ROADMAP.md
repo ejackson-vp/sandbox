@@ -12,10 +12,9 @@ of risk.
 1. **Bind warm-pool claims to the image identity.** A warm pod from an older
    image can be claimed and attest the new digest: `pick()` does not check the
    image and the guest trusts the claim. (#49)
-2. **Make payment records survive schema changes.** `migrate()` drops every
-   table on a version bump, including `payments`, `payment_intents` and
-   `payment_ledger`. F-03 on `security/audit-hardening` adds the migration
-   ladder; the backup/restore runbook remains. (#18)
+2. **Make payment-ledger backups real.** F-03 (merged) made migrations
+   additive, so payment records survive schema changes; the remaining gap is
+   automated backup/restore and point-in-time recovery. (#18)
 3. **Fence recovery.** A restarted controller clears the operation gate without
    proving the old guest operation stopped, and intent claims use a stale
    timeout without a fencing token. Both can hand a session to a second worker.
