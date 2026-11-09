@@ -19,15 +19,12 @@ metadata:
   labels: {app: relay}
 spec:
   replicas: 1
-  # The relay's session registry is in memory. A rolling update would run two
-  # relays at once, and register/claim/attach could each land on a different
-  # pod, so a warm claim would be accepted by one relay and its guest reconnect
-  # rejected by the other. Recreate keeps exactly one registry.
+  # The relay's session registry is in memory, so register/claim/attach must
+  # all reach the same pod. maxSurge 0 terminates the old relay before the new
+  # one starts; two registries never coexist.
   strategy:
-    type: Recreate
-    # The live object was created as RollingUpdate, so the API defaulted this
-    # block in. Recreate forbids it; null deletes it on apply.
-    rollingUpdate: null
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
   selector:
     matchLabels: {app: relay}
   template:
