@@ -178,10 +178,6 @@ export class CapacityService {
     return this.reservations.beginRelease(sessionId, podName);
   }
 
-  confirmRelease(sessionId: string): boolean {
-    return this.reservations.confirmRelease(sessionId);
-  }
-
   releaseSession(sessionId: string): boolean {
     return this.reservations.releaseSession(sessionId);
   }

@@ -5,7 +5,7 @@ import { SESSION_COLUMNS } from "./models.js";
 const statesIn = (event: keyof typeof SOURCE_STATES): string =>
   SOURCE_STATES[event].map((state) => `'${state}'`).join(",");
 
-/** All prepared statements, extracted from Store so the class stays readable. */
+/** All prepared statements used by Store. */
 export function prepareStatements(db: DatabaseSync): Record<string, StatementSync> {
     return {
       insertPayment: db.prepare(
@@ -140,9 +140,6 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       getRequest: db.prepare("SELECT * FROM exec_requests WHERE session_id = ? AND id = ?"),
       finishRequest: db.prepare(
         "UPDATE exec_requests SET state = ?, updated_at = ? WHERE session_id = ? AND id = ?",
-      ),
-      listPendingRequests: db.prepare(
-        "SELECT * FROM exec_requests WHERE session_id = ? AND state = 'pending'",
       ),
     };
 }

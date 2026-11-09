@@ -302,7 +302,7 @@ export class ClientRuntime {
           sessionId: handle.sessionId,
           clientNonce: handle.clientNonce,
           requestId,
-          op: operation.requestId,
+          op: "file.get",
           ok: false,
           error: { code: "operation_pending", message: "the operation is still running; fetch it by request id" },
         } as unknown as T;

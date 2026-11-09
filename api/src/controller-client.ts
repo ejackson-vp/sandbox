@@ -166,10 +166,6 @@ export class ControllerClient {
     await this.call(`/internal/capacity/holds/${encodeURIComponent(paymentKey)}`, { method: "DELETE" }).catch(() => undefined);
   }
 
-  async capacity(): Promise<unknown> {
-    return this.call("/internal/capacity");
-  }
-
   /* ---------------- sessions ---------------- */
 
   async getSession(sessionId: string): Promise<SessionView> {

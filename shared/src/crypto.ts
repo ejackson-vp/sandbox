@@ -5,8 +5,6 @@
  * ephemeral sender key hashed into the nonce). The Go guest runtime uses
  * golang.org/x/crypto/nacl/box SealAnonymous/OpenAnonymous, which implements the
  * identical construction. No primitives are invented here.
- *
- * Interop is covered by tests/unit/crypto-interop.test.ts.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import sodium from "libsodium-wrappers";
@@ -25,7 +23,7 @@ export interface BoxKeyPair {
 
 export const KEY_BYTES = 32;
 export const NONCE_BYTES = 32;
-/** Hard cap on ciphertext we accept over the wire (1 MiB). */
+/** Hard cap on ciphertext we accept over the wire (2 MiB). */
 export const MAX_ENVELOPE_BYTES = 2 * 1024 * 1024;
 
 export async function generateBoxKeyPair(): Promise<BoxKeyPair> {

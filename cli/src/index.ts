@@ -112,6 +112,12 @@ async function extractTar(data: Buffer, destination: string): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "x402-extract-"));
   const tarPath = join(dir, "archive.tar.gz");
   await writeFile(tarPath, data);
+  const listing = execFileSync("tar", ["-tzf", tarPath], { encoding: "utf8" });
+  for (const member of listing.split("\n").filter(Boolean)) {
+    if (member.startsWith("/") || member.split("/").includes("..")) {
+      throw new Error(`unsafe archive member: ${member}`);
+    }
+  }
   execFileSync("tar", ["-xzf", tarPath, "-C", destination]);
 }
 

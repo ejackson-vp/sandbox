@@ -293,7 +293,5 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
     }
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-
   return router;
 }

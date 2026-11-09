@@ -151,7 +151,6 @@ export class Reconciler {
       metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE").set({}, active);
       metrics.gauge("sandbox_provisioning_active", "Sessions in PROVISIONING or RESUMING").set({}, provisioning);
       metrics.gauge("sandbox_provisioning_queued", "PAID sessions waiting for a provisioning slot").set({}, queued);
-      metrics.gauge("sandbox_provisioning_queue_depth", "PAID sessions waiting for a provisioning slot").set({}, queued);
     } catch (err) {
       log.error("reconcile_pass_failed", { error: (err as Error).message });
     } finally {
@@ -186,9 +185,8 @@ export class Reconciler {
 
   /** Idle suspension, suspended expiry, and the wall-clock lifetime cap. */
   private async reconcileSession(session: SessionRecord): Promise<void> {
-    // A client destroy must win from every non-terminal state. Previously the
-    // flag was only checked for READY/ACTIVE, so a session destroyed while
-    // SUSPENDED or SUSPENDING was left behind with its workspace.
+    // A client destroy must win from every non-terminal state, otherwise a
+    // session destroyed while SUSPENDED is left with its workspace.
     if (session.destroyRequested && session.state !== "TERMINATING") {
       if (this.ctx.store.requestTermination(session.id, "client_destroy")) {
         const updated = this.ctx.store.getSession(session.id);
@@ -252,11 +250,9 @@ export class Reconciler {
     // Detect a dead guest/pod between operations (crash, OOM, relay loss).
     // Probed at most every 2s per session to bound Kubernetes API traffic.
     //
-    // Safety: a *failed probe* (API timeout, 429, connection reset) must never
+    // Safety: a failed probe (timeout, 429, connection reset) must never
     // terminate a paid session. Only a successful read that reports the pod
-    // missing or terminal counts, and it must happen twice in a row. This was
-    // found by the density benchmark: an earlier version treated a transient
-    // Kubernetes error as "pod gone" and mass-terminated 20 sessions.
+    // missing or terminal counts, and it must happen twice in a row.
     const readyAt = session.readyAt ?? 0;
     if (session.podName && this.ctx.now() - readyAt > 2000 && this.ctx.now() - (this.healthCheckedAt.get(session.id) ?? 0) > 2000) {
       this.healthCheckedAt.set(session.id, this.ctx.now());

@@ -20,7 +20,8 @@ export class Termination {
     this.refunds.reconcile();
   }
 
-  async terminate(session: SessionRecord): Promise<void> {    const cleanupStarted = session.terminatingAt ?? this.ctx.now();
+  async terminate(session: SessionRecord): Promise<void> {
+    const cleanupStarted = session.terminatingAt ?? this.ctx.now();
     // Ask the guest to stop so it can kill descendants before the pod goes away.
     try {
       await this.ctx.relay.shutdown(session.id, session.terminationReason ?? "terminated");

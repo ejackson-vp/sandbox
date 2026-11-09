@@ -20,7 +20,6 @@ async function main(): Promise<void> {
       port: config.port,
       paymentMode: config.paymentMode,
       network: config.network,
-      priceUsd: config.priceUsd,
       controllerUrl: config.controllerUrl,
       httpHeadersTimeoutMs: config.httpHeadersTimeoutMs,
       httpRequestTimeoutMs: config.httpRequestTimeoutMs,

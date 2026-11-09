@@ -23,7 +23,6 @@ export interface ApiConfig {
   port: number;
   paymentMode: PaymentMode;
   network: string;
-  priceUsd: string;
   payTo: string;
   facilitatorUrl: string;
   controllerUrl: string;
@@ -33,7 +32,6 @@ export interface ApiConfig {
   capabilitySecret: string;
   capabilityTtlSeconds: number;
   maxBodyBytes: number;
-  allowInsecureDev: boolean;
   publicBaseUrl: string;
   /** Time allowed to receive request headers. Receipt only; not handler time. */
   httpHeadersTimeoutMs: number;
@@ -97,11 +95,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     throw new Error("CONTROLLER_ADMIN_TOKEN (or ADMIN_TOKEN) must be at least 16 characters");
   }
 
-  // Key separation is not optional. The capability secret derives session
-  // capabilities; the admin token authenticates to the controller. Falling back
-  // from one to the other (the previous behaviour) meant a leaked capability key
-  // also authenticated against the controller, and rotating either one silently
-  // invalidated the other.
+  // Key separation is not optional: the capability secret derives session
+  // capabilities, the admin token authenticates to the controller. Sharing one
+  // key would make a leaked capability key valid against the controller, and
+  // rotating either would silently invalidate the other.
   const capabilitySecret = env.CAPABILITY_SECRET ?? "";
   if (capabilitySecret.length < 16) {
     throw new Error("CAPABILITY_SECRET is required and must be at least 16 characters");
@@ -148,17 +145,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     port,
     paymentMode,
     network: requestedNetwork,
-    // Default price is used only for the pricing endpoint when no tier is given.
-    priceUsd: env.PRICE_USD ?? "$0.05",
     payTo,
     facilitatorUrl,
     controllerUrl,
     ...(controllerTls ? { controllerTls } : {}),
     controllerAdminToken,
     capabilitySecret,
-    capabilityTtlSeconds: int(env.CAPABILITY_GRACE_SECONDS ?? env.CAPABILITY_TTL_SECONDS, 900, 60, 7200),
+    capabilityTtlSeconds: int(env.CAPABILITY_GRACE_SECONDS, 900, 60, 7200),
     maxBodyBytes: int(env.MAX_BODY_BYTES, 32 * 1024 * 1024, 1024, 64 * 1024 * 1024),
-    allowInsecureDev,
     publicBaseUrl,
     // Receipt timeouts. They bound slow-header and slow-body clients without
     // limiting handler time, so a long-poll exec is unaffected.

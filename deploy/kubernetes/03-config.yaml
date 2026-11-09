@@ -7,7 +7,6 @@ data:
   # --- payments -----------------------------------------------------------
   PAYMENT_MODE: "mock"
   NETWORK: "mock:local"
-  PRICE_USD: "$0.01"
   PAY_TO: "0x0000000000000000000000000000000000000402"
   FACILITATOR_URL: "http://facilitator.sandbox-system.svc.cluster.local:3002"
   ALLOW_INSECURE_DEV: "true"
@@ -67,8 +66,8 @@ data:
   MAX_LEASE_SECONDS: "1800"
   ALLOW_CUSTOM_DURATIONS: "true"
   # Custom requests are capped at the largest published tier ("long": 2 CPU /
-  # 4 GiB). The previous 4 CPU / 8 GiB let one customer take most of a node with
-  # 7.5 CPU and ~13 GiB allocatable, which is an eviction, not a fair share.
+  # 4 GiB). A 4 CPU / 8 GiB request would take most of a node with 7.5 CPU and
+  # ~13 GiB allocatable, which is an eviction, not a fair share.
   MAX_CPU_MILLIS: "2000"
   MAX_MEMORY_MIB: "4096"
   MAX_DISK_MIB: "8192"

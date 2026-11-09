@@ -50,11 +50,6 @@ export interface WarmClaim {
 }
 
 /** Relay -> warm guest. */
-export interface RelayClaimMessage {
-  type: "claim";
-  claim: WarmClaim;
-}
-
 export interface GuestHelloMessage {
   type: "hello";
   evidence: AttestationEnvelope;

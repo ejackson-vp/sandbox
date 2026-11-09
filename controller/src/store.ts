@@ -467,15 +467,4 @@ export class Store {
       updatedAt: row.updated_at as number,
     };
   }
-
-  listPendingRequests(sessionId: string): ExecRequestRecord[] {
-    return (this.stmts.listPendingRequests!.all(sessionId) as unknown as Array<Record<string, unknown>>).map((row) => ({
-      id: row.id as string,
-      sessionId: row.session_id as string,
-      op: row.op as string,
-      state: row.state as ExecRequestRecord["state"],
-      createdAt: row.created_at as number,
-      updatedAt: row.updated_at as number,
-    }));
-  }
 }

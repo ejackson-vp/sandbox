@@ -34,9 +34,6 @@ export const SESSION_STATES: readonly SessionState[] = [
   "DESTROYED",
 ];
 
-/** States in which a session may accept operations (subject to the lease). */
-export const USABLE_STATES: readonly SessionState[] = ["READY", "ACTIVE"];
-
 export function isTerminal(state: SessionState): boolean {
   return TERMINAL_STATES.includes(state);
 }
