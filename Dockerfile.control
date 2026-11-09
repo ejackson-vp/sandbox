@@ -6,7 +6,7 @@
 # output of the packages it actually runs. The dev toolchain (TypeScript,
 # vitest, tsx, esbuild/rolldown) and the package sources never reach the image.
 
-FROM node:24-alpine AS prod-deps
+FROM node:26-alpine AS prod-deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY shared/package.json shared/package.json
@@ -16,7 +16,7 @@ COPY controller/package.json controller/package.json
 COPY cli/package.json cli/package.json
 RUN npm ci --omit=dev --no-audit --no-fund
 
-FROM node:24-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY shared/package.json shared/package.json
@@ -32,7 +32,7 @@ COPY controller controller
 COPY cli cli
 RUN npm run build
 
-FROM node:24-alpine
+FROM node:26-alpine
 ENV NODE_ENV=production \
     HOME=/tmp \
     SERVICE_NAME=control-plane
