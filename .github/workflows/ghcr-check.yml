@@ -17,14 +17,12 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           for pkg in sandbox-guest sandbox-control; do
-            echo "== $pkg =="
-            code=$(curl -sS -o /tmp/token.json -w "%{http_code}" -u "$ACTOR:$TOKEN" \
-              "https://ghcr.io/token?service=ghcr.io&scope=repository:ejackson-vp/$pkg:pull,push" || true)
-            echo "http=$code"
-            tok=$(jq -r '.token // empty' /tmp/token.json 2>/dev/null)
-            if [ -z "$tok" ]; then
-              head -c 300 /tmp/token.json; echo
-              continue
-            fi
-            python3 -c 'import base64,json,sys; p=sys.argv[1].split(".")[1]; p+="="*(-len(p)%4); print(json.dumps(json.loads(base64.urlsafe_b64decode(p)).get("access")))' "$tok"
+            tok=$(curl -sS -u "$ACTOR:$TOKEN" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:ejackson-vp/$pkg:pull,push" \
+              | jq -r .token)
+            code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST \
+              -H "Authorization: Bearer $tok" -H "Content-Length: 0" \
+              "https://ghcr.io/v2/ejackson-vp/$pkg/blobs/uploads/" || true)
+            echo "$pkg upload-init -> $code"
+            head -c 200 /tmp/out; echo
           done
