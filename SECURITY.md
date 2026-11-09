@@ -9,7 +9,7 @@ deployment, not a hosted service.
 
 Use GitHub's private vulnerability reporting:
 
-**https://github.com/ejackson-vp/sandbox/security/advisories/new**
+**[github.com/ejackson-vp/sandbox/security/advisories/new](https://github.com/ejackson-vp/sandbox/security/advisories/new)**
 
 Please do not open a public issue for a suspected vulnerability. Include the
 affected component, version or commit, a reproduction, and the impact. We aim to

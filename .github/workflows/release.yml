@@ -80,6 +80,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          # Publish an SBOM and build provenance alongside each image. Both are
+          # attached as OCI attestations, so `docker buildx imagetools inspect`
+          # can show what went in without trusting the build log.
+          sbom: true
+          provenance: true
 
       - name: digest
         run: |
@@ -129,3 +134,38 @@ jobs:
         with:
           sarif_file: trivy-${{ matrix.name }}.sarif
           category: trivy-${{ matrix.name }}
+
+  # The tag exists as soon as `images` pushes, so a failed scan never blocks the
+  # image build — but it does block the Release entry, which is the signal a
+  # consumer sees.
+  release:
+    name: github release
+    needs: [images, scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          append_body: |
+            ## Images
+
+            Multi-arch (`linux/amd64`, `linux/arm64`), published to GHCR:
+
+            - `ghcr.io/${{ github.repository }}-control:${{ github.ref_name }}`
+            - `ghcr.io/${{ github.repository }}-guest:${{ github.ref_name }}`
+
+            Each image carries an SBOM and SLSA build provenance as OCI
+            attestations:
+
+            ```bash
+            docker buildx imagetools inspect ghcr.io/${{ github.repository }}-control:${{ github.ref_name }}
+            ```
+
+            The guest image is what runs inside the microVM and must match the
+            cluster architecture. CVE results for this tag are in the Security
+            tab (`trivy-control`, `trivy-guest`).

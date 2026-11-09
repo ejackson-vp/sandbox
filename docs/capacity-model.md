@@ -16,7 +16,7 @@ All quantities are integers:
 The model never queries Kubernetes, SQLite or the clock. The service builds a
 `CapacitySnapshot` and calls `admitCapacity(snapshot, request)`.
 
-```
+```text
 CapacitySnapshot
   nodes[]           allocatable, platform overhead, labels, taints, readiness
   reservations[]    active HELD/ALLOCATED/SUSPENDED/RELEASING rows
@@ -62,7 +62,7 @@ mode can change without a schema migration.
 
 For a node:
 
-```
+```text
 available = allocatable - platformOverhead - reserved
 ```
 

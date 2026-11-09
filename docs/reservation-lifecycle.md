@@ -4,7 +4,7 @@ Status: implemented in `controller/src/capacity/reservations.ts`.
 
 ## States
 
-```
+```text
 HELD ──attach──► ALLOCATED ──suspend──► SUSPENDED ──resume──► ALLOCATED
   │                   │                       │
   │                   └──terminate────────────┴──► RELEASING ──► RELEASED
@@ -40,7 +40,7 @@ version bump; session state is disposable by design.
 
 All admission paths run:
 
-```
+```text
 BEGIN IMMEDIATE
   reload active reservations
   admitCapacity(snapshot, request)

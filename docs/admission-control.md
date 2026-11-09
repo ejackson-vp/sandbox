@@ -2,7 +2,6 @@
 
 > Benchmark tooling and raw results live in the [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench) repository; paths below refer to that repo.
 
-
 Status: two-bucket admission and global capacity admission are implemented;
 the burst matrix and constrained-capacity results are measured on the local
 kind rig.

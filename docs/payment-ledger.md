@@ -6,7 +6,7 @@ No partial refunds or customer credits yet.
 
 ## States
 
-```
+```text
 SETTLED ──> REFUND_PENDING ──> REFUNDED
    └──────────────────────────> REFUNDED   (mock auto-refund or manual)
 ```

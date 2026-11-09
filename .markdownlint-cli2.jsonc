@@ -1,0 +1,27 @@
+{
+  // markdownlint-cli2 configuration.
+  // Run locally with `make docs-check`; CI runs the same rules in docs.yml.
+  "config": {
+    // Prose is wrapped by hand where it helps, but hard-wrapping tables,
+    // links and long code lines produces noisy diffs. Do not enforce width.
+    "MD013": false,
+    // Headings repeat across sections (e.g. "Consequences" in every ADR).
+    "MD024": { "siblings_only": true },
+    // <details>, <picture> and similar are used deliberately in docs.
+    "MD033": {
+      "allowed_elements": ["details", "summary", "br", "sub", "sup", "img", "picture", "source", "kbd", "div", "p"]
+    },
+    "MD041": false,
+    // Table column padding and alignment are not worth a review comment.
+    "MD055": false,
+    "MD056": false,
+    // Existing tables use compact pipes (`|---|`); normalising them is churn.
+    "MD060": false
+  },
+  "ignores": [
+    "node_modules/**",
+    "**/dist/**",
+    "guest/bin/**",
+    "docs/assets/**"
+  ]
+}

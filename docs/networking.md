@@ -30,7 +30,7 @@ Consequences:
 
 The guest sets these for every command (credentialed, per session):
 
-```
+```text
 HTTP_PROXY=http://x402:<session-token>@<proxy-ip>:3128
 HTTPS_PROXY=http://x402:<session-token>@<proxy-ip>:3128
 http_proxy=...  https_proxy=...

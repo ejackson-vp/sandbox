@@ -9,7 +9,7 @@ A sandbox that can only run one-shot commands cannot host a notebook, a preview
 server, or an agent tool that exposes HTTP. Lambda MicroVMs solve this with a
 per-VM HTTPS endpoint. x402 solves it without opening inbound pod networking:
 
-```
+```text
 client ──sealed HTTP request──► relay ──► guest ──loopback──► 127.0.0.1:<port>
 client ◄──sealed HTTP response── relay ◄── guest ◄─────────── local service
 ```

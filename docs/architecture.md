@@ -12,9 +12,14 @@ early or lets it expire.
 No accounts, no API keys, no plaintext commands or file contents on the
 provider's control plane.
 
+![Architecture: client, x402 API, controller, relay, Kata microVM, egress proxy](assets/architecture.svg)
+
+The load-bearing choices behind this picture are recorded as
+[ADRs](adr/); the measurements are in [engineering-notes.md](engineering-notes.md).
+
 ## 2. Components
 
-```
+```text
                       ┌──────────────────────────────────────────┐
   SDK / CLI / agent   │  x402 payment  +  session capability    │
   ──────────────┬────►│  API server (stateless)                  │
@@ -138,7 +143,7 @@ state machine and timing rules are in [sessions.md](sessions.md).
 
 ## 4. Payment design (x402 v2)
 
-```
+```text
 POST /v1/sessions (no payment)      → 402 + PAYMENT-REQUIRED (price for tier)
 POST /v1/sessions (PAYMENT-SIGNATURE) → verify → settle → 201 + capability
 ```
@@ -167,7 +172,7 @@ facilitator rejects a reused nonce.
 
 ## 5. Confidentiality protocol
 
-```
+```text
 SDK                                       Guest supervisor
  │ create(clientPubKey, clientNonce)        │
  │──────────────────────────────────────────►│

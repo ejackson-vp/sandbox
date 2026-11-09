@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 800" width="1280" height="800" role="img" aria-labelledby="title desc">
+  <title id="title">sandbox architecture</title>
+  <desc id="desc">A client pays through the x402 API server, which records an entitlement in the controller. The controller creates a Kata microVM through the Kubernetes API and relays opaque frames through a session relay. The guest connects out to the relay, never accepts inbound traffic, and reaches the internet only through an allowlisting egress proxy. Commands and files are sealed end to end between the client and the guest.</desc>
+
+  <style>
+    :root {
+      --bg: #ffffff;
+      --panel: #f6f8fa;
+      --box: #ffffff;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --muted: #59636e;
+      --faint: #818b98;
+      --accent: #0969da;
+      --accent-soft: #ddf4ff;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117;
+        --panel: #151b23;
+        --box: #0d1117;
+        --border: #3d444d;
+        --text: #e6edf3;
+        --muted: #9198a1;
+        --faint: #6e7681;
+        --accent: #4493f8;
+        --accent-soft: #121d2f;
+      }
+    }
+    .bg { fill: var(--bg); }
+    .panel { fill: var(--panel); stroke: var(--border); stroke-width: 1.25; }
+    .box { fill: var(--box); stroke: var(--border); stroke-width: 1.25; }
+    .t { fill: var(--text); font-family: var(--sans); font-size: 16px; font-weight: 600; }
+    .s { fill: var(--muted); font-family: var(--mono); font-size: 12px; }
+    .k { fill: var(--faint); font-family: var(--sans); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+    .l { fill: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+    .flow { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+    .e2e { stroke: var(--accent); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+    .le { fill: var(--accent); font-family: var(--mono); font-size: 11.5px; }
+    .arrow { fill: var(--muted); }
+    .arrow-accent { fill: var(--accent); }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1280" height="800" rx="0"/>
+
+  <!-- client -->
+  <rect class="box" x="60" y="40" width="330" height="96" rx="10"/>
+  <text class="t" x="84" y="74">Client</text>
+  <text class="s" x="84" y="96">SDK · CLI · agent</text>
+  <text class="s" x="84" y="116" style="fill: var(--faint)">session keys stay local</text>
+
+  <!-- control plane -->
+  <rect class="panel" x="60" y="200" width="1160" height="200" rx="12"/>
+  <text class="k" x="84" y="226">control plane</text>
+
+  <rect class="box" x="84" y="244" width="330" height="132" rx="10"/>
+  <text class="t" x="108" y="280">API server</text>
+  <text class="s" x="108" y="304">x402 verify + settle</text>
+  <text class="s" x="108" y="324">stateless · ciphertext only</text>
+
+  <rect class="box" x="450" y="244" width="330" height="132" rx="10"/>
+  <text class="t" x="474" y="280">Controller</text>
+  <text class="s" x="474" y="304">single writer · SQLite</text>
+  <text class="s" x="474" y="324">reconciler · lease deadlines</text>
+
+  <rect class="box" x="816" y="244" width="330" height="132" rx="10"/>
+  <text class="t" x="840" y="280">Session relay</text>
+  <text class="s" x="840" y="304">opaque RPC switch</text>
+  <text class="s" x="840" y="324">cannot decrypt · no ingress</text>
+
+  <!-- sandbox node -->
+  <rect class="panel" x="450" y="452" width="770" height="180" rx="12"/>
+  <text class="k" x="474" y="478">sandbox node · tainted · default-deny</text>
+
+  <rect class="box" x="474" y="496" width="220" height="112" rx="10"/>
+  <text class="t" x="498" y="532">Kubernetes API</text>
+  <text class="s" x="498" y="556">create pod · PVC</text>
+
+  <rect class="box" x="730" y="496" width="466" height="112" rx="10"/>
+  <text class="t" x="754" y="532">Kata microVM</text>
+  <text class="s" x="754" y="556">guest supervisor · ephemeral X25519 key</text>
+  <text class="s" x="754" y="576">/workspace in memory · process watchdog</text>
+
+  <!-- egress -->
+  <rect class="box" x="730" y="690" width="240" height="76" rx="10"/>
+  <text class="t" x="754" y="722">Egress proxy</text>
+  <text class="s" x="754" y="744">HTTPS 443 only</text>
+
+  <rect class="box" x="1010" y="690" width="210" height="76" rx="10"/>
+  <text class="t" x="1034" y="722">Internet</text>
+  <text class="s" x="1034" y="744">allowlisted hosts</text>
+
+  <!-- arrows -->
+  <path class="flow" d="M240 136 V238" marker-end="url(#a)"/>
+  <text class="l" x="254" y="172">POST /v1/sessions</text>
+  <text class="l" x="254" y="190">402 → payment → capability</text>
+
+  <path class="flow" d="M414 310 H444" marker-end="url(#a)"/>
+  <path class="flow" d="M780 310 H810" marker-end="url(#a)"/>
+
+  <path class="flow" d="M615 376 V436 H584 V490" marker-end="url(#a)"/>
+  <text class="l" x="630" y="420">create / delete</text>
+
+  <path class="flow" d="M981 376 V490" marker-end="url(#a)"/>
+  <text class="l" x="995" y="420">opaque frames</text>
+
+  <path class="flow" d="M963 608 V664 H850 V684" marker-end="url(#a)"/>
+  <text class="l" x="742" y="654">allowlisted HTTPS</text>
+
+  <path class="flow" d="M970 728 H1004" marker-end="url(#a)"/>
+
+  <!-- end-to-end path -->
+  <path class="e2e" d="M390 74 H1256 V552 H1202" marker-end="url(#b)"/>
+  <text class="le" x="1240" y="60" text-anchor="end">sealed commands and files · end-to-end encrypted</text>
+
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow" d="M0 0 L10 5 L0 10 z"/>
+    </marker>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow-accent" d="M0 0 L10 5 L0 10 z"/>
+    </marker>
+  </defs>
+</svg>

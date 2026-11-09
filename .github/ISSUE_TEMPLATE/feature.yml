@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose a capability or a change to the design
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project has explicit non-goals (no accounts, no coding agent, no
+        mainnet payments, no persistent environments). Check the README before
+        proposing something that is deliberately out of scope.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can you not do today, and who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The smallest change that solves it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: What else did you consider, and why is it worse?
+    validations:
+      required: false
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Does this change the trust boundary or the lease?
+      options:
+        - "No"
+        - "Yes — it changes the trust boundary"
+        - "Yes — it changes lease semantics"
+        - "Not sure"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I read `docs/production-readiness.md` and `ROADMAP.md`
+        - label: This is not one of the stated non-goals

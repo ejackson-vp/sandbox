@@ -113,10 +113,12 @@ concrete next step.
 - Testnet: `PAYMENT_MODE=testnet`, `EVM_PRIVATE_KEY`, official
   `https://x402.org/facilitator`, network `eip155:84532`. Verify with a funded
   wallet:
+
   ```bash
   EVM_PRIVATE_KEY=0x… ./cli/dist/index.js create --tier short \
     --payment-mode testnet --api-url https://api.example
   ```
+
 - Before mainnet: production facilitator, pinned network id, settlement
   reconciliation, refunds for failed provisioning, per-payer spend caps,
   and a documented incident path for double-charge disputes.

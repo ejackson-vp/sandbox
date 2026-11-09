@@ -25,7 +25,7 @@ compatibility is not a goal.
 
 ## State machine
 
-```
+```text
 PAID ──pod──► PROVISIONING ──hello──► READY ⇄ ACTIVE
   │                                     │
   │                                     ├── idle policy ──► SUSPENDING
