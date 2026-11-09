@@ -1,6 +1,0 @@
-{"sizeMiB":0,"ok":true,"readyMs":5312.360291999999,"writeMs":12.91650000000027,"suspendMs":21.77233299999989,"resumeMs":1904.763,"verifyMs":9.771999999999935,"verifyOk":true}
-{"sizeMiB":0,"ok":true,"readyMs":4968.502583,"writeMs":12.146291999999448,"suspendMs":19.428416999999172,"resumeMs":857.4150829999999,"verifyMs":8.641208999999435,"verifyOk":true}
-{"sizeMiB":32,"ok":true,"readyMs":4975.422667000001,"writeMs":22.493540999999823,"suspendMs":28.837625000000116,"resumeMs":862.648333000001,"verifyMs":8.972249999998894,"verifyOk":true}
-{"sizeMiB":32,"ok":true,"readyMs":4966.380792,"writeMs":22.282749999998487,"suspendMs":28.63445800000045,"resumeMs":1060.6911670000009,"verifyMs":9.586624999999913,"verifyOk":true}
-{"sizeMiB":256,"ok":true,"readyMs":4753.779416000001,"writeMs":64.71941599999991,"suspendMs":21.547624999999243,"resumeMs":1942.1084169999995,"verifyMs":10.130166999995708,"verifyOk":true}
-{"sizeMiB":256,"ok":true,"readyMs":4950.731374999996,"writeMs":98.06120799999917,"suspendMs":16.518208999994386,"resumeMs":1775.5761249999996,"verifyMs":8.767707999999402,"verifyOk":true}

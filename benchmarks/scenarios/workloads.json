@@ -1,5 +1,0 @@
-{
-  "name": "workloads",
-  "description": "Representative workloads: hello, compute, filesystem, pip via proxy, multi-command, expiry.",
-  "defaults": { "cpuMillis": 500, "memoryMiB": 512, "diskMiB": 256 }
-}

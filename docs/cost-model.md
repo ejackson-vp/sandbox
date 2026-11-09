@@ -1,5 +1,8 @@
 # Unit economics
 
+> Benchmark tooling and raw results live in the [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench) repository; paths below refer to that repo.
+
+
 Model: `benchmarks/analysis/cost_model.py`; inputs: `benchmarks/scenarios/cost-model.json`;
 outputs: `benchmarks/results/cost-model/` (`tiers.csv`, `scenarios.csv`, `model.json`).
 

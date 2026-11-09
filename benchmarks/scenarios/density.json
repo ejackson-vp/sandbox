@@ -1,9 +1,0 @@
-{
-  "name": "density",
-  "description": "Create N sessions concurrently, measure idle/CPU/mixed behaviour, tear down.",
-  "defaults": { "levels": [1, 5, 10, 25], "max": 25, "durationSeconds": 240, "cpuMillis": 500, "memoryMiB": 512, "diskMiB": 256 },
-  "safety": {
-    "memoryGuardBytes": 7301444403,
-    "note": "Docker Desktop VM has 7.75 GiB; stop escalating above ~6.8 GiB."
-  }
-}

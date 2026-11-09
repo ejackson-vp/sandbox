@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults benchmark-transfers benchmark-pipeline-probe benchmark-transfer-stress test-workloads demo-sse demo-ws cli fmt test test-unit test-integration benchmark-smoke benchmark-startup benchmark-startup-cold benchmark-startup-pool benchmark-burst benchmark-capacity benchmark-multinode benchmark-soak benchmark-lifecycle-soak benchmark-lifecycle benchmark-density benchmark-density-stress benchmark-workloads benchmark-reliability benchmark-report security-test security-network logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration security-test security-network logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -33,10 +33,7 @@ help:
 	@echo "  make demo-ws       WebSocket echo through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
-	@echo "  make benchmark-smoke / benchmark-startup / benchmark-startup-pool"
-	@echo "  make benchmark-burst / benchmark-capacity / benchmark-multinode / benchmark-soak / benchmark-density"
-	@echo "  make benchmark-workloads / benchmark-reliability / benchmark-report"
-	@echo "  make benchmark-transfers / benchmark-pipeline-probe"
+	@echo "  benchmarks live in the sandbox-bench repository"
 	@echo "  make logs           tail control-plane logs"
 	@echo "  make down           delete the kind cluster"
 	@echo ""
@@ -129,15 +126,6 @@ test-transfers:
 test-control-faults:
 	TARGET=$(or $(TARGET),controller) SESSIONS=$(or $(SESSIONS),) SCENARIO=$(or $(SCENARIO),provisioning) ACTION=$(or $(ACTION),kill) PAUSE_MS=$(or $(PAUSE_MS),3000) REPEAT=$(or $(REPEAT),1) npx tsx scripts/control-faults.ts
 
-benchmark-transfers:
-	npx tsx benchmarks/transfers/bench.ts
-
-benchmark-pipeline-probe:
-	npx tsx benchmarks/transfers/pipeline-probe.ts
-
-benchmark-transfer-stress:
-	SIZE_MIB=256 npx tsx examples/large-file.ts
-
 test-workloads:
 	npx vitest run tests/workloads tests/compatibility
 
@@ -163,54 +151,6 @@ test-unit:
 
 test-integration: cli guest
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest npx vitest run tests/integration
-
-# ---------------------------------------------------------------- benchmarks
-BENCH := npx tsx benchmarks/harness/cli.ts
-
-benchmark-smoke:
-	$(BENCH) smoke
-
-benchmark-startup:
-	$(BENCH) startup --samples $(or $(SAMPLES),100)
-
-benchmark-startup-cold:
-	$(BENCH) startup --cold --image-ref $(IMAGE_REF) --samples $(or $(SAMPLES),10)
-
-benchmark-startup-pool:
-	POOL_SIZE=$(or $(POOL_SIZE),8) SAMPLES=$(or $(SAMPLES),100) ./scripts/benchmark-warm-pool.sh
-
-benchmark-burst:
-	POOL_SIZE=$(or $(POOL_SIZE),8) LEVELS=$(or $(LEVELS),10,25,50) ./scripts/benchmark-warm-pool-burst.sh
-
-benchmark-capacity:
-	MODE=$(or $(MODE),capacity) LEVELS=$(or $(LEVELS),5,10,25,50) PROVISION_LIMIT=$(or $(PROVISION_LIMIT),0) ./scripts/benchmark-capacity.sh
-
-benchmark-multinode:
-	LEVELS=$(or $(LEVELS),10,25) ./scripts/benchmark-multinode.sh
-
-benchmark-soak:
-	POOL_SIZE=$(or $(POOL_SIZE),8) DURATION=$(or $(DURATION),600) RATE=$(or $(RATE),0.5) ./scripts/benchmark-soak.sh
-
-benchmark-lifecycle-soak:
-	DURATION=$(or $(DURATION),300) RATE=$(or $(RATE),0.5) ./scripts/benchmark-lifecycle-soak.sh
-
-benchmark-lifecycle:
-	SIZES=$(or $(SIZES),0,32,256) SAMPLES=$(or $(SAMPLES),3) ./scripts/benchmark-lifecycle.sh
-
-benchmark-density:
-	$(BENCH) density --levels $(or $(LEVELS),1,5,10,25) --mode $(or $(MODE),idle) --max $(or $(MAX),25)
-
-benchmark-density-stress:
-	$(BENCH) density --levels $(or $(LEVELS),50) --mode $(or $(MODE),idle) --max $(or $(MAX),50) --yes
-
-benchmark-workloads:
-	$(BENCH) workloads
-
-benchmark-reliability:
-	$(BENCH) reliability
-
-benchmark-report:
-	python3 benchmarks/analysis/analyze.py --results benchmarks/results
 
 security-test: security-network
 

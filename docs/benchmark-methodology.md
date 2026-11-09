@@ -1,5 +1,8 @@
 # Benchmark methodology
 
+> Benchmark tooling and raw results live in the [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench) repository; paths below refer to that repo.
+
+
 This document explains exactly what was measured, how, and what the numbers can
 and cannot support.
 

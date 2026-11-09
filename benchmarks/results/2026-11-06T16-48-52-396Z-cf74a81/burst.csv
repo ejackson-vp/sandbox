@@ -1,3 +1,0 @@
-level,poolBefore,created,ready,failed,errorCodes,warmHits,coldFallbacks,createP50,readyP50,readyP95,readyP99,warmClaimP50,wallMs,throughputPerSecond,execOk,teardownP50,warmAfter,sandboxPodsAfter,dockerMemMiB
-25,8,25,25,0,,14,11,501.6,2631,9406,10457,542,10458,2.39,25,229,8,0,877
-50,8,50,50,0,,28,22,459.2,11693,22818,29815,9726,29815,1.68,50,232,8,0,894

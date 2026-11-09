@@ -1,3 +1,0 @@
-iteration,ok,errorCode,createMs,readyMs,serverReadyMs,firstExecMs,destroyMs,podGoneMs,tickToProvisionMs,podCreateCallMs,runningToHelloMs,helloToReadyMs,paymentVerifyMs,paymentSettleMs,entitlementMs
-0,true,,58.79341699999986,2364.211875,2268,15.732999999999265,524.333208,60,275,,,202,4,3,13
-1,true,,20.925916999999572,1810.6880419999998,1672,12.784749999999804,522.8703340000002,59,185,,,192,5,4,12
