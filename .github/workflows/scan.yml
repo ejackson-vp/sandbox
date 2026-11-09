@@ -40,3 +40,17 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "0"
+
+      # Same parameters as the release gate, so a red release can be reproduced
+      # here without cutting a tag.
+      - name: Gate ${{ matrix.name }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}-${{ matrix.name }}:${{ inputs.tag }}
+          format: sarif
+          output: gate-${{ matrix.name }}.sarif
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          limit-severities-for-sarif: true
+          exit-code: "1"

@@ -106,6 +106,7 @@ jobs:
           scanners: vuln
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          limit-severities-for-sarif: true
           exit-code: "1"
 
       - name: Upload ${{ matrix.name }} results
