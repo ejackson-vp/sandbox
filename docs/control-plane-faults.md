@@ -67,6 +67,109 @@ until the finalizer is removed`) holds a real sandbox Pod in `Terminating`
 after destroy and expects the reservation to stay `RELEASING`; removing the
 finalizer lets Kubernetes finish deletion and the Pod disappear.
 
+## Scheduled runs (nightly)
+
+`.github/workflows/nightly-faults.yml` runs this matrix plus the cluster
+security suite on a self-hosted runner every day at 04:17 UTC
+(`cron: "17 4 * * *"`), and on demand from **Actions → nightly faults → Run
+workflow** (`full` or `smoke`, optionally fail-fast). PR CI
+(`.github/workflows/ci.yml`) does not depend on it and stays cluster-free.
+
+The workflow is opt-in: GitHub-hosted runners cannot reach a cluster, so
+preflight skips with a notice until the repository variable
+`SANDBOX_FAULT_RUNNER` holds a JSON array of runner labels:
+
+```json
+["self-hosted", "linux", "x64", "sandbox-faults"]
+```
+
+### Runner and secret contract
+
+| Requirement | Why |
+|---|---|
+| Self-hosted runner matching `SANDBOX_FAULT_RUNNER` | Needs a real cluster |
+| Docker, `kind`, `kubectl`, Cilium CLI | `SANDBOX_FAULT_CLUSTER=kind` runs `make up` |
+| 8 vCPU / 16 GiB RAM / ~40 GiB disk | 50-session scenarios plus images |
+| Node 24 and Go per `guest/go.mod` | Installed by `setup-node` / `setup-go` |
+| `SANDBOX_FAULT_KUBECONFIG` secret | Only for `SANDBOX_FAULT_CLUSTER=existing` |
+
+Repository variables:
+
+| Name | Default | Meaning |
+|---|---|---|
+| `SANDBOX_FAULT_RUNNER` | unset | Runner labels; unset skips the workflow |
+| `SANDBOX_FAULT_CLUSTER` | `auto` | `kind`, `existing`, or `auto` (secret set → `existing`) |
+| `SANDBOX_FAULT_API_URL` | `http://localhost:8080` | API the harness drives; loopback gets a port-forward |
+| `SANDBOX_FAULT_MATRIX` | `full` | `full`, `smoke`, or comma-separated case names |
+| `SANDBOX_FAULT_KIND_CLUSTER` | `x402-sandbox` | kind cluster name recreated by `make up` |
+
+`existing` mode targets a long-lived cluster (homelab or tailnet). The secret
+holds a kubeconfig whose context is already selected; the workflow writes it
+with mode 600 under `$RUNNER_TEMP`, never prints it, pins `KUBECTL_CONTEXT`
+from it, and never creates or deletes that cluster. Use a scoped credential
+that can only reach the sandbox namespaces, not an admin kubeconfig.
+
+### Matrix cases
+
+| Case | Target | Fault | Sessions | Budget |
+|---|---|---|---|---|
+| `controller-kill` | controller | kill during provisioning | 50 | 60 s |
+| `api-kill` | api | kill during provisioning | 20 | 30 s |
+| `relay-kill` | relay | kill with operations in flight | 5 | 60 s |
+| `lifecycle-restart` | controller | kill with READY/ACTIVE/SUSPENDED sessions | 50 | 120 s |
+| `controller-pause` | controller | `SIGSTOP`/`SIGCONT` during provisioning | 5 | 60 s |
+| `api-pause` | api | `SIGSTOP`/`SIGCONT` during provisioning | 5 | 30 s |
+| `relay-pause` | relay | `SIGSTOP`/`SIGCONT` with operations in flight | 5 | 60 s |
+
+`full` is all seven; `smoke` is `api-kill`, `controller-pause` and
+`relay-pause`. The relay-restart-mid-create case joins the matrix once #17
+lands.
+
+### Artifacts and reading a red run
+
+```text
+artifacts/faults/
+  summary.json   # every case: passed, exitCode, convergedMs, budget, failureReasons, harness report
+  summary.md     # the same table, also appended to the job summary
+  <case>.json    # one machine-readable result per scenario
+  <case>.log     # full harness stdout/stderr for that scenario
+artifacts/security/
+  junit.xml      # cluster security suite, one test case per assertion
+  vitest.log
+```
+
+The job fails when a scenario exits nonzero (budget breach or state
+assertion), when no JSON result is printed, or when the security suite fails.
+The final `report` step re-emits each failure as a GitHub annotation and
+rebuilds `summary.md` from the artifacts, so triage does not require the
+cluster:
+
+1. Open the run summary — the case table shows convergence against its budget.
+2. Read `summary.json` for `cases[].failureReasons`, `convergedMs` and the raw
+   report (`podCount`, `reservations`, `terminal`, `failures`, `execErrors`).
+3. Read `<case>.log` for the harness output that produced the assertion.
+4. Read `security/junit.xml` for the failing test names.
+
+### Local reproduction
+
+```bash
+make up                                    # kind + Cilium + images + deploy
+npm ci && npm run build && make guest
+node scripts/fault-matrix.mjs              # full matrix → artifacts/faults
+FAULT_MATRIX=smoke node scripts/fault-matrix.mjs
+FAULT_MATRIX=relay-kill node scripts/fault-matrix.mjs
+node scripts/fault-matrix.mjs report       # re-render from existing artifacts
+make security-test                         # cluster security suite
+make test-control-faults TARGET=relay      # one case, unchanged
+```
+
+`scripts/fault-matrix.mjs` only sequences the existing harness: for each case
+it runs `make test-control-faults` with
+`TARGET`/`SCENARIO`/`ACTION`/`SESSIONS`/`CONVERGENCE_BUDGET_MS` in the
+environment, captures the JSON block `scripts/control-faults.ts` already
+prints, and writes the artifacts. It also starts a port-forward to `svc/api`
+when `API_URL` is loopback, so no manual forwarding is needed.
+
 ## In-process fault cases
 
 | Fault | Test | Observed behavior |
