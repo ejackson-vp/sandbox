@@ -268,6 +268,7 @@ describe("operation gating", () => {
     store.claimPaymentIntent(key, specHash(spec), 30_000);
     store.completeEntitlement(key, paymentRecord(key), sessionRecord("sbx_000000000000000000000003", key));
     store.setProvisioning("sbx_000000000000000000000003", "pod-x");
+    store.setRelayToken("sbx_000000000000000000000003", "relay-hash");
     store.setReady("sbx_000000000000000000000003", Date.now(), Date.now() + 60_000, "{}", "guestpk");
     return { store, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
   }
@@ -364,6 +365,7 @@ describe("operation gating", () => {
       store.claimPaymentIntent(key, specHash(spec), 30_000);
       store.completeEntitlement(key, paymentRecord(key), sessionRecord(id, key));
       store.setProvisioning(id, "pod-y");
+      store.setRelayToken(id, "relay-hash");
       store.setReady(id, Date.now() - 120_000, Date.now() - 60_000, "{}", "guestpk");
       expect(store.claimOperation(id, "request-1", "exec")).toMatchObject({ ok: false, code: "lease_expired" });
     } finally {

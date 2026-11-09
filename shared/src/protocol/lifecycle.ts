@@ -18,6 +18,22 @@ export type SessionState =
 
 export const TERMINAL_STATES: readonly SessionState[] = ["EXPIRED", "FAILED", "DESTROYED"];
 
+/** Every state, for exhaustive checks. */
+export const SESSION_STATES: readonly SessionState[] = [
+  "CREATED",
+  "PAID",
+  "PROVISIONING",
+  "READY",
+  "ACTIVE",
+  "SUSPENDING",
+  "SUSPENDED",
+  "RESUMING",
+  "TERMINATING",
+  "EXPIRED",
+  "FAILED",
+  "DESTROYED",
+];
+
 /** States in which a session may accept operations (subject to the lease). */
 export const USABLE_STATES: readonly SessionState[] = ["READY", "ACTIVE"];
 

@@ -110,7 +110,9 @@ Completed slices:
 Next slices:
 
 1. Move controller use cases onto a shared effect interpreter so suspend/resume
-   and provisioning cannot drift from the pure transition table.
+   and provisioning cannot drift from the pure transition table. The store's SQL
+   guards already derive from `SOURCE_STATES`, and a test asserts the map matches
+   the table; what remains is the effect execution path.
 2. Split the remaining control API payment-route handlers from session routes.
 3. Unify SSE/WebSocket poll windows in the guest (`window.go`).
 4. Add dependency-cruiser layer rules and enable `exactOptionalPropertyTypes`.
@@ -121,6 +123,10 @@ Next slices:
   totality, terminal absorption, invariants (`READY ⇒ pod + relay`,
   `SUSPENDED ⇒ PVC + no pod`), monotone expiry, final-state mapping, spec hash
   determinism, admission buckets.
+- **Guard consistency** (`tests/unit/session-guards.test.ts`) asserts
+  `SOURCE_STATES` matches `transition()` for every state/event pair; the store's
+  SQL guards are built from that map, so a table change cannot silently diverge
+  from the database.
 - **Go table tests** for pure validators (`guest/target_test.go`).
 - **E2E** (local process + kind) for effects: lifecycle, services, HTTP/SSE/WS,
   payment flow, faults, portability.

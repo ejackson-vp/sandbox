@@ -430,7 +430,7 @@ describe("session execution", () => {
     }
 
     const status = await client.status(handle);
-    expect(status.state).toBe("ACTIVE");
+    expect(status.state).toBe("READY");
 
     const destroyed = await client.destroy(handle);
     expect(destroyed?.state).toBe("DESTROYED");

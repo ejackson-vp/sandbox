@@ -95,6 +95,7 @@ describe("lifecycle persistence transitions", () => {
       store.completeEntitlement(key, payment(key), session(id, key));
 
       expect(store.setProvisioning(id, "pod-1")).toBe(true);
+      store.setRelayToken(id, "relay-hash-1");
       expect(store.getSession(id)?.state).toBe("PROVISIONING");
 
       const readyAt = NOW + 1000;
@@ -108,6 +109,7 @@ describe("lifecycle persistence transitions", () => {
       expect(store.getSession(id)?.podName).toBeNull();
 
       expect(store.markResuming(id, "pod-2")).toBe(true);
+      store.setRelayToken(id, "relay-hash-2");
       expect(store.getSession(id)?.state).toBe("RESUMING");
       expect(store.getSession(id)?.resumeCount).toBe(1);
 
@@ -126,6 +128,7 @@ describe("lifecycle persistence transitions", () => {
       const id = "sbx_000000000000000000000002";
       store.completeEntitlement(key, payment(key), session(id, key));
       store.setProvisioning(id, "pod-1");
+      store.setRelayToken(id, "relay-hash");
       store.setReady(id, NOW + 1000, NOW + 60_000, "{}", "guest-pk");
 
       expect(store.markSuspended(id, NOW + 2000)).toBe(false);

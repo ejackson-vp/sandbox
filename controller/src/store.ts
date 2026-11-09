@@ -28,6 +28,11 @@ import {
   type SessionState,
 } from "./store/models.js";
 import { migrate } from "./store/schema.js";
+import { SOURCE_STATES } from "@x402s/shared";
+
+/** SQL `IN (...)` list derived from the domain transition table. */
+const statesIn = (event: keyof typeof SOURCE_STATES): string =>
+  SOURCE_STATES[event].map((state) => `'${state}'`).join(",");
 import { ReservationRepository } from "./capacity/reservations.js";
 import type { ReservationStore } from "./capacity/reservation-store.js";
 
@@ -144,38 +149,40 @@ export class Store {
         "UPDATE sessions SET last_activity_at=?, updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')",
       ),
       markSuspending: this.db.prepare(
-        `UPDATE sessions SET state='SUSPENDING', updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')`,
+        `UPDATE sessions SET state='SUSPENDING', updated_at=? WHERE id=? AND state IN (${statesIn("suspend_requested")})`,
       ),
       markSuspended: this.db.prepare(
         `UPDATE sessions SET state='SUSPENDED', suspended_at=?, lease_expires_at=NULL,
-           pod_name=NULL, updated_at=? WHERE id=? AND state='SUSPENDING'`,
+           pod_name=NULL, updated_at=? WHERE id=? AND state IN (${statesIn("guest_stopped")})`,
       ),
       markResuming: this.db.prepare(
         `UPDATE sessions SET state='RESUMING', pod_name=?, suspended_at=NULL,
            resume_count=resume_count+1, lease_expires_at=NULL, updated_at=?
-         WHERE id=? AND state='SUSPENDED'`,
+         WHERE id=? AND state IN (${statesIn("resume_requested")})`,
       ),
       setWorkspacePvc: this.db.prepare("UPDATE sessions SET workspace_pvc=?, updated_at=? WHERE id=?"),
       setNodeName: this.db.prepare("UPDATE sessions SET node_name=?, updated_at=? WHERE id=?"),
       clearWorkspacePvc: this.db.prepare("UPDATE sessions SET workspace_pvc=NULL, updated_at=? WHERE id=?"),
       setProvisioning: this.db.prepare(
-        "UPDATE sessions SET pod_name = ?, state = 'PROVISIONING', updated_at = ? WHERE id = ? AND state = 'PAID'",
+        `UPDATE sessions SET pod_name = ?, state = 'PROVISIONING', updated_at = ? WHERE id = ? AND state IN (${statesIn("provision_requested")})`,
       ),
       setRelayToken: this.db.prepare("UPDATE sessions SET relay_token_hash = ?, updated_at = ? WHERE id = ?"),
       setReady: this.db.prepare(
         `UPDATE sessions SET state='READY', ready_at=?, lease_expires_at=?, attestation_json=?,
-           guest_public_key=?, last_activity_at=?, updated_at=? WHERE id=? AND state IN ('PROVISIONING','RESUMING')`,
+           guest_public_key=?, last_activity_at=?, updated_at=?
+         WHERE id=? AND state IN (${statesIn("guest_ready")})
+           AND pod_name IS NOT NULL AND relay_token_hash IS NOT NULL`,
       ),
       requestTermination: this.db.prepare(
         `UPDATE sessions SET state='TERMINATING', terminating_at=?, termination_reason=?, updated_at=?
-         WHERE id=? AND state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDING','SUSPENDED','RESUMING')`,
+         WHERE id=? AND state IN (${statesIn("terminate_requested")})`,
       ),
       setFailure: this.db.prepare(
         "UPDATE sessions SET failure_code = ?, failure_message = ?, updated_at = ? WHERE id = ?",
       ),
       finalize: this.db.prepare(
         `UPDATE sessions SET state=?, destroyed_at=?, active_request_id=NULL, updated_at=?
-         WHERE id=? AND state='TERMINATING'`,
+         WHERE id=? AND state IN (${statesIn("terminated")})`,
       ),
       requestDestroy: this.db.prepare(
         "UPDATE sessions SET destroy_requested = 1, updated_at = ? WHERE id = ? AND state NOT IN ('EXPIRED','FAILED','DESTROYED')",
@@ -186,7 +193,7 @@ export class Store {
         "UPDATE sessions SET timings_json = json_patch(COALESCE(timings_json, '{}'), ?), updated_at = ? WHERE id = ?",
       ),
       clearActive: this.db.prepare(
-        "UPDATE sessions SET active_request_id = NULL, updated_at = ? WHERE id = ? AND active_request_id = ?",
+        "UPDATE sessions SET active_request_id = NULL, state = CASE WHEN state='ACTIVE' THEN 'READY' ELSE state END, updated_at = ? WHERE id = ? AND active_request_id = ?",
       ),
       abandonPendingRequests: this.db.prepare(
         "UPDATE exec_requests SET state = 'abandoned', updated_at = ? WHERE state = 'pending'",
@@ -553,7 +560,7 @@ export class Store {
         this.db.exec("COMMIT");
         return { ok: false, code: "not_usable", state: "FAILED" };
       }
-      if (session.state !== "READY" && session.state !== "ACTIVE") {
+      if (!SOURCE_STATES.operation_started.includes(session.state)) {
         this.db.exec("COMMIT");
         return { ok: false, code: "not_usable", state: session.state };
       }

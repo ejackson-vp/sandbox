@@ -36,6 +36,36 @@ export type SessionEvent =
   | { type: "terminate_requested"; reason: string }
   | { type: "terminated"; final: "EXPIRED" | "FAILED" | "DESTROYED" };
 
+/**
+ * States from which each event is accepted, ignoring non-state guards
+ * (suspendability, workspace presence, pod/relay invariants).
+ *
+ * The store's SQL guards are built from this map, and a test asserts it matches
+ * transition() for every state/event pair. Change the table, and the store
+ * follows.
+ */
+export const SOURCE_STATES: Readonly<Record<SessionEvent["type"], readonly SessionState[]>> = {
+  payment_settled: ["CREATED"],
+  provision_requested: ["PAID"],
+  guest_ready: ["PROVISIONING", "RESUMING"],
+  operation_started: ["READY", "ACTIVE"],
+  operation_finished: ["READY", "ACTIVE"],
+  suspend_requested: ["READY", "ACTIVE"],
+  guest_stopped: ["SUSPENDING"],
+  resume_requested: ["SUSPENDED"],
+  lease_expired: ["PROVISIONING", "READY", "ACTIVE", "SUSPENDING", "SUSPENDED", "RESUMING"],
+  terminate_requested: [
+    "PAID",
+    "PROVISIONING",
+    "READY",
+    "ACTIVE",
+    "SUSPENDING",
+    "SUSPENDED",
+    "RESUMING",
+  ],
+  terminated: ["TERMINATING"],
+};
+
 export type SessionEffect =
   | { type: "register_relay" }
   | { type: "purge_relay" }
