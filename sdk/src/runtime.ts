@@ -206,7 +206,6 @@ export class ClientRuntime {
     queueMs = 0,
     timeoutMs?: number,
     signal?: AbortSignal,
-    route = "exec",
   ): Promise<T> {
     if (!handle.guestPublicKey) await this.waitForReady(handle);
     const envelope = await sealJsonTo(handle.guestPublicKey!, operation);
@@ -215,7 +214,7 @@ export class ClientRuntime {
 
     for (;;) {
       const res = await this.api(
-        `/v1/sessions/${handle.sessionId}/${route}`,
+        `/v1/sessions/${handle.sessionId}/operations`,
         {
           method: "POST",
           headers: this.auth(handle),
@@ -276,7 +275,7 @@ export class ClientRuntime {
     const queueDeadline = Date.now() + queueMs;
     for (;;) {
       const res = await this.api(
-        `/v1/sessions/${handle.sessionId}/files?request=${encodeURIComponent(envelope)}&requestId=${encodeURIComponent(operation.requestId)}&waitMs=60000`,
+        `/v1/sessions/${handle.sessionId}/operations?request=${encodeURIComponent(envelope)}&requestId=${encodeURIComponent(operation.requestId)}&waitMs=60000`,
         { headers: this.auth(handle) },
         120_000,
       );

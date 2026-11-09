@@ -136,9 +136,8 @@ Full example: [examples/sdk-session.ts](examples/sdk-session.ts).
 ```http
 POST   /v1/sessions                        # x402-protected; body has no plaintext
 GET    /v1/sessions/{id}                   # state, lease, limits
-POST   /v1/sessions/{id}/exec              # { requestId, envelope }
-PUT    /v1/sessions/{id}/files             # { requestId, envelope }  (file.put)
-GET    /v1/sessions/{id}/files?request=…   # encrypted get/list/stat
+POST   /v1/sessions/{id}/operations        # { requestId, envelope }; op is inside
+GET    /v1/sessions/{id}/operations?request=…  # encrypted get/list/stat
 GET    /v1/sessions/{id}/requests/{rid}    # reconnect / fetch a result
 DELETE /v1/sessions/{id}/requests/{rid}    # cancel a running command
 DELETE /v1/sessions/{id}                   # destroy now

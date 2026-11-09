@@ -68,7 +68,6 @@ export class DataPlane {
       0,
       30_000,
       undefined,
-      "services",
     );
     if (!result.ok) {
       throw new SandboxError(result.error?.code ?? "service_start_failed", result.error?.message ?? "service start failed", undefined, requestId);
@@ -93,7 +92,6 @@ export class DataPlane {
       0,
       10_000,
       undefined,
-      "services/stop",
     );
     if (!result.ok) {
       throw new SandboxError(result.error?.code ?? "service_stop_failed", result.error?.message ?? "service stop failed", undefined, requestId);
@@ -116,7 +114,6 @@ export class DataPlane {
       0,
       10_000,
       undefined,
-      "services/list",
     );
     if (!result.ok) {
       throw new SandboxError(result.error?.code ?? "service_list_failed", result.error?.message ?? "service list failed", undefined, requestId);
@@ -151,7 +148,6 @@ export class DataPlane {
       0,
       opts.timeoutMs ?? 30_000,
       undefined,
-      "http",
     );
     if (!result.ok) {
       throw new SandboxError(result.error?.code ?? "http_failed", result.error?.message ?? "http request failed", undefined, requestId);
@@ -195,7 +191,6 @@ export class DataPlane {
       0,
       30_000,
       undefined,
-      "http/stream",
     );
     if (!opened.ok) {
       throw new SandboxError(opened.error?.code ?? "stream_open_failed", opened.error?.message ?? "stream open failed", undefined, openId);
@@ -224,7 +219,6 @@ export class DataPlane {
             0,
             10_000,
             undefined,
-            "http/stream/read",
           );
           if (!result.ok) {
             throw new SandboxError(result.error?.code ?? "stream_read_failed", result.error?.message ?? "stream read failed", undefined, requestId);
@@ -256,7 +250,6 @@ export class DataPlane {
           0,
           10_000,
           undefined,
-          "http/stream/close",
         );
         if (!result.ok) {
           throw new SandboxError(result.error?.code ?? "stream_close_failed", result.error?.message ?? "stream close failed", undefined, requestId);
@@ -286,7 +279,6 @@ export class DataPlane {
       0,
       30_000,
       undefined,
-      "ws/open",
     );
     if (!opened.ok) {
       throw new SandboxError(opened.error?.code ?? "ws_open_failed", opened.error?.message ?? "websocket open failed", undefined, openId);
@@ -313,7 +305,6 @@ export class DataPlane {
             0,
             10_000,
             undefined,
-            "ws/read",
           );
           if (!result.ok) {
             throw new SandboxError(result.error?.code ?? "ws_read_failed", result.error?.message ?? "websocket read failed", undefined, requestId);
@@ -349,7 +340,6 @@ export class DataPlane {
           0,
           10_000,
           undefined,
-          "ws/send",
         );
         if (!result.ok) {
           throw new SandboxError(result.error?.code ?? "ws_send_failed", result.error?.message ?? "websocket send failed", undefined, requestId);
@@ -372,7 +362,6 @@ export class DataPlane {
           0,
           10_000,
           undefined,
-          "ws/close",
         );
         if (!result.ok) {
           throw new SandboxError(result.error?.code ?? "ws_close_failed", result.error?.message ?? "websocket close failed", undefined, requestId);

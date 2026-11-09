@@ -1,5 +1,5 @@
 /**
- * Session routes: status, exec/files, services/http/ws, lifecycle.
+ * Session routes: status, the single operations surface, and lifecycle.
  */
 import express, { type Request, type Response } from "express";
 import { LATENCY_BUCKETS, metrics, sha256Hex, safeEqualHex } from "@x402s/shared";
@@ -60,17 +60,14 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
     res.json(toStatus(session));
   });
 
-  /** Shared by exec and file operations: the API only sees ciphertext. */
-  const runOperation = async (req: Request, res: Response, opHint: string): Promise<void> => {
-    const transfer = opHint === "transfer";
+  /** Every operation: the API only sees ciphertext. */
+  const runOperation = async (req: Request, res: Response): Promise<void> => {
     const started = Date.now();
-    if (transfer) metrics.gauge("sandbox_transfer_active", "Active transfer operations").inc();
+    metrics.gauge("sandbox_operations_active", "Operations in flight").inc();
     res.on("finish", () => {
-      if (!transfer) return;
-      metrics.gauge("sandbox_transfer_active", "Active transfer operations").dec();
-      metrics.histogram("sandbox_transfer_duration_seconds", "Transfer operation duration", LATENCY_BUCKETS).observe((Date.now() - started) / 1000);
-      metrics.counter("sandbox_transfer_total", "Transfer operations by result").inc({ result: res.statusCode < 300 ? "ok" : "error" });
-      if (res.statusCode >= 400) metrics.counter("sandbox_transfer_failures_total", "Transfer operations that failed").inc({ status: String(res.statusCode) });
+      metrics.gauge("sandbox_operations_active", "Operations in flight").dec();
+      metrics.histogram("sandbox_operation_duration_seconds", "Operation duration", LATENCY_BUCKETS).observe((Date.now() - started) / 1000);
+      metrics.counter("sandbox_operations_total", "Operations by result").inc({ result: res.statusCode < 300 ? "ok" : "error" });
     });
     const session = await authorize(req, res);
     if (!session) return;
@@ -96,7 +93,7 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       const out = await deps.controller.operation(session.sessionId, {
         requestId: parsed.data.requestId,
         envelope: parsed.data.envelope,
-        op: opHint,
+        op: "operation",
         waitMs,
       });
       if (out.pending) {
@@ -116,52 +113,16 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
     }
   };
 
-  router.post("/v1/sessions/:id/exec", rejectPlaintextBodies, (req, res) => runOperation(req, res, "exec"));
-  router.post("/v1/sessions/:id/transfers", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "transfer"),
+  // Every operation carries its type inside the sealed envelope. The URL is
+  // deliberately opaque: a path cannot change what the guest does, and the API
+  // never sees the command.
+  router.post("/v1/sessions/:id/operations", rejectPlaintextBodies, (req, res) =>
+    runOperation(req, res),
   );
-
-  // Service and HTTP operations travel in the same opaque envelope. The API
-  // never learns the command, port, headers or body.
-  router.post("/v1/sessions/:id/services", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "service"),
-  );
-  router.post("/v1/sessions/:id/services/list", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "service"),
-  );
-  router.post("/v1/sessions/:id/services/stop", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "service"),
-  );
-  router.post("/v1/sessions/:id/http", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "http"),
-  );
-  router.post("/v1/sessions/:id/http/stream", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "http"),
-  );
-  router.post("/v1/sessions/:id/http/stream/read", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "http"),
-  );
-  router.post("/v1/sessions/:id/http/stream/close", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "http"),
-  );
-  router.post("/v1/sessions/:id/ws/open", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "ws"),
-  );
-  router.post("/v1/sessions/:id/ws/read", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "ws"),
-  );
-  router.post("/v1/sessions/:id/ws/send", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "ws"),
-  );
-  router.post("/v1/sessions/:id/ws/close", rejectPlaintextBodies, (req, res) =>
-    runOperation(req, res, "ws"),
-  );
-
-  router.put("/v1/sessions/:id/files", rejectPlaintextBodies, (req, res) => runOperation(req, res, "file.put"));
 
   // Download/list/stat: the request (path and options) is inside the encrypted
   // envelope too, so the API never learns what is being read.
-  router.get("/v1/sessions/:id/files", async (req, res) => {
+  router.get("/v1/sessions/:id/operations", async (req, res) => {
     const session = await authorize(req, res);
     if (!session) return;
     const raw = req.query.request;

@@ -117,7 +117,7 @@ GET /v1/sessions/{id}
 ## Execute a command
 
 ```http
-POST /v1/sessions/{id}/exec
+POST /v1/sessions/{id}/operations
 Content-Type: application/json
 X-Sandbox-Capability: …
 
@@ -180,7 +180,7 @@ Application errors (`ok: false`) carry `{ "error": { "code", "message" } }`, e.g
 All file requests are encrypted envelopes; the API only forwards them.
 
 ```http
-PUT /v1/sessions/{id}/files
+POST /v1/sessions/{id}/operations
 { "requestId": "…", "envelope": "…" }          # op: file.put
 ```
 
@@ -194,7 +194,7 @@ PUT /v1/sessions/{id}/files
 ```
 
 ```http
-GET /v1/sessions/{id}/files?request=<url-encoded envelope>&requestId=<id>
+GET /v1/sessions/{id}/operations?request=<url-encoded envelope>&requestId=<id>
 ```
 
 The envelope contains one of:
@@ -213,27 +213,17 @@ Limits: `maxFileBytes` (8 MiB default) per file/archive, `diskMiB` workspace
 quota, 5000 entries per listing. Paths are confined to the workspace; absolute
 paths must start with the workspace directory (`/workspace`).
 
-## Services and HTTP
+## Services, HTTP and WebSockets
 
-```http
-POST /v1/sessions/{id}/services        # service.start envelope
-POST /v1/sessions/{id}/services/list   # service.list envelope
-POST /v1/sessions/{id}/services/stop   # service.stop envelope
-POST /v1/sessions/{id}/http            # http.request envelope
-POST /v1/sessions/{id}/http/stream     # http.stream.open envelope
-POST /v1/sessions/{id}/http/stream/read  # http.stream.read envelope
-POST /v1/sessions/{id}/http/stream/close # http.stream.close envelope
-POST /v1/sessions/{id}/ws/open         # ws.open envelope
-POST /v1/sessions/{id}/ws/read         # ws.read envelope
-POST /v1/sessions/{id}/ws/send         # ws.send envelope
-POST /v1/sessions/{id}/ws/close        # ws.close envelope
-```
-
-All four use the same `{requestId, envelope, timeoutMs?, waitMs?}` body as
-`/exec`; the operation is inside the sealed envelope. The API never learns the
-service command, port, headers or body. HTTP is loopback-only to a port declared
-by a running service; there is no inbound pod networking. See
+Services, HTTP and WebSocket operations use the same `POST /operations` route;
+the operation type and its arguments are inside the sealed envelope. The API
+never learns the service command, port, headers or body. HTTP is loopback-only to
+a port declared by a running service; there is no inbound pod networking. See
 [http.md](http.md).
+
+Envelope `op` values in this group: `service.start`, `service.list`,
+`service.stop`, `http.request`, `http.stream.open`, `http.stream.read`,
+`http.stream.close`, `ws.open`, `ws.read`, `ws.send`, `ws.close`.
 
 Common errors: `service_not_found`, `service_exists`, `port_in_use`,
 `service_not_listening`, `too_many_services`, `service_unavailable`,

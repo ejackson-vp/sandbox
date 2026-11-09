@@ -20,21 +20,23 @@ only through the relay and only on a port the customer declared.
 
 ## Contract
 
-| Operation | Envelope `op` | Purpose |
-|---|---|---|
-| `POST /v1/sessions/{id}/services` | `service.start` | Start a long-running process (`name`, `command`, `port`) |
-| `POST /v1/sessions/{id}/services/list` | `service.list` | List services and state |
-| `POST /v1/sessions/{id}/services/stop` | `service.stop` | Stop and reap a service |
-| `POST /v1/sessions/{id}/http` | `http.request` | HTTP request to a running service's loopback port |
-| `POST /v1/sessions/{id}/http/stream` | `http.stream.open` | Open a streaming response |
-| `POST /v1/sessions/{id}/http/stream/read` | `http.stream.read` | Read the next chunk (or `pending`) |
-| `POST /v1/sessions/{id}/http/stream/close` | `http.stream.close` | Close and reap the stream |
-| `POST /v1/sessions/{id}/ws/open` | `ws.open` | Open a loopback WebSocket |
-| `POST /v1/sessions/{id}/ws/read` | `ws.read` | Read the next message (or `pending`) |
-| `POST /v1/sessions/{id}/ws/send` | `ws.send` | Send a text/binary message |
-| `POST /v1/sessions/{id}/ws/close` | `ws.close` | Close the WebSocket |
+All rows use `POST /v1/sessions/{id}/operations`; the envelope's `op` selects the operation.
 
-All four take the same body as `/exec`:
+| Envelope `op` | Purpose |
+|---|---|
+| `service.start` | Start a long-running process (`name`, `command`, `port`) |
+| `service.list` | List services and state |
+| `service.stop` | Stop and reap a service |
+| `http.request` | HTTP request to a running service's loopback port |
+| `http.stream.open` | Open a streaming response |
+| `http.stream.read` | Read the next chunk (or `pending`) |
+| `http.stream.close` | Close and reap the stream |
+| `ws.open` | Open a loopback WebSocket |
+| `ws.read` | Read the next message (or `pending`) |
+| `ws.send` | Send a text/binary message |
+| `ws.close` | Close the WebSocket |
+
+All operations use the same body:
 
 ```json
 { "requestId": "…", "envelope": "<base64 sealed box>", "timeoutMs": 30000, "waitMs": 40000 }

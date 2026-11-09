@@ -125,7 +125,7 @@ export class OperationService {
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<TransferResult | OperationError> {
-    return this.rt.run<TransferResult>(handle, operation, requestId, 0, timeoutMs, signal, "transfers");
+    return this.rt.run<TransferResult>(handle, operation, requestId, 0, timeoutMs, signal);
   }
 
   getOperation(handle: SessionHandle, requestId: string, waitMs = 20_000): Promise<GuestResult | null> {
