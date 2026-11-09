@@ -5,13 +5,16 @@
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
+import type { TerminationStore } from "./store/ports.js";
+
+type TerminationContext = Omit<ReconcilerContext, "store"> & { store: TerminationStore };
 import { RefundService } from "./refunds.js";
 import type { SessionRecord } from "./store.js";
 
 export class Termination {
   private readonly refunds: RefundService;
 
-  constructor(private readonly ctx: ReconcilerContext) {
+  constructor(private readonly ctx: TerminationContext) {
     this.refunds = new RefundService(ctx.store);
   }
 

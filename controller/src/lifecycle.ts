@@ -4,6 +4,9 @@
 import { canResume, canSuspend, idleExpired, lifetimeExpired, metrics, suspendedExpired } from "@x402s/shared";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
+import type { LifecycleStore } from "./store/ports.js";
+
+type LifecycleContext = Omit<ReconcilerContext, "store"> & { store: LifecycleStore };
 import type { SessionRecord } from "./store.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { Provisioning } from "./provisioning.js";
@@ -22,7 +25,7 @@ export class LifecycleError extends Error {
 
 export class Lifecycle {
   constructor(
-    private readonly ctx: ReconcilerContext,
+    private readonly ctx: LifecycleContext,
     private readonly provisioning: Provisioning,
   ) {}
 

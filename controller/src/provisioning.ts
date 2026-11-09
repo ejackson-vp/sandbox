@@ -5,6 +5,9 @@ import { LATENCY_BUCKETS, lifetimeExpired, metrics } from "@x402s/shared";
 import { proxyTokenFor } from "./config.js";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
+import type { ProvisioningStore } from "./store/ports.js";
+
+type ProvisioningContext = Omit<ReconcilerContext, "store"> & { store: ProvisioningStore };
 import { newOpaqueToken, sha256Hex } from "./tokens.js";
 import type { SessionRecord } from "./store.js";
 import { snapshotOf } from "./session-snapshot.js";
@@ -12,7 +15,7 @@ import type { WarmPool } from "./warm-pool.js";
 
 export class Provisioning {
   constructor(
-    private readonly ctx: ReconcilerContext,
+    private readonly ctx: ProvisioningContext,
     private readonly warm: WarmPool,
   ) {}
 

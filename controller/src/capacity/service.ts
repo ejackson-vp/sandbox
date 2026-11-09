@@ -5,7 +5,8 @@
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
 import type { ControllerConfig } from "../config.js";
 import type { Provisioner } from "../k8s.js";
-import type { SessionRecord, Store } from "../store.js";
+import type { SessionRecord } from "../store.js";
+import type { CapacityStore } from "../store/ports.js";
 import { admitCapacity } from "./admission.js";
 import { availableOnNode, placementCandidates } from "./placement.js";
 import type {
@@ -20,7 +21,7 @@ import type { ReservationAdmission, ReservationRecord, ReservationStore } from "
 
 export interface CapacityDeps {
   cfg: ControllerConfig;
-  store: Store;
+  store: CapacityStore;
   provisioner: Provisioner;
   /** Override the reservation store port; defaults to Store's SQLite adapter. */
   reservations?: ReservationStore;

@@ -5,9 +5,9 @@
 import { remainingSeconds as remainingLeaseSeconds } from "@x402s/shared";
 import type { ControllerSessionView } from "@x402s/shared";
 import { snapshotOf } from "./session-snapshot.js";
-import type { Store } from "./store.js";
+import type { SessionViewStore } from "./store/ports.js";
 
-export function describeSession(store: Store, id: string): ControllerSessionView | null {
+export function describeSession(store: SessionViewStore, id: string): ControllerSessionView | null {
   const session = store.getSession(id);
   if (!session) return null;
   const payment = store.getPayment(session.paymentKey);

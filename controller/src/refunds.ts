@@ -9,12 +9,13 @@
  */
 import { metrics } from "@x402s/shared";
 import { log } from "@x402s/shared";
-import type { SessionRecord, SessionState, Store } from "./store.js";
+import type { SessionRecord, SessionState } from "./store.js";
+import type { RefundStore } from "./store/ports.js";
 
 export type RefundOutcome = "refunded" | "pending" | "not_applicable";
 
 export class RefundService {
-  constructor(private readonly store: Store) {}
+  constructor(private readonly store: RefundStore) {}
 
   /** Repair a crash between finalisation and the refund write. */
   reconcile(): void {

@@ -31,7 +31,9 @@ function* files(dir) {
 const offenders = [];
 for (const root of ROOTS) {
   for (const path of files(join(ROOT, root))) {
-    const lines = readFileSync(path, "utf8").split("\n").length;
+    // Count real lines: a file ending in "\n" must not gain a phantom line.
+    const text = readFileSync(path, "utf8").replace(/\n$/, "");
+    const lines = text.split("\n").length;
     if (lines > MAX_LINES) offenders.push({ path: relative(ROOT, path), lines });
   }
 }
