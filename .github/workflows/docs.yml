@@ -24,8 +24,8 @@ jobs:
     name: markdownlint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: DavidAnson/markdownlint-cli2-action@v25
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: DavidAnson/markdownlint-cli2-action@696eb3f2509270d7b882d2aa68347bc676e7af34 # v25
         with:
           globs: |
             *.md
@@ -38,8 +38,8 @@ jobs:
     name: internal links
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: lycheeverse/lychee-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
         with:
           # Offline mode keeps CI deterministic: it verifies every relative link
           # and anchor target. External URLs are checked on demand locally.
