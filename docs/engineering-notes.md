@@ -6,18 +6,19 @@ method is in [benchmark-methodology.md](benchmark-methodology.md).
 
 ## The create path is the product, not the VM boot
 
-The headline warm number — 179 ms server-side ready (p50) — is claim and
+The headline warm number — 127 ms server-side ready (p50) — is claim and
 readiness of a running VM, not microVM boot. That distinction matters when
 comparing against providers that quote cold boot: the honest comparison here is
 the 2.69 s cold figure, and even that assumes the image is already on the node.
 
 What the numbers do show is that the interesting cost is elsewhere. Warm client
-ready is 665 ms against 179 ms server-side. Roughly 486 ms happens in the client
-path: payment, the 402 challenge round trip, SDK readiness polling at 250 ms, and
-network. The VM is not the problem.
+ready is 395 ms against 127 ms server-side. Roughly 268 ms happens before the
+client can use the VM: the paid create request and payment (~175 ms) plus
+readiness polling and network. 0.1.16 removed the 402 challenge round trip from
+repeat creates and one redundant capacity call; the VM is not the problem.
 
 That gap is the product target. A user does not care that the pod was ready in
-179 ms if they waited two-thirds of a second to run a command.
+127 ms if they waited nearly 400 ms to run a command.
 
 ## Burst traffic queues; it does not thrash
 
@@ -43,21 +44,27 @@ than capacity.
 
 Idle memory is about 182 MiB of host-side cost per guest (VM plus shim, not guest
 RSS). A pool of 20 costs roughly 3.6 GiB across two nodes — the price of the
-179 ms claim, and the reason pool size is a config knob rather than a default.
+127 ms claim, and the reason pool size is a config knob rather than a default.
 
 ## Three experiments, in order
 
-1. **Remove the readiness poll.** The SDK polls every 250 ms. A pushed `READY`
-   event or a long-poll should cut most of the client-side gap. Cheapest change
-   with the largest effect.
-2. **Collapse the x402 round trip.** Preflight and pre-sign repeat creates so the
-   402 challenge is not on the critical path. Payment remains verifiable; it just
-   stops costing a full round trip.
-3. **Audit the claim path.** The reconciler ticks at 250 ms. That tick is a
-   candidate for an event-driven wakeup, at the cost of more moving parts.
+1. **Cut the paid create path.** Payment verify/settle is ~20 ms; the rest of the
+   ~175 ms create is the paid request and the controller entitlement round trips.
+   Folding the post-create `getSession` into the completion response is the next
+   contained win.
+2. **Push readiness instead of polling.** Polling and network are ~90 ms of the
+   remaining gap. A pushed `READY` event or long-poll removes the tick, but it is
+   smaller than the create path now.
+3. **Audit the claim path.** Pick/relabel is ~50 ms at p50 with a p95 tail. The
+   reconciler tick is a candidate for an event-driven wakeup, at the cost of more
+   moving parts.
 
-Provisional targets: warm server p50 100–150 ms, warm client p50 400–500 ms,
-holding the same p95 discipline. No correctness check gets removed for latency.
+Done in 0.1.16: the 402 challenge is cached per session spec, and the paid path
+makes one capacity decision instead of two. It moved client p50 665 → 395 ms and
+server p50 179 → 127 ms.
+
+The provisional targets are met (server 100–150, client 400–500); the next pass
+is p95 (286 / 708 ms). No correctness check gets removed for latency.
 
 ## What we deliberately did not optimise
 

@@ -16,9 +16,9 @@ signup — and the control plane never sees what you run.
 
 | Warm session ready | Exec round trip | Host cost per idle guest | Test suite |
 | :---: | :---: | :---: | :---: |
-| **179 ms** p50 | **53 ms** p50 | **~182 MiB** | **177 CI tests** |
+| **127 ms** p50 | **53 ms** p50 | **~182 MiB** | **180 CI tests** |
 
-Kata on two nodes with a 20-guest warm pool; p50 unless stated.
+Kata on two nodes with a 20-guest warm pool, control 0.1.16; p50 unless stated.
 [Method and caveats](docs/performance-cluster.md).
 
 ## Why
@@ -130,10 +130,14 @@ All session endpoints require `X-Sandbox-Capability`. Reference:
 
 | Metric | n | p50 | p95 |
 | --- | ---: | ---: | ---: |
-| Warm server ready (pool = 20) | 30 | **179 ms** | 340 ms |
-| Warm client ready | 30 | 665 ms | 948 ms |
+| Warm server ready (pool = 20) | 50 | **127 ms** | 286 ms |
+| Warm client ready | 50 | **395 ms** | 708 ms |
 | Existing-session exec | 50 | **53 ms** | 108 ms |
 | Cold server ready (image cached) | 10 | 2.69 s | 3.33 s |
+
+0.1.16 caches the x402 challenge for repeat creates and removes a redundant
+capacity round trip; warm client ready fell from 665 ms to 395 ms (p50, steady
+client with the challenge cached) and the server side from 179 ms to 127 ms.
 
 60 concurrent held sessions and 25/25 burst creates completed with zero failures;
 the bottleneck is the create queue at ~1.3/s, not VM boot. Sources:

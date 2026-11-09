@@ -12,7 +12,7 @@ quote for this deployment.
 | Nodes | 2 × 8 vCPU, ~13 GiB allocatable each |
 | Runtime | Kata Containers + Cloud Hypervisor (`handler: kata`) |
 | CNI | Cilium, kube-proxy replacement |
-| Control image | `0.1.10` |
+| Control image | `0.1.16` |
 | Guest image | `0.1.6` (pinned by digest) |
 | Warm pool | 20 pre-booted guests |
 | Client | macOS, SDK over Tailscale |
@@ -34,14 +34,14 @@ Warm runs pace creates 1.2 s apart so the pool can replenish.
 
 | Metric | n | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: | ---: |
-| Warm server ready (pool=20) | 30 | **179 ms** | **340 ms** | 398 ms |
-| Warm client ready | 30 | 665 ms | 948 ms | 956 ms |
+| Warm server ready (pool=20) | 50 | **127 ms** | **286 ms** | — |
+| Warm client ready | 50 | **395 ms** | **708 ms** | — |
 | Cold server ready (pool=0, image cached) | 10 | **2.69 s** | **3.33 s** | — |
 | Cold client ready | 10 | 2.87 s | 3.96 s | — |
 | Existing-session exec | 50 | **53 ms** | **108 ms** | 216 ms |
 | Destroy | 30 | 181 ms | 253 ms | 260 ms |
 
-Warm components: payment + create p50 **481 ms**, first exec p50 **67 ms**.
+Warm components: client create p50 **175 ms** (steady state, challenge cached), API entitlement p50 **89 ms**, first exec p50 **67 ms**.
 Idle memory: pool 0 → 4.40 GiB across both nodes, pool 20 → 8.03 GiB, i.e.
 **~182 MiB host-side per idle guest** (VM + shim, not guest RSS).
 
@@ -60,13 +60,15 @@ nodes.
 - **Cold means the image is already on both nodes.** A registry pull adds time.
 - Idle memory is a node delta, so it includes shim and page-cache noise.
 - p95 with n=10 cold is effectively the maximum.
-- The 179 ms warm figure is **claim/readiness of a running VM**, not microVM
+- The 127 ms warm figure is **claim/readiness of a running VM**, not microVM
   boot. Do not compare it to cold-start numbers from providers.
 
 ## Next experiments
 
-The 486 ms gap between server and client is the product target. The ranked list,
-the burst analysis and the reasoning are in
-[engineering-notes.md](engineering-notes.md). Provisional targets: **server warm
-p50 100–150 ms**, **client warm p50 400–500 ms**, with the same p95 discipline.
+The remaining gap — 395 ms client against 127 ms server — is ~268 ms. 0.1.16
+removed the 402 round trip and one capacity decision; what remains is the paid
+create request and payment (~175 ms) plus readiness polling and network. The
+ranked list, the burst analysis and the reasoning are in
+[engineering-notes.md](engineering-notes.md). The provisional targets are met on
+0.1.16 (**server 127 ms**, **client 395 ms**); the next pass is p95 (286 / 708 ms).
 Do not remove correctness checks for latency.
