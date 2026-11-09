@@ -29,6 +29,8 @@ spec:
   template:
     metadata:
       labels: {app: api}
+      annotations:
+        reloader.stakater.com/auto: "true"
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false

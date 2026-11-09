@@ -24,6 +24,8 @@ spec:
   template:
     metadata:
       labels: {app: relay}
+      annotations:
+        reloader.stakater.com/auto: "true"
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false

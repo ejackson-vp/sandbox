@@ -37,6 +37,8 @@ spec:
   template:
     metadata:
       labels: {app: controller}
+      annotations:
+        reloader.stakater.com/auto: "true"
     spec:
       enableServiceLinks: false
       serviceAccountName: sandbox-controller

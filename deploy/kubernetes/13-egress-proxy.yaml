@@ -24,6 +24,8 @@ spec:
   template:
     metadata:
       labels: {app: egress-proxy}
+      annotations:
+        reloader.stakater.com/auto: "true"
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
