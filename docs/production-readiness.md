@@ -46,8 +46,11 @@ concrete next step.
   no workload can forge `X-Forwarded-For`; kind keeps it at 0.
 - **Image scanning** runs in the release workflow: Trivy on both images, SARIF
   to the Security tab, and a failure on fixable CRITICAL/HIGH.
-- **Per-session mTLS** between API and controller instead of a shared bearer
-  token (NetworkPolicy is the only other control).
+- **API→controller mTLS**: the controller's 3004 listener requires a client
+  certificate with `CN=api`; the API presents it and no longer sends the bearer
+  token on that path. NetworkPolicy admits the API only on 3004. The relay keeps
+  the HTTP port and its low-privilege wake token — moving it to mTLS is the
+  remaining half.
 - **Capability derivation trade-off**: capabilities are HMAC(payment key) so a
   retried request can recover them. A leaked `PAYMENT-SIGNATURE` after settlement
   could recover the capability. Mitigation options: short capability TTL (already
