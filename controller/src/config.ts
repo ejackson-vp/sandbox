@@ -94,9 +94,8 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   }
 
   const runtimeClass = env.RUNTIME_CLASS ?? "x402-sandbox";
-  // Retained only for guest-image digest enforcement. It no longer gates
-  // execution: there is nothing to acknowledge, because no mode is
-  // hardware-backed and the documentation says so plainly.
+  // Gates guest-image digest enforcement only; no execution mode is
+  // hardware-backed, so there is nothing else to acknowledge.
   const allowInsecureDev = bool(env.ALLOW_INSECURE_DEV, true);
 
   const adminToken = env.ADMIN_TOKEN ?? "";
