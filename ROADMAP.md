@@ -12,10 +12,11 @@ of risk.
 1. **Make payment records survive schema changes.** `migrate()` drops every
    table on a version bump, including `payments`, `payment_intents` and
    `payment_ledger`. Split durable payment migrations from disposable session
-   tables and add the backup/restore runbook before real settlement.
+   tables and add the backup/restore runbook before real settlement. (#18)
 2. **Fence recovery.** A restarted controller clears the operation gate without
    proving the old guest operation stopped, and intent claims use a stale
    timeout without a fencing token. Both can hand a session to a second worker.
+   (#19, #20)
 3. **Close the relay restart window.** A create that lands during a relay
    replacement can lose its registration (#17). Re-register before the guest's
    dial deadline, or drain creates while the relay is not ready.
@@ -23,14 +24,14 @@ of risk.
    and server p50 179 → 127 ms. The remaining ~268 ms is payment/create
    (~175 ms) plus polling and network; p95 is 708 / 286 ms. A pushed `READY`
    event or long-poll removes the tick; folding the post-create `getSession`
-   into the completion response is the smaller first cut.
+   into the completion response is the smaller first cut. (#26, #27)
 5. **Move the store behind an adapter tested against a second backend.**
    SQLite is the single writer and therefore the HA ceiling. Postgres or
    DynamoDB with conditional writes, preserving the unique payment key and
-   guarded transitions.
+   guarded transitions. (#25)
 6. **Relay state out of process.** One in-memory relay pod loses pending
    ciphertext on restart. Redis or NATS with per-session queues and TTLs,
-   ciphertext only.
+   ciphertext only. (#24)
 
 ## Later
 
