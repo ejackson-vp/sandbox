@@ -28,11 +28,9 @@ import {
   type SessionState,
 } from "./store/models.js";
 import { migrate } from "./store/schema.js";
+import { prepareStatements } from "./store/statements.js";
 import { finalStateForReason, SOURCE_STATES } from "@x402s/shared";
 
-/** SQL `IN (...)` list derived from the domain transition table. */
-const statesIn = (event: keyof typeof SOURCE_STATES): string =>
-  SOURCE_STATES[event].map((state) => `'${state}'`).join(",");
 import { ReservationRepository } from "./capacity/reservations.js";
 import type { ReservationStore } from "./capacity/reservation-store.js";
 
@@ -77,144 +75,7 @@ export class Store {
     }
     this.reservations = new ReservationRepository(this.db);
 
-    this.stmts = {
-      insertPayment: this.db.prepare(
-        `INSERT INTO payments (payment_key, network, scheme, asset, amount, pay_to, payer, tx, mode, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ),
-      insertSession: this.db.prepare(
-        `INSERT INTO sessions (
-           id, capability_hash, capability_expires_at, client_public_key, client_nonce,
-           tier, duration_seconds, cpu_millis, memory_mib, disk_mib, max_output_bytes,
-           max_file_bytes, max_command_seconds, max_processes,
-           state, created_at, paid_at, payment_key, runtime_class, execution_mode,
-           relay_token_hash, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ),
-      getSession: this.db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = ?`),
-      getPayment: this.db.prepare("SELECT * FROM payments WHERE payment_key = ?"),
-      getIntent: this.db.prepare("SELECT * FROM payment_intents WHERE payment_key = ?"),
-      insertLedger: this.db.prepare(
-        `INSERT INTO payment_ledger
-           (payment_key, session_id, payer, amount, asset, network, mode, status, reason, refund_tx, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'SETTLED', NULL, NULL, ?, ?)`,
-      ),
-      getLedgerByPayment: this.db.prepare("SELECT * FROM payment_ledger WHERE payment_key = ?"),
-      getLedgerBySession: this.db.prepare("SELECT * FROM payment_ledger WHERE session_id = ?"),
-      listLedgerByStatus: this.db.prepare(
-        "SELECT * FROM payment_ledger WHERE status = ? ORDER BY updated_at ASC",
-      ),
-      listUnrefundedTerminalBeforeReady: this.db.prepare(
-        `SELECT l.* FROM payment_ledger l JOIN sessions s ON s.id = l.session_id
-         WHERE l.status = 'SETTLED' AND s.ready_at IS NULL
-           AND s.state IN ('FAILED','EXPIRED','DESTROYED')
-         ORDER BY l.updated_at ASC LIMIT 100`,
-      ),
-      markRefundPending: this.db.prepare(
-        `UPDATE payment_ledger SET status='REFUND_PENDING', reason=?, updated_at=?
-         WHERE payment_key=? AND status='SETTLED'`,
-      ),
-      markRefunded: this.db.prepare(
-        `UPDATE payment_ledger SET status='REFUNDED', reason=?, refund_tx=?, updated_at=?
-         WHERE payment_key=? AND status IN ('SETTLED','REFUND_PENDING')`,
-      ),
-      insertIntent: this.db.prepare(
-        `INSERT INTO payment_intents (payment_key, status, session_id, spec_hash, reason, created_at, updated_at)
-         VALUES (?, 'claimed', NULL, ?, NULL, ?, ?)`,
-      ),
-      reclaimIntent: this.db.prepare(
-        "UPDATE payment_intents SET status='claimed', reason=NULL, updated_at=? WHERE payment_key=?",
-      ),
-      settleIntent: this.db.prepare(
-        "UPDATE payment_intents SET status='settled', session_id=?, updated_at=? WHERE payment_key=?",
-      ),
-      failIntent: this.db.prepare(
-        "UPDATE payment_intents SET status='failed', reason=?, updated_at=? WHERE payment_key=?",
-      ),
-      listNonTerminal: this.db.prepare(
-        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDING','SUSPENDED','RESUMING','TERMINATING')`,
-      ),
-      listTerminalWithPod: this.db.prepare(
-        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('EXPIRED','FAILED','DESTROYED') AND pod_name IS NOT NULL`,
-      ),
-      listTerminalWithPvc: this.db.prepare(
-        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('EXPIRED','FAILED','DESTROYED') AND workspace_pvc IS NOT NULL`,
-      ),
-      initLifecycle: this.db.prepare(
-        `UPDATE sessions SET idle_policy_json=?, max_lifetime_seconds=?, last_activity_at=?,
-           workspace_pvc=?, suspended_at=?, resume_count=?, baseline_cpu_millis=?,
-           baseline_memory_mib=?, updated_at=? WHERE id=?`,
-      ),
-      touchActivity: this.db.prepare(
-        "UPDATE sessions SET last_activity_at=?, updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')",
-      ),
-      markSuspending: this.db.prepare(
-        `UPDATE sessions SET state='SUSPENDING', updated_at=? WHERE id=? AND state IN (${statesIn("suspend_requested")})`,
-      ),
-      markSuspended: this.db.prepare(
-        `UPDATE sessions SET state='SUSPENDED', suspended_at=?, lease_expires_at=NULL,
-           pod_name=NULL, updated_at=? WHERE id=? AND state IN (${statesIn("guest_stopped")})`,
-      ),
-      markResuming: this.db.prepare(
-        `UPDATE sessions SET state='RESUMING', pod_name=?, suspended_at=NULL,
-           resume_count=resume_count+1, lease_expires_at=NULL, updated_at=?
-         WHERE id=? AND state IN (${statesIn("resume_requested")})`,
-      ),
-      setWorkspacePvc: this.db.prepare("UPDATE sessions SET workspace_pvc=?, updated_at=? WHERE id=?"),
-      setNodeName: this.db.prepare("UPDATE sessions SET node_name=?, updated_at=? WHERE id=?"),
-      clearWorkspacePvc: this.db.prepare("UPDATE sessions SET workspace_pvc=NULL, updated_at=? WHERE id=?"),
-      setProvisioning: this.db.prepare(
-        `UPDATE sessions SET pod_name = ?, state = 'PROVISIONING', updated_at = ? WHERE id = ? AND state IN (${statesIn("provision_requested")})`,
-      ),
-      setRelayToken: this.db.prepare("UPDATE sessions SET relay_token_hash = ?, updated_at = ? WHERE id = ?"),
-      setReady: this.db.prepare(
-        `UPDATE sessions SET state='READY', ready_at=?, lease_expires_at=?, attestation_json=?,
-           guest_public_key=?, last_activity_at=?, updated_at=?
-         WHERE id=? AND state IN (${statesIn("guest_ready")})
-           AND pod_name IS NOT NULL AND relay_token_hash IS NOT NULL`,
-      ),
-      requestTermination: this.db.prepare(
-        `UPDATE sessions SET state='TERMINATING', terminating_at=?, termination_reason=?, updated_at=?
-         WHERE id=? AND state IN (${statesIn("terminate_requested")})`,
-      ),
-      setFailure: this.db.prepare(
-        "UPDATE sessions SET failure_code = ?, failure_message = ?, updated_at = ? WHERE id = ?",
-      ),
-      finalize: this.db.prepare(
-        `UPDATE sessions SET state=?, destroyed_at=?, active_request_id=NULL, updated_at=?
-         WHERE id=? AND state IN (${statesIn("terminated")})`,
-      ),
-      requestDestroy: this.db.prepare(
-        "UPDATE sessions SET destroy_requested = 1, updated_at = ? WHERE id = ? AND state NOT IN ('EXPIRED','FAILED','DESTROYED')",
-      ),
-      markRelayPurged: this.db.prepare("UPDATE sessions SET relay_purged_at = ?, updated_at = ? WHERE id = ?"),
-      clearPod: this.db.prepare("UPDATE sessions SET pod_name = NULL, updated_at = ? WHERE id = ?"),
-      mergeTimings: this.db.prepare(
-        "UPDATE sessions SET timings_json = json_patch(COALESCE(timings_json, '{}'), ?), updated_at = ? WHERE id = ?",
-      ),
-      clearActive: this.db.prepare(
-        "UPDATE sessions SET active_request_id = NULL, state = CASE WHEN state='ACTIVE' THEN 'READY' ELSE state END, updated_at = ? WHERE id = ? AND active_request_id = ?",
-      ),
-      abandonPendingRequests: this.db.prepare(
-        "UPDATE exec_requests SET state = 'abandoned', updated_at = ? WHERE state = 'pending'",
-      ),
-      clearAllActiveRequests: this.db.prepare(
-        `UPDATE sessions SET active_request_id = NULL, updated_at = ?
-         WHERE active_request_id IS NOT NULL AND state NOT IN ('EXPIRED','FAILED','DESTROYED')`,
-      ),
-      countSessions: this.db.prepare("SELECT COUNT(*) AS n FROM sessions"),
-      countPayments: this.db.prepare("SELECT COUNT(*) AS n FROM payments"),
-      insertRequest: this.db.prepare(
-        "INSERT INTO exec_requests (id, session_id, op, state, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?)",
-      ),
-      getRequest: this.db.prepare("SELECT * FROM exec_requests WHERE session_id = ? AND id = ?"),
-      finishRequest: this.db.prepare(
-        "UPDATE exec_requests SET state = ?, updated_at = ? WHERE session_id = ? AND id = ?",
-      ),
-      listPendingRequests: this.db.prepare(
-        "SELECT * FROM exec_requests WHERE session_id = ? AND state = 'pending'",
-      ),
-    };
+    this.stmts = prepareStatements(this.db);
   }
 
   close(): void {
