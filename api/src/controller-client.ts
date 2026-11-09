@@ -5,14 +5,9 @@
 import { readFileSync } from "node:fs";
 import { Agent, fetch as undiciFetch } from "undici";
 import type {
-  AttestationEnvelope,
   EntitlementRequest,
-  PaymentSummary,
-  SessionLimits,
   SessionSpec,
   SessionState,
-  SessionTier,
-  SessionTimings,
   ControllerSessionView,
 } from "@x402s/shared";
 

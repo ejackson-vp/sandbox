@@ -11,7 +11,6 @@
  */
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import {
-  SESSION_COLUMNS,
   mapIntent,
   mapLedger,
   mapSession,

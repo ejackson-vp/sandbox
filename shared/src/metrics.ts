@@ -8,11 +8,6 @@
 
 export type Labels = Record<string, string>;
 
-interface Sample {
-  labels: Labels;
-  value: number;
-}
-
 function keyOf(labels: Labels): string {
   const entries = Object.entries(labels).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return entries.map(([k, v]) => `${k}="${v.replace(/["\\]/g, "_")}"`).join(",");

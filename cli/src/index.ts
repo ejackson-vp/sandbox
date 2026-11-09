@@ -14,7 +14,6 @@ import { readFile, writeFile, stat, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { parseArgs } from "node:util";
-import { randomBytes } from "node:crypto";
 import {
   SandboxClient,
   SandboxError,
