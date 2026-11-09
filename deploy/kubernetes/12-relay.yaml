@@ -19,6 +19,11 @@ metadata:
   labels: {app: relay}
 spec:
   replicas: 1
+  # The relay's session registry is in memory. A rolling update would run two
+  # relays at once, and register/claim/attach could each land on a different
+  # pod, so a warm claim would be accepted by one relay and its guest reconnect
+  # rejected by the other. Recreate keeps exactly one registry.
+  strategy: {type: Recreate}
   selector:
     matchLabels: {app: relay}
   template:
