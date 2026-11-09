@@ -3,10 +3,11 @@
  * the wire shape can be reviewed and tested without Express.
  */
 import { remainingSeconds as remainingLeaseSeconds } from "@x402s/shared";
+import type { ControllerSessionView } from "@x402s/shared";
 import { snapshotOf } from "./session-snapshot.js";
 import type { Store } from "./store.js";
 
-export function describeSession(store: Store, id: string) {
+export function describeSession(store: Store, id: string): ControllerSessionView | null {
   const session = store.getSession(id);
   if (!session) return null;
   const payment = store.getPayment(session.paymentKey);
@@ -34,7 +35,10 @@ export function describeSession(store: Store, id: string) {
     failureCode: session.failureCode ?? undefined,
     failureMessage: session.failureMessage ?? undefined,
     runtimeClass: session.runtimeClass ?? undefined,
-    executionMode: session.executionMode ?? undefined,
+    executionMode:
+      session.executionMode === "dev" || session.executionMode === "kata"
+        ? session.executionMode
+        : undefined,
     busy: session.activeRequestId !== null,
     suspendedAt: session.suspendedAt ?? undefined,
     resumeCount: session.resumeCount,

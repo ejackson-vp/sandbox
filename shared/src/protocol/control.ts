@@ -1,7 +1,49 @@
 /**
  * Internal control-plane contract (API server <-> controller).
  */
-import type { SessionSpec, SessionState } from "./lifecycle.js";
+import type {
+  IdlePolicy,
+  SessionLimits,
+  SessionSpec,
+  SessionState,
+  SessionTier,
+} from "./lifecycle.js";
+import type { AttestationEnvelope } from "./attestation.js";
+import type { PaymentSummary, SessionTimings } from "./session.js";
+
+/** Controller -> API session view. One definition; both sides import it. */
+export interface ControllerSessionView {
+  sessionId: string;
+  state: SessionState;
+  tier: SessionTier;
+  durationSeconds: number;
+  limits: SessionLimits;
+  createdAt: number;
+  paidAt?: number;
+  readyAt?: number;
+  leaseExpiresAt?: number;
+  remainingSeconds: number;
+  terminatingAt?: number;
+  destroyedAt?: number;
+  clientNonce: string;
+  clientPublicKey: string;
+  capabilityHash: string;
+  capabilityExpiresAt: number;
+  guestPublicKey?: string;
+  attestation?: AttestationEnvelope;
+  suspendedAt?: number;
+  resumeCount?: number;
+  maxLifetimeSeconds?: number;
+  idlePolicy?: IdlePolicy;
+  baseline?: { cpuMillis: number; memoryMiB: number };
+  failureCode?: string;
+  failureMessage?: string;
+  runtimeClass?: string;
+  executionMode?: "dev" | "kata";
+  busy: boolean;
+  timings?: SessionTimings;
+  payment: Omit<PaymentSummary, "priceUsd"> & { paymentKey: string };
+}
 
 export interface EntitlementRequest {
   sessionId: string;

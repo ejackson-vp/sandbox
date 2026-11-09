@@ -13,44 +13,10 @@ import type {
   SessionState,
   SessionTier,
   SessionTimings,
+  ControllerSessionView,
 } from "@x402s/shared";
 
-export interface SessionView {
-  sessionId: string;
-  state: SessionState;
-  tier: SessionTier;
-  durationSeconds: number;
-  limits: SessionLimits;
-  createdAt: number;
-  paidAt?: number;
-  readyAt?: number;
-  leaseExpiresAt?: number;
-  remainingSeconds: number;
-  terminatingAt?: number;
-  destroyedAt?: number;
-  clientNonce: string;
-  clientPublicKey: string;
-  capabilityHash: string;
-  capabilityExpiresAt: number;
-  guestPublicKey?: string;
-  attestation?: AttestationEnvelope;
-  suspendedAt?: number;
-  resumeCount?: number;
-  maxLifetimeSeconds?: number;
-  idlePolicy?: {
-    maxIdleSeconds?: number;
-    suspendedDurationSeconds?: number;
-    autoResume?: boolean;
-  };
-  baseline?: { cpuMillis: number; memoryMiB: number };
-  failureCode?: string;
-  failureMessage?: string;
-  runtimeClass?: string;
-  executionMode?: "dev" | "kata";
-  busy: boolean;
-  timings?: SessionTimings;
-  payment: PaymentSummary & { paymentKey: string };
-}
+export type SessionView = ControllerSessionView;
 
 export interface OperationResult {
   state: SessionState;
