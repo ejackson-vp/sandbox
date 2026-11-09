@@ -174,7 +174,14 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       res.status(400).json({ error: "invalid_request_id" });
       return;
     }
-    const envelope = raw.includes("-") || raw.includes("_") ? Buffer.from(raw, "base64url").toString("base64") : raw;
+    // Standard base64 only. Guessing base64url from `-`/`_` could silently
+    // reinterpret a payload as different bytes. Clients percent-encode the
+    // value, so `+` and `/` are safe in the query string.
+    if (raw.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(raw)) {
+      res.status(400).json({ error: "invalid_envelope_encoding" });
+      return;
+    }
+    const envelope = raw;
     try {
       const out = await deps.controller.operation(session.sessionId, {
         requestId,

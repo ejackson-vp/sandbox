@@ -3,23 +3,13 @@ import {
   loadTiers,
   type PlatformLimits,
   type TierTable,
+  envBool as bool,
+  envInt as int,
 } from "@x402s/shared";
 import { KubeProvisioner, NullProvisioner, type Provisioner } from "./k8s.js";
 import { LocalProvisioner } from "./local-provisioner.js";
 import { RelayClient } from "./relay-client.js";
 import { mintProxyToken } from "./tokens.js";
-
-function bool(v: string | undefined, def: boolean): boolean {
-  if (v === undefined || v === "") return def;
-  return ["1", "true", "yes", "on"].includes(v.toLowerCase());
-}
-
-function int(v: string | undefined, def: number, min: number, max: number): number {
-  if (v === undefined || v === "") return def;
-  const n = Number(v);
-  if (!Number.isInteger(n) || n < min || n > max) throw new Error(`invalid int ${v}`);
-  return n;
-}
 
 export type Role = "controller" | "relay" | "proxy" | "all";
 

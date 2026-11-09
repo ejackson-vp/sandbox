@@ -28,7 +28,7 @@ import {
   type SessionState,
 } from "./store/models.js";
 import { migrate } from "./store/schema.js";
-import { SOURCE_STATES } from "@x402s/shared";
+import { finalStateForReason, SOURCE_STATES } from "@x402s/shared";
 
 /** SQL `IN (...)` list derived from the domain transition table. */
 const statesIn = (event: keyof typeof SOURCE_STATES): string =>
@@ -489,16 +489,7 @@ export class Store {
     const session = this.getSession(id);
     if (!session || session.state !== "TERMINATING") return null;
     const reason = session.terminationReason ?? "";
-    let final: SessionState = "DESTROYED";
-    if (
-      reason.startsWith("lease_expired") ||
-      reason.startsWith("suspended_expired") ||
-      reason.startsWith("max_lifetime")
-    ) {
-      final = "EXPIRED";
-    }
-    else if (reason.startsWith("failure") || reason.startsWith("pod_")) final = "FAILED";
-    else if (reason.startsWith("client_destroy")) final = "DESTROYED";
+    const final = finalStateForReason(reason);
     this.stmts.finalize!.run(final, Date.now(), Date.now(), id);
     return final;
   }

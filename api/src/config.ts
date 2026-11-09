@@ -10,22 +10,11 @@ import {
   loadTiers,
   type PlatformLimits,
   type TierTable,
+  envBool as bool,
+  envInt as int,
 } from "@x402s/shared";
 
 export type PaymentMode = "mock" | "testnet";
-
-function bool(v: string | undefined, def = false): boolean {
-  if (v === undefined || v === "") return def;
-  return ["1", "true", "yes", "on"].includes(v.toLowerCase());
-}
-
-function int(v: string | undefined, def: number, min: number, max: number): number {
-  const n = v === undefined || v === "" ? def : Number(v);
-  if (!Number.isInteger(n) || n < min || n > max) {
-    throw new Error(`invalid integer config value ${v} (expected ${min}..${max})`);
-  }
-  return n;
-}
 
 const MAINNET_NETWORKS = new Set(["eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"]);
 const TESTNET_NETWORKS = new Set(["eip155:84532", "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"]);
