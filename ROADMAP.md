@@ -9,42 +9,63 @@ file-level backlog is in issues; this page keeps the order. The gap analysis is
 The issue tracker is the detailed, file-level backlog. This list keeps the order
 of risk.
 
-1. **Make payment records survive schema changes.** `migrate()` drops every
+1. **Bind warm-pool claims to the image identity.** A warm pod from an older
+   image can be claimed and attest the new digest: `pick()` does not check the
+   image and the guest trusts the claim. (#49)
+2. **Make payment records survive schema changes.** `migrate()` drops every
    table on a version bump, including `payments`, `payment_intents` and
-   `payment_ledger`. Split durable payment migrations from disposable session
-   tables and add the backup/restore runbook before real settlement. (#18)
-2. **Fence recovery.** A restarted controller clears the operation gate without
+   `payment_ledger`. F-03 on `security/audit-hardening` adds the migration
+   ladder; the backup/restore runbook remains. (#18)
+3. **Fence recovery.** A restarted controller clears the operation gate without
    proving the old guest operation stopped, and intent claims use a stale
    timeout without a fencing token. Both can hand a session to a second worker.
    (#19, #20)
-3. **Close the relay restart window.** A create that lands during a relay
+4. **Close the relay restart window.** A create that lands during a relay
    replacement can lose its registration (#17). Re-register before the guest's
    dial deadline, or drain creates while the relay is not ready.
-4. **Push readiness instead of polling.** 0.1.16 moved client p50 665 → 395 ms
+5. **Push readiness instead of polling.** 0.1.16 moved client p50 665 → 395 ms
    and server p50 179 → 127 ms. The remaining ~268 ms is payment/create
    (~175 ms) plus polling and network; p95 is 708 / 286 ms. A pushed `READY`
    event or long-poll removes the tick; folding the post-create `getSession`
    into the completion response is the smaller first cut. (#26, #27)
-5. **Move the store behind an adapter tested against a second backend.**
+6. **Move the store behind an adapter tested against a second backend.**
    SQLite is the single writer and therefore the HA ceiling. Postgres or
    DynamoDB with conditional writes, preserving the unique payment key and
    guarded transitions. (#25)
-6. **Relay state out of process.** One in-memory relay pod loses pending
+7. **Relay state out of process.** One in-memory relay pod loses pending
    ciphertext on restart. Redis or NATS with per-session queues and TTLs,
    ciphertext only. (#24)
 
+## Cross-cutting
+
+- **Observability:** a scrape-ready contract on a private port (#37) and a
+  lightweight metrics/alerting stack (#38). Log correlation is #28.
+- **Verification:** run the cluster fault matrix in CI (#39), model-check the
+  lifecycle and payment state machines (#40), and fuzz the protocol (#41).
+  Release isolation evidence is #44.
+
 ## Later
 
-- **Admission control for images.** Digest pinning exists; Kyverno or sigstore
-  policy would make a moved tag or a compromised node a second, independent
-  failure rather than the only one.
+- **Memory snapshot and restore.** Suspend/resume is disk-only today, and a
+  restored snapshot must reseed identity, entropy and network state. (#52, #53)
+- **Encrypted checkpoint storage.** Checkpoint PVCs are plaintext today, which
+  puts suspended session files in the node and storage trust domain. (#32)
 - **Real settlement reconciliation and refunds.** Mock mode auto-refunds
   terminal-before-`READY` sessions. Testnet/mainnet need facilitator webhooks or
-  an on-chain refund worker before money is real.
-- **Encrypted checkpoint storage.** Checkpoint PVCs are plaintext today, which
-  puts suspended session files in the node and storage trust domain.
+  an on-chain refund worker before money is real. (#31)
+- **Admission control for images.** Digest pinning exists; Kyverno or sigstore
+  policy would make a moved tag or a compromised node a second, independent
+  failure rather than the only one. (#30)
+- **HTTP/2 and gRPC workloads.** The guest supports HTTP/1.1, SSE and a polled
+  WebSocket; gRPC and HTTP/2 are not available today. (#55)
+- **Elastic warm pool.** Scale the pool from in-flight demand instead of a fixed
+  size, with a min/max, rate cap and scale-to-zero grace. (#54)
 - **Publish `@x402s/sdk` to npm.** The package is a workspace build today; a
-  public release makes the SDK usable without cloning the repo.
+  public release makes the SDK usable without cloning the repo. (#33)
+- **Secret rotation.** Add key ids and dual-key verification so capabilities and
+  controller tokens can rotate without draining live sessions. (#61)
+- **Incident runbooks.** Egress abuse, orphan storage and relay compromise need
+  detect/contain/recover procedures, not just alerts. (#60)
 - **Docs site.** Only if it can be generated from `docs/` without becoming a
   second source of truth.
 
