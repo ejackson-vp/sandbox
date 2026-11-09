@@ -28,6 +28,13 @@ COPY --from=build /app/sdk ./sdk
 COPY --from=build /app/api ./api
 COPY --from=build /app/controller ./controller
 COPY --from=build /app/package.json ./package.json
+
+# The runtime executes node only, never a package manager. Dropping the bundled
+# npm also drops its dependency tree (undici, brace-expansion), which was the
+# only source of fixable CVEs in this image.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
 USER 1000:1000
 EXPOSE 3000 3001 3002 3128 8443
 CMD ["node", "api/dist/main.js"]

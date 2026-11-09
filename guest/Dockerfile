@@ -7,7 +7,9 @@
 #   - a network probe used exclusively by the security test suite
 #
 # Customers never supply an image, a command, or a PodSpec.
-FROM golang:1.24-alpine AS build
+# Pinned to the patch that carries the stdlib fixes the image scan flagged
+# (net/http, crypto/x509, crypto/tls). The module now requires go >= 1.26.
+FROM golang:1.27.3-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -1,0 +1,8 @@
+# Scan suppressions, each with its reason. Keep this list short: a real finding
+# should be fixed, not silenced.
+
+# False positive. Our private root package.json is named "sandbox" at version
+# 0.1.0, which collides with an unrelated npm package of the same name
+# (vulnerable below 1.0.0). Nothing in the image installs that package: the
+# root package is "private": true and is never published or fetched.
+GHSA-gc25-3vc5-2jf9
