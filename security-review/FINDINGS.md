@@ -1,6 +1,7 @@
 # Findings
 
-Base revision: `9d4bf54`. Fixes are in the working tree (see `EVIDENCE.md`).
+Base revision: `9d4bf54`. Fixes merged in `381dad3` (PR #36); follow-up work is
+tracked as GitHub issues #31, #42–#48 and #64. See `EVIDENCE.md`.
 Severity is impact if exploited **in the configuration named in each entry**.
 Confidence: `proven` (regression test), `code-confirmed` (read and traced, not
 executed), `theoretical` (no concrete path found).

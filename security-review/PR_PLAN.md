@@ -1,12 +1,14 @@
 # PR plan
 
-The working tree contains fixes 1–5 combined (they share the integration
-fixtures). Each is separable into the PRs below; the order avoids a schema
-dependency inversion (the commitment PR needs the v8 column).
+PRs 1–5 landed together in `381dad3` (PR #36); PR 8 landed in `dd44e93`
+(PR #62). PRs 6, 7, 9 and 10 are tracked as issues. The order below still
+matters if the work is ever split: the commitment PR needs the v8 column.
 
 ---
 
 ## PR 1 — `fix(store): additive schema migrations` (F-03)
+
+**Status:** done in `381dad3` (PR #36).
 
 **Complexity:** M · **Depends on:** none
 
@@ -23,6 +25,8 @@ fail closed without data loss.
 
 ## PR 2 — `fix(egress): reserve a slot before DNS and never leak it` (F-01)
 
+**Status:** done in `381dad3` (PR #36).
+
 **Complexity:** M · **Depends on:** none
 
 - Lease reserved synchronously; idempotent release; global budget
@@ -37,6 +41,8 @@ established tunnel; global budget holds across sessions.
 ---
 
 ## PR 3 — `fix(payments): bind the session capability to the paying wallet` (F-02)
+
+**Status:** done in `381dad3` (PR #36).
 
 **Complexity:** L · **Depends on:** PR 1 (column), PR 2 (not strictly)
 
@@ -64,6 +70,8 @@ Drain or recreate sessions across the upgrade.
 
 ## PR 4 — `fix(billing): price custom sessions by CPU, RAM and disk` (F-04)
 
+**Status:** done in `381dad3` (PR #36).
+
 **Complexity:** S · **Depends on:** none
 
 - Resource units against the standard tier, integer atomic math, round up.
@@ -77,6 +85,8 @@ equals admitted spec.
 
 ## PR 5 — `fix(admission): evict buckets without resetting penalties` (F-05)
 
+**Status:** done in `381dad3` (PR #36).
+
 **Complexity:** S · **Depends on:** none
 
 - Replace `buckets.clear()` with bounded eviction; never evict the current key.
@@ -87,6 +97,8 @@ exhausted; table bounded; fresh keys still work.
 ---
 
 ## PR 6 — `ci(release): promote images only after a passing scan` (F-06)
+
+**Status:** open, tracked as #42.
 
 **Complexity:** M · **Depends on:** none · **Needs a real tag run to validate**
 
@@ -102,6 +114,8 @@ claims truthful.
 ---
 
 ## PR 7 — `fix(payments): reconcile and refund real settlement` (F-10)
+
+**Status:** open, tracked as #31.
 
 **Complexity:** L · **Depends on:** none
 
@@ -119,6 +133,8 @@ credit or refund record; double settlement is impossible.
 
 ## PR 8 — `ci: pin actions and images, scope tokens` (F-15, TokenPermissions)
 
+**Status:** done in `dd44e93` (PR #62). Pinned-dependency, token and vulnerability alerts are clear.
+
 **Complexity:** S–M · **Depends on:** none
 
 - Pin every `uses:` to a commit SHA (Dependabot keeps them current).
@@ -133,6 +149,8 @@ release still publishes both architectures.
 ---
 
 ## PR 9 — `feat(payments): freshness nonce for the client commitment` (F-07, optional)
+
+**Status:** open, tracked as #47.
 
 **Complexity:** L · **Depends on:** PR 3
 
@@ -149,6 +167,8 @@ deployment.
 ---
 
 ## PR 10 — `ci(security): run Kata and Cilium suites on a disposable cluster` (gate)
+
+**Status:** open, tracked as #44.
 
 **Complexity:** M + infrastructure · **Depends on:** none
 
