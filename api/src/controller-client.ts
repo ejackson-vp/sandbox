@@ -3,7 +3,7 @@
  * owns the single-writer database and the Kubernetes lifecycle.
  */
 import { readFileSync } from "node:fs";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import type {
   AttestationEnvelope,
   EntitlementRequest,
@@ -130,8 +130,11 @@ export class ControllerClient {
         ...(init.headers ?? {}),
       },
       signal: AbortSignal.timeout(timeoutMs),
-    } as RequestInit;
-    return fetch(new URL(path, this.baseUrl), request);
+    } as Parameters<typeof undiciFetch>[1];
+    // undici's fetch, not the global one: the global fetch uses Node's bundled
+    // undici, and a dispatcher created by the npm package is a different
+    // instance, which fails with UND_ERR_INVALID_ARG.
+    return undiciFetch(new URL(path, this.baseUrl), request) as unknown as Promise<Response>;
   }
 
   private async call<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
