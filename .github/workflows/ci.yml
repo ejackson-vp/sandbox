@@ -7,6 +7,11 @@ on:
   # Required so release.yml can gate image publishing on the test suite.
   workflow_call:
 
+# Keep the token read-only even though the repository default is now write
+# (GHCR pushes require that default; explicit workflow permissions cap it).
+permissions:
+  contents: read
+
 jobs:
   unit:
     name: unit
