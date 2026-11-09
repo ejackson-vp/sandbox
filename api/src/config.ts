@@ -44,7 +44,10 @@ export interface ApiConfig {
   maxBodyBytes: number;
   allowInsecureDev: boolean;
   publicBaseUrl: string;
-  requestTimeoutMs: number;
+  /** Time allowed to receive request headers. Receipt only; not handler time. */
+  httpHeadersTimeoutMs: number;
+  /** Time allowed to receive a complete request (headers + body). */
+  httpRequestTimeoutMs: number;
   intentStaleMs: number;
   createRateBurst: number;
   createRateRefill: number;
@@ -94,13 +97,41 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   }
 
   const controllerAdminToken = env.CONTROLLER_ADMIN_TOKEN ?? env.ADMIN_TOKEN ?? "";
-  const capabilitySecret = env.CAPABILITY_SECRET ?? controllerAdminToken;
+  if (controllerAdminToken.length < 16) {
+    throw new Error("CONTROLLER_ADMIN_TOKEN (or ADMIN_TOKEN) must be at least 16 characters");
+  }
+
+  // Key separation is not optional. The capability secret derives session
+  // capabilities; the admin token authenticates to the controller. Falling back
+  // from one to the other (the previous behaviour) meant a leaked capability key
+  // also authenticated against the controller, and rotating either one silently
+  // invalidated the other.
+  const capabilitySecret = env.CAPABILITY_SECRET ?? "";
   if (capabilitySecret.length < 16) {
-    throw new Error("CAPABILITY_SECRET (or CONTROLLER_ADMIN_TOKEN) must be at least 16 characters");
+    throw new Error("CAPABILITY_SECRET is required and must be at least 16 characters");
+  }
+  if (capabilitySecret === controllerAdminToken) {
+    throw new Error("CAPABILITY_SECRET must differ from CONTROLLER_ADMIN_TOKEN");
+  }
+
+  const port = int(env.PORT, 3000, 1, 65535);
+
+  // Absolute http(s) URL, no trailing slash: the 402 challenge appends
+  // `/v1/sessions` to it, and a stray slash produces a URL with a double slash.
+  const rawPublicBaseUrl = env.PUBLIC_BASE_URL ?? `http://localhost:${port}`;
+  let publicBaseUrl: string;
+  try {
+    const parsed = new URL(rawPublicBaseUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("unsupported scheme");
+    }
+    publicBaseUrl = rawPublicBaseUrl.replace(/\/+$/, "");
+  } catch {
+    throw new Error(`PUBLIC_BASE_URL must be an absolute http(s) URL, got ${rawPublicBaseUrl}`);
   }
 
   return {
-    port: int(env.PORT, 3000, 1, 65535),
+    port,
     paymentMode,
     network: requestedNetwork,
     // Default price is used only for the pricing endpoint when no tier is given.
@@ -113,8 +144,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     capabilityTtlSeconds: int(env.CAPABILITY_GRACE_SECONDS ?? env.CAPABILITY_TTL_SECONDS, 900, 60, 7200),
     maxBodyBytes: int(env.MAX_BODY_BYTES, 32 * 1024 * 1024, 1024, 64 * 1024 * 1024),
     allowInsecureDev,
-    publicBaseUrl: env.PUBLIC_BASE_URL ?? `http://localhost:${env.PORT ?? "3000"}`,
-    requestTimeoutMs: int(env.REQUEST_TIMEOUT_MS, 180_000, 1000, 600_000),
+    publicBaseUrl,
+    // Receipt timeouts. They bound slow-header and slow-body clients without
+    // limiting handler time, so a long-poll exec is unaffected.
+    httpHeadersTimeoutMs: int(env.HTTP_HEADERS_TIMEOUT_MS, 15_000, 1_000, 120_000),
+    httpRequestTimeoutMs: int(env.HTTP_REQUEST_TIMEOUT_MS, 60_000, 5_000, 600_000),
     intentStaleMs: int(env.PAYMENT_INTENT_STALE_MS, 30_000, 1000, 600_000),
     createRateBurst: int(env.CREATE_RATE_BURST, 30, 1, 100_000),
     createRateRefill: int(env.CREATE_RATE_REFILL, 1, 1, 100_000),

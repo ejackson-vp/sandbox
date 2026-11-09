@@ -12,6 +12,7 @@
  */
 import express, { type NextFunction, type Request, type Response } from "express";
 import { createHmac } from "node:crypto";
+import { ZodError } from "zod";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import type { Network, PaymentRequirements } from "@x402/core/types";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
@@ -238,6 +239,13 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   app.use(createSessionsRouter({ config, controller }));
 
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+    // Every current route uses safeParse and answers 400 itself. This is the
+    // backstop for a handler that throws a schema error instead: a validation
+    // failure is a client error, never a 500.
+    if (err instanceof ZodError) {
+      res.status(400).json({ error: "invalid_request", issues: err.issues });
+      return;
+    }
     if (err.name === "PayloadTooLargeError" || (err as { type?: string }).type === "entity.too.large") {
       res.status(413).json({ error: "payload_too_large" });
       return;

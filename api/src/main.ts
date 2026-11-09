@@ -18,8 +18,17 @@ async function main(): Promise<void> {
       network: config.network,
       priceUsd: config.priceUsd,
       controllerUrl: config.controllerUrl,
+      httpHeadersTimeoutMs: config.httpHeadersTimeoutMs,
+      httpRequestTimeoutMs: config.httpRequestTimeoutMs,
     });
   });
+
+  // Node's defaults are 60 s for headers and 300 s for the whole request, which
+  // leaves a slowloris-shaped client a long time per connection. Both timers
+  // stop when the request has been received: they do not cap how long a handler
+  // may run, so `exec` with a long `waitMs` is unaffected.
+  server.headersTimeout = config.httpHeadersTimeoutMs;
+  server.requestTimeout = config.httpRequestTimeoutMs;
 
   const shutdown = (signal: string) => {
     log.info("shutting_down", { signal });
