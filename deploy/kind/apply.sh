@@ -10,6 +10,13 @@ set -euo pipefail
 CONTEXT="${CONTEXT:-kind-x402-sandbox}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# Credentials are generated locally and git-ignored. Apply the namespaces and the
+# Secret before the workloads so the first pod start does not race an absent
+# Secret (CreateContainerConfigError until the next kubelet retry).
+"${ROOT}/scripts/dev-secrets.sh"
+kubectl --context "${CONTEXT}" apply -f "${ROOT}/deploy/kubernetes/00-namespaces.yaml"
+kubectl --context "${CONTEXT}" apply -f "${ROOT}/deploy/kubernetes/02-secrets-dev.yaml"
+
 kubectl --context "${CONTEXT}" apply -k "${ROOT}/deploy/kubernetes"
 
 # The shipped Service is ClusterIP: nothing outside the cluster should reach the

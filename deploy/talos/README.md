@@ -9,6 +9,11 @@ kubectl kustomize deploy/talos   # render only
 kubectl apply -k deploy/talos    # only if you are not running Flux
 ```
 
+This overlay does **not** create the `x402-secrets` Secret: the base ships no
+credentials. Create it in `sandbox-system` before applying — locally with
+`scripts/dev-secrets.sh`, on a real deployment from your secret store. The
+homelab applies it from the private repository (SOPS-encrypted).
+
 This is the overlay used for a two-node Talos cluster with the
 `kata-containers` system extension. It extends `deploy/kata`, so sandboxes run
 in microVMs, but every step below is required for them to actually schedule and

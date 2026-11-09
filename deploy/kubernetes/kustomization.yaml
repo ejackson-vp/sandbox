@@ -3,7 +3,6 @@ kind: Kustomization
 resources:
   - 00-namespaces.yaml
   - 01-runtimeclass.yaml
-  - 02-secrets-dev.yaml
   - 03-config.yaml
   - 04-rbac.yaml
   - 10-api.yaml

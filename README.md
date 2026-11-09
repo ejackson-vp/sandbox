@@ -58,6 +58,12 @@ for anything that matters.
 kubectl apply -k deploy/talos
 ```
 
+`deploy/talos` does not create credentials. Create the `x402-secrets` Secret in
+`sandbox-system` first — locally with `scripts/dev-secrets.sh`, on a deployed
+cluster from your secret store. Without it the pods stay in
+`CreateContainerConfigError`. The homelab injects it from the private
+infrastructure repo.
+
 See [deploy/talos/README.md](deploy/talos/README.md). Two steps are easy to miss
 and produce pods that never schedule or never start: the node label
 `x402.io/sandbox-pool=true`, and a StorageClass named `standard`.

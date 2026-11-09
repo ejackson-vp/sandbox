@@ -7,3 +7,6 @@ guest/bin/
 coverage/
 __pycache__/
 *.pyc
+
+# Generated local-cluster credentials (scripts/dev-secrets.sh). Never commit.
+deploy/kubernetes/02-secrets-dev.yaml
