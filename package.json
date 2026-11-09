@@ -27,7 +27,7 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.6.6",
     "@types/ws": "^8.18.0",
     "fast-check": "^4.10.2",
     "tsx": "^4.20.0",
