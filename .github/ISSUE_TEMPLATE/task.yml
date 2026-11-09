@@ -1,0 +1,52 @@
+name: Engineering task
+description: A scoped reliability, performance, data or security change
+title: ""
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for work that is not a user-facing bug or a new product
+        capability. Keep the context concrete: file paths, observed numbers, and
+        the invariant at stake. A good issue can be picked up without rereading
+        the whole repository.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What exists today. File paths, current behaviour, measurements.
+      placeholder: |
+        `controller/src/...` does X today. Measured Y at p50/Z at p95.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What breaks or is missing, who is affected, and the invariant.
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Approach
+      description: The smallest change that solves it; alternatives and non-goals.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Tests, measurements or docs that prove it is done.
+      value: |
+        - [ ]
+        - [ ] `make verify` and the relevant cluster test pass.
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Docs, ADRs, issues, PRs, benchmark runs.
+      value: |
+        -

@@ -1,21 +1,34 @@
 # Roadmap
 
-Ordered by risk and by what unlocks the next step, not by novelty. The detailed
-gap list, with the concrete next action for each item, is
+Ordered by risk and by what unlocks the next step, not by novelty. The detailed,
+file-level backlog is in issues; this page keeps the order. The gap analysis is
 [`docs/production-readiness.md`](docs/production-readiness.md).
 
 ## Next
 
-1. **Push readiness instead of polling it.** The SDK polls every 250 ms and the
-   client-side gap is roughly 486 ms against a 179 ms server-side claim. A pushed
-   `READY` event or a long-poll is the cheapest large win.
-2. **Pre-sign repeat creates.** Remove the x402 402-challenge round trip from the
-   critical path while keeping settlement verifiable.
-3. **Move the store behind an adapter tested against a second backend.**
-   SQLite is the single writer and therefore the HA ceiling. Postgres or DynamoDB
-   with conditional writes, preserving the unique payment key and guarded
-   transitions.
-4. **Relay state out of process.** One in-memory relay pod loses pending
+The issue tracker is the detailed, file-level backlog. This list keeps the order
+of risk.
+
+1. **Make payment records survive schema changes.** `migrate()` drops every
+   table on a version bump, including `payments`, `payment_intents` and
+   `payment_ledger`. Split durable payment migrations from disposable session
+   tables and add the backup/restore runbook before real settlement.
+2. **Fence recovery.** A restarted controller clears the operation gate without
+   proving the old guest operation stopped, and intent claims use a stale
+   timeout without a fencing token. Both can hand a session to a second worker.
+3. **Close the relay restart window.** A create that lands during a relay
+   replacement can lose its registration (#17). Re-register before the guest's
+   dial deadline, or drain creates while the relay is not ready.
+4. **Push readiness instead of polling.** 0.1.16 moved client p50 665 → 395 ms
+   and server p50 179 → 127 ms. The remaining ~268 ms is payment/create
+   (~175 ms) plus polling and network; p95 is 708 / 286 ms. A pushed `READY`
+   event or long-poll removes the tick; folding the post-create `getSession`
+   into the completion response is the smaller first cut.
+5. **Move the store behind an adapter tested against a second backend.**
+   SQLite is the single writer and therefore the HA ceiling. Postgres or
+   DynamoDB with conditional writes, preserving the unique payment key and
+   guarded transitions.
+6. **Relay state out of process.** One in-memory relay pod loses pending
    ciphertext on restart. Redis or NATS with per-session queues and TTLs,
    ciphertext only.
 
@@ -42,6 +55,6 @@ wallets and persistent dev environments are deliberate non-goals — see the REA
 
 ## How items leave this list
 
-Work lands as a PR with tests, and the item is removed here and from
+Work lands as a PR with tests; close the issue and remove the item here and from
 `production-readiness.md` in the same change. A roadmap entry that silently
 disappears is worse than one that stays.
