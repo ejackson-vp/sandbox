@@ -1,30 +1,17 @@
 /**
- * SQLite schema. Destructive migration is deliberate: session state is
- * disposable in this prototype, so a version bump recreates the database.
+ * SQLite schema and migrations.
+ *
+ * Payment identity, the ledger and refund obligations are money: a version
+ * bump must never recreate those tables. Migrations are additive and run in a
+ * transaction, and a database from a newer build is refused rather than
+ * silently downgraded.
  */
 import type { DatabaseSync } from "node:sqlite";
 
-const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
-export function migrate(db: DatabaseSync): void {
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA synchronous = FULL;");
-  db.exec("PRAGMA busy_timeout = 5000;");
-
-  const version = (db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined)
-    ?.user_version ?? 0;
-  if (version !== SCHEMA_VERSION) {
-    db.exec(`
-    DROP TABLE IF EXISTS reservations;
-    DROP TABLE IF EXISTS exec_requests;
-    DROP TABLE IF EXISTS sessions;
-    DROP TABLE IF EXISTS payment_ledger;
-    DROP TABLE IF EXISTS payment_intents;
-    DROP TABLE IF EXISTS payments;
-    `);
-  }
-
-  db.exec(`
+/** Tables created for a brand-new database (always the current shape). */
+const BASE_SCHEMA = `
     CREATE TABLE IF NOT EXISTS payments (
     payment_key TEXT PRIMARY KEY,
     network TEXT NOT NULL,
@@ -68,6 +55,7 @@ export function migrate(db: DatabaseSync): void {
     capability_expires_at INTEGER NOT NULL,
     client_public_key TEXT NOT NULL,
     client_nonce TEXT NOT NULL,
+    client_signer TEXT,
     tier TEXT NOT NULL,
     duration_seconds INTEGER NOT NULL,
     cpu_millis INTEGER NOT NULL,
@@ -141,6 +129,43 @@ export function migrate(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS sessions_state ON sessions(state);
     CREATE INDEX IF NOT EXISTS exec_requests_session ON exec_requests(session_id);
-  `);
-  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+`;
+
+/**
+ * v7 -> v8: record the wallet that signed the client commitment. Additive only;
+ * payments, ledger and sessions are untouched.
+ */
+function migrateV7toV8(db: DatabaseSync): void {
+  db.exec("ALTER TABLE sessions ADD COLUMN client_signer TEXT;");
+}
+
+export function migrate(db: DatabaseSync): void {
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA synchronous = FULL;");
+  db.exec("PRAGMA busy_timeout = 5000;");
+
+  const version = (db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined)
+    ?.user_version ?? 0;
+
+  if (version > SCHEMA_VERSION) {
+    throw new Error(
+      `database schema v${version} is newer than this build (v${SCHEMA_VERSION}); refusing to downgrade`,
+    );
+  }
+  if (version === SCHEMA_VERSION) return;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (version === 0) {
+      db.exec(BASE_SCHEMA);
+    } else {
+      if (version < 8) migrateV7toV8(db);
+      // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
+    }
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }

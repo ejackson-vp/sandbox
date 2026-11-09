@@ -90,4 +90,9 @@ export interface SessionSpec {
   idlePolicy?: IdlePolicy;
   /** Wall-clock cap, including suspended time. */
   maxLifetimeSeconds?: number;
+  /**
+   * The client key this payment is bound to. Part of the spec hash, so a
+   * receipt cannot be replayed with a different client key.
+   */
+  clientCommitment?: { publicKey: string; nonce: string };
 }

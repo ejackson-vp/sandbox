@@ -6,6 +6,7 @@
  * without code changes; hard caps are enforced regardless.
  */
 import { canonicalJson, sha256Hex } from "./crypto.js";
+import { formatUsd, parseUsdPrice } from "./payment.js";
 import {
   MAX_LEASE_SECONDS,
   MAX_SESSION_LIFETIME_SECONDS,
@@ -73,6 +74,23 @@ export function loadTiers(env: NodeJS.ProcessEnv = process.env): TierTable {
     const value = parsed[key];
     if (value) out[key] = { ...DEFAULT_TIERS[key], ...value };
   }
+  for (const [name, tier] of Object.entries(out)) {
+    // A bad override must not become a free, negative or NaN price, and it
+    // must not advertise a lease longer than the platform maximum.
+    const priceOk = /^\$?\d+(\.\d{1,6})?$/.test(String(tier.priceUsd));
+    const priceAtomic = priceOk ? parseUsdPrice(String(tier.priceUsd)).amount : 0n;
+    if (!priceOk || priceAtomic <= 0n) {
+      throw new Error(`invalid SESSION_TIERS.${name}.priceUsd: ${String(tier.priceUsd)}`);
+    }
+    if (!Number.isSafeInteger(tier.durationSeconds) || tier.durationSeconds < MIN_LEASE_SECONDS || tier.durationSeconds > MAX_LEASE_SECONDS) {
+      throw new Error(`invalid SESSION_TIERS.${name}.durationSeconds: ${tier.durationSeconds}`);
+    }
+    for (const field of ["cpuMillis", "memoryMiB", "diskMiB"] as const) {
+      if (!Number.isSafeInteger(tier[field]) || tier[field] <= 0) {
+        throw new Error(`invalid SESSION_TIERS.${name}.${field}: ${String(tier[field])}`);
+      }
+    }
+  }
   return out;
 }
 
@@ -121,10 +139,24 @@ export function resolveSessionSpec(
     cpuMillis = Math.trunc(req.cpuMillis ?? tiers.standard.cpuMillis);
     memoryMiB = Math.trunc(req.memoryMiB ?? tiers.standard.memoryMiB);
     diskMiB = Math.trunc(req.diskMiB ?? tiers.standard.diskMiB);
+    // Price both axes. A custom session used to cost only by duration, so
+    // 4 vCPU / 8 GiB and 100m / 128 MiB at the same duration were identical.
+    // `units` is the largest resource ratio against the standard tier, floored
+    // at a quarter so a tiny session is cheaper than standard rather than free.
     const base = tiers.standard;
-    const factor = Math.max(0.1, durationSeconds / base.durationSeconds);
-    const basePrice = Number(String(base.priceUsd).replace("$", "")) || 0.05;
-    priceUsd = `$${(basePrice * factor).toFixed(4).replace(/0+$/, "").replace(/\.$/, ".00")}`;
+    const durationFactor = Math.max(0.01, durationSeconds / base.durationSeconds);
+    const units = Math.max(
+      0.25,
+      cpuMillis / base.cpuMillis,
+      memoryMiB / base.memoryMiB,
+      diskMiB / base.diskMiB,
+    );
+    // Integer arithmetic at 1e-6 USD; round up so a paid session never
+    // under-charges by a rounding step.
+    const baseAtomic = parseUsdPrice(base.priceUsd).amount;
+    const factorMicros = BigInt(Math.ceil(durationFactor * units * 1_000_000));
+    const atomic = (baseAtomic * factorMicros + 999_999n) / 1_000_000n;
+    priceUsd = formatUsd((atomic > 0n ? atomic : 1n).toString());
   }
 
   if (durationSeconds < MIN_LEASE_SECONDS || durationSeconds > limits.maxLeaseSeconds) {
@@ -218,6 +250,9 @@ export function resolveSessionSpec(
       baseline: { cpuMillis: baselineCpuMillis, memoryMiB: baselineMemoryMiB },
       ...(idlePolicy ? { idlePolicy } : {}),
       ...(maxLifetimeSeconds !== undefined ? { maxLifetimeSeconds } : {}),
+      ...(req.clientPublicKey && req.clientNonce
+        ? { clientCommitment: { publicKey: req.clientPublicKey, nonce: req.clientNonce } }
+        : {}),
     },
     priceUsd,
   };

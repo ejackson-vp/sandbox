@@ -12,7 +12,9 @@ import {
   MOCK_NETWORK,
   MockExactClientScheme,
   TESTNET_NETWORK,
+  clientCommitmentMessage,
   formatUsd,
+  paymentKey,
   type CreateSessionRequest,
 } from "@x402s/shared";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -30,10 +32,16 @@ export interface PaidResponse {
 
 export interface Payer {
   mode: PaymentMode;
+  /** Sign the client commitment with the paying wallet. */
+  signMessage(message: string): Promise<`0x${string}`>;
   createSession(apiUrl: string, body: CreateSessionRequest): Promise<PaidResponse>;
 }
 
-function buildClient(mode: PaymentMode): { client: x402Client; address: string } {
+function buildClient(mode: PaymentMode): {
+  client: x402Client;
+  address: string;
+  signMessage: (message: string) => Promise<`0x${string}`>;
+} {
   if (mode === "mock") {
     // Ephemeral wallet: mock payments have no economic value.
     const account = privateKeyToAccount(generatePrivateKey());
@@ -41,7 +49,11 @@ function buildClient(mode: PaymentMode): { client: x402Client; address: string }
       schemes: [{ network: MOCK_NETWORK, client: new MockExactClientScheme(account) }],
       spendControls: false,
     });
-    return { client, address: account.address };
+    return {
+      client,
+      address: account.address,
+      signMessage: (message) => account.signMessage({ message }),
+    };
   }
 
   const pk = process.env.EVM_PRIVATE_KEY;
@@ -52,11 +64,15 @@ function buildClient(mode: PaymentMode): { client: x402Client; address: string }
   const client = x402Client.fromConfig({
     schemes: [{ network: TESTNET_NETWORK, client: new ExactEvmScheme(account) }],
   });
-  return { client, address: account.address };
+  return {
+    client,
+    address: account.address,
+    signMessage: (message) => account.signMessage({ message }),
+  };
 }
 
 export function createPayer(mode: PaymentMode): Payer {
-  const { client, address } = buildClient(mode);
+  const { client, address, signMessage } = buildClient(mode);
   const httpClient = new x402HTTPClient(client);
   /**
    * A challenge is a function of the session spec, not of the request. Caching
@@ -80,6 +96,7 @@ export function createPayer(mode: PaymentMode): Payer {
 
   return {
     mode,
+    signMessage,
     async createSession(apiUrl, body) {
       const url = `${apiUrl.replace(/\/$/, "")}/v1/sessions`;
       const headers = { "content-type": "application/json" };
@@ -93,10 +110,19 @@ export function createPayer(mode: PaymentMode): Payer {
       const pay = async (required: PaymentRequired): Promise<Response> => {
         const payload = await client.createPaymentPayload(required);
         const paymentHeaders = httpClient.encodePaymentSignatureHeader(payload);
+        // Prove the client key is controlled by the wallet that pays. The
+        // receipt alone then cannot be replayed by another client.
+        const commitment = await signMessage(
+          clientCommitmentMessage({
+            paymentKey: paymentKey(payload as never),
+            clientPublicKey: body.clientPublicKey,
+            clientNonce: body.clientNonce,
+          }),
+        );
         return fetch(url, {
           method: "POST",
           headers: { ...headers, ...paymentHeaders },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...body, clientSignature: commitment }),
           signal: AbortSignal.timeout(120_000),
         });
       };

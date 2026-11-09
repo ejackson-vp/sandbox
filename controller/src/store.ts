@@ -166,6 +166,7 @@ export class Store {
         session.capabilityExpiresAt,
         session.clientPublicKey,
         session.clientNonce,
+        session.clientSigner ?? null,
         session.tier,
         session.durationSeconds,
         session.limits.cpuMillis,

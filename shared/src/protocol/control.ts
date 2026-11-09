@@ -52,6 +52,8 @@ export interface EntitlementRequest {
   spec: SessionSpec;
   clientPublicKey: string;
   clientNonce: string;
+  /** Wallet that signed the client commitment (the payment authoriser). */
+  clientSigner?: string;
   payment: {
     paymentKey: string;
     network: string;

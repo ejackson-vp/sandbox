@@ -26,12 +26,15 @@ import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
 import { CapacityService } from "../../controller/src/capacity/service.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import {
+  clientCommitmentMessage,
   fromBase64,
   generateBoxKeyPair,
   generateNonce,
+  paymentKey,
   toBase64,
   type SessionStatus,
 } from "../../shared/src/index.js";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { SandboxClient, FileSessionStore, SandboxError, type SessionHandle } from "../../sdk/src/index.js";
 import { createSessionPayment, requestChallenge } from "../helpers/x402.js";
 import { makeTar } from "../helpers/tar.js";
@@ -252,12 +255,15 @@ describe("payments and entitlements", () => {
 
   it("rejects a tampered payment", async () => {
     const body = await createBody();
-    const { header } = await createSessionPayment(apiUrl, body);
+    const { header, body: signedBody } = await createSessionPayment(apiUrl, body);
     const decoded = JSON.parse(Buffer.from(header, "base64").toString("utf8"));
     decoded.payload.authorization.value = "1";
     const tampered = Buffer.from(JSON.stringify(decoded)).toString("base64");
-    const res = await postSession(body, tampered);
-    expect(res.status).toBe(402);
+    const res = await postSession(signedBody, tampered);
+    // Tampering changes the payment key, so the wallet's commitment signature
+    // no longer covers this receipt. Rejected before any settlement.
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: string }).error).toBe("client_proof_invalid");
     expect(store.countSessions()).toBe(0);
   });
 
@@ -280,13 +286,13 @@ describe("payments and entitlements", () => {
 
   it("creates exactly one session for one payment and replays idempotently", async () => {
     const body = await createBody();
-    const { header } = await createSessionPayment(apiUrl, body);
-    const first = await postSession(body, header);
+    const { header, body: signedBody } = await createSessionPayment(apiUrl, body);
+    const first = await postSession(signedBody, header);
     expect(first.status).toBe(201);
     const created = (await first.json()) as { sessionId: string; capability: string };
     const before = store.countSessions();
 
-    const replay = await postSession(body, header);
+    const replay = await postSession(signedBody, header);
     expect(replay.status).toBe(200);
     const replayBody = (await replay.json()) as { sessionId: string; capability: string };
     expect(replayBody.sessionId).toBe(created.sessionId);
@@ -294,11 +300,96 @@ describe("payments and entitlements", () => {
     expect(store.countSessions()).toBe(before);
   });
 
+  it("does not let a receipt holder bind the session to their own client key", async () => {
+    // B has A's PAYMENT-SIGNATURE but not A's wallet. B tries to bind the
+    // session to B's client key before A submits.
+    const bodyA = await createBody();
+    const { header, challenge, body: signedA } = await createSessionPayment(apiUrl, bodyA);
+    const bodyB = await createBody();
+    const b = privateKeyToAccount(generatePrivateKey());
+    const payload = decodePaymentSignatureHeader(header);
+    const bSignature = await b.signMessage({
+      message: clientCommitmentMessage({
+        paymentKey: paymentKey(payload),
+        clientPublicKey: bodyB.clientPublicKey,
+        clientNonce: bodyB.clientNonce,
+      }),
+    });
+
+    const before = store.countSessions();
+    const hijack = await postSession({ ...bodyB, clientSignature: bSignature }, header);
+    expect(hijack.status).toBe(401);
+    expect(((await hijack.json()) as { error: string }).error).toBe("client_proof_invalid");
+    expect(store.countSessions()).toBe(before);
+    expect(challenge.requirement.amount).toBeTruthy();
+
+    // A's own request still works: the hijack attempt consumed nothing.
+    const created = await postSession(signedA, header);
+    expect(created.status).toBe(201);
+    expect(store.countSessions()).toBe(before + 1);
+  });
+
+  it("does not return a capability to a client that only holds the receipt", async () => {
+    // A pays and owns a live session. B steals the header and asks for the
+    // capability with its own client key, then with A's key but no proof.
+    const bodyA = await createBody();
+    const { header, body: signedA, account: payer } = await createSessionPayment(apiUrl, bodyA);
+    const first = await postSession(signedA, header);
+    expect(first.status).toBe(201);
+    const created = (await first.json()) as { sessionId: string; capability: string };
+
+    const bodyB = await createBody();
+    const b = privateKeyToAccount(generatePrivateKey());
+    const payload = decodePaymentSignatureHeader(header);
+    const bSignature = await b.signMessage({
+      message: clientCommitmentMessage({
+        paymentKey: paymentKey(payload),
+        clientPublicKey: bodyB.clientPublicKey,
+        clientNonce: bodyB.clientNonce,
+      }),
+    });
+
+    // B's own wallet cannot sign A's payment: rejected before any intent work.
+    const bAttempt = await postSession({ ...bodyB, clientSignature: bSignature }, header);
+    expect(bAttempt.status).toBe(401);
+    expect(((await bAttempt.json()) as { error: string }).error).toBe("client_proof_invalid");
+
+    // Even the payer's wallet, signing a *different* client key for the same
+    // receipt, is a different spec: no capability is minted for it.
+    const bodyA2 = await createBody();
+    const aDifferentKeySignature = await payer.signMessage({
+      message: clientCommitmentMessage({
+        paymentKey: paymentKey(payload),
+        clientPublicKey: bodyA2.clientPublicKey,
+        clientNonce: bodyA2.clientNonce,
+      }),
+    });
+    const withDifferentKey = await postSession(
+      { ...bodyA2, clientSignature: aDifferentKeySignature },
+      header,
+    );
+    expect(withDifferentKey.status).toBe(409);
+    const rejected = (await withDifferentKey.json()) as { error: string; capability?: string };
+    expect(rejected.capability).toBeUndefined();
+    expect(["spec_mismatch", "capacity_unavailable"]).toContain(rejected.error);
+
+    // Same client key but no proof of possession.
+    const withoutProof = await postSession(bodyA, header);
+    expect(withoutProof.status).toBe(401);
+    expect(((await withoutProof.json()) as { error: string }).error).toBe("client_proof_required");
+
+    // The rightful owner can still present the capability.
+    const status = await fetch(`${apiUrl}/v1/sessions/${created.sessionId}`, {
+      headers: { "x-sandbox-capability": created.capability },
+    });
+    expect(status.status).toBe(200);
+  });
+
   it("cannot create multiple sessions under concurrent retries", async () => {
     const body = await createBody();
-    const { header } = await createSessionPayment(apiUrl, body);
+    const { header, body: signedBody } = await createSessionPayment(apiUrl, body);
     const before = store.countSessions();
-    const results = await Promise.all(Array.from({ length: 6 }, () => postSession(body, header)));
+    const results = await Promise.all(Array.from({ length: 6 }, () => postSession(signedBody, header)));
     const created = results.filter((r) => r.status === 201).length;
     const idempotent = results.filter((r) => r.status === 200).length;
     const rejected = results.filter((r) => r.status === 409).length;
@@ -312,9 +403,9 @@ describe("payments and entitlements", () => {
     facilitator.setFailSettle(true);
     try {
       const body = await createBody();
-      const { header } = await createSessionPayment(apiUrl, body);
+      const { header, body: signedBody } = await createSessionPayment(apiUrl, body);
       const before = store.countSessions();
-      const res = await postSession(body, header);
+      const res = await postSession(signedBody, header);
       expect(res.status).toBe(402);
       expect(store.countSessions()).toBe(before);
     } finally {
@@ -324,7 +415,7 @@ describe("payments and entitlements", () => {
 
   it("recovers an entitlement when the payment settled before the API crashed", async () => {
     const body = await createBody();
-    const { header, challenge } = await createSessionPayment(apiUrl, body);
+    const { header, challenge, body: signedBody } = await createSessionPayment(apiUrl, body);
     // Settle directly with the facilitator, simulating a crash after settlement
     // but before the entitlement was durable.
     const payload = decodePaymentSignatureHeader(header);
@@ -336,31 +427,43 @@ describe("payments and entitlements", () => {
     expect(((await settle.json()) as { success: boolean }).success).toBe(true);
 
     const before = store.countSessions();
-    const res = await postSession(body, header);
+    const res = await postSession(signedBody, header);
     expect(res.status).toBe(201);
     expect(store.countSessions()).toBe(before + 1);
   });
 
   it("recovers when the controller crashes after settlement but before entitlement", async () => {
     const body = await createBody();
-    const { header } = await createSessionPayment(apiUrl, body);
+    const { header, body: signedBody } = await createSessionPayment(apiUrl, body);
     const before = store.countSessions();
+    const paymentsBefore = store.countPayments();
     const original = apiController.completeIntent.bind(apiController);
     (apiController as unknown as { completeIntent: typeof apiController.completeIntent }).completeIntent = async () => {
       throw new ControllerError(503, "injected_crash", "simulated controller crash after settlement");
     };
     try {
-      const first = await postSession(body, header);
+      const first = await postSession(signedBody, header);
       expect(first.status).toBe(503);
       expect(store.countSessions()).toBe(before);
     } finally {
       (apiController as unknown as { completeIntent: typeof apiController.completeIntent }).completeIntent = original;
     }
     await new Promise((resolve) => setTimeout(resolve, 1200));
-    const retry = await postSession(body, header);
+    const retry = await postSession(signedBody, header);
     expect(retry.status).toBe(201);
     expect(store.countSessions()).toBe(before + 1);
+    // Exactly-once accounting: the retry recovered the settled payment rather
+    // than charging a second time.
+    expect(store.countPayments()).toBe(paymentsBefore + 1);
     const created = (await retry.json()) as { sessionId: string; capability: string };
+
+    // The same client can recover the same capability, and no second charge is
+    // recorded.
+    const recovered = await postSession(signedBody, header);
+    expect(recovered.status).toBe(200);
+    expect(((await recovered.json()) as { capability: string }).capability).toBe(created.capability);
+    expect(store.countPayments()).toBe(paymentsBefore + 1);
+
     await fetch(`${apiUrl}/v1/sessions/${created.sessionId}`, {
       method: "DELETE",
       headers: { "x-sandbox-capability": created.capability },

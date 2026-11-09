@@ -153,6 +153,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
           capabilityExpiresAt: body.capabilityExpiresAt,
           clientPublicKey: body.clientPublicKey,
           clientNonce: body.clientNonce,
+          clientSigner: body.clientSigner ?? null,
           tier: spec.tier,
           durationSeconds: spec.durationSeconds,
           limits: spec.limits,

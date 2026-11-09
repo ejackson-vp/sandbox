@@ -1,7 +1,7 @@
 /** Shared test helpers for the x402 payment handshake. */
 import { x402Client } from "@x402/core/client";
 import { x402HTTPClient } from "@x402/core/client";
-import { MOCK_NETWORK, MockExactClientScheme } from "../../shared/src/index.js";
+import { MOCK_NETWORK, MockExactClientScheme, clientCommitmentMessage, paymentKey } from "../../shared/src/index.js";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 export function createMockPayingClient(account = privateKeyToAccount(generatePrivateKey())) {
@@ -10,7 +10,7 @@ export function createMockPayingClient(account = privateKeyToAccount(generatePri
     spendControls: false,
   });
   const http = new x402HTTPClient(client);
-  return { client, http, address: account.address };
+  return { client, http, account, address: account.address };
 }
 
 export interface PaymentChallenge {
@@ -55,11 +55,37 @@ export async function signChallenge(challenge: PaymentChallenge): Promise<string
   return value;
 }
 
+/**
+ * Challenge + pay with a single wallet, and sign the client commitment with
+ * that same wallet. Returns the body to post: it carries `clientSignature`.
+ */
 export async function createSessionPayment(
   apiUrl: string,
   body: unknown,
-): Promise<{ header: string; challenge: PaymentChallenge }> {
+): Promise<{
+  header: string;
+  challenge: PaymentChallenge;
+  body: Record<string, unknown>;
+  account: ReturnType<typeof privateKeyToAccount>;
+}> {
+  const account = privateKeyToAccount(generatePrivateKey());
   const { challenge } = await requestChallenge(`${apiUrl}/v1/sessions`, body);
-  const header = await signChallenge(challenge);
-  return { header, challenge };
+  const { client, http } = createMockPayingClient(account);
+  const payload = await client.createPaymentPayload(challenge.paymentRequired as never);
+  const header = http.encodePaymentSignatureHeader(payload)["PAYMENT-SIGNATURE"];
+  if (!header) throw new Error("encoder produced no PAYMENT-SIGNATURE");
+  const signed = body as { clientPublicKey: string; clientNonce: string };
+  const clientSignature = await account.signMessage({
+    message: clientCommitmentMessage({
+      paymentKey: paymentKey(payload as never),
+      clientPublicKey: signed.clientPublicKey,
+      clientNonce: signed.clientNonce,
+    }),
+  });
+  return {
+    header,
+    challenge,
+    body: { ...(body as Record<string, unknown>), clientSignature },
+    account,
+  };
 }

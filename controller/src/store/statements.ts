@@ -14,12 +14,12 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       ),
       insertSession: db.prepare(
         `INSERT INTO sessions (
-           id, capability_hash, capability_expires_at, client_public_key, client_nonce,
+           id, capability_hash, capability_expires_at, client_public_key, client_nonce, client_signer,
            tier, duration_seconds, cpu_millis, memory_mib, disk_mib, max_output_bytes,
            max_file_bytes, max_command_seconds, max_processes,
            state, created_at, paid_at, payment_key, runtime_class, execution_mode,
            relay_token_hash, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ),
       getSession: db.prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = ?`),
       getPayment: db.prepare("SELECT * FROM payments WHERE payment_key = ?"),

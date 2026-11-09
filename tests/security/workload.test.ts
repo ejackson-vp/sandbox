@@ -299,12 +299,12 @@ describe.skipIf(!available)("workload hardening (real cluster)", () => {
       return { clientPublicKey: m.toBase64(kp.publicKey), clientNonce: m.toBase64(await m.generateNonce()) };
     });
     const body = { tier: "short", clientPublicKey: keys.clientPublicKey, clientNonce: keys.clientNonce };
-    const { header } = await createSessionPayment(API, body);
+    const { header, body: signedBody } = await createSessionPayment(API, body);
     const post = () =>
       fetch(`${API}/v1/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json", "PAYMENT-SIGNATURE": header },
-        body: JSON.stringify(body),
+        body: JSON.stringify(signedBody),
       });
     const first = await post();
     expect(first.status).toBe(201);

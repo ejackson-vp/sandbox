@@ -37,6 +37,22 @@ the container registry.
   performance and the design decisions; `docs/README.md` is an audience-based
   map rather than a flat list.
 
+### Security
+
+- Session capabilities are bound to the paying wallet: a captured
+  `PAYMENT-SIGNATURE` can no longer recover a capability or bind the session to
+  another client key. The payer signs a canonical client commitment, which is
+  part of the spec hash (`security-review/FINDINGS.md` F-02).
+- Egress proxy connection slots are reserved before DNS and released on every
+  path, with an independent global budget (F-01).
+- Schema migrations are additive and transactional; payments, ledger and
+  refund obligations survive upgrades, and newer databases are refused (F-03).
+- Custom sessions are priced by CPU, RAM and disk, monotonic in each dimension
+  (F-04).
+- Rate-limit eviction no longer clears the table on high-cardinality input
+  (F-05).
+- Full audit, scanner triage and release gate in `security-review/`.
+
 ### Fixed
 
 - A create that raced a relay restart could be split across two registries.

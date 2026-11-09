@@ -29,8 +29,17 @@ export interface EgressProxyOptions {
   allowedHostSuffixes?: string[];
   deniedCidrs?: string[];
   maxConnectionsPerSession?: number;
+  /**
+   * Independent process-wide budget. Per-session limits alone let many
+   * sessions exhaust the proxy's file descriptors at once.
+   */
+  maxGlobalConnections?: number;
   connectTimeoutMs?: number;
   idleTimeoutMs?: number;
+  /** Test seam: DNS resolver. Defaults to the system resolver. */
+  resolve?: (host: string) => Promise<string[]>;
+  /** Test seam: dial the validated IP literal. Defaults to net.connect. */
+  dial?: (opts: { host: string; port: number; family: number }) => net.Socket;
 }
 
 export interface EgressProxy {
@@ -94,13 +103,47 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
   const allowedPorts = new Set(opts.allowedPorts ?? [443]);
   const deniedCidrs = opts.deniedCidrs ?? [];
   const maxPerSession = opts.maxConnectionsPerSession ?? 16;
+  const maxGlobal = opts.maxGlobalConnections ?? 512;
   const connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
   const idleTimeoutMs = opts.idleTimeoutMs ?? 120_000;
+  const resolveHost =
+    opts.resolve ??
+    (async (host: string) =>
+      (await dns.lookup(host, { all: true, verbatim: true })).map((r) => r.address));
+  const dial = opts.dial ?? ((o: { host: string; port: number; family: number }) => net.connect(o));
 
   const activeBySession = new Map<string, number>();
   let active = 0;
   let denied = 0;
   let allowed = 0;
+
+  /**
+   * A reservation is taken synchronously, before the first await, so concurrent
+   * CONNECT attempts cannot all observe a free slot. release() is idempotent:
+   * every path may call it, but the counters move exactly once.
+   */
+  interface Lease {
+    release(): void;
+  }
+
+  function reserve(sessionId: string): Lease | null {
+    const current = activeBySession.get(sessionId) ?? 0;
+    if (current >= maxPerSession) return null;
+    if (active >= maxGlobal) return null;
+    activeBySession.set(sessionId, current + 1);
+    active += 1;
+    let released = false;
+    return {
+      release() {
+        if (released) return;
+        released = true;
+        active -= 1;
+        const n = (activeBySession.get(sessionId) ?? 1) - 1;
+        if (n <= 0) activeBySession.delete(sessionId);
+        else activeBySession.set(sessionId, n);
+      },
+    };
+  }
 
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && (req.url === "/healthz" || req.url === "/stats")) {
@@ -122,9 +165,13 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
       denied += 1;
       log.warn("egress_denied", { reason, host: host ? host.slice(0, 100) : undefined });
       if (clientSocket.writable) {
-        clientSocket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
+        clientSocket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
+        // end() flushes; destroy is only a backstop for a hostile peer that
+        // never reads. unref keeps it out of the event loop's liveness set.
+        setTimeout(() => clientSocket.destroy(), 1_000).unref();
+      } else {
+        clientSocket.destroy();
       }
-      clientSocket.destroy();
     };
 
     const auth = req.headers["proxy-authorization"];
@@ -154,12 +201,6 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
       return;
     }
 
-    const current = activeBySession.get(verified.sessionId) ?? 0;
-    if (current >= maxPerSession) {
-      deny(429, "too_many_connections", host);
-      return;
-    }
-
     if (opts.allowedHostSuffixes?.length) {
       const ok = opts.allowedHostSuffixes.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
       if (!ok) {
@@ -167,6 +208,52 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
         return;
       }
     }
+
+    // Reserve before resolving. DNS can take seconds; without this, N concurrent
+    // CONNECTs all pass the limit check while holding no slot.
+    const lease = reserve(verified.sessionId);
+    if (!lease) {
+      deny(429, "too_many_connections", host);
+      return;
+    }
+
+    // A paused socket does not report peer close, so a client that disconnects
+    // during DNS would hold its slot until the dial timeout. Resume it and
+    // buffer (bounded) any bytes that arrive before the tunnel is up.
+    const early: Buffer[] = [];
+    let earlyBytes = 0;
+    let aborted = false;
+    const onEarlyData = (chunk: Buffer) => {
+      earlyBytes += chunk.length;
+      if (earlyBytes > 64 * 1024) {
+        aborted = true;
+        clientSocket.destroy();
+        return;
+      }
+      early.push(chunk);
+    };
+    // Upgraded HTTP sockets are allowHalfOpen: a peer FIN arrives as "end",
+    // not "close". Treat either as the client going away.
+    const onClientGone = () => {
+      aborted = true;
+      lease.release();
+      clientSocket.destroy();
+    };
+    const detach = () => {
+      clientSocket.off("close", onClientGone);
+      clientSocket.off("end", onClientGone);
+      clientSocket.off("data", onEarlyData);
+    };
+    clientSocket.on("data", onEarlyData);
+    clientSocket.once("close", onClientGone);
+    clientSocket.once("end", onClientGone);
+    clientSocket.resume();
+
+    const fail = (status: number, reason: string) => {
+      detach();
+      lease.release();
+      deny(status, reason, host);
+    };
 
     // Resolve and validate.
     let addresses: string[] = [];
@@ -177,19 +264,23 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
         // Single-label names are never legitimate public destinations, and are
         // the shape of most cluster-internal service names.
         if (!host.includes(".")) {
-          deny(403, "single_label_hostname", host);
+          fail(403, "single_label_hostname");
           return;
         }
-        const resolved = await dns.lookup(host, { all: true, verbatim: true });
-        addresses = resolved.map((r) => r.address);
+        addresses = await resolveHost(host);
       }
     } catch {
-      deny(502, "dns_resolution_failed", host);
+      fail(502, "dns_resolution_failed");
       return;
     }
 
+    if (aborted || !clientSocket.writable) {
+      detach();
+      lease.release();
+      return;
+    }
     if (addresses.length === 0) {
-      deny(502, "dns_no_addresses", host);
+      fail(502, "dns_no_addresses");
       return;
     }
 
@@ -197,51 +288,66 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
     for (const addr of addresses) {
       const cls: AddressClass = classifyAddress(addr, deniedCidrs);
       if (cls !== "public") {
-        deny(403, `blocked_destination:${cls}`, host);
+        fail(403, `blocked_destination:${cls}`);
         return;
       }
       target ??= addr;
     }
     if (!target) {
-      deny(502, "no_usable_address", host);
+      fail(502, "no_usable_address");
       return;
     }
 
     // Connect to the validated IP literal. Family is derived from the literal so
     // a dual-stack re-resolution cannot swap in a private address.
     const family = net.isIP(target);
-    const upstream = net.connect({ host: target, port: authority.port, family });
+    let upstream: net.Socket;
+    try {
+      upstream = dial({ host: target, port: authority.port, family });
+    } catch {
+      fail(502, "upstream_dial_failed");
+      return;
+    }
 
-    active += 1;
-    activeBySession.set(verified.sessionId, current + 1);
     allowed += 1;
 
-    let settled = false;
-    const cleanup = () => {
-      if (settled) return;
-      settled = true;
-      active -= 1;
-      const n = (activeBySession.get(verified.sessionId) ?? 1) - 1;
-      if (n <= 0) activeBySession.delete(verified.sessionId);
-      else activeBySession.set(verified.sessionId, n);
-    };
-
+    let tunnelled = false;
     const connectTimer = setTimeout(() => {
-      if (!settled) {
-        deny(504, "upstream_connect_timeout", host);
-        upstream.destroy();
-      }
+      if (tunnelled) return;
+      upstream.destroy();
+      fail(504, "upstream_connect_timeout");
     }, connectTimeoutMs);
+
+    const onConnectError = () => {
+      clearTimeout(connectTimer);
+      if (tunnelled) return;
+      detach();
+      lease.release();
+      if (clientSocket.writable) {
+        clientSocket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+        setTimeout(() => clientSocket.destroy(), 1_000).unref();
+      } else {
+        clientSocket.destroy();
+      }
+    };
+    upstream.once("error", onConnectError);
 
     upstream.once("connect", () => {
       clearTimeout(connectTimer);
+      // The pre-connect handler must not survive: writing a 502 into an
+      // established tunnel corrupts the client's TLS stream.
+      upstream.off("error", onConnectError);
+      tunnelled = true;
+      detach();
+      clientSocket.pause();
       if (!clientSocket.writable) {
         upstream.destroy();
-        cleanup();
+        lease.release();
         return;
       }
       clientSocket.write("HTTP/1.1 200 Connection Established\r\nProxy-Agent: x402-egress-proxy\r\n\r\n");
       if (head.length > 0) upstream.write(head);
+      for (const chunk of early) upstream.write(chunk);
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
       log.info("egress_allowed", { host, port: authority.port, sessionPrefix: verified.sessionId.slice(0, 12) });
@@ -249,20 +355,11 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
       upstream.setTimeout(idleTimeoutMs, () => upstream.destroy());
       upstream.on("error", () => clientSocket.destroy());
       upstream.on("close", () => {
-        cleanup();
+        lease.release();
         clientSocket.destroy();
       });
       clientSocket.on("error", () => upstream.destroy());
       clientSocket.on("close", () => upstream.destroy());
-    });
-
-    upstream.once("error", () => {
-      clearTimeout(connectTimer);
-      cleanup();
-      if (clientSocket.writable) {
-        clientSocket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
-      }
-      clientSocket.destroy();
     });
   }
 
@@ -270,6 +367,7 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
     server,
     stats: () => ({ active, denied, allowed }),
     close: async () => {
+      server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };

@@ -21,6 +21,12 @@ export interface CreateSessionRequest {
   clientPublicKey: string;
   /** Customer freshness nonce (base64, 32 bytes) bound into attestation. */
   clientNonce: string;
+  /**
+   * Proof that the payer wallet (the EIP-3009 `from`) authorised this exact
+   * payment + client key. Personal-sign over `clientCommitmentMessage`.
+   * Required on the paid request; absent on the initial 402 probe.
+   */
+  clientSignature?: string;
   /** Opt into checkpointed suspend/resume. */
   idlePolicy?: IdlePolicy;
   /** Wall-clock cap, including suspended time (default 8h for suspendable). */

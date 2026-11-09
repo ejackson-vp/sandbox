@@ -53,6 +53,8 @@ export interface ControllerConfig {
   allowedPorts: number[];
   allowedHostSuffixes: string[];
   deniedCidrs: string[];
+  egressMaxConnectionsPerSession: number;
+  egressMaxGlobalConnections: number;
   tiers: TierTable;
   platformLimits: PlatformLimits;
   /** Pre-booted, unleased sandboxes kept ready for fast claims (0 = off). */
@@ -225,6 +227,8 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    egressMaxConnectionsPerSession: int(env.EGRESS_MAX_CONNECTIONS_PER_SESSION, 16, 1, 1024),
+    egressMaxGlobalConnections: int(env.EGRESS_MAX_GLOBAL_CONNECTIONS, 512, 1, 65_536),
     tiers,
     platformLimits: loadPlatformLimits(env),
     warmPoolSize,

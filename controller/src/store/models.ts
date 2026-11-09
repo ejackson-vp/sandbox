@@ -24,6 +24,8 @@ export interface SessionRecord {
   capabilityExpiresAt: number;
   clientPublicKey: string;
   clientNonce: string;
+  /** Wallet that signed the client commitment; absent on pre-v8 rows. */
+  clientSigner?: string | null;
   tier: SessionTier;
   durationSeconds: number;
   limits: SessionLimits;
@@ -117,7 +119,7 @@ export type IntentClaimResult =
   | { status: "mismatch" };
 
 export const SESSION_COLUMNS = `
-  id, capability_hash, capability_expires_at, client_public_key, client_nonce,
+  id, capability_hash, capability_expires_at, client_public_key, client_nonce, client_signer,
   tier, duration_seconds, cpu_millis, memory_mib, disk_mib, max_output_bytes,
   max_file_bytes, max_command_seconds, max_processes,
   state, created_at, paid_at, ready_at, lease_expires_at, terminating_at,
@@ -135,6 +137,7 @@ export interface RawSession {
   capability_expires_at: number;
   client_public_key: string;
   client_nonce: string;
+  client_signer: string | null;
   tier: string;
   duration_seconds: number;
   cpu_millis: number;
@@ -184,6 +187,7 @@ export function mapSession(r: RawSession): SessionRecord {
     capabilityExpiresAt: r.capability_expires_at,
     clientPublicKey: r.client_public_key,
     clientNonce: r.client_nonce,
+    clientSigner: r.client_signer,
     tier: r.tier as SessionTier,
     durationSeconds: r.duration_seconds,
     limits: {
