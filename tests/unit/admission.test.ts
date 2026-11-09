@@ -32,3 +32,28 @@ describe("admission control", () => {
     expect(paymentPayerKey(undefined, "10.0.0.3")).toBe("ip:10.0.0.3");
   });
 });
+
+describe("rate limiter eviction", () => {
+  it("does not reset an exhausted bucket when unrelated keys overflow the table", () => {
+    // Small table so the attack is cheap to express; production uses 10k.
+    const limiter = new RateLimiter(1, 0.001, 8);
+    expect(limiter.take("payer:victim")).toBe(true);
+    expect(limiter.take("payer:victim")).toBe(false);
+
+    for (let i = 0; i < 200; i += 1) {
+      limiter.take(`payer:attacker-${i}`);
+    }
+
+    // The victim is still rate limited: a full-table clear would have reset it.
+    expect(limiter.take("payer:victim")).toBe(false);
+    expect(limiter.retryAfterSeconds("payer:victim")).toBeGreaterThan(0);
+  });
+
+  it("keeps the number of buckets bounded", () => {
+    const limiter = new RateLimiter(1, 0.001, 16);
+    for (let i = 0; i < 500; i += 1) limiter.take(`payer:${i}`);
+    // New keys keep working (the table is bounded, not wedged).
+    expect(limiter.take("payer:fresh")).toBe(true);
+    expect(limiter.take("payer:fresh")).toBe(false);
+  });
+});

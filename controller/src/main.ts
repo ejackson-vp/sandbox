@@ -52,6 +52,8 @@ async function main(): Promise<void> {
       allowedPorts: cfg.allowedPorts,
       allowedHostSuffixes: cfg.allowedHostSuffixes,
       deniedCidrs: cfg.deniedCidrs,
+      maxConnectionsPerSession: cfg.egressMaxConnectionsPerSession,
+      maxGlobalConnections: cfg.egressMaxGlobalConnections,
     });
     await listen(proxy.server, cfg.proxyPort);
     log.info("egress_proxy_listening", {
@@ -90,6 +92,8 @@ async function main(): Promise<void> {
       allowedPorts: cfg.allowedPorts,
       allowedHostSuffixes: cfg.allowedHostSuffixes,
       deniedCidrs: cfg.deniedCidrs,
+      maxConnectionsPerSession: cfg.egressMaxConnectionsPerSession,
+      maxGlobalConnections: cfg.egressMaxGlobalConnections,
     });
     await listen(proxy.server, cfg.proxyPort);
     log.info("egress_proxy_listening", { port: cfg.proxyPort });

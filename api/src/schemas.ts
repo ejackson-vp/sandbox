@@ -14,6 +14,8 @@ export const createSchema = z.object({
   diskMiB: z.number().int().positive().optional(),
   clientPublicKey: z.string().min(40).max(64),
   clientNonce: z.string().min(40).max(64),
+  /** Payer-wallet proof over the client commitment; required on paid requests. */
+  clientSignature: z.string().regex(/^0x[0-9a-fA-F]{130}$/).optional(),
   baselineCpuMillis: z.number().int().min(50).optional(),
   baselineMemoryMiB: z.number().int().min(64).optional(),
   idlePolicy: z

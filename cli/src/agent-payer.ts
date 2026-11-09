@@ -1,42 +1,19 @@
 /**
- * Agent purchase path: the whole payment handshake is handled by
- * @x402/fetch's wrapFetchWithPayment, exactly as an autonomous agent would do.
+ * Agent purchase path.
+ *
+ * The agent does the whole handshake itself: discover the challenge, sign the
+ * payment, prove the client commitment with the same wallet, retry. It uses the
+ * SDK payer so the commitment signing cannot drift from the normal client path.
  */
-import { x402Client } from "@x402/core/client";
-import { wrapFetchWithPayment } from "@x402/fetch";
-import { ExactEvmScheme } from "@x402/evm/exact/client";
-import { MOCK_NETWORK, MockExactClientScheme, TESTNET_NETWORK, formatUsd } from "@x402s/shared";
-import type { Payer, PaymentMode } from "@x402s/sdk";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { createPayer, type Payer, type PaymentMode } from "@x402s/sdk";
+import { MOCK_NETWORK, TESTNET_NETWORK, formatUsd } from "@x402s/shared";
 
 export async function createAgentPayer(
   mode: PaymentMode,
   apiUrl: string,
   log: (line: string) => void,
 ): Promise<Payer> {
-  let client: x402Client;
-  let address: string;
-
-  if (mode === "mock") {
-    const account = privateKeyToAccount(generatePrivateKey());
-    client = x402Client.fromConfig({
-      schemes: [{ network: MOCK_NETWORK, client: new MockExactClientScheme(account) }],
-      spendControls: false,
-    });
-    address = account.address;
-  } else {
-    const pk = process.env.EVM_PRIVATE_KEY;
-    if (!pk || !/^0x[0-9a-fA-F]{64}$/.test(pk)) {
-      throw new Error("testnet payment mode requires EVM_PRIVATE_KEY");
-    }
-    const account = privateKeyToAccount(pk as `0x${string}`);
-    client = x402Client.fromConfig({
-      schemes: [{ network: TESTNET_NETWORK, client: new ExactEvmScheme(account) }],
-    });
-    address = account.address;
-  }
-
-  const fetchWithPayment = wrapFetchWithPayment(fetch, client);
+  const payer = createPayer(mode);
 
   let priceUsd = "unknown";
   let network: string = mode === "mock" ? MOCK_NETWORK : TESTNET_NETWORK;
@@ -52,18 +29,14 @@ export async function createAgentPayer(
   }
 
   return {
-    mode,
+    mode: payer.mode,
+    signMessage: (message) => payer.signMessage(message),
     async createSession(baseUrl, body) {
       log(`discovered price: ${priceUsd}`);
       log("signing x402 payment and retrying request");
-      const response = await fetchWithPayment(`${baseUrl}/v1/sessions`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(120_000),
-      } as RequestInit);
-      log(`server responded ${response.status}`);
-      return { response, priceUsd, network, mode, payer: address };
+      const paid = await payer.createSession(baseUrl, body);
+      log(`server responded ${paid.response.status}`);
+      return { ...paid, priceUsd, network };
     },
   };
 }

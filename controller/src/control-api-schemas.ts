@@ -33,6 +33,9 @@ export const specSchema = z.object({
       memoryMiB: z.number().int().min(64),
     })
     .optional(),
+  clientCommitment: z
+    .object({ publicKey: z.string().min(1).max(128), nonce: z.string().min(1).max(128) })
+    .optional(),
   limits: z.object({
     cpuMillis: z.number().int().positive(),
     memoryMiB: z.number().int().positive(),
@@ -60,6 +63,7 @@ export const completeSchema = z.object({
   spec: specSchema,
   clientPublicKey: z.string().min(40).max(64),
   clientNonce: z.string().min(40).max(64),
+  clientSigner: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   timings: timingsSchema,
   payment: z.object({
     paymentKey: z.string().regex(/^[0-9a-f]{64}$/),

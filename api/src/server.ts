@@ -160,8 +160,12 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
       .json({ ...required, error });
   };
 
-  const capabilityFor = (key: string): string =>
-    createHmac("sha256", config.capabilitySecret).update(`x402-capability:${key}`).digest("base64url");
+  // Bound to the payment *and* the client commitment: the same receipt with a
+  // different client key derives a different capability.
+  const capabilityFor = (key: string, commitment: string): string =>
+    createHmac("sha256", config.capabilitySecret)
+      .update(`x402-capability:v2:${key}:${commitment}`)
+      .digest("base64url");
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, paymentMode: config.paymentMode, network: config.network });

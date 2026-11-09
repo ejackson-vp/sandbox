@@ -5,6 +5,7 @@
 import type { Request, Response } from "express";
 import { randomBytes } from "node:crypto";
 import { decodePaymentSignatureHeader } from "@x402/core/http";
+import { verifyMessage } from "viem";
 import type { x402ResourceServer } from "@x402/core/server";
 import type { PaymentRequirements } from "@x402/core/types";
 import {
@@ -12,6 +13,8 @@ import {
   PAYMENT_VERSION,
   formatUsd,
   metrics,
+  clientCommitmentMessage,
+  paymentAuthorizer,
   paymentKey,
   resolveSessionSpec,
   sha256Hex,
@@ -35,7 +38,7 @@ export interface CreateSessionDeps {
   settlementLookup: SettlementLookup;
   requirementFor(priceUsd: string, spec: SessionSpec): Promise<PaymentRequirements>;
   payment402(res: Response, requirement: PaymentRequirements, error: string): Promise<void>;
-  capabilityFor(key: string): string;
+  capabilityFor(key: string, commitment: string): string;
   ipCreateLimiter: RateLimiter;
   createLimiter: RateLimiter;
 }
@@ -135,7 +138,41 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     }
 
     const key = paymentKey(payload);
-    const capability = deps.capabilityFor(key);
+
+    // The receipt alone is not authority. The wallet that signed the payment
+    // must also sign this exact client key, so a captured PAYMENT-SIGNATURE
+    // cannot bind the session to another client or reclaim the capability.
+    const authorizer = paymentAuthorizer(payload);
+    if (!authorizer) {
+      await deps.payment402(res, requirement, "malformed_payment_authorization");
+      return;
+    }
+    if (!body.clientSignature) {
+      res.status(401).json({ error: "client_proof_required" });
+      return;
+    }
+    let proofOk = false;
+    try {
+      proofOk = await verifyMessage({
+        address: authorizer,
+        message: clientCommitmentMessage({
+          paymentKey: key,
+          clientPublicKey: body.clientPublicKey,
+          clientNonce: body.clientNonce,
+        }),
+        signature: body.clientSignature as `0x${string}`,
+      });
+    } catch {
+      proofOk = false;
+    }
+    if (!proofOk) {
+      log.warn("client_commitment_invalid", { paymentKeyPrefix: key.slice(0, 12) });
+      res.status(401).json({ error: "client_proof_invalid" });
+      return;
+    }
+
+    const commitment = `${body.clientPublicKey}:${body.clientNonce}`;
+    const capability = deps.capabilityFor(key, commitment);
     const capabilityHash = sha256Hex(capability);
 
     // Authoritative capacity hold happens before settlement. The preflight at
@@ -201,6 +238,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
           spec,
           clientPublicKey: body.clientPublicKey,
           clientNonce: body.clientNonce,
+          clientSigner: authorizer,
           timings: {
             apiReceivedAt,
             paymentVerifyMs,
