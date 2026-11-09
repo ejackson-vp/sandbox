@@ -6,6 +6,7 @@
  * use the official @x402 packages.
  */
 import { x402Client, x402HTTPClient } from "@x402/core/client";
+import type { PaymentRequired } from "@x402/core/types";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import {
   MOCK_NETWORK,
@@ -57,6 +58,25 @@ function buildClient(mode: PaymentMode): { client: x402Client; address: string }
 export function createPayer(mode: PaymentMode): Payer {
   const { client, address } = buildClient(mode);
   const httpClient = new x402HTTPClient(client);
+  /**
+   * A challenge is a function of the session spec, not of the request. Caching
+   * it lets repeat creates skip the unauthenticated 402 round trip: send the
+   * payment on the first request and only take the challenge path when the
+   * server rejects it (a price or payTo change) or when it is not cached yet.
+   */
+  const challenges = new Map<string, PaymentRequired>();
+  const cacheKey = (apiUrl: string, body: CreateSessionRequest): string =>
+    JSON.stringify([
+      apiUrl,
+      body.tier ?? null,
+      body.durationSeconds ?? null,
+      body.cpuMillis ?? null,
+      body.memoryMiB ?? null,
+      body.diskMiB ?? null,
+      body.baselineCpuMillis ?? null,
+      body.baselineMemoryMiB ?? null,
+      body.maxLifetimeSeconds ?? null,
+    ]);
 
   return {
     mode,
@@ -70,6 +90,44 @@ export function createPayer(mode: PaymentMode): Payer {
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(120_000),
         });
+      const pay = async (required: PaymentRequired): Promise<Response> => {
+        const payload = await client.createPaymentPayload(required);
+        const paymentHeaders = httpClient.encodePaymentSignatureHeader(payload);
+        return fetch(url, {
+          method: "POST",
+          headers: { ...headers, ...paymentHeaders },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(120_000),
+        });
+      };
+      const paid = (response: Response, required: PaymentRequired): PaidResponse => {
+        const requirement = required.accepts[0]!;
+        return {
+          response,
+          priceUsd: formatUsd(requirement.amount),
+          network: requirement.network,
+          mode,
+          payer: address,
+        };
+      };
+
+      const key = cacheKey(apiUrl, body);
+      const cached = challenges.get(key);
+      if (cached) {
+        const response = await pay(cached);
+        if (response.ok) return paid(response, cached);
+        if (response.status !== 402) {
+          return {
+            response,
+            priceUsd: "unknown",
+            network: cached.accepts[0]?.network ?? "unknown",
+            mode,
+            payer: address,
+          };
+        }
+        // Rejected or stale: forget it and take the challenge path once.
+        challenges.delete(key);
+      }
 
       let response = await request();
       if (response.status !== 402) {
@@ -120,14 +178,9 @@ export function createPayer(mode: PaymentMode): Payer {
         };
       }
 
-      const payload = await client.createPaymentPayload(paymentRequired);
-      const paymentHeaders = httpClient.encodePaymentSignatureHeader(payload);
-      response = await fetch(url, {
-        method: "POST",
-        headers: { ...headers, ...paymentHeaders },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(120_000),
-      });
+      if (challenges.size >= 64) challenges.clear();
+      challenges.set(key, paymentRequired);
+      response = await pay(paymentRequired);
 
       let paymentError: string | undefined;
       if (response.status === 402) {
