@@ -27,7 +27,6 @@ export class ClientRuntime {
   readonly apiUrl: string;
   readonly payer: Payer;
   readonly allowInsecureDev: boolean;
-  readonly requireHardware: boolean;
   readonly expectedMeasurement?: string;
   readonly store?: FileSessionStore;
   readonly log: (line: string) => void;
@@ -36,7 +35,6 @@ export class ClientRuntime {
     this.apiUrl = opts.apiUrl.replace(/\/$/, "");
     this.payer = opts.payer ?? createPayer(opts.paymentMode ?? "mock");
     this.allowInsecureDev = opts.allowInsecureDev ?? true;
-    this.requireHardware = opts.requireHardware ?? false;
     this.expectedMeasurement = opts.expectedMeasurement;
     this.store = opts.store;
     this.log = opts.log ?? (() => {});
@@ -168,6 +166,7 @@ export class ClientRuntime {
     const mode = last.executionMode ?? "dev";
     const verdict = verifyAttestation(last.attestation, {
       mode,
+      allowInsecureDev: this.allowInsecureDev,
       expectedSessionId: handle.sessionId,
       expectedClientNonce: handle.clientNonce,
       expectedClientPublicKey: toBase64(handle.clientPublicKey),

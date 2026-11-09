@@ -78,8 +78,13 @@ describe("attestation verifier", () => {
     }
   });
 
-  it("refuses any claim of hardware backing (no such path exists)", () => {
-    const env = makeEvidence({ hardwareBacked: true, insecureDevOnly: false });
+  it("rejects simulated evidence when the policy forbids it", () => {
+    const res = verifyAttestation(makeEvidence(), { ...basePolicy, allowInsecureDev: false });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("insecure_dev_rejected");
+  });
+
+  it("refuses any claim of hardware backing (no such path exists)", () => {    const env = makeEvidence({ hardwareBacked: true, insecureDevOnly: false });
     const res = verifyAttestation(env, basePolicy);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.code).toBe("inconsistent_evidence");

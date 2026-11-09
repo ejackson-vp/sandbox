@@ -32,6 +32,8 @@ export interface AttestationPolicy {
   allowedMeasurements?: string[];
   /** Optional allowlist of approved evidence types. */
   allowedEvidenceTypes?: EvidenceType[];
+  /** Reject simulated dev evidence. Defaults to true (allowed). */
+  allowInsecureDev?: boolean;
   /** Maximum accepted evidence age in ms (default 120s). */
   maxEvidenceAgeMs?: number;
   /** Clock skew allowance (default 60s). */
@@ -144,6 +146,9 @@ export function verifyAttestation(env: unknown, policy: AttestationPolicy): Atte
   // Dev/kata modes: simulated evidence must be explicitly labelled.
   if (!e.insecureDevOnly) {
     return fail("unexpected_hardware_claim", "non-hardware execution must be labelled insecureDevOnly");
+  }
+  if (policy.allowInsecureDev === false) {
+    return fail("insecure_dev_rejected", "simulated dev evidence is not allowed by policy");
   }
   if (policy.mode === "kata" && e.evidenceType !== "kata-dev-no-hw-attestation") {
     return fail("evidence_type_not_allowed", "kata mode expects kata-dev-no-hw-attestation evidence");

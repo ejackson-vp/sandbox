@@ -29,10 +29,9 @@ export interface SandboxClientOptions {
   apiUrl: string;
   payer?: Payer;
   paymentMode?: PaymentMode;
-  /** @deprecated no longer required; retained for source compatibility. */
+  /** @deprecated Retained for source compatibility. Set to false to reject all
+   * simulated evidence; this product has no hardware evidence path. */
   allowInsecureDev?: boolean;
-  /** Reject anything that is not hardware-attested. */
-  requireHardware?: boolean;
   expectedMeasurement?: string;
   /** Persist session handles for multi-process CLI use. */
   store?: FileSessionStore;
