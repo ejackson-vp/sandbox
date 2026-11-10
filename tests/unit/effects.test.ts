@@ -33,8 +33,10 @@ import {
 } from "../../controller/src/effects.js";
 import type { SessionRecord } from "../../controller/src/store/models.js";
 import { Termination } from "../../controller/src/termination.js";
+import { Lifecycle } from "../../controller/src/lifecycle.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import type { ReconcilerContext } from "../../controller/src/reconciler-context.js";
+import type { Provisioning } from "../../controller/src/provisioning.js";
 
 const NOW = 1_700_000_000_000;
 
@@ -268,6 +270,125 @@ describe("termination", () => {
       "finalizeTermination",
     ]);
     expect(ctx.provisioner.deletePod).toHaveBeenCalledWith("sbx-effects-0001", 1);
+  });
+});
+
+describe("lifecycle suspend", () => {
+  interface Harness {
+    lifecycle: Lifecycle;
+    calls: string[];
+    setGuard: (value: boolean) => void;
+  }
+
+  function harness(state: SessionState = "READY"): Harness {
+    const calls: string[] = [];
+    let guard = true;
+    const row = session({ state });
+    const ctx = {
+      cfg: controllerConfig(),
+      store: {
+        getSession: () => row,
+        markSuspending: () => {
+          calls.push("markSuspending");
+          if (guard) row.state = "SUSPENDING";
+          return guard;
+        },
+        markSuspended: () => {
+          calls.push("markSuspended");
+          if (guard) {
+            row.state = "SUSPENDED";
+            row.suspendedAt = NOW;
+          }
+          return guard;
+        },
+        markRelayPurged: () => calls.push("markRelayPurged"),
+        clearPod: () => {
+          calls.push("clearPod");
+          row.podName = null;
+        },
+        setNodeName: () => undefined,
+        clearWorkspacePvc: () => calls.push("clearWorkspacePvc"),
+        finalizeTermination: () => null,
+        setReady: () => false,
+        requestTermination: () => true,
+        listNonTerminal: () => [],
+        listTerminalWithPvc: () => [],
+      },
+      provisioner: {
+        getPod: async () => null,
+        suspendPod: async () => {
+          calls.push("suspendPod");
+        },
+        deletePod: async () => calls.push("deletePod"),
+        deleteWorkspacePvc: async () => calls.push("deleteWorkspacePvc"),
+      },
+      relay: {
+        shutdown: async () => {
+          calls.push("shutdown");
+        },
+        purge: async () => {
+          calls.push("purge");
+        },
+      },
+      capacity: {
+        suspend: () => calls.push("capacity.suspend"),
+      },
+      snapshotter: {
+        capture: async () => {
+          calls.push("capture");
+        },
+        discard: async () => calls.push("discard"),
+      },
+      now: () => NOW,
+      serviceAddress: async () => null,
+    } as unknown as ReconcilerContext;
+    return {
+      lifecycle: new Lifecycle(ctx, {} as Provisioning),
+      calls,
+      setGuard: (value) => {
+        guard = value;
+      },
+    };
+  }
+
+  it("suspends in table order: fence the state, stop the guest, release compute", async () => {
+    const { lifecycle, calls } = harness();
+    await lifecycle.suspend("sbx_effects_0001");
+    expect(calls).toEqual([
+      "markSuspending",
+      "shutdown",
+      "capture",
+      "suspendPod",
+      "clearPod",
+      "markSuspended",
+      "purge",
+      "markRelayPurged",
+      "capacity.suspend",
+    ]);
+  });
+
+  it("runs no external effect when the persist_suspending guard loses the race", async () => {
+    const { lifecycle, calls, setGuard } = harness();
+    setGuard(false);
+    // The same refusal the store's guarded UPDATE produced before the table
+    // drove the sequence: one error, nothing else touched.
+    await expect(lifecycle.suspend("sbx_effects_0001")).rejects.toMatchObject({
+      code: "not_suspendable",
+      message: "session changed state while suspending",
+    });
+    expect(calls).toEqual(["markSuspending"]);
+    expect(calls).not.toContain("shutdown");
+    expect(calls).not.toContain("capture");
+    expect(calls).not.toContain("suspendPod");
+  });
+
+  it("refuses a session that is not suspendable", async () => {
+    const { lifecycle, calls } = harness("PAID");
+    await expect(lifecycle.suspend("sbx_effects_0001")).rejects.toMatchObject({
+      code: "not_suspendable",
+      message: "session is PAID",
+    });
+    expect(calls).toEqual([]);
   });
 });
 
