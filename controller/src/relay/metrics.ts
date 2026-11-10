@@ -6,7 +6,6 @@
  * code, never from the guest-provided text.
  */
 import { metrics, type MetricsRegistry } from "@x402s/shared";
-import type { RelayRegistry } from "./registry.js";
 
 export const RELAY_DISCONNECT_REASONS = [
   "normal",
@@ -56,7 +55,14 @@ export function registerRelayMetrics(registry: MetricsRegistry = metrics): void 
   );
 }
 
-export function collectRelayMetrics(registry: MetricsRegistry, relay: RelayRegistry): void {
+/** The counters the scrape reads. Declared here so metrics does not import the registry. */
+export interface RelayMetricsSource {
+  size(): number;
+  pendingTotal(): number;
+  activeTotal(): number;
+}
+
+export function collectRelayMetrics(registry: MetricsRegistry, relay: RelayMetricsSource): void {
   registry.gauge("sandbox_relay_sessions", "Registered relay sessions").set({}, relay.size());
   registry
     .gauge("sandbox_relay_pending_requests", "Requests awaiting a guest response")
