@@ -66,6 +66,7 @@ api/src/status.ts               controller view -> public wire status
 
 controller/src/reconciler.ts    scheduler: tick, health, lease, dispatch
 controller/src/provisioning.ts  cold/warm provisioning + readiness handshake
+controller/src/provisioning/    endpoints + claims, admission prerequisites, pod create and observation
 controller/src/warm-pool.ts     warm-pool policy and lifecycle
 controller/src/lifecycle.ts     suspend/resume, idle/expiry policy, PVC cleanup
 controller/src/termination.ts   terminate/finalise/reap
