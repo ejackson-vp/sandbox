@@ -1,0 +1,40 @@
+# The monitoring contract: everything here is tied to the application's metric
+# names and is useful with any Prometheus-compatible scraper.
+#
+# The runnable VictoriaMetrics + vmalert + Grafana stack is cluster-specific and
+# lives in the private homelab repository (`apps/sandbox-monitoring/`). Nothing
+# in this directory knows about a metrics backend, a retention period or an
+# image tag.
+#
+#   kubectl kustomize deploy/monitoring/contract   # render only
+#   kubectl apply -k deploy/monitoring/contract    # ConfigMaps into `monitoring`
+#
+# The namespace must already exist. The app's `allow-metrics-scrape`
+# NetworkPolicy admits the `monitoring` namespace on TCP 9100, so keep the name
+# or patch that policy too.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+resources:
+  # The #37 scrape contract, bare-list form. A Prometheus can consume the value
+  # directly; VMSingle needs the full-document mirror kept by the stack.
+  - prometheus-scrape.yaml
+
+configMapGenerator:
+  # Stable names on purpose. Kustomize appends a content hash only within the
+  # Kustomization that generates the ConfigMap; the homelab stack lives in a
+  # different Kustomization, so a hashed name would be unknowable there.
+  # Consumers mount these by name.
+  - name: vmalert-rules
+    files:
+      - sandbox-slo.yaml=rules/sandbox-slo.yaml
+  - name: grafana-dashboard-sandbox
+    files:
+      - sandbox-control-plane.json=grafana-dashboard.json
+
+# The stack that mounts these by name is a separate Kustomization, so the
+# names must be stable across renders.
+generatorOptions:
+  disableNameSuffixHash: true

@@ -5,6 +5,16 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
+## Unreleased
+
+### Changed
+
+- Monitoring is split by ownership: this repository keeps the portable contract
+  under `deploy/monitoring/contract/` (scrape list, SLO rules, Grafana
+  dashboard, metric/SLO docs), and the cluster-specific VictoriaMetrics +
+  vmalert + Grafana stack moves to the private homelab repository. Object
+  names, the dashboard uid and the scrape targets are unchanged.
+
 ## 0.1.19
 
 ### Added

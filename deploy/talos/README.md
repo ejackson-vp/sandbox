@@ -93,22 +93,35 @@ API's `Ingress`, e.g. `https://sandbox.<tailnet>.ts.net`.
 
 ## 5. Monitoring
 
-The metrics stack is deliberately a separate overlay:
-[`../monitoring`](../monitoring/README.md) installs VictoriaMetrics
-single-node, Grafana and vmalert into the `monitoring` namespace. In the
-homelab, Flux should reconcile it as a second `Kustomization` (path
-`./deploy/monitoring`) rather than folding it into `apps/sandbox`; by hand,
-apply the app first and then the stack:
+The metrics **contract** lives in [`../monitoring`](../monitoring/README.md):
+one scrape job for the three roles' private `:9100` listeners, the SLO rules and
+the Grafana dashboard. It is tied to the application's metric names, creates no
+workload, and is enough for a cluster that already runs Prometheus:
+
+```bash
+kubectl create namespace monitoring          # name is load-bearing, see below
+kubectl apply -k deploy/monitoring/contract  # three ConfigMaps, no workloads
+```
+
+The runnable stack — VictoriaMetrics single-node, vmalert and Grafana — is
+cluster-specific and lives in the private homelab repository
+(`apps/sandbox-monitoring/`). Flux reconciles it there in three ordered steps:
+namespace, contract, stack. Nothing in this repository points at those
+workloads. By hand, apply the app first, then the namespace, contract and stack:
 
 ```bash
 kubectl apply -k deploy/talos
-kubectl apply -k deploy/monitoring
+# namespace + stack come from ejackson-vp/homelab:
+#   kubectl apply -k apps/sandbox-monitoring-namespace
+#   kubectl apply -k apps/sandbox-monitoring
 ```
 
 The stack scrapes the three roles on their private `:9100` listener. It does
 not create an Ingress and does not expose metrics through the public API
 Service. Retention is 14 days and the PVC uses the cluster default
-StorageClass; on this cluster that is `standard`.
+StorageClass; on this cluster that is `standard`. `allow-metrics-scrape` admits
+only a namespace named `monitoring` (or `observability`), so the contract's
+ConfigMaps must land in one of those.
 
 ## What is verified on this cluster
 

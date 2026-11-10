@@ -1,141 +1,32 @@
-# Monitoring stack
+# Monitoring contract
 
-This directory used to hold only the scrape contract from #37. It now ships a
-complete, versioned stack for the two-node homelab: **VictoriaMetrics
-single-node + Grafana + vmalert**. There is still no Prometheus, no
-Alertmanager, no kube-state-metrics and no node-exporter.
+This directory is the **portable** half of the sandbox's monitoring: the scrape
+job, the SLO rules, the Grafana dashboard and the documentation for the metric
+names they depend on. Everything here is tied to the application, not to a
+particular metrics backend — a cluster that already runs a Prometheus can use it
+without inheriting VictoriaMetrics.
 
-The stack scrapes the three control-plane roles on their private `:9100`
-listener, stores 14 days of samples, provisions the existing
-[`grafana-dashboard.json`](grafana-dashboard.json), and evaluates the SLO rules
-in [`rules/sandbox-slo.yaml`](rules/sandbox-slo.yaml).
+The runnable stack (VictoriaMetrics single-node, vmalert, Grafana, the
+`monitoring` namespace, NetworkPolicies, image pins, retention and Flux wiring)
+is cluster-specific and lives in the private `ejackson-vp/homelab` repository
+under [`apps/sandbox-monitoring/`](https://github.com/ejackson-vp/homelab/tree/main/apps/sandbox-monitoring).
 
-## Why this stack
-
-A full kube-prometheus-stack is five or six pods (Prometheus, Alertmanager,
-Grafana, kube-state-metrics, node-exporter, often a sidecar) plus CRDs and a
-large default rule set. On two nodes that spends more memory and operational
-attention than the service it watches.
-
-| Option | Decision |
-| --- | --- |
-| VictoriaMetrics single-node + Grafana + vmalert | **Chosen.** One storage/scrape process, PromQL-compatible, ~100–200 MiB steady state, one PVC. |
-| Prometheus agent + remote store | A second store is still required; no gain at this size. |
-| Grafana Alloy → local Prometheus | More moving parts than one VMSingle process; Prometheus is heavier than VMSingle for the same series. |
-| kube-prometheus-stack | Rejected: too many pods and CRDs for a two-node homelab. |
-
-The deliberate trade-off is no HA. One VMSingle pod, one Grafana pod and one
-vmalert pod; if the node they run on is lost, metrics and dashboards are gone
-until it returns. That is acceptable for observability metadata; it is not a
-system of record.
-
-## What is deployed
-
-| File | Contents |
-| --- | --- |
-| [`namespace.yaml`](namespace.yaml) | `monitoring` namespace, baseline Pod Security. |
-| [`vmsingle.yaml`](vmsingle.yaml) | VMSingle Deployment, `vmsingle-data` PVC, ClusterIP Service. |
-| [`vmsingle-scrape-config.yaml`](vmsingle-scrape-config.yaml) | Full `scrape.yml` for VMSingle, all three roles on `:9100`. |
-| [`prometheus-scrape.yaml`](prometheus-scrape.yaml) | The #37 bare-list contract, kept for an existing Prometheus. |
-| [`vmalert.yaml`](vmalert.yaml) | vmalert Deployment and ClusterIP Service. |
-| [`rules/sandbox-slo.yaml`](rules/sandbox-slo.yaml) | Portable Prometheus/vmalert SLO rules. |
-| [`grafana.yaml`](grafana.yaml) | Stateless Grafana Deployment and ClusterIP Service. |
-| [`grafana/datasources.yaml`](grafana/datasources.yaml) | Provisioned VictoriaMetrics datasource (`uid: vmsingle`). |
-| [`grafana/dashboards.yaml`](grafana/dashboards.yaml) | File-based dashboard provider. |
-| [`grafana-dashboard.json`](grafana-dashboard.json) | The #37 dashboard plus a firing-alert table. |
-| [`networkpolicy.yaml`](networkpolicy.yaml) | Egress limits for the monitoring pods. |
-
-Images are tag-pinned, not `latest`:
-
-| Component | Image | Retention / config |
+| Part | Where | Why |
 | --- | --- | --- |
-| VictoriaMetrics | `victoriametrics/victoria-metrics:v1.156.0` | `-retentionPeriod=14d`, PVC `2Gi` |
-| vmalert | `victoriametrics/vmalert:v1.156.0` | `-evaluationInterval=30s`, `-notifier.blackhole` |
-| Grafana | `grafana/grafana:13.2.5` | Dashboards and datasources provisioned from ConfigMaps |
+| Scrape list, SLO rules, dashboard JSON, metric/SLO docs | **here** — `deploy/monitoring/contract/` | Tied to app metric names; portable to any Prometheus-compatible stack |
+| VMSingle, vmalert, Grafana, namespace, NetworkPolicies, scrape-config mirror | `homelab/apps/sandbox-monitoring/` | Cluster decisions: storage class, retention, resources, image pins |
+| Flux ordering | `homelab/apps/sandbox-monitoring{,-namespace,-contract}.yaml` | Namespace → contract → stack, so a fresh cluster cannot deadlock |
 
-Bump the two VictoriaMetrics tags together. They are released from the same
-tree and the rule/datasource HTTP surface is shared.
-
-## Resource budget
-
-Requests are deliberately small; limits leave headroom for a scrape burst and
-Grafana's first render.
-
-| Pod | CPU request / limit | Memory request / limit | Estimated steady state |
-| --- | --- | --- | --- |
-| `vmsingle` | `100m` / `500m` | `128Mi` / `512Mi` | ~100–200 MiB |
-| `vmalert` | `25m` / `200m` | `64Mi` / `192Mi` | ~40–70 MiB |
-| `grafana` | `50m` / `300m` | `256Mi` / `512Mi` | ~180–260 MiB |
-| **Total** | **`175m` / `1000m`** | **`448Mi` / `1216Mi`** | **~290–490 MiB** |
-
-Storage: roughly 600 active series (three targets times the bounded families
-in `shared/src/metrics.ts`), 15 s scrapes and 14 days is on the order of
-100–300 MB before compaction headroom. The `2Gi` PVC is intentionally larger
-than the estimate.
-
-Measured on the two-node homelab on 2026-11-10 after four minutes: Grafana
-228Mi, VMSingle 40Mi, vmalert 5Mi (273Mi total); 2,140 active series; nodes at
-9%/13% CPU and 30%/31% memory. Grafana's request is now 256Mi so it is not the
-first eviction candidate. These are early measurements, not a long-run
-capacity claim; recheck `kubectl top pod -n monitoring` after a day.
-
-## Apply
-
-### Render first
-
-```bash
-kubectl kustomize deploy/monitoring >/tmp/monitoring.yaml
-```
-
-### By hand (portable Kubernetes)
-
-```bash
-kubectl get storageclass        # the PVC uses the cluster default
-kubectl apply -k deploy/monitoring
-kubectl -n monitoring rollout status deploy/vmsingle deploy/vmalert deploy/grafana
-```
-
-If the cluster has no default StorageClass, set `storageClassName` in
-[`vmsingle.yaml`](vmsingle.yaml) before applying. The homelab's local-path
-provisioner exposes `standard`; a cluster with a different default needs no
-change. The PVC is `ReadWriteOnce`, so the VMSingle pod is pinned to whichever
-node first binds it — expected for a single-node metrics store.
-
-The app deployment does **not** depend on this directory. Apply
-`deploy/talos` (or `deploy/kata`) as before; monitoring is a separate overlay
-because a metrics store has a different lifecycle and can be removed without
-touching tenant sessions.
-
-### Homelab / Flux
-
-This is the only homelab-specific part. The homelab reconciles the service
-from `ejackson-vp/homelab`; add a second Flux `Kustomization` that points at
-this path in the same source repository:
-
-```yaml
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: sandbox-monitoring
-  namespace: flux-system
-spec:
-  interval: 10m
-  path: ./deploy/monitoring
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: sandbox
-```
-
-Do not fold it into the existing `apps/sandbox` Kustomization if that
-Kustomization has a `targetNamespace` other than `monitoring`; this directory
-sets `namespace: monitoring` itself. The manifests are plain Kubernetes and do
-not use Flux CRs, so the same directory applies with `kubectl apply -k`
-anywhere.
+Nothing in this directory creates a workload. `kubectl apply -k
+deploy/monitoring/contract` produces three ConfigMaps in the `monitoring`
+namespace and nothing else.
 
 ## Scrape contract
 
-Both scrape files target the same three private listeners:
+One job covers all three control-plane roles. Each role runs one replica in the
+homelab, so DNS targets are enough; a scaled deployment should switch to pod
+discovery with `containerPort: metrics` (the pods already name the port
+`metrics`).
 
 | Role | Target | Port |
 | --- | --- | --- |
@@ -143,43 +34,36 @@ Both scrape files target the same three private listeners:
 | Controller | `controller.sandbox-system.svc.cluster.local` | `9100` |
 | Relay | `relay.sandbox-system.svc.cluster.local` | `9100` |
 
-The scrape job adds `role: api|controller|relay`. The application never exposes
-`/metrics` on the service listener or the public ingress; #37 moved it to a
-dedicated `METRICS_PORT` and made `allow-metrics-scrape` in
+The job adds `role: api|controller|relay`. Every rule and dashboard panel
+selects on that label, so it is part of the contract, not a convenience.
+
+The application never exposes `/metrics` on the service listener or the public
+ingress: #37 moved it to a dedicated `METRICS_PORT` and made
+`allow-metrics-scrape` in
 [`../kubernetes/21-networkpolicy-control.yaml`](../kubernetes/21-networkpolicy-control.yaml)
-admit only the `monitoring` or `observability` namespace on TCP 9100.
+admit only the `monitoring` or `observability` namespace on TCP 9100. Change the
+namespace name only together with that policy.
 
-Keep [`prometheus-scrape.yaml`](prometheus-scrape.yaml) and
-[`vmsingle-scrape-config.yaml`](vmsingle-scrape-config.yaml) in sync. The
-first is a bare list for kube-prometheus-stack's `additionalScrapeConfigs`; the
-second is the full document VMSingle needs. They are duplicated because the two
-formats cannot share one ConfigMap key without an init container.
+Cardinality is bounded by the application, not by the scraper: routes are
+Express templates and failure/close reasons are closed enums, defined in
+`shared/src/metrics.ts`. Run the app with `METRICS_STRICT_LABELS=1` when adding
+a family to catch an id-shaped label before it reaches storage.
 
-## Dashboard
+## What the contract directory contains
 
-Grafana provisions the existing dashboard as `Sandbox / Sandbox control plane`.
-The `DS_PROMETHEUS` variable is pre-selected to the `vmsingle` datasource uid,
-so provisioned panels resolve without a click. The added table at the bottom,
-**Firing SLO alerts (vmalert)**, queries `ALERTS{alertstate="firing"}` and shows
-the rules vmalert has evaluated.
-
-Access is operator-only:
-
-```bash
-kubectl -n monitoring port-forward svc/grafana 3000:3000
-# http://127.0.0.1:3000
-```
-
-There is no Ingress and no LoadBalancer. Grafana runs with anonymous **Viewer**
-access and the login form disabled; provisioning is the only way to change a
-dashboard. Anyone who can reach the ClusterIP can read the dashboards, so keep
-the namespace and NetworkPolicy boundary intact.
+| File | Contract |
+| --- | --- |
+| [`contract/prometheus-scrape.yaml`](contract/prometheus-scrape.yaml) | The scrape job, bare-list form for `additionalScrapeConfigs` |
+| [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Ten SLO rules, portable Prometheus/vmalert rule file |
+| [`contract/grafana-dashboard.json`](contract/grafana-dashboard.json) | `Sandbox control plane`, uid `sandbox-control-plane` |
+| [`contract/kustomization.yaml`](contract/kustomization.yaml) | Renders the three ConfigMaps, namespace `monitoring` |
+| [`contract/README.md`](contract/README.md) | How to consume the ConfigMaps, including with an existing Prometheus |
 
 ## Alerts
 
-Rules live in [`rules/sandbox-slo.yaml`](rules/sandbox-slo.yaml) and are
-evaluated by vmalert against VMSingle. vmalert writes `ALERTS` and
-`ALERTS_FOR_STATE` back to VMSingle; that is what the dashboard table reads.
+Rules are in [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml).
+They are plain Prometheus rule files: Prometheus, vmalert and compatible
+evaluators all load them unchanged.
 
 | Alert | Condition | For | Severity |
 | --- | --- | --- | --- |
@@ -197,7 +81,7 @@ evaluated by vmalert against VMSingle. vmalert writes `ALERTS` and
 `SandboxMetricsTargetDown` is the leading indicator: when a process is gone its
 application gauges go stale rather than low, so the per-role alerts alone would
 miss it. `SandboxBlastRadius` is the rule requested in the issue comments: it
-pages once with the affected session count when per-component health is not
+fires once with the affected session count when per-component health is not
 enough to describe tenant impact.
 
 ### Alert caveats
@@ -216,99 +100,104 @@ exports `sandbox_warm_pool_pods` only when `WARM_POOL_SIZE > 0`; the homelab
 default is `0`. The rule is intentionally written so an absent series does not
 fire. Enable the pool before relying on it.
 
-**There is no pager in this stack.** vmalert runs with `-notifier.blackhole`,
-so it evaluates, stores state and leaves delivery alone. To page, replace that
-flag with `-notifier.url=<alertmanager-or-webhook-bridge>` and configure a
-receiver; the rule file itself does not change.
+**The rules do not deliver notifications.** The rule file carries no receiver.
+The homelab stack evaluates with `-notifier.blackhole`, so alerts are visible as
+`ALERTS` series and in the dashboard but nothing pages. Any other deployment is
+free to attach its own Alertmanager or webhook bridge without touching these
+rules.
 
-## Validation and what remains cluster-only
+## Dashboard
 
-Checked in this change, without a cluster:
+`contract/grafana-dashboard.json` is the #37 dashboard plus a firing-alert
+table. Grafana provisions it as `Sandbox / Sandbox control plane` in the
+homelab; imported by hand elsewhere, it keeps the same uid and title.
 
-| Check | Command | Result |
-| --- | --- | --- |
-| Kustomize render | `kubectl kustomize deploy/monitoring` | passes, 17 YAML documents |
-| Rule syntax | `promtool check rules deploy/monitoring/rules/sandbox-slo.yaml` and `vmalert -dryRun -rule=...` | 10 rules, success |
-| Scrape config syntax | `promtool check config` on both scrape documents | success |
-| YAML parse | `python3 -c 'yaml.safe_load_all(...)'` over every file and embedded ConfigMap document | passes |
-| Dashboard JSON | `python3 -m json.tool deploy/monitoring/grafana-dashboard.json` | passes |
-| Image tag exists | `crane digest <image>` for all three pinned tags | resolves |
-| Markdown | `npx markdownlint-cli2` over the changed Markdown | passes |
+The `DS_PROMETHEUS` input is a datasource variable, so the dashboard binds to
+whichever Prometheus-compatible datasource the viewer selects. The committed
+default is the homelab's `vmsingle` uid; pick your own datasource once after
+import.
 
-**Not done, because no live cluster was available:** applying the manifests,
-scraping a real process, binding the PVC, enforcing the NetworkPolicy, firing a
-synthetic alert, and measuring steady-state memory. `kubectl apply
---dry-run=client` also cannot validate against this workstation's API server
-(no reachable cluster/OpenAPI), so the render and schema-independent checks
-above are the limit here.
+The table at the bottom, **Firing SLO alerts (vmalert)**, queries
+`ALERTS{alertstate="firing"}`. It is empty unless the evaluator writes alert
+state back to the queried store; vmalert does, a bare Prometheus exposes
+`ALERTS` from its own rule evaluation.
 
-Cluster-only checks, in order:
+## Portable usage
 
-1. `kubectl -n monitoring get pods,pvc` — all three pods `Running`, PVC `Bound`.
-2. `kubectl -n monitoring port-forward svc/vmsingle 8428:8428`, then
-   `curl -s localhost:8428/api/v1/targets | jq '.data.activeTargets[].labels.role'`
-   — expect `api`, `controller`, `relay`, all `up`.
-3. Open Grafana and confirm every panel has data and the datasource variable
-   resolves to `vmsingle`.
-4. `kubectl -n monitoring port-forward svc/vmalert 8880:8880`, then
-   `curl -s localhost:8880/api/v1/rules | jq` — 10 rules loaded, no parse errors.
-5. Synthetic failure on a disposable cluster: scale the relay to zero
-   (`kubectl -n sandbox-system scale deploy/relay --replicas=0`), wait more than
-   two minutes, and check `curl -s localhost:8880/api/v1/alerts`. Expect
-   `SandboxMetricsTargetDown`; with at least five previously registered sessions
-   also expect `SandboxBlastRadius` after five minutes. Scaling the relay drops
-   in-flight sessions, so do this only on a test deployment. This was **not**
-   run for this change and no claim is made that an alert fired.
-6. Leave the stack for 24 hours and record `kubectl top pod -n monitoring`; use
-   that measurement, not the estimate table, as the steady-state figure.
+### Render and apply the ConfigMaps
 
-## Operations
+```bash
+kubectl kustomize deploy/monitoring/contract >/tmp/monitoring-contract.yaml
+kubectl apply -k deploy/monitoring/contract    # needs the `monitoring` namespace
+```
 
-- **Retention** is 14 days. Increase `-retentionPeriod` and the PVC together;
-  do not set it above 14 days without checking free space on the node.
-- **Upgrades** are a `Recreate` of one pod. VMSingle keeps the PVC; Grafana is
-  stateless and reprovisions from ConfigMaps.
-- **Backups** are not included. Metrics are disposable; if you need them longer
-  than the PVC or the node survives, add `vmbackup` to object storage or raise
-  retention. Do not treat this as a system of record.
-- **Cardinality** is bounded by the application, not by this stack. Routes are
-  Express templates and failure/close reasons are closed enums. Run the app
-  with `METRICS_STRICT_LABELS=1` when adding a family to catch an id-shaped
-  label before it reaches storage.
-- **No node metrics**: kube-state-metrics and node-exporter are omitted. The
-  dashboard's capacity panels read the controller's own
-  `sandbox_capacity_*` gauges. Add node-exporter only when a node-saturation
-  panel is actually needed; that is another DaemonSet on both nodes.
+### Existing Prometheus
 
-## Portability
+- Scrape: merge `sandbox-scrape-configs.yaml` into
+  `prometheus.additionalScrapeConfigs` (it is already a bare YAML list).
+- Rules: add `rules/sandbox-slo.yaml` to `rule_files`.
+- Dashboard: import `contract/grafana-dashboard.json`.
 
-| Part | Portable Kubernetes | Homelab / Flux-specific |
-| --- | --- | --- |
-| Namespace, Deployments, Services, PVC, NetworkPolicies | Yes | — |
-| `kubectl apply -k deploy/monitoring` | Yes | — |
-| Dashboard, datasource and rule provisioning | Yes | — |
-| StorageClass | Uses the cluster default; set it if there is none | Homelab default is `standard` |
-| Flux `Kustomization` | — | Path in the homelab repo, source name and reconciliation interval |
-| Private `:9100` scrape / `allow-metrics-scrape` | Yes, provided the monitoring namespace keeps its name | Homelab applies the app overlay separately |
-| Pod Security | Baseline; VM and vmalert run as upstream root | Adjust for a restricted cluster |
-| Ingress | None | None; port-forward only |
+See [`contract/README.md`](contract/README.md) for the ConfigMap keys and a
+values snippet.
 
-## Residual risks
+## Validation
 
-- **No HA.** Losing the node that holds the VMSingle PVC loses history and
-  dashboards until it is rescheduled. Local-path PVCs cannot move between nodes.
-- **No notifications.** Alerts are evaluated and visible, but no page is sent
-  until a notifier is configured.
+These checks need no cluster:
+
+| Check | Command |
+| --- | --- |
+| Kustomize render | `kubectl kustomize deploy/monitoring/contract` |
+| Rule syntax | `promtool check rules deploy/monitoring/contract/rules/sandbox-slo.yaml` |
+| Scrape syntax | `promtool check config` on the extracted `sandbox-scrape-configs.yaml` |
+| Dashboard JSON | `python3 -m json.tool deploy/monitoring/contract/grafana-dashboard.json` |
+| YAML parse | `python3 -c 'yaml.safe_load_all(open(...))'` over every file |
+
+Cluster-only checks — scrape targets up, rules loaded, dashboard panels
+resolving, PVC bound, steady-state memory — are the stack's responsibility and
+are recorded in the homelab repository.
+
+## Residual risks (contract side)
+
 - **`reconciliation_pending` is approximate** until the API exports a dedicated
   counter (see [Alert caveats](#alert-caveats)).
 - **Warm-pool alert is off** while the homelab default `WARM_POOL_SIZE=0`.
 - **Blast-radius threshold** of five sessions is a starting point for a
   single-tenant homelab, not a capacity-derived number.
-- **Memory figures are estimates.** The acceptance criterion to measure them is
-  cluster-only.
-- **VMSingle and vmalert run as root** because their upstream images have no
-  unprivileged user. They have no host mounts, drop all capabilities and use
-  the default seccomp profile; a stricter image or an init-time `chown` is the
-  next hardening step if Pod Security moves to `restricted`.
-- **Grafana is anonymous Viewer on a ClusterIP.** This is intentional for an
-  operator dashboard with no ingress, but any pod in the cluster can read it.
+- **The contract names two ConfigMaps after their homelab consumers**
+  (`vmalert-rules`, `grafana-dashboard-sandbox`). That keeps the live
+  installation adoptable without recreation; a downstream consumer that mounts
+  the files by path does not care about the names.
+
+Stack risks — no HA, no delivery, root-running upstream images, anonymous
+Grafana on a ClusterIP, local-path PVC pinning — are recorded with the stack in
+the homelab repository, because they follow from the deployment and not from
+these files.
+
+## The homelab stack
+
+The stack keeps the same namespace, PVC, Deployment and Service names, the same
+dashboard uid (`sandbox-control-plane`) and the same scrape targets as before the
+split, so adoption did not recreate storage or Services:
+
+- namespace `monitoring`, PVC `vmsingle-data`, Services `vmsingle`, `vmalert`,
+  `grafana`, ConfigMaps `sandbox-scrape-config`, `vmsingle-scrape-config`,
+  `grafana-datasources`, `grafana-dashboard-provider`, `vmalert-rules`,
+  `grafana-dashboard-sandbox`.
+- VMSingle and vmalert are tag-pinned together
+  (`victoriametrics/*:v1.156.0`); Grafana is `grafana/grafana:13.2.5`.
+- 14-day retention, `2Gi` PVC, `Recreate` strategies, ClusterIP only, no
+  Ingress, no Alertmanager, no node-exporter, no kube-state-metrics.
+
+The two contract ConfigMaps are named **without** a kustomize content hash
+(`generatorOptions.disableNameSuffixHash`), because the stack that mounts them
+is a different Kustomization and cannot resolve a hash computed here. That made
+the adoption a one-time rollout of `vmalert` and `grafana` when the names changed
+from `vmalert-rules-<hash>` / `grafana-dashboard-sandbox-<hash>`; VMSingle and
+the scrape path were not restarted. A later content change updates the ConfigMap
+in place: Grafana re-reads dashboards every 30 s, vmalert only reloads rules on
+restart (or SIGHUP), so restart it after editing the SLO rules.
+
+`vmsingle-scrape-config.yaml` in the stack duplicates the targets here because
+VictoriaMetrics needs a full Prometheus document rather than a bare list. Keep
+both in sync.
