@@ -35,6 +35,9 @@ async function main(): Promise<number> {
       "max-lifetime": { type: "string" },
       timeout: { type: "string" },
       env: { type: "string", multiple: true },
+      file: { type: "string", multiple: true },
+      return: { type: "string", multiple: true },
+      runtime: { type: "string" },
       recursive: { type: "boolean", default: false },
       extract: { type: "boolean", default: false },
       archive: { type: "boolean", default: false },
@@ -117,7 +120,17 @@ async function main(): Promise<number> {
 
   const attach = (id: string): SessionHandle => client.attach(id);
 
-  const ctx: CommandContext = { values, positionals, apiUrl, json, quiet, paymentMode, client, attach };
+  const ctx: CommandContext = {
+    values,
+    positionals,
+    apiUrl,
+    json,
+    quiet,
+    paymentMode,
+    client,
+    attach,
+    hasSeparator: process.argv.includes("--"),
+  };
   const handler = commands[command];
   if (!handler) {
     process.stderr.write(`unknown command: ${command}\n\n${HELP}`);

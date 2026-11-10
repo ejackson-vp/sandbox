@@ -66,6 +66,16 @@ sandbox stop-service <id> web
 sandbox run examples/hello.py --duration 5m
 sandbox agent-demo examples/hello.py          # purchase through @x402/fetch
 
+# one-shot run: fresh session, upload, exec, download, destroy
+sandbox run -- python3 --version
+sandbox run --file data.csv=data.csv --file analyze.py=analyze.py --return out.csv -- python3 analyze.py
+sandbox run --runtime base --timeout 30s --return out.txt -- bash -c 'echo hi > out.txt'
+
+# One-shot file paths are workspace-relative (/workspace is implied). --return
+# writes the downloaded file to the same relative path in the current directory.
+# Only the "base" runtime exists today; anything else fails with
+# unsupported_runtime before a session is created.
+
 sandbox pricing
 ```
 
@@ -104,6 +114,25 @@ if (file.ok) console.log(Buffer.from(file.dataBase64, "base64").toString());
 await client.destroy(session);
 ```
 
+One-shot runs create a fresh session, upload inputs, exec, download outputs and
+always destroy it:
+
+```ts
+const result = await client.run({
+  runtime: "base",                       // optional; currently the only runtime
+  command: ["bash", "-c", "python3 app.py > out.txt"],
+  files: { "app.py": "print('hello')" }, // workspace-relative keys
+  returnFiles: ["out.txt"],              // workspace-relative paths
+  tier: "short",
+});
+console.log(result.sessionId, result.exitCode, result.stdout);
+console.log(Buffer.from(result.files["out.txt"]).toString());
+```
+
+Unknown runtimes fail with `unsupported_runtime` before a session is created.
+If cleanup fails after a run error, the run error is preserved and its
+`cleanupError` property carries the destroy failure.
+
 Run the bundled example:
 
 ```bash
@@ -111,7 +140,8 @@ API_URL=http://localhost:8080 npx tsx examples/sdk-session.ts
 ```
 
 Key types: `SessionHandle`, `ExecResult`, `OperationError`, `FilePutResult`,
-`FileGetResult`, `FileListResult`, `FileStatResult`, `SessionStatus`.
+`FileGetResult`, `FileListResult`, `FileStatResult`, `SessionStatus`,
+`RunOptions`, `RunResult`.
 
 `SandboxError { code, status, requestId? }` is thrown for transport/session
 problems; command failures are returned as `ok: false` results with an error code.

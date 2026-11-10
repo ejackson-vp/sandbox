@@ -97,6 +97,8 @@ More: [architecture](docs/architecture.md) · [sessions](docs/sessions.md) ·
 ```bash
 sandbox create --tier standard                 # 5 minutes, 1 vCPU, 1 GiB
 sandbox exec <id> -- python3 --version
+sandbox run -- python3 --version               # one-shot: create, run, destroy
+sandbox run --file data.csv=data.csv --return out.csv -- python3 analyze.py
 sandbox upload <id> ./src /workspace/src       # directory -> tar
 sandbox download <id> /workspace/out.txt ./out.txt
 sandbox destroy <id>
@@ -113,6 +115,15 @@ const session = await client.createSession({ tier: "standard" });
 await client.waitForReady(session);
 const result = await client.exec(session, { command: ["python3", "--version"] });
 await client.destroy(session);
+
+// One-shot: fresh session, upload, exec, collect, destroy (files are
+// workspace-relative). Only the "base" runtime is available today.
+const run = await client.run({
+  command: ["bash", "-c", "python3 main.py > out.txt"],
+  files: { "main.py": "print('hello')" },
+  returnFiles: ["out.txt"],
+});
+console.log(run.exitCode, run.stdout, run.files["out.txt"]);
 ```
 
 `@x402s/sdk` builds from source (`npm ci && npm run build`), not npm.

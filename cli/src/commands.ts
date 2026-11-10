@@ -3,11 +3,12 @@
  * `index.ts` parses arguments and dispatches.
  */
 import { execFileSync } from "node:child_process";
-import { readFile, writeFile, stat, mkdtemp } from "node:fs/promises";
+import { readFile, writeFile, stat, mkdtemp, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import {
   SandboxClient,
+  type CreateOptions,
   type SessionHandle,
   type SessionTier,
 } from "@x402s/sdk";
@@ -32,7 +33,10 @@ Usage:
   sandbox stop-service <session-id> <name>
   sandbox http <session-id> <port> <path> [--method GET] [--body text] [--stream]
   sandbox destroy <session-id>
-  sandbox run <file>            # create + upload + exec + destroy (convenience)
+  sandbox run [create options] [--runtime base] [--file local=remote]
+              [--return remote] -- <command> [args...]
+                                # one-shot: create, upload, exec, download, destroy
+  sandbox run <file> [create options]   # legacy: run a local .py/.js/.sh file
   sandbox agent-demo <file>     # same, purchased through @x402/fetch
   sandbox pricing
   sandbox sessions              # locally stored session handles
@@ -82,6 +86,36 @@ function inferTier(explicit: string | undefined, durationSeconds: number | undef
   return undefined;
 }
 
+function parseCreateOptions(values: CommandContext["values"]): CreateOptions {
+  const durationSeconds = parseDuration(values.duration as string | undefined);
+  const tier = inferTier(values.tier as string | undefined, durationSeconds);
+  return {
+    ...(tier ? { tier } : {}),
+    ...(durationSeconds === undefined ? {} : { durationSeconds }),
+    ...(values.cpu ? { cpuMillis: parseCpu(values.cpu as string) } : {}),
+    ...(values.memory ? { memoryMiB: parseMemory(values.memory as string) } : {}),
+    ...(values.disk ? { diskMiB: parseDisk(values.disk as string) } : {}),
+    ...(values["baseline-cpu"]
+      ? { baselineCpuMillis: parseCpu(values["baseline-cpu"] as string) }
+      : {}),
+    ...(values["baseline-memory"]
+      ? { baselineMemoryMiB: parseMemory(values["baseline-memory"] as string) }
+      : {}),
+    ...(values.idle
+      ? {
+          idlePolicy: {
+            maxIdleSeconds: parseDuration(values.idle as string) ?? 300,
+            suspendedDurationSeconds: 28800,
+            autoResume: false,
+          },
+        }
+      : {}),
+    ...(values["max-lifetime"]
+      ? { maxLifetimeSeconds: parseDuration(values["max-lifetime"] as string) }
+      : {}),
+  };
+}
+
 function out(line: string, json: boolean): void {
   if (!json) process.stdout.write(line + "\n");
 }
@@ -118,38 +152,14 @@ export type CommandContext = {
   paymentMode: "mock" | "testnet";
   client: SandboxClient;
   attach: (id: string) => SessionHandle;
+  /** True when argv contained `--`, which marks the one-shot run form. */
+  hasSeparator: boolean;
 };
 
 export const commands: Record<string, (ctx: CommandContext) => Promise<number>> = {
   "create": async (ctx) => {
     const { values, json, client, paymentMode } = ctx;
-      const durationSeconds = parseDuration(values.duration as string | undefined);
-      const tier = inferTier(values.tier as string | undefined, durationSeconds);
-      const handle = await client.createSession({
-        ...(tier ? { tier } : {}),
-        ...(durationSeconds === undefined ? {} : { durationSeconds }),
-        ...(values.cpu ? { cpuMillis: parseCpu(values.cpu as string) } : {}),
-        ...(values.memory ? { memoryMiB: parseMemory(values.memory as string) } : {}),
-        ...(values.disk ? { diskMiB: parseDisk(values.disk as string) } : {}),
-        ...(values["baseline-cpu"]
-          ? { baselineCpuMillis: parseCpu(values["baseline-cpu"] as string) }
-          : {}),
-        ...(values["baseline-memory"]
-          ? { baselineMemoryMiB: parseMemory(values["baseline-memory"] as string) }
-          : {}),
-        ...(values.idle
-          ? {
-              idlePolicy: {
-                maxIdleSeconds: parseDuration(values.idle as string) ?? 300,
-                suspendedDurationSeconds: 28800,
-                autoResume: false,
-              },
-            }
-          : {}),
-        ...(values["max-lifetime"]
-          ? { maxLifetimeSeconds: parseDuration(values["max-lifetime"] as string) }
-          : {}),
-      });
+      const handle = await client.createSession(parseCreateOptions(values));
       out(`Session: ${handle.sessionId}`, json);
       out(`State: ${handle.status?.state ?? "PAID"}`, json);
       if (handle.status) {
@@ -413,7 +423,14 @@ export const commands: Record<string, (ctx: CommandContext) => Promise<number>> 
       return 0;
   },
   "run": async (ctx) => {
-    const { values, positionals, json, quiet, client } = ctx;
+    const { values, positionals, json, quiet, client, hasSeparator } = ctx;
+      const oneShot =
+        hasSeparator ||
+        values.runtime !== undefined ||
+        values.file !== undefined ||
+        values.return !== undefined;
+      if (oneShot) return runOneShot(ctx);
+
       const file = requireArg(positionals[1], "file");
       const durationSeconds = parseDuration(values.duration as string | undefined) ?? 300;
       const tier = inferTier(values.tier as string | undefined, durationSeconds);
@@ -508,4 +525,84 @@ async function runFile(
       out(`Sandbox: ${(destroyed?.state ?? "DESTROYED").toLowerCase()}`, opts.json);
     }
   }
+}
+
+async function runOneShot(ctx: CommandContext): Promise<number> {
+  const { values, positionals, json, quiet, client } = ctx;
+  const command = positionals.slice(1);
+  if (command.length === 0) {
+    process.stderr.write("missing command; use: sandbox run [options] -- <command> [args...]\n");
+    return 2;
+  }
+
+  const files: Record<string, Uint8Array> = {};
+  for (const spec of (values.file as string[] | undefined) ?? []) {
+    const idx = spec.indexOf("=");
+    if (idx <= 0 || idx === spec.length - 1) {
+      process.stderr.write(`invalid --file ${spec} (expected local=remote)\n`);
+      return 2;
+    }
+    files[spec.slice(idx + 1)] = await readFile(spec.slice(0, idx));
+  }
+  const returnFiles = (values.return as string[] | undefined) ?? [];
+  const env = parseEnv(values.env as string[] | undefined);
+  const timeoutSeconds = values.timeout ? parseDuration(values.timeout as string) : undefined;
+
+  const result = await client.run({
+    ...parseCreateOptions(values),
+    ...(values.runtime === undefined ? {} : { runtime: String(values.runtime) }),
+    command,
+    ...(Object.keys(files).length === 0 ? {} : { files }),
+    ...(returnFiles.length === 0 ? {} : { returnFiles }),
+    ...(env ? { env } : {}),
+    ...(timeoutSeconds === undefined ? {} : { timeoutMs: timeoutSeconds * 1000 }),
+  });
+
+  const written: Record<string, string> = {};
+  for (const [remote, data] of Object.entries(result.files)) {
+    const local = localReturnPath(remote);
+    await mkdir(dirname(local), { recursive: true });
+    await writeFile(local, data);
+    written[remote] = local;
+  }
+
+  if (json) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          sessionId: result.sessionId,
+          exitCode: result.exitCode,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          durationMs: result.durationMs,
+          timedOut: result.timedOut,
+          files: Object.fromEntries(
+            Object.entries(result.files).map(([path, data]) => [path, Buffer.from(data).toString("base64")]),
+          ),
+          written,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+  } else {
+    if (result.stdout) process.stdout.write(result.stdout.endsWith("\n") ? result.stdout : result.stdout + "\n");
+    if (result.stderr) process.stderr.write(result.stderr.endsWith("\n") ? result.stderr : result.stderr + "\n");
+    for (const [remote, local] of Object.entries(written)) err(`Wrote ${remote} -> ${local}`, quiet);
+    err(
+      `exit ${result.exitCode} (${result.durationMs}ms${result.timedOut ? ", timed out" : ""}` +
+        `${result.cancelled ? ", cancelled" : ""})`,
+      quiet,
+    );
+  }
+  return result.timedOut ? 124 : Math.max(0, Math.min(125, result.exitCode));
+}
+
+function localReturnPath(remote: string): string {
+  const prefix = "/workspace/";
+  const path = remote.startsWith(prefix) ? remote.slice(prefix.length) : remote;
+  if (path.startsWith("/") || path.split("/").includes("..")) {
+    throw new Error(`invalid --return path: ${remote}`);
+  }
+  return path;
 }

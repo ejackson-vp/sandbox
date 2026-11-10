@@ -8,6 +8,7 @@ import { SessionService } from "./session.js";
 import { OperationService } from "./operations.js";
 import { DataPlane } from "./data-plane.js";
 import { Sandbox } from "./sandbox.js";
+import { runOnce } from "./run.js";
 import { TransferService, type TransferOptions, type TransferOutcome } from "./transfers.js";
 import type { StoredSession } from "./session-store.js";
 import type {
@@ -19,6 +20,8 @@ import type {
   HttpStream,
   OpenHttpStreamOptions,
   OpenWebSocketOptions,
+  RunOptions,
+  RunResult,
   SandboxClientOptions,
   SessionHandle,
   StartServiceOptions,
@@ -52,6 +55,17 @@ export class SandboxClient {
     const handle = await this.createSession(opts);
     await this.waitForReady(handle);
     return new Sandbox(this, handle);
+  }
+
+  /**
+   * One-shot run: create a fresh session, upload files, exec a command,
+   * download requested files, and always destroy the session.
+   *
+   * `files` keys and `returnFiles` entries are workspace-relative paths under
+   * `/workspace`. Only the `"base"` runtime is available.
+   */
+  run(opts: RunOptions): Promise<RunResult> {
+    return runOnce(this, opts);
   }
 
   attach(sessionId: string): SessionHandle {

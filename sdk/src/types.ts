@@ -7,6 +7,9 @@ import type { Payer, PaymentMode } from "./payment.js";
 import type { FileSessionStore } from "./session-store.js";
 
 export class SandboxError extends Error {
+  /** Set when a one-shot run failed and destroying its session also failed. */
+  cleanupError?: unknown;
+
   constructor(
     readonly code: string,
     message: string,
@@ -135,6 +138,38 @@ export interface ExecOptions {
   queueMs?: number;
   /** Abort the client-side wait (the command keeps running server-side). */
   signal?: AbortSignal;
+}
+
+/**
+ * One-shot run options. A run creates a fresh session, uploads `files`, runs
+ * `command`, downloads `returnFiles`, and destroys the session.
+ *
+ * File paths are workspace-relative (the guest resolves them under
+ * `/workspace`). Absolute paths are accepted only inside `/workspace`.
+ */
+export interface RunOptions extends CreateOptions {
+  /** Runtime profile. Only `"base"` is available today; defaults to `"base"`. */
+  runtime?: string;
+  command: string[];
+  /** Files to write before the command, keyed by workspace-relative path. */
+  files?: Record<string, string | Uint8Array>;
+  /** Workspace-relative paths to download after the command. */
+  returnFiles?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  timeoutMs?: number;
+}
+
+export interface RunResult {
+  sessionId: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  /** Downloaded files, keyed by the requested workspace-relative path. */
+  files: Record<string, Uint8Array>;
+  durationMs: number;
+  timedOut: boolean;
+  cancelled: boolean;
 }
 
 export interface FilePutOptions {

@@ -540,6 +540,26 @@ describe("session execution", () => {
     expect(store.getSession(handle.sessionId)?.podName).toBeNull();
   }, 90_000);
 
+  it("runs one-shot: uploads, collects returns, and destroys the session", async () => {
+    const result = await client.run({
+      tier: "custom",
+      durationSeconds: 60,
+      command: [
+        "bash",
+        "-c",
+        "mkdir -p out && tr a-z A-Z < in.txt > out/upper.txt && echo done >&2",
+      ],
+      files: { "in.txt": "hello\n" },
+      returnFiles: ["out/upper.txt"],
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("done");
+    expect(Buffer.from(result.files["out/upper.txt"]!).toString()).toBe("HELLO\n");
+    expect(store.getSession(result.sessionId)?.state).toBe("DESTROYED");
+  }, 90_000);
+
   it("uploads, lists, stats, downloads files and round-trips archives", async () => {
     const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
     await client.waitForReady(handle);
