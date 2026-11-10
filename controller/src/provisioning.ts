@@ -11,7 +11,6 @@ import {
   verifyAttestation,
 } from "@x402s/shared";
 import type { AttestationEnvelope, RelaySessionState } from "@x402s/shared";
-import { proxyTokenFor } from "./config.js";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { EffectStore, ProvisioningStore } from "./store/ports.js";
@@ -19,15 +18,15 @@ import type { EffectStore, ProvisioningStore } from "./store/ports.js";
 type ProvisioningContext = Omit<ReconcilerContext, "store"> & {
   store: ProvisioningStore & EffectStore;
 };
-type Endpoint = { host: string; port: number };
-type EndpointPair = { relay: Endpoint | null; proxy: Endpoint | null };
-import { newOpaqueToken, sha256Hex, guestTokenFor } from "./tokens.js";
-import { pinnedShard, shardClaim } from "./data-plane-shard.js";
-import type { DataPlaneService } from "./data-plane-shard.js";
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { WarmPool } from "./warm-pool.js";
 import { effectContext, executeEffects } from "./effects.js";
+import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
+import type { EndpointPair } from "./provisioning/endpoints.js";
+import { PodCreation } from "./provisioning/pod-creation.js";
+import { ProvisioningAdmission } from "./provisioning/admission.js";
+import { PodStatus } from "./provisioning/pod-status.js";
 
 export class Provisioning {
   /**
@@ -42,45 +41,23 @@ export class Provisioning {
    * in-flight one.
    */
   private readonly inFlight = new Set<string>();
-  /** Relay generation that accepted each provisioning pod. */
-  private readonly relayGeneration = new Map<string, string>();
+  /** Shard-aware address resolution and the relay shard claim. */
+  private readonly endpoints: DataPlaneEndpoints;
+  /** Relay gate, compute reservation and workspace volume before a create. */
+  private readonly admission: ProvisioningAdmission;
+  /** Pod spec assembly, warm registration and replacement. */
+  private readonly pods: PodCreation;
+  /** Placement and phase observations for an already-created pod. */
+  private readonly podStatus: PodStatus;
 
   constructor(
     private readonly ctx: ProvisioningContext,
     private readonly warm: WarmPool,
-  ) {}
-
-  /**
-   * Relay endpoint for this session.
-   *
-   * With one replica this is the existing ClusterIP/endpoint lookup, unchanged.
-   * Above one it is the ready endpoint Pod IP for the session's shard. A
-   * hostname would be dialled by a guest that runs with `dnsPolicy: None` and
-   * no DNS egress, so it can never resolve one.
-   */
-  private relayAddress(sessionId: string) {
-    return this.endpoint("relay", sessionId);
-  }
-
-  /** Proxy endpoint for this session; same single/multi-replica split. */
-  private proxyAddress(sessionId: string) {
-    return this.endpoint("proxy", sessionId);
-  }
-
-  /**
-   * Resolve `service` for a session.
-   *
-   * At one replica this is the shardless Service lookup, byte-identical to the
-   * pre-shard path. Above one it is the shard's ready endpoint and never the
-   * ClusterIP, which load-balances across replicas.
-   */
-  private endpoint(service: DataPlaneService, sessionId: string) {
-    const name =
-      service === "relay" ? this.ctx.cfg.relayServiceName : this.ctx.cfg.proxyServiceName;
-    const shard = pinnedShard(this.ctx.cfg, service, sessionId);
-    return shard === null
-      ? this.ctx.serviceAddress(name)
-      : this.ctx.serviceAddress(name, shard);
+  ) {
+    this.endpoints = new DataPlaneEndpoints(ctx);
+    this.admission = new ProvisioningAdmission(ctx);
+    this.pods = new PodCreation({ ...ctx, endpoints: this.endpoints });
+    this.podStatus = new PodStatus(ctx);
   }
 
   /**
@@ -90,35 +67,7 @@ export class Provisioning {
    * as an error rather than terminate the session.
    */
   async endpointsFor(sessionId: string): Promise<EndpointPair> {
-    return {
-      relay: await this.relayAddress(sessionId),
-      proxy: await this.proxyAddress(sessionId),
-    };
-  }
-
-  /**
-   * Endpoints for a pod this pass will create, or null when it must not.
-   *
-   * A null is always a defer-and-retry, never a silent fallback. The Service or
-   * the pinned shard may come back inside the provisioning timeout, and that
-   * timeout already terminates and refunds. Failing a paid session the moment a
-   * replica rolls would make a normal restart look like a customer-visible
-   * failure. Falling back to a hostname is not an option either: sandbox pods
-   * have no DNS, so a guest handed a name can never connect.
-   */
-  private async podEndpoints(session: SessionRecord): Promise<{ relay: Endpoint; proxy: Endpoint } | null> {
-    const { relay, proxy } = await this.endpointsFor(session.id);
-    if (relay && proxy) return { relay, proxy };
-
-    const pinned = (["relay", "proxy"] as const).some(
-      (service) => (service === "relay" ? !relay : !proxy) && pinnedShard(this.ctx.cfg, service, session.id) !== null,
-    );
-    log.warn(pinned ? "sandbox_data_plane_endpoint_unavailable" : "sandbox_services_unavailable", {
-      sessionId: session.id,
-      relay: Boolean(relay),
-      proxy: Boolean(proxy),
-    });
-    return null;
+    return this.endpoints.endpointsFor(sessionId);
   }
 
   async provision(session: SessionRecord): Promise<void> {
@@ -170,62 +119,11 @@ export class Provisioning {
   }
 
   private async provisionWithSlot(session: SessionRecord): Promise<void> {
-    // Admission gate: a paid create must not start while the relay is being
-    // replaced. Its registry is in memory, so a pod created now can dial a
-    // relay that never accepted the registration and never recover inside the
-    // provisioning budget. Holding the session in PAID costs nothing: no pod,
-    // no capacity claim, and the next tick re-checks after the relay is ready.
-    if (!(await this.ctx.relay.isReady())) {
-      const waited = session.paidAt === null ? 0 : this.ctx.now() - session.paidAt;
-      if (this.ctx.cfg.provisioningTimeoutMs > 0 && waited > this.ctx.cfg.provisioningTimeoutMs) {
-        metrics
-          .counter("sandbox_provisioning_relay_gate_total", "Creates held for relay readiness")
-          .inc({ result: "timeout" });
-        this.ctx.store.requestTermination(session.id, "failure:provisioning_timeout", {
-          code: "provisioning_timeout",
-          message: "the relay did not become ready in time",
-        });
-        log.warn("sandbox_relay_not_ready_timeout", { sessionId: session.id, waitedMs: waited });
-      } else {
-        metrics
-          .counter("sandbox_provisioning_relay_gate_total", "Creates held for relay readiness")
-          .inc({ result: "wait" });
-        log.info("sandbox_relay_not_ready_deferred", { sessionId: session.id, waitedMs: waited });
-      }
-      return;
-    }
-
-    let reservation = this.ctx.capacity.getReservation(session.id);
-    if (!reservation) {
-      const admission = await this.ctx.capacity.attach(
-        session.paymentKey,
-        session.id,
-        "",
-        { limits: session.limits, ...(session.baselineCpuMillis && session.baselineMemoryMib ? {
-          baseline: { cpuMillis: session.baselineCpuMillis, memoryMiB: session.baselineMemoryMib },
-        } : {}) },
-      );
-      if (!admission.admitted) {
-        metrics.counter("sandbox_capacity_provision_deferred_total", "Paid sessions waiting for capacity").inc({
-          reason: admission.reason,
-        });
-        log.warn("sandbox_capacity_deferred", { sessionId: session.id, reason: admission.reason });
-        return;
-      }
-      reservation = admission.reservation;
-    }
-    const queued = session.timingsJson
-      ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
-      : {};
-    if (typeof queued.provisionQueueEnteredAt === "number" && typeof queued.provisionQueueWaitMs !== "number") {
-      const waitMs = Math.max(0, this.ctx.now() - queued.provisionQueueEnteredAt);
-      metrics
-        .histogram("sandbox_provisioning_wait_seconds", "Time spent waiting for a provisioning slot", LATENCY_BUCKETS)
-        .observe(waitMs / 1000);
-      this.ctx.store.mergeTimings(session.id, { provisionQueueWaitMs: waitMs });
-    }
+    if (!(await this.admission.relayReady(session))) return;
+    const reservation = await this.admission.reserve(session);
+    if (!reservation) return;
     const provisionBeginAt = this.ctx.now();
-    const endpoints = await this.podEndpoints(session);
+    const endpoints = await this.endpoints.podEndpoints(session);
     if (!endpoints) return;
     const { relay: relayAddr, proxy: proxyAddr } = endpoints;
 
@@ -237,48 +135,21 @@ export class Provisioning {
     const suspendable = Boolean(session.idlePolicyJson);
     let workspacePvc = session.workspacePvc ?? undefined;
     if (suspendable) {
-      // A checkpointed session needs its workspace to outlive the pod. It also
-      // cannot use a warm pod: volumes are immutable at claim time.
-      if (!workspacePvc) {
-        workspacePvc = await this.ctx.provisioner.createWorkspacePvc(session.id, session.limits.diskMiB);
-        this.ctx.store.setWorkspacePvc(session.id, workspacePvc);
-      } else if (!(await this.ctx.provisioner.workspacePvcExists(workspacePvc).catch(() => false))) {
-        // A stale name from a failed attempt; create a fresh PVC rather than
-        // leaving the first pod Pending forever.
-        workspacePvc = await this.ctx.provisioner.createWorkspacePvc(session.id, session.limits.diskMiB);
-        this.ctx.store.setWorkspacePvc(session.id, workspacePvc);
-      }
+      workspacePvc = await this.admission.workspaceFor(session);
     } else if (await this.warm.tryClaim(session, relayAddr, proxyAddr, provisionBeginAt)) {
       return;
     }
 
-    const existingPod = await this.ctx.provisioner
-      .listSandboxPods()
-      .then((pods) => pods.find((pod) => pod.sessionId === session.id && pod.phase !== "Failed" && pod.phase !== "Succeeded"))
-      .catch(() => undefined);
-    if (existingPod) {
-      // The controller crashed after Kubernetes accepted the Pod but before the
-      // session row was marked PROVISIONING. Adopt it instead of creating a
-      // second Pod or rotating the relay token the guest already holds.
-      if (this.ctx.store.setProvisioning(session.id, existingPod.name)) {
-        this.ctx.capacity.updatePod(session.id, existingPod.name);
-        this.ctx.store.mergeTimings(session.id, {
-          podRequestedAt: this.ctx.now(),
-          podCreateCallMs: 0,
-        });
-        log.info("sandbox_pod_adopted", { sessionId: session.id, podName: existingPod.name });
-      }
-      return;
-    }
+    if (await this.pods.adoptExistingPod(session)) return;
 
-    const { podName, createStarted, relayGeneration } = await this.createPod(session, relayAddr, proxyAddr, {
+    const { podName, createStarted, relayGeneration } = await this.pods.createPod(session, relayAddr, proxyAddr, {
       ...(workspacePvc ? { workspacePvc } : {}),
       ...(reservation && reservation.nodeId !== "disabled" ? { nodeName: reservation.nodeId } : {}),
     });
     this.ctx.store.setProvisioning(session.id, podName);
     this.ctx.capacity.updatePod(session.id, podName);
     this.ctx.store.mergeTimings(session.id, { podCreateCallMs: Date.now() - createStarted });
-    this.relayGeneration.set(session.id, relayGeneration);
+    this.pods.recordGeneration(session.id, relayGeneration);
     metrics
       .histogram("sandbox_provision_duration_seconds", "Entitlement to pod create", LATENCY_BUCKETS)
       .observe((Date.now() - (session.paidAt ?? session.createdAt)) / 1000);
@@ -292,117 +163,14 @@ export class Provisioning {
     });
   }
 
-
-  /**
-   * Replace a provisioning pod whose guest cannot reach the current relay.
-   *
-   * The old pod is deleted first so the deterministic pod name can be reused;
-   * if it is still terminating we leave the session in PROVISIONING and retry
-   * on the next reconcile pass rather than racing Kubernetes with a 409.
-   */
-  private async recreatePod(session: SessionRecord): Promise<boolean> {
-    const oldPod = session.podName;
-    if (!oldPod) return false;
-    await this.ctx.provisioner.deletePod(oldPod, 0).catch(() => undefined);
-    for (let i = 0; i < 50; i += 1) {
-      const pod = await this.ctx.provisioner.getPod(oldPod).catch(() => null);
-      if (!pod) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (await this.ctx.provisioner.getPod(oldPod).catch(() => null)) {
-      log.warn("sandbox_pod_reprovision_pending", { sessionId: session.id, podName: oldPod });
-      return false;
-    }
-
-    const endpoints = await this.podEndpoints(session);
-    if (!endpoints) return false;
-    const { relay: relayAddr, proxy: proxyAddr } = endpoints;
-    const timings = session.timingsJson
-      ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
-      : {};
-    const created = await this.createPod(session, relayAddr, proxyAddr, {
-      ...(session.workspacePvc ? { workspacePvc: session.workspacePvc } : {}),
-      ...(session.state === "RESUMING" ? { resume: true } : {}),
-    });
-    if (!this.ctx.store.setProvisioningPod(session.id, created.podName)) return false;
-    this.ctx.capacity.updatePod(session.id, created.podName);
-    this.relayGeneration.set(session.id, created.relayGeneration);
-    this.ctx.store.mergeTimings(session.id, {
-      reprovisionCount: Number(timings.reprovisionCount ?? 0) + 1,
-    });
-    log.warn("sandbox_pod_reprovisioned", {
-      sessionId: session.id,
-      oldPod,
-      podName: created.podName,
-      relayGeneration: created.relayGeneration,
-    });
-    return true;
-  }
-
   async createPod(
     session: SessionRecord,
     relayAddr: { host: string; port: number },
     proxyAddr: { host: string; port: number },
     opts: { workspacePvc?: string; resume?: boolean; nodeName?: string } = {},
   ): Promise<{ podName: string; createStarted: number; relayGeneration: string }> {
-    this.ctx.store.mergeTimings(session.id, {
-      provisionStartAt: Date.now(),
-      podRequestedAt: Date.now(),
-    });
-    const guestToken = guestTokenFor(newOpaqueToken(32), shardClaim(this.ctx.cfg, "relay", session.id));
-    const tokenHash = sha256Hex(guestToken);
-    const ttlMs = this.ctx.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
-    // Register against the relay generation that is serving now and prove it
-    // survived the call. A registration accepted by a terminating relay is
-    // discarded and retried, so the pod never boots against a registry that is
-    // about to disappear. A stale entry from a resumed session is replaced.
-    const registration = await this.ctx.relay.registerCurrent(session.id, tokenHash, ttlMs, {
-      deadlineMs: this.ctx.cfg.relayRegistrationTimeoutMs,
-      replaceConnected: true,
-      onRetry: (attempt, err) => log.warn("sandbox_relay_register_retry", {
-        sessionId: session.id,
-        attempt,
-        error: err.message,
-      }),
-    });
-    this.ctx.store.setRelayToken(session.id, tokenHash);
-
-    // Registration may have waited through a relay replacement. Resolve the
-    // relay endpoint again after it succeeds so the pod boots against the relay
-    // that accepted the registration, not the one that was cached before it.
-    // Above one replica this re-resolves the shard's ready endpoint, so the pod
-    // lands on its shard and is never handed a hostname the guest cannot
-    // resolve. The proxy endpoint is stable and already resolved by the caller.
-    const relay = (await this.relayAddress(session.id)) ?? relayAddr;
-    const proxy = proxyAddr;
-
-    const createStarted = Date.now();
-    const { podName } = await this.ctx.provisioner.createPod({
-      sessionId: session.id,
-      leaseSeconds: session.durationSeconds,
-      limits: session.limits,
-      clientPublicKey: session.clientPublicKey,
-      clientNonce: session.clientNonce,
-      guestToken,
-      relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(session.id)}`,
-      relayHost: relay.host,
-      relayPort: relay.port,
-      proxyUrl: `http://${proxy.host}:${proxy.port}`,
-      proxyToken: proxyTokenFor(this.ctx.cfg, session.id),
-      image: this.ctx.cfg.guestImageRef,
-      imageDigest: this.ctx.cfg.guestImageDigest,
-      runtimeClass: this.ctx.cfg.runtimeClass,
-      executionMode: this.ctx.cfg.executionMode,
-      workspaceDir: this.ctx.cfg.workspaceDir,
-      ...(opts.workspacePvc ? { workspacePvc: opts.workspacePvc } : {}),
-      ...(opts.resume ? { resume: true } : {}),
-      ...(session.baselineCpuMillis ? { baselineCpuMillis: session.baselineCpuMillis } : {}),
-      ...(session.baselineMemoryMib ? { baselineMemoryMiB: session.baselineMemoryMib } : {}),
-      ...(opts.nodeName ? { nodeName: opts.nodeName } : {}),
-    });
-    return { podName, createStarted, relayGeneration: registration.generation };
+    return this.pods.createPod(session, relayAddr, proxyAddr, opts);
   }
-
 
   async awaitReady(session: SessionRecord): Promise<void> {
     const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
@@ -442,7 +210,7 @@ export class Provisioning {
         // that is about to exit. Re-register on the next pass instead.
         const before = await this.ctx.relay.healthFor(session.id).catch(() => null);
         let state = await this.ctx.relay.state(session.id);
-        const generationAtCreate = this.relayGeneration.get(session.id) ?? null;
+        const generationAtCreate = this.pods.generationFor(session.id) ?? null;
         const relayChanged = Boolean(
           before && generationAtCreate && before.generation !== generationAtCreate,
         );
@@ -456,7 +224,7 @@ export class Provisioning {
           timings.warmPoolHit !== 1 &&
           (!state.registered || (relayChanged && !state.connected))
         ) {
-          if (await this.recreatePod(session)) return;
+          if (await this.pods.recreatePod(session)) return;
         }
         if (!state.registered) {
           // The replacement relay does not know this session yet. Re-register
@@ -529,7 +297,7 @@ export class Provisioning {
             metrics
               .histogram("sandbox_ready_duration_seconds", "Entitlement to READY", LATENCY_BUCKETS)
               .observe((readyAt - startedAt) / 1000);
-            this.relayGeneration.delete(session.id);
+            this.pods.forgetGeneration(session.id);
             log.info("sandbox_ready", {
               sessionId: session.id,
               evidenceType: state.attestation.evidenceType,
@@ -543,38 +311,7 @@ export class Provisioning {
       }
     }
 
-    if (session.podName) {
-      const pod = await this.ctx.provisioner.getPod(session.podName).catch(() => null);
-      if (pod?.nodeName) {
-        const reservation = this.ctx.capacity.getReservation(session.id);
-        if (reservation && reservation.nodeId !== pod.nodeName && reservation.nodeId !== "disabled") {
-          this.ctx.capacity.pinSessionNode(session.id, pod.nodeName);
-          metrics.counter("sandbox_capacity_placement_reconciled_total", "Placement intents reconciled with Kubernetes").inc();
-          log.warn("sandbox_placement_reconciled", {
-            sessionId: session.id,
-            intended: reservation.nodeId,
-            actual: pod.nodeName,
-          });
-        }
-        if (session.workspacePvc && !session.nodeName) {
-          this.ctx.store.setNodeName(session.id, pod.nodeName);
-          session.nodeName = pod.nodeName;
-        }
-      }
-      if (pod && pod.phase === "Running") {
-        // Record the first observation of a running container (tick resolution).
-        const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
-        if (!timings.podRunningObservedAt && timings.warmPoolHit !== 1) {
-          this.ctx.store.mergeTimings(session.id, { podRunningObservedAt: this.ctx.now() });
-        }
-      }
-      if (pod && (pod.phase === "Failed" || pod.phase === "Succeeded")) {
-        this.ctx.store.requestTermination(session.id, "failure:pod_terminated", {
-          code: "pod_terminated",
-          message: `pod reached phase ${pod.phase}`,
-        });
-      }
-    }
+    await this.podStatus.reconcile(session);
   }
 
   /**
