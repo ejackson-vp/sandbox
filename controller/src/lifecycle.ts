@@ -103,12 +103,17 @@ export class Lifecycle {
   /**
    * Reconcile a row already in SUSPENDING: replay the stop_guest of the entry
    * transition (a crash may have happened before it ran), then complete.
+   *
+   * The replay is a table decision like any other, so the effect list has one
+   * definition. A refusal means the row moved on under us (a destroy, a lease
+   * expiry); `finishSuspend` is what reports that, exactly as it did before the
+   * replay was table-driven.
    */
   async reconcileSuspend(session: SessionRecord): Promise<void> {
-    await executeEffects(
-      [{ type: "stop_guest", intent: "suspend" }],
-      effectContext(this.ctx, session),
-    );
+    const decision = transition(snapshotOf(session), { type: "suspend_retry" });
+    if (decision.ok) {
+      await executeEffects(decision.value.effects, effectContext(this.ctx, session));
+    }
     await this.finishSuspend(session);
   }
 

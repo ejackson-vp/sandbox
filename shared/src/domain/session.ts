@@ -34,6 +34,12 @@ export type SessionEvent =
   | { type: "operation_finished" }
   | { type: "suspend_requested" }
   | { type: "guest_stopped" }
+  /**
+   * Replay the stop of a suspend that was interrupted after the state write.
+   * Self-transition: it asks for the guest to stop again without moving the row,
+   * because the checkpoint commit (`guest_stopped`) is a separate decision.
+   */
+  | { type: "suspend_retry" }
   | { type: "resume_requested" }
   | { type: "lease_expired" }
   | { type: "terminate_requested"; reason: string }
@@ -55,6 +61,7 @@ export const SOURCE_STATES: Readonly<Record<SessionEvent["type"], readonly Sessi
   operation_finished: ["READY", "ACTIVE"],
   suspend_requested: ["READY", "ACTIVE"],
   guest_stopped: ["SUSPENDING"],
+  suspend_retry: ["SUSPENDING"],
   resume_requested: ["SUSPENDED"],
   lease_expired: ["PROVISIONING", "READY", "ACTIVE", "SUSPENDING", "SUSPENDED", "RESUMING"],
   terminate_requested: [
@@ -223,6 +230,15 @@ export function transition(
       return fail(snapshot, event, "invalid_transition", "READY/ACTIVE accepts operations, suspend, or terminate");
 
     case "SUSPENDING":
+      if (event.type === "suspend_retry") {
+        // A crash between the state write and the goodbye leaves the guest
+        // running. Ask again; the row does not move until the checkpoint is
+        // committed, so the retry is a self-transition with one effect.
+        return Ok({
+          state: "SUSPENDING",
+          effects: [{ type: "stop_guest", intent: "suspend" }],
+        });
+      }
       if (event.type === "guest_stopped") {
         // The pod teardown is a local repair that precedes the commit; the
         // guarded write then fences the relay purge behind it.
@@ -238,7 +254,12 @@ export function transition(
       if (event.type === "lease_expired" || event.type === "terminate_requested") {
         return Ok({ state: "TERMINATING", effects: terminationEffects(snapshot) });
       }
-      return fail(snapshot, event, "invalid_transition", "SUSPENDING accepts guest_stopped or terminate");
+      return fail(
+        snapshot,
+        event,
+        "invalid_transition",
+        "SUSPENDING accepts guest_stopped, a retry, or terminate",
+      );
 
     case "SUSPENDED":
       if (event.type === "resume_requested") {
