@@ -14,5 +14,5 @@ export interface ReconcilerContext {
   readonly capacity: CapacityService;
   readonly snapshotter: Snapshotter;
   now(): number;
-  serviceAddress(name: string): Promise<{ host: string; port: number } | null>;
+  serviceAddress(name: string, shard?: number): Promise<{ host: string; port: number } | null>;
 }

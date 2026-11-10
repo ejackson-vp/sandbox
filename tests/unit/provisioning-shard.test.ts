@@ -55,29 +55,43 @@ interface CreatedPod {
   proxyToken: string;
 }
 
-function harness(cfg: ControllerConfig, serviceAddress = vi.fn(async () => null)) {
+function harness(
+  cfg: ControllerConfig,
+  serviceAddress = vi.fn(async (_name: string, _shard?: number) => null),
+) {
   const createPod = vi.fn(async (_spec: CreatedPod) => ({ podName: "sbx-pod" }));
+  const requestTermination = vi.fn();
   const store = {
     mergeTimings: vi.fn(),
     setRelayToken: vi.fn(),
+    setProvisioning: vi.fn(() => true),
+    requestTermination,
   } as unknown as Store;
   const relay = {
+    isReady: async () => true,
     registerCurrent: vi.fn(async () => ({ generation: "g", attempts: 1 })),
   } as unknown as RelayClient;
+  const provisioner = {
+    createPod,
+    listSandboxPods: vi.fn(async () => []),
+  } as unknown as Provisioner;
   const provisioning = new Provisioning(
     {
       cfg,
       store,
-      provisioner: { createPod } as unknown as Provisioner,
+      provisioner,
       relay,
-      capacity: {} as never,
+      capacity: {
+        getReservation: () => ({ nodeId: "disabled" }),
+        updatePod: vi.fn(),
+      } as never,
       snapshotter: {} as never,
       now: () => Date.now(),
       serviceAddress,
     },
-    {} as WarmPool,
+    { tryClaim: async () => false } as unknown as WarmPool,
   );
-  return { provisioning, createPod, serviceAddress };
+  return { provisioning, createPod, serviceAddress, requestTermination };
 }
 
 /**
@@ -124,18 +138,19 @@ describe("provisioning data-plane placement", () => {
     expect(spec.proxyToken.startsWith("v1.")).toBe(true);
   });
 
-  it("pins both endpoints to the session's shard with two replicas", async () => {
+  it("hands the guest shard endpoint IPs, never a hostname, with two replicas", async () => {
     const cfg = config({ RELAY_REPLICAS: "2", PROXY_REPLICAS: "2" });
-    const { provisioning, createPod, serviceAddress } = harness(cfg);
+    const serviceAddress = vi.fn(async (name: string, shard?: number) => {
+      const ordinal = (shard ?? 0) + 1;
+      return name === cfg.relayServiceName
+        ? { host: `10.1.1.${ordinal}`, port: cfg.relayPort }
+        : { host: `10.1.2.${ordinal}`, port: cfg.proxyPort };
+    });
+    const { provisioning, createPod } = harness(cfg, serviceAddress);
     const [zero, one] = idsForTwoShards();
 
-    for (const id of [zero, one]) {
-      await provisioning.createPod(
-        session(id),
-        { host: "10.0.0.1", port: cfg.relayPort },
-        { host: "10.0.0.9", port: cfg.proxyPort },
-      );
-    }
+    await provisioning.provision(session(zero));
+    await provisioning.provision(session(one));
 
     const first = createPod.mock.calls[0]![0];
     const second = createPod.mock.calls[1]![0];
@@ -144,19 +159,42 @@ describe("provisioning data-plane placement", () => {
     expect(firstShard).not.toBe(secondShard);
 
     expect(first.relayUrl).toBe(
-      `ws://relay-${firstShard}.relay-headless:${cfg.relayPort}/guest?session=${encodeURIComponent(zero)}`,
+      `ws://10.1.1.${firstShard + 1}:${cfg.relayPort}/guest?session=${encodeURIComponent(zero)}`,
     );
-    expect(first.proxyUrl).toBe(`http://egress-proxy-${firstShard}.egress-proxy-headless:${cfg.proxyPort}`);
+    expect(first.proxyUrl).toBe(`http://10.1.2.${firstShard + 1}:${cfg.proxyPort}`);
     expect(second.relayUrl).toBe(
-      `ws://relay-${secondShard}.relay-headless:${cfg.relayPort}/guest?session=${encodeURIComponent(one)}`,
+      `ws://10.1.1.${secondShard + 1}:${cfg.relayPort}/guest?session=${encodeURIComponent(one)}`,
     );
-    expect(second.proxyUrl).toBe(
-      `http://egress-proxy-${secondShard}.egress-proxy-headless:${cfg.proxyPort}`,
-    );
-    expect(first.relayUrl).not.toBe(second.relayUrl);
+    expect(second.proxyUrl).toBe(`http://10.1.2.${secondShard + 1}:${cfg.proxyPort}`);
 
-    // The Service lookup is skipped at N>1: a ClusterIP would load-balance.
-    expect(serviceAddress).not.toHaveBeenCalled();
+    // Different shards must be handed different endpoints.
+    expect(first.relayUrl).not.toBe(second.relayUrl);
+    expect(first.proxyUrl).not.toBe(second.proxyUrl);
+
+    // A guest runs with `dnsPolicy: None` and no DNS egress: a headless Service
+    // name would be unresolvable, so neither URL may contain one.
+    expect(first.relayUrl).not.toContain("relay-headless");
+    expect(first.proxyUrl).not.toContain("egress-proxy-headless");
+    expect(serviceAddress).toHaveBeenCalledWith(cfg.relayServiceName, firstShard);
+    expect(serviceAddress).toHaveBeenCalledWith(cfg.proxyServiceName, firstShard);
+  });
+
+  it("fails closed when the session's shard has no ready endpoint", async () => {
+    const cfg = config({ RELAY_REPLICAS: "2", PROXY_REPLICAS: "2" });
+    const { provisioning, createPod, requestTermination } = harness(cfg);
+
+    await provisioning.provision(session("sbx_no_shard_endpoint"));
+
+    // No pod is created: a hostname in the pod spec could never be dialled.
+    expect(createPod).not.toHaveBeenCalled();
+    expect(requestTermination).toHaveBeenCalledWith(
+      "sbx_no_shard_endpoint",
+      "failure:data_plane_endpoint_unavailable",
+      {
+        code: "data_plane_endpoint_unavailable",
+        message: expect.stringContaining("relay"),
+      },
+    );
   });
 
   it("mints shard claims into both credentials when replicas > 1", async () => {

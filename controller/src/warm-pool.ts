@@ -8,7 +8,7 @@ import { GUEST_TOOLS, type WarmPodInfo } from "./k8s.js";
 import { proxyTokenFor } from "./config.js";
 import { warmPoolIdentity } from "./warm-pool-identity.js";
 import { newOpaqueToken, sha256Hex, guestTokenFor } from "./tokens.js";
-import { pinnedAddress, shardClaim } from "./data-plane-shard.js";
+import { pinnedShard, shardClaim } from "./data-plane-shard.js";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { WarmPoolStore } from "./store/ports.js";
@@ -122,12 +122,19 @@ export class WarmPool {
 
     // As in the cold path, registration may have waited through a relay
     // replacement. The claim must point at the endpoint that accepted it;
-    // above one replica that endpoint is the session's shard, recomputed from
-    // the session id rather than inherited from the warm pod's own shard.
-    const currentRelay = pinnedAddress(cfg, "relay", session.id) ??
-      (await this.ctx.serviceAddress(cfg.relayServiceName));
-    const relay = currentRelay ?? relayAddr;
-    const proxy = pinnedAddress(cfg, "proxy", session.id) ?? proxyAddr;
+    // above one replica that is the session's shard, recomputed from the
+    // session id rather than inherited from the warm pod's own shard. It has to
+    // be the shard's ready pod IP: the claimed guest still has no DNS. The
+    // caller's addresses are this session's shard already, so they are the
+    // fallback when a re-read races a pod restart.
+    const relayShard = pinnedShard(cfg, "relay", session.id);
+    const proxyShard = pinnedShard(cfg, "proxy", session.id);
+    const relay = relayShard === null
+      ? (await this.ctx.serviceAddress(cfg.relayServiceName)) ?? relayAddr
+      : (await this.ctx.serviceAddress(cfg.relayServiceName, relayShard)) ?? relayAddr;
+    const proxy = proxyShard === null
+      ? proxyAddr
+      : (await this.ctx.serviceAddress(cfg.proxyServiceName, proxyShard)) ?? proxyAddr;
     const claim: WarmClaim = {
       sessionId: session.id,
       relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(session.id)}`,
@@ -345,8 +352,22 @@ export class WarmPool {
     // The pooled id owns its own shard, independent of whichever session later
     // claims this pod. The claim message rewrites both endpoints for the real
     // session, so the guest follows the session's shard when it reconnects.
-    const relay = pinnedAddress(cfg, "relay", poolId) ?? relayAddr;
-    const proxy = pinnedAddress(cfg, "proxy", poolId) ?? proxyAddr;
+    // Above one replica the pooled guest needs its shard's ready pod IP: it
+    // runs with no DNS and cannot resolve the headless Service name. A shard
+    // with no ready endpoint leaves the slot for the next pass rather than
+    // booting a guest that dials another shard's pod.
+    const relayShard = pinnedShard(cfg, "relay", poolId);
+    const proxyShard = pinnedShard(cfg, "proxy", poolId);
+    const relay = relayShard === null
+      ? relayAddr
+      : await this.ctx.serviceAddress(cfg.relayServiceName, relayShard);
+    const proxy = proxyShard === null
+      ? proxyAddr
+      : await this.ctx.serviceAddress(cfg.proxyServiceName, proxyShard);
+    if (!relay || !proxy) {
+      log.warn("warm_pool_endpoint_unavailable", { poolId });
+      return;
+    }
     try {
       // One bounded attempt per housekeeping pass. If the relay is mid-restart
       // the next pass creates the pod against the replacement instead of

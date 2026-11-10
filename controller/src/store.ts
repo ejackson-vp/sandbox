@@ -68,6 +68,7 @@ const PROVISION_FAILURE_REASONS = new Set([
   "guest_protocol_unsupported",
   "guest_measurement_not_allowed",
   "guest_attestation_rejected",
+  "data_plane_endpoint_unavailable",
 ]);
 
 function boundedFailureReason(reason: string): string {

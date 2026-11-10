@@ -14,11 +14,6 @@
  */
 import { createHash } from "node:crypto";
 
-export interface DataPlaneAddress {
-  host: string;
-  port: number;
-}
-
 /** The placement-relevant subset of the controller config. */
 export interface DataPlanePlacement {
   relayReplicas: number;
@@ -54,30 +49,23 @@ export function shardHost(template: string, shard: number): string {
 }
 
 /**
- * The shard-pinned address of `service` for this session, or null when there is
- * only one replica and the caller should resolve the ClusterIP Service instead.
+ * The shard `service` is pinned to for this session, or null at one replica
+ * where the shardless Service lookup applies.
  *
- * Skipping the Service lookup at N>1 is deliberate: a ClusterIP load-balances,
- * which is exactly the misrouting this module exists to prevent.
- *
- * A headless Service plus a StatefulSet is what makes the `{shard}` pod DNS
- * name resolvable (the StatefulSet gives each pod a stable, ordinal name and
- * the headless Service publishes it). The two objects must ship together: a
- * StatefulSet without its headless Service produces names nothing resolves, and
- * a template with no matching StatefulSet points at a pod that does not exist.
+ * A shard above one replica is not addressable by name from a guest: sandbox
+ * pods run with `dnsPolicy: None` and no DNS egress, so a headless Service's
+ * `relay-<n>.relay-headless` never resolves inside the microVM. Callers must
+ * resolve the Service's EndpointSlice to the matching pod IP instead (the
+ * StatefulSet publishes the pod name as the endpoint hostname). The controller
+ * runs in-cluster with working DNS, so its admin path may keep the hostname.
  */
-export function pinnedAddress(
+export function pinnedShard(
   placement: DataPlanePlacement,
   service: DataPlaneService,
   sessionId: string,
-): DataPlaneAddress | null {
+): number | null {
   const replicas = service === "relay" ? placement.relayReplicas : placement.proxyReplicas;
-  if (replicas <= 1) return null;
-  const template =
-    service === "relay" ? placement.relayHostTemplate : placement.proxyHostTemplate;
-  const port = service === "relay" ? placement.relayPort : placement.proxyPort;
-  const shard = dataPlaneShard(sessionId, replicas);
-  return { host: shardHost(template, shard), port };
+  return replicas > 1 ? dataPlaneShard(sessionId, replicas) : null;
 }
 
 /**
@@ -85,6 +73,5 @@ export function pinnedAddress(
  * service has one replica and no placement to enforce.
  */
 export function shardClaim(placement: DataPlanePlacement, service: DataPlaneService, sessionId: string): number | undefined {
-  const replicas = service === "relay" ? placement.relayReplicas : placement.proxyReplicas;
-  return replicas > 1 ? dataPlaneShard(sessionId, replicas) : undefined;
+  return pinnedShard(placement, service, sessionId) ?? undefined;
 }

@@ -156,6 +156,11 @@ and hands that to the guest (`getServiceAddress` in `controller/src/k8s.ts`).
 Pod IPs are routed normally in every runtime, so this works for both `runc` and
 Kata. It falls back to the ClusterIP when no endpoint is ready.
 
+With `RELAY_REPLICAS` or `PROXY_REPLICAS` above 1 it resolves the endpoint whose
+hostname is `<service>-<shard>` (the StatefulSet pod name behind the headless
+Service), so a sharded guest also gets an IP. A shard with no ready endpoint
+fails provisioning instead of falling back to a name or another shard.
+
 Consequences worth knowing:
 
 - The guest is pinned to one replica for the life of the process; the controller

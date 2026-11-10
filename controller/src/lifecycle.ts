@@ -10,7 +10,6 @@ type LifecycleContext = Omit<ReconcilerContext, "store"> & { store: LifecycleSto
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { Provisioning } from "./provisioning.js";
-import { pinnedAddress } from "./data-plane-shard.js";
 
 export class LifecycleError extends Error {
   constructor(
@@ -166,12 +165,10 @@ export class Lifecycle {
         );
       }
     }
-    const relayAddr =
-      pinnedAddress(this.ctx.cfg, "relay", id) ??
-      (await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName));
-    const proxyAddr =
-      pinnedAddress(this.ctx.cfg, "proxy", id) ??
-      (await this.ctx.serviceAddress(this.ctx.cfg.proxyServiceName));
+    // Above one replica these are the session shard's ready pod IPs, not pod
+    // names: the guest has no DNS. A shard with no ready endpoint leaves this
+    // null and the resume fails rather than creating an unreachable pod.
+    const { relay: relayAddr, proxy: proxyAddr } = await this.provisioning.endpointsFor(id);
     if (!relayAddr || !proxyAddr) {
       throw new LifecycleError("control_plane_unavailable", "relay or proxy unavailable", 503);
     }

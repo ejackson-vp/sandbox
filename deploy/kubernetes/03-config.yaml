@@ -59,10 +59,15 @@ data:
   PROXY_SERVICE_NAME: "egress-proxy"
   # Data-plane placement. Both default to 1, which keeps the ClusterIP Service
   # path (byte-identical pod endpoints). Raising either to match its
-  # StatefulSet's replicas switches provisioning to shard-pinned pod names and
-  # makes the relay/proxy reject a connection routed to the wrong shard.
+  # StatefulSet's replicas switches provisioning to the shard's ready pod IP,
+  # resolved from the Service's EndpointSlice, and makes the relay/proxy reject
+  # a connection routed to the wrong shard.
   # Update these and the StatefulSet replicas in 12-relay.yaml / 13-egress-proxy.yaml
   # in the same change; a mismatch silently reintroduces per-replica state.
+  # Raising RELAY_REPLICAS also requires the relay server certificate (the
+  # relay-tls Secret, managed outside this repo) to carry
+  # relay-<n>.relay-headless SANs for every shard: the controller's admin calls
+  # reach each shard by that name over mTLS.
   RELAY_REPLICAS: "1"
   PROXY_REPLICAS: "1"
   RELAY_HOST_TEMPLATE: "relay-{shard}.relay-headless"

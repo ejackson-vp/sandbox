@@ -366,8 +366,14 @@ export class KubeProvisioner implements Provisioner {
    *
    * Falls back to the ClusterIP only when no endpoint is ready, which preserves
    * the previous behaviour for container runtimes that can use it.
+   *
+   * `shard` selects one replica of a StatefulSet behind a headless Service. The
+   * endpoint hostname is the pod name (`relay-0`), so `${name}-${shard}` picks
+   * the replica. There is no ClusterIP fallback on this path: a ClusterIP
+   * load-balances across replicas, which is the misrouting the shard prevents.
+   * A shard with no ready endpoint resolves to null.
    */
-  async getServiceAddress(name: string): Promise<{ host: string; port: number } | null> {
+  async getServiceAddress(name: string, shard?: number): Promise<{ host: string; port: number } | null> {
     try {
       const svc = await this.core.readNamespacedService({ name, namespace: this.controlNamespace });
       const port = svc.spec?.ports?.[0]?.port;
@@ -377,10 +383,19 @@ export class KubeProvisioner implements Provisioner {
         namespace: this.controlNamespace,
         labelSelector: `kubernetes.io/service-name=${name}`,
       });
-      const endpointIp = (slices.items ?? [])
+      const ready = (slices.items ?? [])
         .flatMap((slice) => slice.endpoints ?? [])
-        .filter((endpoint) => endpoint.conditions?.ready !== false)
-        .flatMap((endpoint) => endpoint.addresses ?? [])[0];
+        .filter((endpoint) => endpoint.conditions?.ready !== false);
+
+      if (shard !== undefined) {
+        const hostname = `${name}-${shard}`;
+        const shardIp = ready
+          .filter((endpoint) => endpoint.hostname === hostname)
+          .flatMap((endpoint) => endpoint.addresses ?? [])[0];
+        return shardIp ? { host: shardIp, port } : null;
+      }
+
+      const endpointIp = ready.flatMap((endpoint) => endpoint.addresses ?? [])[0];
       if (endpointIp) return { host: endpointIp, port };
 
       const ip = svc.spec?.clusterIP;

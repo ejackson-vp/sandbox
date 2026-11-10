@@ -16,8 +16,11 @@ import type { ReconcilerContext } from "./reconciler-context.js";
 import type { ProvisioningStore } from "./store/ports.js";
 
 type ProvisioningContext = Omit<ReconcilerContext, "store"> & { store: ProvisioningStore };
+type Endpoint = { host: string; port: number };
+type EndpointPair = { relay: Endpoint | null; proxy: Endpoint | null };
 import { newOpaqueToken, sha256Hex, guestTokenFor } from "./tokens.js";
-import { pinnedAddress, shardClaim } from "./data-plane-shard.js";
+import { pinnedShard, shardClaim } from "./data-plane-shard.js";
+import type { DataPlaneService } from "./data-plane-shard.js";
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { WarmPool } from "./warm-pool.js";
@@ -47,23 +50,81 @@ export class Provisioning {
    * Relay endpoint for this session.
    *
    * With one replica this is the existing ClusterIP/endpoint lookup, unchanged.
-   * Above one it is the shard-specific pod address computed from the session
-   * id, and the Service lookup is skipped on purpose: a ClusterIP load-balances
-   * across replicas, which is the misrouting the shard exists to prevent.
+   * Above one it is the ready endpoint Pod IP for the session's shard. A
+   * hostname would be dialled by a guest that runs with `dnsPolicy: None` and
+   * no DNS egress, so it can never resolve one.
    */
-  private async relayAddress(sessionId: string) {
-    return (
-      pinnedAddress(this.ctx.cfg, "relay", sessionId) ??
-      (await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName))
-    );
+  private relayAddress(sessionId: string) {
+    return this.endpoint("relay", sessionId);
   }
 
   /** Proxy endpoint for this session; same single/multi-replica split. */
-  private async proxyAddress(sessionId: string) {
-    return (
-      pinnedAddress(this.ctx.cfg, "proxy", sessionId) ??
-      (await this.ctx.serviceAddress(this.ctx.cfg.proxyServiceName))
+  private proxyAddress(sessionId: string) {
+    return this.endpoint("proxy", sessionId);
+  }
+
+  /**
+   * Resolve `service` for a session.
+   *
+   * At one replica this is the shardless Service lookup, byte-identical to the
+   * pre-shard path. Above one it is the shard's ready endpoint and never the
+   * ClusterIP, which load-balances across replicas.
+   */
+  private endpoint(service: DataPlaneService, sessionId: string) {
+    const name =
+      service === "relay" ? this.ctx.cfg.relayServiceName : this.ctx.cfg.proxyServiceName;
+    const shard = pinnedShard(this.ctx.cfg, service, sessionId);
+    return shard === null
+      ? this.ctx.serviceAddress(name)
+      : this.ctx.serviceAddress(name, shard);
+  }
+
+  /**
+   * Both data-plane endpoints for a session.
+   *
+   * Exposed for the resume path, which has to report an unavailable data plane
+   * as an error rather than terminate the session.
+   */
+  async endpointsFor(sessionId: string): Promise<EndpointPair> {
+    return {
+      relay: await this.relayAddress(sessionId),
+      proxy: await this.proxyAddress(sessionId),
+    };
+  }
+
+  /**
+   * Endpoints for a pod this pass will create, or null when it must not.
+   *
+   * A null at one replica is the existing defer-and-retry: the Service may come
+   * back. A null for a pinned shard is terminal for this attempt, with its own
+   * failure reason: retrying cannot help until that replica is ready, and
+   * falling back to a hostname would create a guest that can never connect.
+   */
+  private async podEndpoints(session: SessionRecord): Promise<{ relay: Endpoint; proxy: Endpoint } | null> {
+    const { relay, proxy } = await this.endpointsFor(session.id);
+    if (relay && proxy) return { relay, proxy };
+
+    const unresolved = { relay: !relay, proxy: !proxy } as const;
+    const missing = (["relay", "proxy"] as const).filter(
+      (service) => unresolved[service] && pinnedShard(this.ctx.cfg, service, session.id) !== null,
     );
+    if (missing.length === 0) {
+      log.warn("sandbox_services_unavailable", {
+        sessionId: session.id,
+        relay: Boolean(relay),
+        proxy: Boolean(proxy),
+      });
+      return null;
+    }
+    this.ctx.store.requestTermination(session.id, "failure:data_plane_endpoint_unavailable", {
+      code: "data_plane_endpoint_unavailable",
+      message: `no ready endpoint for ${missing.join(", ")}`,
+    });
+    log.warn("sandbox_data_plane_endpoint_unavailable", {
+      sessionId: session.id,
+      services: missing.join(","),
+    });
+    return null;
   }
 
   async provision(session: SessionRecord): Promise<void> {
@@ -170,16 +231,9 @@ export class Provisioning {
       this.ctx.store.mergeTimings(session.id, { provisionQueueWaitMs: waitMs });
     }
     const provisionBeginAt = this.ctx.now();
-    const relayAddr = await this.relayAddress(session.id);
-    const proxyAddr = await this.proxyAddress(session.id);
-    if (!relayAddr || !proxyAddr) {
-      log.warn("sandbox_services_unavailable", {
-        sessionId: session.id,
-        relay: Boolean(relayAddr),
-        proxy: Boolean(proxyAddr),
-      });
-      return;
-    }
+    const endpoints = await this.podEndpoints(session);
+    if (!endpoints) return;
+    const { relay: relayAddr, proxy: proxyAddr } = endpoints;
 
     if (lifetimeExpired(snapshotOf(session), this.ctx.now())) {
       this.ctx.store.requestTermination(session.id, "max_lifetime");
@@ -266,9 +320,9 @@ export class Provisioning {
       return false;
     }
 
-    const relayAddr = await this.relayAddress(session.id);
-    const proxyAddr = await this.proxyAddress(session.id);
-    if (!relayAddr || !proxyAddr) return false;
+    const endpoints = await this.podEndpoints(session);
+    if (!endpoints) return false;
+    const { relay: relayAddr, proxy: proxyAddr } = endpoints;
     const timings = session.timingsJson
       ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
       : {};
@@ -320,14 +374,13 @@ export class Provisioning {
     this.ctx.store.setRelayToken(session.id, tokenHash);
 
     // Registration may have waited through a relay replacement. Resolve the
-    // endpoint again after it succeeds so the pod boots against the relay that
-    // accepted the registration, not the one that was cached before it.
-    // Above one replica the endpoint is a pure function of the session id, so
-    // the re-resolution is a no-op and the pod always lands on its shard.
-    const currentRelay = pinnedAddress(this.ctx.cfg, "relay", session.id) ??
-      (await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName));
-    const relay = currentRelay ?? relayAddr;
-    const proxy = pinnedAddress(this.ctx.cfg, "proxy", session.id) ?? proxyAddr;
+    // relay endpoint again after it succeeds so the pod boots against the relay
+    // that accepted the registration, not the one that was cached before it.
+    // Above one replica this re-resolves the shard's ready endpoint, so the pod
+    // lands on its shard and is never handed a hostname the guest cannot
+    // resolve. The proxy endpoint is stable and already resolved by the caller.
+    const relay = (await this.relayAddress(session.id)) ?? relayAddr;
+    const proxy = proxyAddr;
 
     const createStarted = Date.now();
     const { podName } = await this.ctx.provisioner.createPod({
