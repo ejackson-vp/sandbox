@@ -5,6 +5,45 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
+## 0.1.19
+
+### Added
+
+- One-shot `sandbox.run()` in the TypeScript SDK and `sandbox run` CLI: create,
+  upload, exec, download and always destroy, with a fresh session per run
+  (#80).
+- A private metrics listener (`METRICS_PORT`, default 9100) for API, controller
+  and relay, a bounded-label scrape contract, process/event-loop/GC metrics, a
+  Grafana dashboard and a scrape manifest. The public ingress no longer serves
+  `/metrics` (#37).
+- Nightly TLA+ model checking with a pinned Java/TLC toolchain and failure
+  artifacts (#73).
+- Execution-epoch, guest-status and fence-release modeling, plus `FenceRelease`
+  and `StaleEpoch` broken variants (#75).
+
+### Changed
+
+- The controller reconciles readiness and terminal cleanup in bounded parallel
+  phases with per-session serialization and queue metrics (#21).
+- Liveness and readiness are separate. Readiness checks store writability and
+  migrations, relay reachability and provisioner reachability with a short
+  cache (#50).
+- The internal controller/relay listeners are rate-limited and their CodeQL
+  missing-rate-limit findings are resolved with a repository-owned token bucket
+  (#86).
+
+### Fixed
+
+- Relay replacement during a create no longer loses the session registration;
+  the controller gates admission on the current relay generation and the guest
+  dial window exceeds the provisioning timeout (#17).
+- Operation fencing and payment-intent fencing prevent unsafe duplicate
+  execution and completion after a controller restart (#19, #20).
+- Suspended sessions no longer charge peak compute while `RELEASING` (#72), and
+  peak storage is accounted consistently (#68).
+- Kubernetes deployments reject an unpinned guest image digest independently of
+  the payment/attestation dev switch (#4).
+
 ## 0.1.18
 
 ### Fixed
