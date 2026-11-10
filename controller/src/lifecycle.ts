@@ -203,6 +203,11 @@ export class Lifecycle {
       this.ctx.capacity.suspend(id);
       throw new LifecycleError("not_suspended", "session changed state while resuming", 409);
     }
+    // The reaper may have seen the session as SUSPENDED while the pod was
+    // being created and re-suspended the reservation we just admitted. The
+    // session is RESUMING now, so reassert the allocation before it is
+    // observable as READY with suspended capacity.
+    this.ctx.capacity.reassertAllocated(id);
     metrics.counter("sandbox_sessions_resumed_total", "Sessions resumed").inc();
     log.info("sandbox_resuming", { sessionId: id, podName, resumeCount: session.resumeCount + 1 });
   }

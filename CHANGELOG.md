@@ -7,6 +7,13 @@ the container registry.
 
 ## Unreleased
 
+### Added
+
+- The relay exports `sandbox_relay_active_requests`, the number of operations
+  the guests themselves report as running. The lifecycle fault harness waits
+  for this gauge before killing the controller, so it tests an observed
+  operation rather than racing the guest's status frame (#108).
+
 ### Fixed
 
 - A relay replacement no longer strands paid creates on the old relay Pod IP.
@@ -20,6 +27,10 @@ the container registry.
   request still transitions from `pending`; a request already marked
   `outcome_unknown` remains owned by `OperationFence` until the guest reports
   it idle at the new epoch (#111).
+- A resumed session can no longer reach `READY` with its compute reservation
+  still counted as `SUSPENDED`. The reaper could re-suspend the reservation
+  between admission and `markResuming`; the controller now reasserts the
+  allocation once the session is `RESUMING` (#114).
 
 ## 0.1.20
 
