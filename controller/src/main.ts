@@ -80,6 +80,7 @@ async function main(): Promise<void> {
       wakeToken: cfg.wakeToken,
       ...(cfg.relayTls ? { controlTls: cfg.relayTls } : {}),
       ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
+      replicas: cfg.relayReplicas,
     };
     const relay = createRelay(relayOpts);
     collectors.push(() => relay.collectMetrics());
@@ -103,6 +104,7 @@ async function main(): Promise<void> {
       maxConnectionsPerSession: cfg.egressMaxConnectionsPerSession,
       maxGlobalConnections: cfg.egressMaxGlobalConnections,
       ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
+      replicas: cfg.proxyReplicas,
     });
     await listen(proxy.server, cfg.proxyPort);
     log.info("egress_proxy_listening", {
@@ -135,6 +137,7 @@ async function main(): Promise<void> {
       wakeToken: cfg.wakeToken,
       ...(cfg.relayTls ? { controlTls: cfg.relayTls } : {}),
       ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
+      replicas: cfg.relayReplicas,
     };
     const relay = createRelay(relayOpts);
     collectors.push(() => relay.collectMetrics());
@@ -154,6 +157,7 @@ async function main(): Promise<void> {
       maxConnectionsPerSession: cfg.egressMaxConnectionsPerSession,
       maxGlobalConnections: cfg.egressMaxGlobalConnections,
       ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
+      replicas: cfg.proxyReplicas,
     });
     await listen(proxy.server, cfg.proxyPort);
     log.info("egress_proxy_listening", { port: cfg.proxyPort });

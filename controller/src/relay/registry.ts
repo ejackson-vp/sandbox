@@ -70,6 +70,11 @@ export interface RelayRegistryOptions {
    * it. Unset (the single-replica default) accepts any shard.
    */
   shardIndex?: number;
+  /**
+   * Number of relay replicas. Enforcement is skipped at one replica because the
+   * controller mints a claim-free token there; see `precheck`.
+   */
+  replicas?: number;
   /** Called for a non-pool guest hello; the composition root wakes the controller. */
   onHello?: (sessionId: string) => void;
   /** Injectable for tests; defaults to the process-wide registry. */
@@ -367,7 +372,11 @@ export class RelayRegistry {
     if (!token || !constantTimeEqual(sha256Hex(token), entry.tokenHash)) return "bad_token";
     // The shard suffix is covered by the hash above, so a value that survives
     // that check is the one the controller minted, not one the guest chose.
-    if (this.opts.shardIndex !== undefined && guestTokenShard(token) !== this.opts.shardIndex) {
+    if (
+      this.opts.shardIndex !== undefined &&
+      (this.opts.replicas ?? 1) > 1 &&
+      guestTokenShard(token) !== this.opts.shardIndex
+    ) {
       return "wrong_shard";
     }
     if (entry.ws) return "connected";

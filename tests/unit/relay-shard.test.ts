@@ -29,7 +29,7 @@ function listen(server: NetServer): Promise<number> {
   });
 }
 
-async function start(env: { shardIndex?: number }): Promise<{
+async function start(env: { shardIndex?: number; replicas?: number }): Promise<{
   relay: RelayServer;
   port: number;
   client: RelayClient;
@@ -38,6 +38,7 @@ async function start(env: { shardIndex?: number }): Promise<{
     adminToken: ADMIN,
     responseTtlMs: 30_000,
     ...(env.shardIndex !== undefined ? { shardIndex: env.shardIndex } : {}),
+    ...(env.replicas !== undefined ? { replicas: env.replicas } : {}),
   });
   relays.push(relay);
   const port = await listen(relay.server);
@@ -75,7 +76,7 @@ function upgrade(port: number, sessionId: string, token: string): Promise<string
 
 describe("relay shard enforcement", () => {
   it("rejects a guest token claiming another shard, and accepts its own", async () => {
-    const { port, client } = await start({ shardIndex: 1 });
+    const { port, client } = await start({ shardIndex: 1, replicas: 2 });
     const sessionId = "sbx_relay_shard_own";
     const token = guestTokenFor(OPAQUE_TOKEN, 1);
     await client.register(sessionId, sha256Hex(token), 60_000);
@@ -87,11 +88,21 @@ describe("relay shard enforcement", () => {
     expect(await upgrade(port, misroutedSession, otherToken)).toContain("421");
   });
 
-  it("rejects a token with no shard claim once a shard is configured", async () => {
-    const { port, client } = await start({ shardIndex: 0 });
+  it("rejects a token with no shard claim in a multi-replica deployment", async () => {
+    const { port, client } = await start({ shardIndex: 0, replicas: 2 });
     const sessionId = "sbx_relay_shard_missing";
     await client.register(sessionId, sha256Hex(OPAQUE_TOKEN), 60_000);
     expect(await upgrade(port, sessionId, OPAQUE_TOKEN)).toContain("421");
+  });
+
+  // Regression: the StatefulSet always exports SHARD_INDEX, but at one replica
+  // the controller mints a token with no shard claim. Enforcing there refused
+  // every guest and every create timed out.
+  it("accepts a claim-free token when a shard is configured but only one replica runs", async () => {
+    const { port, client } = await start({ shardIndex: 0, replicas: 1 });
+    const sessionId = "sbx_relay_single_replica";
+    await client.register(sessionId, sha256Hex(OPAQUE_TOKEN), 60_000);
+    expect(await upgrade(port, sessionId, OPAQUE_TOKEN)).toContain("101");
   });
 
   it("accepts any shard when SHARD_INDEX is unset", async () => {

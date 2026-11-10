@@ -79,29 +79,47 @@ describe("egress proxy shard enforcement", () => {
         net.connect({ host: "127.0.0.1", port: echo.port, family: 0 }),
     };
 
-    const shardOne = await startProxy({ ...base, shardIndex: 1 });
+    const shardOne = await startProxy({ ...base, shardIndex: 1, replicas: 2 });
     const ownToken = mintProxyToken(SECRET, "session-a", 60_000, 1);
     const accepted = connectVia(shardOne.port, ownToken);
     expect(await accepted.status).toContain("200");
 
-    const shardZero = await startProxy({ ...base, shardIndex: 0 });
+    const shardZero = await startProxy({ ...base, shardIndex: 0, replicas: 2 });
     const misrouted = connectVia(shardZero.port, ownToken);
     expect(await misrouted.status).toContain("421");
     expect(shardZero.proxy.stats().allowed).toBe(0);
     expect(shardZero.proxy.stats().denied).toBe(1);
   });
 
-  it("rejects a token with no shard claim once a shard is configured", async () => {
+  it("rejects a token with no shard claim in a multi-replica deployment", async () => {
     const echo = await echoServer();
     const shardZero = await startProxy({
       tokenSecret: SECRET,
       shardIndex: 0,
+      replicas: 2,
       resolve: async () => ["93.184.216.34"],
       dial: () => net.connect({ host: "127.0.0.1", port: echo.port, family: 0 }),
     });
 
     const legacy = connectVia(shardZero.port, mintProxyToken(SECRET, "session-b", 60_000));
     expect(await legacy.status).toContain("421");
+  });
+
+  // Regression: the StatefulSet always exports SHARD_INDEX, but at one replica
+  // the controller mints a claim-free token. Enforcing there denied every
+  // tunnel.
+  it("accepts a claim-free token when a shard is configured but only one replica runs", async () => {
+    const echo = await echoServer();
+    const shardZero = await startProxy({
+      tokenSecret: SECRET,
+      shardIndex: 0,
+      replicas: 1,
+      resolve: async () => ["93.184.216.34"],
+      dial: () => net.connect({ host: "127.0.0.1", port: echo.port, family: 0 }),
+    });
+
+    const legacy = connectVia(shardZero.port, mintProxyToken(SECRET, "session-c", 60_000));
+    expect(await legacy.status).toContain("200");
   });
 
   it("accepts any shard when SHARD_INDEX is unset", async () => {

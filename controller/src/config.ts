@@ -485,6 +485,15 @@ function parseDataPlanePlacement(
       );
     }
   }
+  // Affinity is only enforced when the ordinal is known. More than one replica
+  // without it would route guests into the wrong in-memory registry silently,
+  // so refuse to start rather than run blind.
+  if (shardIndex === undefined && role === "relay" && relayReplicas > 1) {
+    throw new Error("SHARD_INDEX is required when RELAY_REPLICAS > 1");
+  }
+  if (shardIndex === undefined && role === "proxy" && proxyReplicas > 1) {
+    throw new Error("SHARD_INDEX is required when PROXY_REPLICAS > 1");
+  }
 
   return {
     relayReplicas,

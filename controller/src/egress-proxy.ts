@@ -32,6 +32,11 @@ export interface EgressProxyOptions {
    * single-replica default) accepts any shard.
    */
   shardIndex?: number;
+  /**
+   * Number of proxy replicas. Enforcement is skipped at one replica because the
+   * controller mints a claim-free token there; see the check below.
+   */
+  replicas?: number;
   allowedPorts?: number[];
   /** Optional hostname allowlist (suffix match). Empty = any public host. */
   allowedHostSuffixes?: string[];
@@ -197,7 +202,7 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
     // in memory, so a session split across replicas gets N times the limit
     // regardless of what this check says; rejecting makes the misrouting
     // visible instead of silently over-serving it.
-    if (opts.shardIndex !== undefined && verified.shard !== opts.shardIndex) {
+    if (opts.shardIndex !== undefined && (opts.replicas ?? 1) > 1 && verified.shard !== opts.shardIndex) {
       metrics
         .counter("sandbox_egress_cross_shard_total", "CONNECTs refused for landing on the wrong shard")
         .inc({ service: "proxy", reason: verified.shard === undefined ? "missing_shard" : "wrong_shard" });

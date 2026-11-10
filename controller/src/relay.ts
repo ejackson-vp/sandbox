@@ -85,6 +85,12 @@ export interface RelayOptions {
    * registering in an in-memory registry the controller will never query.
    */
   shardIndex?: number;
+  /**
+   * How many relay replicas are deployed. Shard enforcement only applies when
+   * there is more than one: at a single replica the controller mints tokens
+   * with no shard claim, so enforcing would refuse every guest.
+   */
+  replicas?: number;
   /** Injectable for tests; defaults to the process-wide registry. */
   metricsRegistry?: MetricsRegistry;
   /** Injectable for tests; production uses the bounded internal bucket. */
@@ -117,6 +123,7 @@ export function createRelay(opts: RelayOptions): RelayServer {
     responseTtlMs: opts.responseTtlMs ?? 5 * 60_000,
     onHello: () => wakeController(opts),
     ...(opts.shardIndex !== undefined ? { shardIndex: opts.shardIndex } : {}),
+    replicas: opts.replicas ?? 1,
     metricsRegistry,
   });
 

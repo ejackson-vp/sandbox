@@ -248,4 +248,15 @@ describe("data-plane placement config", () => {
       /outside the 2-replica range/,
     );
   });
+
+  it("requires an ordinal when a role will run more than one replica", () => {
+    expect(() => config({ ROLE: "relay", RELAY_REPLICAS: "2" })).toThrow(/SHARD_INDEX is required/);
+    expect(() => config({ ROLE: "proxy", PROXY_REPLICAS: "2" })).toThrow(/SHARD_INDEX is required/);
+  });
+
+  it("does not require an ordinal for a role that is not itself a replica", () => {
+    // The controller routes by shard but serves no ordinal of its own.
+    const cfg = config({ ROLE: "controller", RELAY_REPLICAS: "2", PROXY_REPLICAS: "2" });
+    expect(cfg.shardIndex).toBeUndefined();
+  });
 });
