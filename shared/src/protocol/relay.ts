@@ -58,9 +58,55 @@ export interface WarmClaim {
   tools: string;
 }
 
+/**
+ * Frame protocol this build speaks. Bump it when a change to the frames is not
+ * backward compatible, and raise `MIN_SUPPORTED_GUEST_PROTOCOL_VERSION` only
+ * once every guest image an operator may still be running has been replaced.
+ *
+ * This is the first versioned frame set: the fields added here are optional, so
+ * a build that omits them speaks the same frames and is version 1 too.
+ */
+export const GUEST_PROTOCOL_VERSION = 1;
+
+/**
+ * Oldest guest frame protocol this build can serve.
+ *
+ * A guest that predates versioning sends no `protocolVersion` at all. During a
+ * controller rollout a warm pool still holds pods from the previous image, so
+ * an absent field is treated as exactly this value: it is accepted, never
+ * rejected. Only a version below this floor is unsupported.
+ */
+export const MIN_SUPPORTED_GUEST_PROTOCOL_VERSION = 1;
+
+/**
+ * Whether a hello version is within the accepted range.
+ *
+ * The rule is deliberately one-sided: there is no upper bound. A newer guest
+ * image may reach a warm pool before the controller that will claim it is
+ * upgraded, and a higher version means the guest speaks a superset of the
+ * frames this controller sends. Rejecting it would break that rollout
+ * direction; rejecting an old guest is the case this negotiation exists for.
+ */
+export function supportsGuestProtocolVersion(version: number | undefined): boolean {
+  if (version === undefined) return true;
+  if (!Number.isInteger(version) || version < 0) return false;
+  return version >= MIN_SUPPORTED_GUEST_PROTOCOL_VERSION;
+}
+
 /** Relay -> warm guest. */
 export interface GuestHelloMessage {
   type: "hello";
+  /**
+   * Frame protocol the guest speaks. Optional: a guest built before the field
+   * existed omits it and is treated as `MIN_SUPPORTED_GUEST_PROTOCOL_VERSION`.
+   */
+  protocolVersion?: number;
+  /**
+   * Operation verbs the guest implements, so the controller can see what a
+   * session can do without probing it. Optional and operational only; never
+   * carries customer data.
+   */
+  capabilities?: readonly string[];
   evidence: AttestationEnvelope;
 }
 
@@ -103,6 +149,10 @@ export interface RelaySessionState {
   registered: boolean;
   connected: boolean;
   attestation?: AttestationEnvelope;
+  /** Frame protocol the guest reported on hello; absent for a pre-versioning guest. */
+  protocolVersion?: number;
+  /** Operation verbs the guest reported on hello; absent when it sent none. */
+  capabilities?: readonly string[];
   /** Number of requests awaiting a response. */
   pending: number;
   /** When the hello frame was received (epoch ms). */

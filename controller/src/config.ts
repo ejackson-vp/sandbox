@@ -115,6 +115,12 @@ export interface ControllerConfig {
   /** Optional test/demo ceilings; 0 means use the node's allocatable values. */
   capacityNodeCpuOverrideMillis: number;
   capacityNodeMemoryOverrideMiB: number;
+  /**
+   * SHA-256 hex digests of guest measurements the controller accepts on hello.
+   * Empty (the default) means measurement is not pinned, matching the behaviour
+   * before this option existed.
+   */
+  guestMeasurementAllowlist: string[];
 }
 
 /**
@@ -366,6 +372,20 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     },
     capacityNodeCpuOverrideMillis: int(env.CAPACITY_NODE_CPU_MILLICORES, 0, 0, 1_000_000),
     capacityNodeMemoryOverrideMiB: int(env.CAPACITY_NODE_MEMORY_MIB, 0, 0, 1_048_576),
+    // Append-only: another branch adds fields above this line.
+    guestMeasurementAllowlist: (() => {
+      const values = (env.GUEST_MEASUREMENT_ALLOWLIST ?? "")
+        .split(",")
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean);
+      for (const value of values) {
+        // sha256 hex only: a typo must fail startup, never silently unpin.
+        if (!/^[0-9a-f]{64}$/.test(value)) {
+          throw new Error(`invalid GUEST_MEASUREMENT_ALLOWLIST entry ${value}`);
+        }
+      }
+      return values;
+    })(),
   };
 }
 

@@ -8,7 +8,42 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/x402s/sandbox/guest/internal/protocol"
 )
+
+// ProtocolVersion is the relay frame protocol this build speaks. Keep it in
+// sync with GUEST_PROTOCOL_VERSION in shared/src/protocol/relay.ts.
+const ProtocolVersion = 1
+
+// Capabilities are the operation verbs this guest dispatches in
+// supervisor.handleRequest. They are advertised on hello so the controller can
+// see what a session implements without probing it. Add a verb here when (and
+// only when) the supervisor gains a case for it.
+var Capabilities = []string{
+	protocol.OpExec,
+	protocol.OpFilePut,
+	protocol.OpFileGet,
+	protocol.OpFileList,
+	protocol.OpFileStat,
+	protocol.OpServiceStart,
+	protocol.OpServiceStop,
+	protocol.OpServiceList,
+	protocol.OpHTTP,
+	protocol.OpHTTPOpen,
+	protocol.OpHTTPRead,
+	protocol.OpHTTPClose,
+	protocol.OpWSOpen,
+	protocol.OpWSRead,
+	protocol.OpWSSend,
+	protocol.OpWSClose,
+	protocol.OpTransferInit,
+	protocol.OpTransferChunk,
+	protocol.OpTransferComplete,
+	protocol.OpTransferStatus,
+	protocol.OpTransferRead,
+	protocol.OpTransferCancel,
+}
 
 // Frame is the relay's control-plane envelope. Exactly one of the fields is
 // meaningful per type:
@@ -96,8 +131,20 @@ func (c *Client) send(ctx context.Context, v any) error {
 	return c.conn.Write(writeCtx, websocket.MessageText, data)
 }
 
+// helloFrame is the handshake payload. Version and capabilities are optional on
+// the wire (a guest built before them omits them), so sending them is additive:
+// an older relay ignores the extra fields.
+func helloFrame(evidence map[string]any) map[string]any {
+	return map[string]any{
+		"type":            "hello",
+		"protocolVersion": ProtocolVersion,
+		"capabilities":    Capabilities,
+		"evidence":        evidence,
+	}
+}
+
 func (c *Client) SendHello(ctx context.Context, evidence map[string]any) error {
-	return c.send(ctx, map[string]any{"type": "hello", "evidence": evidence})
+	return c.send(ctx, helloFrame(evidence))
 }
 
 func (c *Client) SendResponse(ctx context.Context, id, envelope string) error {

@@ -65,6 +65,9 @@ const PROVISION_FAILURE_REASONS = new Set([
   "checkpoint_missing",
   "guest_exited",
   "reaped",
+  "guest_protocol_unsupported",
+  "guest_measurement_not_allowed",
+  "guest_attestation_rejected",
 ]);
 
 function boundedFailureReason(reason: string): string {

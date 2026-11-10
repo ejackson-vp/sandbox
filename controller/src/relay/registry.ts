@@ -40,6 +40,10 @@ interface Entry {
   connectedAt: number | null;
   hello: AttestationEnvelope | null;
   helloAt: number | null;
+  /** Frame protocol the guest reported; null when it predates versioning. */
+  protocolVersion: number | null;
+  /** Operation verbs the guest reported on hello; null when it sent none. */
+  capabilities: readonly string[] | null;
   pending: Map<string, Pending>;
   responses: Map<string, CachedResponse>;
   errors: Map<string, CachedError>;
@@ -135,6 +139,8 @@ export class RelayRegistry {
       connectedAt: null,
       hello: null,
       helloAt: existing?.helloAt ?? null,
+      protocolVersion: null,
+      capabilities: null,
       pending: existing?.pending ?? new Map(),
       responses: existing?.responses ?? new Map(),
       errors: existing?.errors ?? new Map(),
@@ -160,6 +166,8 @@ export class RelayRegistry {
       pending: entry.pending.size,
       ...(entry.hello ? { attestation: entry.hello } : {}),
       ...(entry.helloAt ? { helloAt: entry.helloAt } : {}),
+      ...(entry.protocolVersion !== null ? { protocolVersion: entry.protocolVersion } : {}),
+      ...(entry.capabilities !== null ? { capabilities: entry.capabilities } : {}),
       ...(entry.statusAt !== null
         ? {
             activeRequestId: entry.activeRequestId ?? "",
@@ -369,11 +377,20 @@ export class RelayRegistry {
     return true;
   }
 
-  hello(sessionId: string, evidence: AttestationEnvelope): boolean {
+  hello(
+    sessionId: string,
+    evidence: AttestationEnvelope,
+    meta: { protocolVersion?: number; capabilities?: readonly string[] } = {},
+  ): boolean {
     const entry = this.entries.get(sessionId);
     if (!entry || evidence.sessionId !== sessionId) return false;
     entry.hello = evidence;
     entry.helloAt = Date.now();
+    // A registration starts from a fresh guest process, so a reconnect that
+    // sends no metadata must clear what a previous process reported rather than
+    // inherit it.
+    entry.protocolVersion = meta.protocolVersion ?? null;
+    entry.capabilities = meta.capabilities ?? null;
     if (!sessionId.startsWith("warm_")) this.opts.onHello?.(sessionId);
     return true;
   }

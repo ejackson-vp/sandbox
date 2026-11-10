@@ -86,7 +86,13 @@ function handleGuestConnection(registry: RelayRegistry, sessionId: string, ws: W
     switch (msg.type) {
       case "hello": {
         const evidence = msg.evidence as AttestationEnvelope;
-        if (!evidence || typeof evidence !== "object" || !registry.hello(sessionId, evidence)) {
+        const meta = helloMetadata(msg);
+        if (!evidence || typeof evidence !== "object" || meta === null) {
+          log.warn("relay_hello_binding_mismatch", { sessionId });
+          ws.close(1008, "bad hello");
+          return;
+        }
+        if (!registry.hello(sessionId, evidence, meta)) {
           log.warn("relay_hello_binding_mismatch", { sessionId });
           ws.close(1008, "bad hello");
           return;
@@ -96,6 +102,9 @@ function handleGuestConnection(registry: RelayRegistry, sessionId: string, ws: W
           sessionId,
           evidenceType: evidence.evidenceType,
           insecureDevOnly: evidence.insecureDevOnly,
+          // Version only: the capability list is operational metadata and the
+          // shared log policy forbids logging capability sets.
+          protocolVersion: meta.protocolVersion ?? null,
         });
         return;
       }
@@ -173,4 +182,36 @@ function handleGuestConnection(registry: RelayRegistry, sessionId: string, ws: W
       /* ignore */
     }
   });
+}
+
+const MAX_CAPABILITIES = 64;
+const MAX_CAPABILITY_LENGTH = 64;
+
+/**
+ * Optional hello metadata, sanitised.
+ *
+ * Absent fields are valid: a guest built before version negotiation omits both
+ * and must still reach READY. A present field with the wrong shape is a
+ * malformed frame, not an old guest, so it fails closed rather than being
+ * silently dropped.
+ */
+function helloMetadata(
+  msg: GuestToRelay,
+): { protocolVersion?: number; capabilities?: readonly string[] } | null {
+  if (msg.type !== "hello") return null;
+  const version = msg.protocolVersion;
+  if (version !== undefined && (!Number.isInteger(version) || version < 0)) return null;
+  const capabilities = msg.capabilities;
+  if (capabilities !== undefined) {
+    if (!Array.isArray(capabilities) || capabilities.length > MAX_CAPABILITIES) return null;
+    for (const capability of capabilities) {
+      if (typeof capability !== "string" || capability.length === 0 || capability.length > MAX_CAPABILITY_LENGTH) {
+        return null;
+      }
+    }
+  }
+  return {
+    ...(version !== undefined ? { protocolVersion: version } : {}),
+    ...(capabilities !== undefined ? { capabilities } : {}),
+  };
 }

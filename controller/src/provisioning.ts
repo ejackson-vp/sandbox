@@ -1,7 +1,15 @@
 /**
  * Provisioning use case: cold pod or warm claim, then the readiness handshake.
  */
-import { LATENCY_BUCKETS, lifetimeExpired, metrics } from "@x402s/shared";
+import {
+  LATENCY_BUCKETS,
+  lifetimeExpired,
+  metrics,
+  MIN_SUPPORTED_GUEST_PROTOCOL_VERSION,
+  supportsGuestProtocolVersion,
+  verifyAttestation,
+} from "@x402s/shared";
+import type { AttestationEnvelope, RelaySessionState } from "@x402s/shared";
 import { proxyTokenFor } from "./config.js";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
@@ -402,6 +410,9 @@ export class Provisioning {
             });
             return;
           }
+          // Reject an unsupported guest while the session is still pre-READY,
+          // where termination is refundable. A versionless hello is accepted.
+          if (this.rejectUnsupportedGuest(session, state, state.attestation)) return;
           const readyAt = this.ctx.now();
           const leaseExpiresAt = readyAt + session.durationSeconds * 1000;
           const ok = this.ctx.store.setReady(
@@ -477,5 +488,66 @@ export class Provisioning {
         });
       }
     }
+  }
+
+  /**
+   * Refuse a guest before the lease starts (READY), so the termination is
+   * refundable, in two independent cases.
+   *
+   *  - The hello's frame protocol is below the floor this build can serve. An
+   *    absent version resolves to the floor and is accepted: a warm pool still
+   *    holds pods from the previous image during a controller rollout.
+   *  - The operator configured a measurement allowlist. This reuses the shared
+   *    verifier the SDK already runs; the controller is the server-side pin.
+   *    With no allowlist this method does no verification at all, preserving
+   *    the previous behaviour (accept, and the verifier's "not pinned" warning
+   *    remains a client-side concern).
+   */
+  private rejectUnsupportedGuest(
+    session: SessionRecord,
+    state: RelaySessionState,
+    evidence: AttestationEnvelope,
+  ): boolean {
+    if (!supportsGuestProtocolVersion(state.protocolVersion)) {
+      this.ctx.store.requestTermination(session.id, "failure:guest_protocol_unsupported", {
+        code: "guest_protocol_unsupported",
+        message: `guest protocol ${state.protocolVersion} is below the supported minimum ${MIN_SUPPORTED_GUEST_PROTOCOL_VERSION}`,
+      });
+      log.warn("sandbox_guest_protocol_unsupported", {
+        sessionId: session.id,
+        protocolVersion: state.protocolVersion ?? null,
+        minSupported: MIN_SUPPORTED_GUEST_PROTOCOL_VERSION,
+      });
+      return true;
+    }
+
+    const allowlist = this.ctx.cfg.guestMeasurementAllowlist;
+    if (allowlist.length === 0) return false;
+
+    const verdict = verifyAttestation(evidence, {
+      mode: this.ctx.cfg.executionMode,
+      expectedSessionId: session.id,
+      expectedClientNonce: session.clientNonce,
+      expectedClientPublicKey: session.clientPublicKey,
+      allowedMeasurements: allowlist,
+      allowInsecureDev: this.ctx.cfg.allowInsecureDev,
+      now: this.ctx.now(),
+    });
+    if (verdict.ok) {
+      log.info("sandbox_guest_measurement_pinned", {
+        sessionId: session.id,
+        guestMeasurement: verdict.guestMeasurement,
+      });
+      return false;
+    }
+
+    const reason =
+      verdict.code === "measurement_not_allowed" ? "guest_measurement_not_allowed" : "guest_attestation_rejected";
+    this.ctx.store.requestTermination(session.id, `failure:${reason}`, {
+      code: reason,
+      message: verdict.message,
+    });
+    log.warn("sandbox_guest_attestation_rejected", { sessionId: session.id, verdict: verdict.code });
+    return true;
   }
 }
