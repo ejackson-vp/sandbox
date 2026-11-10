@@ -1,16 +1,25 @@
 /**
  * Termination use case: stop the guest, delete pod/PVC, purge relay, finalise,
  * reap orphan pods, and delete workspace PVCs that no live session owns.
+ *
+ * The cleanup and the final write are the transition table's work: the effects
+ * of entering TERMINATING are replayed here (the guarded UPDATE that moved the
+ * row did so before this pass), and TERMINATING + `terminated` decides the
+ * final state. Both go through the effect interpreter.
  */
-import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
+import { finalStateForReason, LATENCY_BUCKETS, metrics, terminationEffects, transition } from "@x402s/shared";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
-import type { TerminationStore } from "./store/ports.js";
+import type { EffectStore, TerminationStore } from "./store/ports.js";
 
-type TerminationContext = Omit<ReconcilerContext, "store"> & { store: TerminationStore };
+type TerminationContext = Omit<ReconcilerContext, "store"> & {
+  store: TerminationStore & EffectStore;
+};
 import { RefundService } from "./refunds.js";
 import { workspacePvcReapReason } from "./checkpoint-retention.js";
 import type { SessionRecord } from "./store/models.js";
+import { effectContext, executeEffects } from "./effects.js";
+import { snapshotOf } from "./session-snapshot.js";
 
 export class Termination {
   private readonly refunds: RefundService;
@@ -26,41 +35,12 @@ export class Termination {
 
   async terminate(session: SessionRecord): Promise<void> {
     const cleanupStarted = session.terminatingAt ?? this.ctx.now();
-    // Ask the guest to stop so it can kill descendants before the pod goes away.
-    try {
-      await this.ctx.relay.shutdown(session.id, session.terminationReason ?? "terminated");
-    } catch {
-      /* relay may already be gone */
-    }
-
-    if (session.podName) {
-      await this.ctx.provisioner.deletePod(session.podName, 1).catch(() => undefined);
-      this.ctx.store.clearPod(session.id);
-      this.ctx.capacity.beginRelease(session.id, session.podName);
-    } else {
-      this.ctx.capacity.beginRelease(session.id, null);
-    }
-    await this.ctx.snapshotter.discard(session).catch((err) => {
-      log.warn("snapshot_discard_failed", { sessionId: session.id, error: (err as Error).message });
-    });
-    if (session.workspacePvc) {
-      await this.ctx.provisioner.deleteWorkspacePvc(session.workspacePvc).catch((err) => {
-        log.warn("workspace_pvc_delete_failed", {
-          sessionId: session.id,
-          pvc: session.workspacePvc,
-          error: (err as Error).message,
-        });
-      });
-      this.ctx.store.clearWorkspacePvc(session.id);
-    }
-    if (session.relayPurgedAt === null) {
-      try {
-        await this.ctx.relay.purge(session.id);
-        this.ctx.store.markRelayPurged(session.id);
-      } catch (err) {
-        log.warn("relay_purge_failed", { sessionId: session.id, error: (err as Error).message });
-      }
-    }
+    const snapshot = snapshotOf(session);
+    const effects = effectContext(this.ctx, session);
+    // Replay the effects of entering TERMINATING. Every step is idempotent, so
+    // a crash halfway through is repaired by the next pass.
+    await executeEffects(terminationEffects(snapshot), effects);
+    this.ctx.capacity.beginRelease(session.id, session.podName);
     const cleanupMs = Date.now() - cleanupStarted;
     this.ctx.store.mergeTimings(session.id, {
       terminationStartedAt: cleanupStarted,
@@ -70,22 +50,32 @@ export class Termination {
     metrics
       .histogram("sandbox_cleanup_duration_seconds", "TERMINATING to cleanup complete", LATENCY_BUCKETS)
       .observe(cleanupMs / 1000);
-    const finalState = this.ctx.store.finalizeTermination(session.id);
-    if (finalState) {
+    // TERMINATING + terminated is the only transition out. Its `finalize`
+    // effect performs the guarded write; the state it names is the state the
+    // store writes, both derived from the termination reason.
+    const decision = transition(snapshot, {
+      type: "terminated",
+      final: finalStateForReason(session.terminationReason ?? ""),
+    });
+    const finalized =
+      decision.ok && (await executeEffects(decision.value.effects, effects)).ok
+        ? decision.value.state
+        : null;
+    if (finalized) {
       try {
-        this.refunds.refund(session, finalState);
+        this.refunds.refund(session, finalized);
       } catch (err) {
         log.warn("payment_refund_failed", { sessionId: session.id, error: (err as Error).message });
       }
     }
-    if (finalState === "FAILED" || finalState === "EXPIRED") {
+    if (finalized === "FAILED" || finalized === "EXPIRED") {
       metrics
         .counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED")
-        .inc({ final_state: finalState, reason: (session.terminationReason ?? "unknown").split(":")[0]! });
+        .inc({ final_state: finalized, reason: (session.terminationReason ?? "unknown").split(":")[0]! });
     }
     log.info("sandbox_destroyed", {
       sessionId: session.id,
-      state: finalState ?? "unknown",
+      state: finalized ?? "unknown",
       reason: session.terminationReason ?? "unknown",
     });
   }

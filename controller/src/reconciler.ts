@@ -368,7 +368,7 @@ export class Reconciler {
         await this.enforceLease(session);
         break;
       case "SUSPENDING":
-        await this.lifecycle.finishSuspend(session);
+        await this.lifecycle.reconcileSuspend(session);
         break;
       case "TERMINATING":
         await this.terminate(session);

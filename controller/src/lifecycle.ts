@@ -1,15 +1,29 @@
 /**
  * Lifecycle use cases: suspend, resume, idle/expiry policy, PVC cleanup.
+ *
+ * Suspend is table-driven: READY/ACTIVE + `suspend_requested` moves the row and
+ * stops the guest, SUSPENDING + `guest_stopped` releases the pod and completes
+ * the checkpoint. Both effect lists are executed by the effect interpreter.
  */
-import { canResume, canSuspend, idleExpired, lifetimeExpired, metrics, suspendedExpired } from "@x402s/shared";
+import {
+  canResume,
+  idleExpired,
+  lifetimeExpired,
+  metrics,
+  suspendedExpired,
+  transition,
+} from "@x402s/shared";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
-import type { LifecycleStore } from "./store/ports.js";
+import type { EffectStore, LifecycleStore } from "./store/ports.js";
 
-type LifecycleContext = Omit<ReconcilerContext, "store"> & { store: LifecycleStore };
+type LifecycleContext = Omit<ReconcilerContext, "store"> & {
+  store: LifecycleStore & EffectStore;
+};
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { Provisioning } from "./provisioning.js";
+import { effectContext, executeEffects } from "./effects.js";
 
 export class LifecycleError extends Error {
   constructor(
@@ -72,13 +86,29 @@ export class Lifecycle {
   async suspend(id: string): Promise<void> {
     const session = this.ctx.store.getSession(id);
     if (!session) throw new LifecycleError("not_found", "session not found", 404);
-    if (!canSuspend(snapshotOf(session))) {
+    const decision = transition(snapshotOf(session), { type: "suspend_requested" });
+    if (!decision.ok) {
+      // Same refusal the store's guarded UPDATE gives for the same state.
       throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
     }
-    if (!this.ctx.store.markSuspending(id)) {
+    // persist_suspending runs first: losing that race must not stop the guest.
+    const applied = await executeEffects(decision.value.effects, effectContext(this.ctx, session));
+    if (!applied.ok) {
       throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
     }
     await this.finishSuspend(this.ctx.store.getSession(id) ?? session);
+  }
+
+  /**
+   * Reconcile a row already in SUSPENDING: replay the stop_guest of the entry
+   * transition (a crash may have happened before it ran), then complete.
+   */
+  async reconcileSuspend(session: SessionRecord): Promise<void> {
+    await executeEffects(
+      [{ type: "stop_guest", intent: "suspend" }],
+      effectContext(this.ctx, session),
+    );
+    await this.finishSuspend(session);
   }
 
   /**
@@ -91,32 +121,29 @@ export class Lifecycle {
       throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
     }
     const id = session.id;
-    try {
-      await this.ctx.relay.shutdown(id, "suspend");
-    } catch {
-      /* relay may already be gone */
-    }
     await this.ctx.snapshotter.capture(session);
-    if (session.podName) {
-      if (!session.nodeName && session.workspacePvc) {
-        const pod = await this.ctx.provisioner.getPod(session.podName).catch(() => null);
-        if (pod?.nodeName) {
-          this.ctx.store.setNodeName(id, pod.nodeName);
-          session.nodeName = pod.nodeName;
-        }
+    if (session.podName && !session.nodeName && session.workspacePvc) {
+      const pod = await this.ctx.provisioner.getPod(session.podName).catch(() => null);
+      if (pod?.nodeName) {
+        this.ctx.store.setNodeName(id, pod.nodeName);
+        session.nodeName = pod.nodeName;
       }
-      await this.ctx.provisioner.suspendPod(session.podName);
-      this.ctx.store.clearPod(id);
     }
-    const suspendedAt = this.ctx.now();
-    if (!this.ctx.store.markSuspended(id, suspendedAt)) {
+    const decision = transition(snapshotOf(session), { type: "guest_stopped" });
+    if (!decision.ok) {
+      throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
+    }
+    const applied = await executeEffects(decision.value.effects, effectContext(this.ctx, session));
+    if (!applied.ok) {
       if (this.ctx.store.getSession(id)?.state === "SUSPENDED") return;
       throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
     }
-    await this.ctx.relay.purge(id).catch(() => undefined);
     this.ctx.capacity.suspend(id);
     metrics.counter("sandbox_sessions_suspended_total", "Sessions suspended").inc();
-    log.info("sandbox_suspended", { sessionId: id, suspendedAt });
+    log.info("sandbox_suspended", {
+      sessionId: id,
+      suspendedAt: this.ctx.store.getSession(id)?.suspendedAt,
+    });
   }
 
   /** Boot a fresh guest against the persisted workspace. */

@@ -23,6 +23,9 @@ export interface SessionSnapshot {
   lastActivityAt: number | null;
 }
 
+/** Terminal states a session can be finalised into. */
+export type FinalState = "EXPIRED" | "FAILED" | "DESTROYED";
+
 export type SessionEvent =
   | { type: "payment_settled" }
   | { type: "provision_requested" }
@@ -34,7 +37,7 @@ export type SessionEvent =
   | { type: "resume_requested" }
   | { type: "lease_expired" }
   | { type: "terminate_requested"; reason: string }
-  | { type: "terminated"; final: "EXPIRED" | "FAILED" | "DESTROYED" };
+  | { type: "terminated"; final: FinalState };
 
 /**
  * States from which each event is accepted, ignoring non-state guards
@@ -66,18 +69,40 @@ export const SOURCE_STATES: Readonly<Record<SessionEvent["type"], readonly Sessi
   terminated: ["TERMINATING"],
 };
 
+/**
+ * The work a transition asks the shell to do, as data.
+ *
+ * The set is closed and exhaustive: the controller's interpreter
+ * (`controller/src/effects.ts`) switches on `type` and ends in `assertNever`,
+ * so a new variant fails `tsc` until it is executed.
+ *
+ * Payloads carry plain values only. Anything the table cannot know (pod name,
+ * relay endpoint, the ready handshake) belongs to the interpreter's context,
+ * which is the session row the effects act on.
+ *
+ * Order is significant. `persist_*` effects are guarded writes: if the row
+ * moved on under the transition, the write refuses and the interpreter stops,
+ * so no external effect after it runs. The next reconcile pass retries.
+ */
 export type SessionEffect =
   | { type: "register_relay" }
   | { type: "purge_relay" }
   | { type: "ensure_workspace_pvc" }
   | { type: "start_pod"; warm: boolean }
-  | { type: "stop_guest" }
-  | { type: "delete_pod" }
+  /** Ask the guest to shut down. The shell derives the reason text from `intent`. */
+  | { type: "stop_guest"; intent: "terminate" | "suspend" }
+  /**
+   * terminate: short grace period, a failed delete is logged and cleanup
+   * continues. suspend: wait until the pod is gone (resume reuses the name), a
+   * failure aborts so the suspend is retried.
+   */
+  | { type: "delete_pod"; intent: "terminate" | "suspend" }
+  | { type: "discard_checkpoint" }
   | { type: "delete_workspace_pvc" }
   | { type: "persist_ready" }
   | { type: "persist_suspending" }
   | { type: "persist_suspended" }
-  | { type: "finalize"; final: "EXPIRED" | "FAILED" | "DESTROYED" };
+  | { type: "finalize"; final: FinalState };
 
 export interface TransitionError {
   readonly code:
@@ -105,10 +130,25 @@ function fail(
   return Err({ code, message, from: snapshot.state, event: event.type });
 }
 
-function terminateEffects(snapshot: SessionSnapshot): SessionEffect[] {
+/**
+ * Effects of entering TERMINATING: stop the guest, drop the pod, the relay
+ * entry, the checkpoint and the workspace.
+ *
+ * `transition()` returns exactly this list for `terminate_requested` and
+ * `lease_expired` from every live state. Termination performs the cleanup after
+ * the guarded write has already moved the row to TERMINATING, so the list is
+ * exported and both callers read one definition rather than two that can drift.
+ */
+export function terminationEffects(snapshot: SessionSnapshot): SessionEffect[] {
   return [
-    ...(snapshot.hasPod ? [{ type: "stop_guest" as const }, { type: "delete_pod" as const }] : []),
+    ...(snapshot.hasPod
+      ? [
+          { type: "stop_guest" as const, intent: "terminate" as const },
+          { type: "delete_pod" as const, intent: "terminate" as const },
+        ]
+      : []),
     ...(snapshot.hasRelay ? [{ type: "purge_relay" as const }] : []),
+    { type: "discard_checkpoint" },
     ...(snapshot.hasPvc ? [{ type: "delete_workspace_pvc" as const }] : []),
   ];
 }
@@ -140,7 +180,7 @@ export function transition(
         });
       }
       if (event.type === "terminate_requested") {
-        return Ok({ state: "TERMINATING", effects: terminateEffects(snapshot) });
+        return Ok({ state: "TERMINATING", effects: terminationEffects(snapshot) });
       }
       return fail(snapshot, event, "invalid_transition", "PAID accepts provision or terminate");
 
@@ -152,7 +192,7 @@ export function transition(
         return Ok({ state: "READY", effects: [{ type: "persist_ready" }] });
       }
       if (event.type === "terminate_requested" || event.type === "lease_expired") {
-        return Ok({ state: "TERMINATING", effects: terminateEffects(snapshot) });
+        return Ok({ state: "TERMINATING", effects: terminationEffects(snapshot) });
       }
       return fail(snapshot, event, "invalid_transition", "PROVISIONING accepts guest_ready or terminate");
 
@@ -168,32 +208,35 @@ export function transition(
         if (!snapshot.suspendable || !snapshot.hasPvc) {
           return fail(snapshot, event, "not_suspendable", "session has no checkpoint workspace");
         }
+        // The guarded write comes first: a lost race must not stop the guest.
         return Ok({
           state: "SUSPENDING",
           effects: [
-            ...(snapshot.hasPod ? [{ type: "stop_guest" as const }] : []),
             { type: "persist_suspending" },
+            ...(snapshot.hasPod ? [{ type: "stop_guest" as const, intent: "suspend" as const }] : []),
           ],
         });
       }
       if (event.type === "lease_expired" || event.type === "terminate_requested") {
-        return Ok({ state: "TERMINATING", effects: terminateEffects(snapshot) });
+        return Ok({ state: "TERMINATING", effects: terminationEffects(snapshot) });
       }
       return fail(snapshot, event, "invalid_transition", "READY/ACTIVE accepts operations, suspend, or terminate");
 
     case "SUSPENDING":
       if (event.type === "guest_stopped") {
+        // The pod teardown is a local repair that precedes the commit; the
+        // guarded write then fences the relay purge behind it.
         return Ok({
           state: "SUSPENDED",
           effects: [
-            ...(snapshot.hasPod ? [{ type: "delete_pod" as const }] : []),
-            ...(snapshot.hasRelay ? [{ type: "purge_relay" as const }] : []),
+            ...(snapshot.hasPod ? [{ type: "delete_pod" as const, intent: "suspend" as const }] : []),
             { type: "persist_suspended" },
+            ...(snapshot.hasRelay ? [{ type: "purge_relay" as const }] : []),
           ],
         });
       }
       if (event.type === "lease_expired" || event.type === "terminate_requested") {
-        return Ok({ state: "TERMINATING", effects: terminateEffects(snapshot) });
+        return Ok({ state: "TERMINATING", effects: terminationEffects(snapshot) });
       }
       return fail(snapshot, event, "invalid_transition", "SUSPENDING accepts guest_stopped or terminate");
 
@@ -208,7 +251,7 @@ export function transition(
         });
       }
       if (event.type === "lease_expired" || event.type === "terminate_requested") {
-        return Ok({ state: "TERMINATING", effects: terminateEffects(snapshot) });
+        return Ok({ state: "TERMINATING", effects: terminationEffects(snapshot) });
       }
       if (event.type === "operation_started") {
         return fail(snapshot, event, "invalid_transition", "resume the session before operations");
@@ -223,7 +266,7 @@ export function transition(
         return Ok({ state: "READY", effects: [{ type: "persist_ready" }] });
       }
       if (event.type === "terminate_requested" || event.type === "lease_expired") {
-        return Ok({ state: "TERMINATING", effects: terminateEffects(snapshot) });
+        return Ok({ state: "TERMINATING", effects: terminationEffects(snapshot) });
       }
       return fail(snapshot, event, "invalid_transition", "RESUMING accepts guest_ready or terminate");
 

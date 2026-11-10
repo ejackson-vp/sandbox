@@ -7,15 +7,18 @@ import {
   metrics,
   MIN_SUPPORTED_GUEST_PROTOCOL_VERSION,
   supportsGuestProtocolVersion,
+  transition,
   verifyAttestation,
 } from "@x402s/shared";
 import type { AttestationEnvelope, RelaySessionState } from "@x402s/shared";
 import { proxyTokenFor } from "./config.js";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
-import type { ProvisioningStore } from "./store/ports.js";
+import type { EffectStore, ProvisioningStore } from "./store/ports.js";
 
-type ProvisioningContext = Omit<ReconcilerContext, "store"> & { store: ProvisioningStore };
+type ProvisioningContext = Omit<ReconcilerContext, "store"> & {
+  store: ProvisioningStore & EffectStore;
+};
 type Endpoint = { host: string; port: number };
 type EndpointPair = { relay: Endpoint | null; proxy: Endpoint | null };
 import { newOpaqueToken, sha256Hex, guestTokenFor } from "./tokens.js";
@@ -24,6 +27,7 @@ import type { DataPlaneService } from "./data-plane-shard.js";
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { WarmPool } from "./warm-pool.js";
+import { effectContext, executeEffects } from "./effects.js";
 
 export class Provisioning {
   /**
@@ -486,14 +490,26 @@ export class Provisioning {
           if (this.rejectUnsupportedGuest(session, state, state.attestation)) return;
           const readyAt = this.ctx.now();
           const leaseExpiresAt = readyAt + session.durationSeconds * 1000;
-          const ok = this.ctx.store.setReady(
-            session.id,
-            readyAt,
-            leaseExpiresAt,
-            JSON.stringify(state.attestation),
-            state.attestation.guestPublicKey,
-          );
-          if (ok) {
+          // PROVISIONING/RESUMING + guest_ready is the table's decision; its
+          // single effect is the guarded write, so a lost race skips the
+          // bookkeeping below exactly as a refused setReady did before.
+          const decision = transition(snapshotOf(session), { type: "guest_ready" });
+          const persisted =
+            decision.ok &&
+            (
+              await executeEffects(
+                decision.value.effects,
+                effectContext(this.ctx, session, {
+                  ready: {
+                    readyAt,
+                    leaseExpiresAt,
+                    attestationJson: JSON.stringify(state.attestation),
+                    guestPublicKey: state.attestation.guestPublicKey,
+                  },
+                }),
+              )
+            ).ok;
+          if (persisted) {
             const warm = timings.warmPoolHit === 1;
             const podInfo = warm || !session.podName
               ? null
