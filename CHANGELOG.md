@@ -27,6 +27,10 @@ the container registry.
   request still transitions from `pending`; a request already marked
   `outcome_unknown` remains owned by `OperationFence` until the guest reports
   it idle at the new epoch (#111).
+- A resumed session can no longer reach `READY` with its compute reservation
+  still counted as `SUSPENDED`. The reaper could re-suspend the reservation
+  between admission and `markResuming`; the controller now reasserts the
+  allocation once the session is `RESUMING` (#114).
 
 ## 0.1.20
 
