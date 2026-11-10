@@ -10,7 +10,8 @@
  *    `terminationEffects` is exactly what the table returns when it enters
  *    TERMINATING;
  *  - a guarded write that loses the race stops the sequence, so no external
- *    effect runs for a transition that did not happen.
+ *    effect runs for a transition that did not happen, and a `deferred` outcome
+ *    is a stop rather than a success.
  */
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -25,10 +26,15 @@ import {
 } from "../../shared/src/index.js";
 import {
   EFFECT_VARIANTS,
+  OK,
   UnwiredEffectError,
+  deferred,
   effectContext,
   executeEffect,
   executeEffects,
+  isOk,
+  refused,
+  type EffectOutcome,
   type EffectRuntime,
 } from "../../controller/src/effects.js";
 import type { SessionRecord } from "../../controller/src/store/models.js";
@@ -192,14 +198,52 @@ describe("effect interpreter", () => {
     }
   });
 
+  it("returns ok when every effect runs", async () => {
+    const { runtime, calls } = recordingRuntime();
+    const outcome = await executeEffects(
+      [{ type: "persist_suspending" }, { type: "stop_guest", intent: "suspend" }],
+      effectContext(runtime, session()),
+    );
+    expect(outcome).toEqual({ status: "ok" });
+    expect(calls).toEqual(["markSuspending", "shutdown"]);
+  });
+
+  it("returns ok for an empty list", async () => {
+    const { runtime, calls } = recordingRuntime();
+    expect(await executeEffects([], effectContext(runtime, session()))).toEqual({ status: "ok" });
+    expect(calls).toEqual([]);
+  });
+
   it("stops at a refused guarded write", async () => {
     const { runtime, calls } = recordingRuntime({ guard: false });
     const applied = await executeEffects(
       [{ type: "persist_suspending" }, { type: "stop_guest", intent: "suspend" }],
       effectContext(runtime, session()),
     );
-    expect(applied).toEqual({ ok: false, error: { effect: "persist_suspending", reason: "guard_lost" } });
+    expect(applied).toEqual({
+      status: "refused",
+      effect: "persist_suspending",
+      reason: "guard_lost",
+    });
     expect(calls).toEqual(["markSuspending"]);
+  });
+
+  it("treats a deferred outcome as a stop, not a success", () => {
+    // Nothing defers yet: provisioning will, once admission and endpoint
+    // resolution can say "not yet". The outcome is constructed here, and the
+    // loop above stops on anything `isOk` rejects, so deferred stops the list
+    // exactly like the refusal case.
+    const outcome: EffectOutcome = deferred(EFFECT_VARIANTS.persist_suspending);
+    expect(outcome).toEqual({
+      status: "deferred",
+      effect: "persist_suspending",
+      reason: "not_ready",
+    });
+    expect([isOk(OK), isOk(refused(EFFECT_VARIANTS.finalize)), isOk(outcome)]).toEqual([
+      true,
+      false,
+      false,
+    ]);
   });
 });
 

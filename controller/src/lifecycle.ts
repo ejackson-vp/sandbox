@@ -23,7 +23,7 @@ type LifecycleContext = Omit<ReconcilerContext, "store"> & {
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { Provisioning } from "./provisioning.js";
-import { effectContext, executeEffects } from "./effects.js";
+import { effectContext, executeEffects, isOk } from "./effects.js";
 
 export class LifecycleError extends Error {
   constructor(
@@ -92,8 +92,9 @@ export class Lifecycle {
       throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
     }
     // persist_suspending runs first: losing that race must not stop the guest.
+    // A deferred outcome (no producer yet) aborts here too: same retry next pass.
     const applied = await executeEffects(decision.value.effects, effectContext(this.ctx, session));
-    if (!applied.ok) {
+    if (!isOk(applied)) {
       throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
     }
     await this.finishSuspend(this.ctx.store.getSession(id) ?? session);
@@ -134,7 +135,7 @@ export class Lifecycle {
       throw new LifecycleError("not_suspendable", `session is ${session.state}`, 409);
     }
     const applied = await executeEffects(decision.value.effects, effectContext(this.ctx, session));
-    if (!applied.ok) {
+    if (!isOk(applied)) {
       if (this.ctx.store.getSession(id)?.state === "SUSPENDED") return;
       throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
     }

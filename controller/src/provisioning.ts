@@ -27,7 +27,7 @@ import type { DataPlaneService } from "./data-plane-shard.js";
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { WarmPool } from "./warm-pool.js";
-import { effectContext, executeEffects } from "./effects.js";
+import { effectContext, executeEffects, isOk } from "./effects.js";
 
 export class Provisioning {
   /**
@@ -496,7 +496,7 @@ export class Provisioning {
           const decision = transition(snapshotOf(session), { type: "guest_ready" });
           const persisted =
             decision.ok &&
-            (
+            isOk(
               await executeEffects(
                 decision.value.effects,
                 effectContext(this.ctx, session, {
@@ -507,8 +507,8 @@ export class Provisioning {
                     guestPublicKey: state.attestation.guestPublicKey,
                   },
                 }),
-              )
-            ).ok;
+              ),
+            );
           if (persisted) {
             const warm = timings.warmPoolHit === 1;
             const podInfo = warm || !session.podName

@@ -18,7 +18,7 @@ type TerminationContext = Omit<ReconcilerContext, "store"> & {
 import { RefundService } from "./refunds.js";
 import { workspacePvcReapReason } from "./checkpoint-retention.js";
 import type { SessionRecord } from "./store/models.js";
-import { effectContext, executeEffects } from "./effects.js";
+import { effectContext, executeEffects, isOk } from "./effects.js";
 import { snapshotOf } from "./session-snapshot.js";
 
 export class Termination {
@@ -58,7 +58,7 @@ export class Termination {
       final: finalStateForReason(session.terminationReason ?? ""),
     });
     const finalized =
-      decision.ok && (await executeEffects(decision.value.effects, effects)).ok
+      decision.ok && isOk(await executeEffects(decision.value.effects, effects))
         ? decision.value.state
         : null;
     if (finalized) {

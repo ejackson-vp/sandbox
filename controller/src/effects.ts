@@ -6,23 +6,19 @@
  * exhaustive over `SessionEffect["type"]` and ends in `assertNever`, so adding
  * a variant to the domain fails `tsc` until it is executed here.
  *
- * Two rules keep the shell honest:
+ * Three rules keep the shell honest:
  *
  *  - `persist_*` effects are guarded writes, and the guard is the authority. A
  *    refusal means the row moved on; the remaining effects are skipped and the
  *    next reconcile pass retries. No effect runs after a lost guard.
+ *  - A `deferred` outcome means not now, try again next pass: admission and
+ *    endpoint resolution are neither done nor failed, so they need a third
+ *    answer. It stops the list exactly like a refusal.
  *  - External failures follow the call they replace: a lost pod delete during
  *    termination is logged and cleanup continues, a lost pod suspend aborts so
  *    the suspend is retried, a failed checkpoint discard is logged.
  */
-import {
-  assertNever,
-  Err,
-  log,
-  Ok,
-  type Result,
-  type SessionEffect,
-} from "@x402s/shared";
+import { assertNever, log, type SessionEffect } from "@x402s/shared";
 import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
 import type { Snapshotter } from "./snapshotter.js";
@@ -64,10 +60,58 @@ export function effectContext(
   return { ...runtime, session, ...(extra.ready ? { ready: extra.ready } : {}) };
 }
 
-/** A guarded write refused because the row is no longer in the source state. */
-export interface EffectRefused {
-  readonly effect: SessionEffect["type"];
-  readonly reason: "guard_lost";
+/**
+ * What one pass of effects achieved.
+ *
+ *  - `ok`: every effect ran.
+ *  - `refused`: a guarded write lost the race, so the transition did not happen
+ *    and the row moved on without us.
+ *  - `deferred`: a precondition is not ready yet (admission, endpoint
+ *    resolution). Nothing is decided; the next pass tries again.
+ *
+ * The caller stops the remaining effects on either of the last two.
+ */
+export type EffectOutcome =
+  | { readonly status: "ok" }
+  | {
+      readonly status: "refused";
+      readonly effect: SessionEffect["type"];
+      readonly reason: "guard_lost";
+    }
+  | {
+      readonly status: "deferred";
+      readonly effect: SessionEffect["type"];
+      readonly reason: "not_ready";
+    };
+
+/** Every effect in the list ran. */
+export const OK: EffectOutcome = { status: "ok" };
+
+/** The guarded write refused: the row is no longer in the source state. */
+export function refused(effect: SessionEffect): EffectOutcome {
+  return { status: "refused", effect: effect.type, reason: "guard_lost" };
+}
+
+/** Try again next pass: a precondition is not ready. */
+export function deferred(effect: SessionEffect): EffectOutcome {
+  return { status: "deferred", effect: effect.type, reason: "not_ready" };
+}
+
+/**
+ * The only stop condition the interpreter has. Written as a switch so a fourth
+ * outcome is a `tsc` error rather than a silently non-`ok` value that some
+ * caller treats as success.
+ */
+export function isOk(outcome: EffectOutcome): outcome is Extract<EffectOutcome, { status: "ok" }> {
+  switch (outcome.status) {
+    case "ok":
+      return true;
+    case "refused":
+    case "deferred":
+      return false;
+    default:
+      return assertNever(outcome, "EffectOutcome");
+  }
 }
 
 /**
@@ -87,25 +131,25 @@ export class UnwiredEffectError extends Error {
 /**
  * Execute a transition's effects in table order.
  *
- * Stops at the first refused guarded write and returns it; the caller maps that
- * to the error it already returned for the same race (the store's guarded
- * UPDATE would have refused identically).
+ * Stops at the first outcome that is not `ok` and returns it; the caller maps
+ * that to the error it already returned for the same race (the store's guarded
+ * UPDATE would have refused identically) or retries on the next pass.
  */
 export async function executeEffects(
   effects: readonly SessionEffect[],
   ctx: EffectContext,
-): Promise<Result<void, EffectRefused>> {
+): Promise<EffectOutcome> {
   for (const effect of effects) {
-    const refused = await executeEffect(effect, ctx);
-    if (refused) return Err(refused);
+    const outcome = await executeEffect(effect, ctx);
+    if (!isOk(outcome)) return outcome;
   }
-  return Ok(undefined);
+  return OK;
 }
 
 export async function executeEffect(
   effect: SessionEffect,
   ctx: EffectContext,
-): Promise<EffectRefused | null> {
+): Promise<EffectOutcome> {
   const id = ctx.session.id;
   switch (effect.type) {
     case "persist_ready": {
@@ -119,16 +163,16 @@ export async function executeEffect(
       if (!ctx.store.setReady(id, readyAt, leaseExpiresAt, attestationJson, guestPublicKey)) {
         return refused(effect);
       }
-      return null;
+      return OK;
     }
 
     case "persist_suspending":
       if (!ctx.store.markSuspending(id)) return refused(effect);
-      return null;
+      return OK;
 
     case "persist_suspended":
       if (!ctx.store.markSuspended(id, ctx.now())) return refused(effect);
-      return null;
+      return OK;
 
     case "finalize": {
       const final = ctx.store.finalizeTermination(id);
@@ -142,7 +186,7 @@ export async function executeEffect(
           actual: final,
         });
       }
-      return null;
+      return OK;
     }
 
     case "stop_guest": {
@@ -153,12 +197,12 @@ export async function executeEffect(
       } catch {
         /* the relay entry may already be gone; pod deletion is the backstop */
       }
-      return null;
+      return OK;
     }
 
     case "delete_pod": {
       const podName = ctx.session.podName;
-      if (!podName) return null;
+      if (!podName) return OK;
       if (effect.intent === "suspend") {
         // Wait for the pod to disappear: resume reuses the deterministic name,
         // and a still-terminating pod would make the create conflict.
@@ -175,7 +219,7 @@ export async function executeEffect(
         }
       }
       ctx.store.clearPod(id);
-      return null;
+      return OK;
     }
 
     case "purge_relay": {
@@ -185,7 +229,7 @@ export async function executeEffect(
       } catch (err) {
         log.warn("relay_purge_failed", { sessionId: id, error: (err as Error).message });
       }
-      return null;
+      return OK;
     }
 
     case "discard_checkpoint": {
@@ -197,12 +241,12 @@ export async function executeEffect(
           error: (err as Error).message,
         });
       }
-      return null;
+      return OK;
     }
 
     case "delete_workspace_pvc": {
       const pvc = ctx.session.workspacePvc;
-      if (!pvc) return null;
+      if (!pvc) return OK;
       try {
         await ctx.provisioner.deleteWorkspacePvc(pvc);
         ctx.store.clearWorkspacePvc(id);
@@ -213,7 +257,7 @@ export async function executeEffect(
           error: (err as Error).message,
         });
       }
-      return null;
+      return OK;
     }
 
     // The provisioning use case owns these. It creates the guest token, the
@@ -238,10 +282,6 @@ export async function executeEffect(
     default:
       return assertNever(effect, "SessionEffect");
   }
-}
-
-function refused(effect: SessionEffect): EffectRefused {
-  return { effect: effect.type, reason: "guard_lost" };
 }
 
 /**
