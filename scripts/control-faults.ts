@@ -14,7 +14,7 @@
  */
 import { execFileSync, spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { SandboxClient, type SessionHandle } from "@x402s/sdk";
+import { SandboxClient, SandboxError, type SessionHandle } from "@x402s/sdk";
 
 const API = process.env.API_URL ?? "http://localhost:8080";
 const NS = process.env.NAMESPACE ?? "sandbox-system";
@@ -458,11 +458,16 @@ async function lifecycleRestart(): Promise<number> {
         ...entry,
         requestId,
         outcome: entry.client
-          .exec(entry.handle, { command: ["sleep", "30"], timeoutMs: 10_000, requestId })
+          .exec(entry.handle, {
+            command: ["sleep", "300"],
+            timeoutMs: 300_000,
+            requestId,
+          })
           .then(() => null, (err: Error) => err),
       };
     });
     await waitForStatuses(activeEntries, (status) => status.state === "ACTIVE", 15_000, "ACTIVE sessions");
+    await waitForStatuses(activeEntries, (status) => status.busy, 15_000, "operation gate to close");
 
     const suspendedEntries = entries.filter((entry) => entry.kind === "suspended");
     await Promise.all(suspendedEntries.map(({ client, handle }) => client.suspend(handle)));
@@ -472,10 +477,61 @@ async function lifecycleRestart(): Promise<number> {
     killedAt = Date.now();
     await inject("controller");
 
-    await waitForStatuses(entries, (status) => !status.busy, 60_000, "operation gates to clear");
+    // The interrupted operation is still running in the guest. A correct
+    // restart keeps the gate closed, reports a defined outcome, and never
+    // forwards a new operation into the guest's busy slot.
+    const fencedStatuses = await waitForStatuses(
+      activeEntries,
+      (status) => status.state === "ACTIVE" && status.busy,
+      60_000,
+      "fenced ACTIVE sessions after restart",
+    );
+    if (fencedStatuses.length !== activeCount) process.exitCode = 1;
+    const outcomes = await Promise.all(activeRequests.map(async ({ client, handle, requestId }) => {
+      try {
+        await client.getOperation(handle, requestId, 0);
+        return { requestId, outcome: "unexpected_result" as const };
+      } catch (err) {
+        if (err instanceof SandboxError) return { requestId, outcome: err.code };
+        return { requestId, outcome: "lookup_failed" as const, message: (err as Error).message };
+      }
+    }));
+    const outcomeUnknown = outcomes.filter((entry) => entry.outcome === "outcome_unknown").length;
+    if (outcomeUnknown !== activeCount) {
+      console.error(`expected ${activeCount} outcome_unknown results, got ${JSON.stringify(outcomes)}`);
+      process.exitCode = 1;
+    }
+
+    const refused = await Promise.all(activeEntries.map(async ({ client, handle }, index) => {
+      const requestId = `lifecycle-refused-${String(index).padStart(3, "0")}`;
+      try {
+        await client.exec(handle, {
+          command: ["echo", "must-not-run"],
+          timeoutMs: 2_000,
+          requestId,
+          queueMs: 0,
+        });
+        return "unexpected_success";
+      } catch (err) {
+        if (err instanceof SandboxError) return err.code;
+        return "unexpected_error";
+      }
+    }));
+    const refusedWhileFenced = refused.filter((code) => code === "session_busy").length;
+    if (refusedWhileFenced !== activeCount) {
+      console.error(`expected ${activeCount} session_busy refusals, got ${JSON.stringify(refused)}`);
+      process.exitCode = 1;
+    }
+    const pendingAtFence = await relayPending(activeEntries.map(({ handle }) => handle.sessionId));
+    if (pendingAtFence !== activeCount) {
+      console.error(`expected ${activeCount} in-flight relay requests while fenced, got ${pendingAtFence}`);
+      process.exitCode = 1;
+    }
+
     await Promise.all(activeRequests.map(({ client, handle, requestId }) =>
       client.cancel(handle, requestId).catch(() => undefined)));
     await Promise.all(activeRequests.map(({ outcome }) => Promise.race([outcome, sleep(30_000).then(() => null)])));
+    await waitForStatuses(entries, (status) => !status.busy, 60_000, "operation gates to clear");
 
     await waitForStatuses(entries, (status, index) => {
       const kind = entries[index]!.kind;
@@ -522,6 +578,11 @@ async function lifecycleRestart(): Promise<number> {
       reservationsBefore,
       podsAfterResume,
       reservationsAfter,
+      fencedBusy: fencedStatuses.filter((status) => status.busy).length,
+      outcomeUnknown,
+      refusedWhileFenced,
+      pendingAtFence,
+      outcomes,
       failures,
     }, null, 2));
 

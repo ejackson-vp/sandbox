@@ -59,7 +59,7 @@ export function registerRelayRoutes(
 
   app.post("/internal/:sessionId/request", requireAdmin, (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
-    const { id, envelope, deadlineMs } = req.body ?? {};
+    const { id, envelope, deadlineMs, epoch } = req.body ?? {};
     if (typeof id !== "string" || id.length < 8 || id.length > 128) {
       res.status(400).json({ error: "invalid_request_id" });
       return;
@@ -68,7 +68,11 @@ export function registerRelayRoutes(
       res.status(400).json({ error: "invalid_envelope" });
       return;
     }
-    const result = registry.request(sessionId, id, envelope, Number(deadlineMs));
+    if (epoch !== undefined && (typeof epoch !== "number" || !Number.isFinite(epoch) || epoch < 0)) {
+      res.status(400).json({ error: "invalid_epoch" });
+      return;
+    }
+    const result = registry.request(sessionId, id, envelope, Number(deadlineMs), Number(epoch ?? 0));
     if (result === "not_registered") {
       res.status(404).json({ error: "session_not_registered" });
       return;
@@ -146,7 +150,10 @@ export function registerRelayRoutes(
   app.get("/internal/:sessionId/response/:requestId", requireAdmin, async (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const requestId = String(req.params.requestId ?? "");
-    const waitMs = Math.min(120_000, Number(req.query.waitMs) || 20_000);
+    const requestedWait = Number(req.query.waitMs);
+    const waitMs = Number.isFinite(requestedWait)
+      ? Math.min(120_000, Math.max(0, requestedWait))
+      : 20_000;
     const result = await registry.waitForResponse(sessionId, requestId, waitMs);
     if (result.kind === "not_registered") {
       res.status(404).json({ error: "session_not_registered" });

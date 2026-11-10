@@ -15,6 +15,7 @@ import { createControlApi } from "./control-api.js";
 import { createRelay } from "./relay.js";
 import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
+import { OperationFence } from "./operation-fence.js";
 import { CapacityService } from "./capacity/service.js";
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
 import { log } from "@x402s/shared";
@@ -102,6 +103,12 @@ async function main(): Promise<void> {
 
   const provisioner = makeProvisioner(cfg);
   const relay = makeRelayClient(cfg);
+  const fence = new OperationFence(store, relay);
+  // Unblock any startup fence as soon as the relay is reachable. The control
+  // API fails closed until this succeeds, and the reconciler retries it.
+  void fence.reconcile().catch((err) => {
+    log.warn("operation_fence_startup_failed", { error: (err as Error).message });
+  });
   const capacity = new CapacityService({ cfg, store, provisioner });
 
   let wake: (() => void) | undefined;
@@ -151,7 +158,7 @@ async function main(): Promise<void> {
     kubeEnabled: cfg.kubeEnabled,
   });
 
-  const reconciler = new Reconciler({ cfg, store, provisioner, relay, capacity });
+  const reconciler = new Reconciler({ cfg, store, provisioner, relay, capacity, fence });
   wake = () => reconciler.wake();
   suspend = (id) => reconciler.suspendSession(id);
   resume = (id) => reconciler.resumeSession(id);

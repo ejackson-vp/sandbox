@@ -125,17 +125,34 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       clearActive: db.prepare(
         "UPDATE sessions SET active_request_id = NULL, state = CASE WHEN state='ACTIVE' THEN 'READY' ELSE state END, updated_at = ? WHERE id = ? AND active_request_id = ?",
       ),
-      abandonPendingRequests: db.prepare(
-        "UPDATE exec_requests SET state = 'abandoned', updated_at = ? WHERE state = 'pending'",
+      /** Recovery: an in-flight request may still be running; never report success/failure. */
+      markPendingOutcomeUnknown: db.prepare(
+        "UPDATE exec_requests SET state = 'outcome_unknown', updated_at = ? WHERE state = 'pending'",
       ),
-      clearAllActiveRequests: db.prepare(
-        `UPDATE sessions SET active_request_id = NULL, updated_at = ?
-         WHERE active_request_id IS NOT NULL AND state NOT IN ('EXPIRED','FAILED','DESTROYED')`,
+      /** Recovery: fence the generation that owned the interrupted request. */
+      fenceActiveSessions: db.prepare(
+        "UPDATE sessions SET exec_epoch = exec_epoch + 1, updated_at = ? WHERE active_request_id IS NOT NULL",
+      ),
+      /** Sessions whose gate is held by a request the current controller did not claim. */
+      listFencedSessions: db.prepare(
+        `SELECT ${SESSION_COLUMNS} FROM sessions s
+         WHERE s.active_request_id IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM exec_requests r
+             WHERE r.session_id = s.id AND r.id = s.active_request_id AND r.state = 'outcome_unknown'
+           )`,
+      ),
+      clearFencedGate: db.prepare(
+        `UPDATE sessions
+         SET active_request_id = NULL,
+             state = CASE WHEN state='ACTIVE' THEN 'READY' ELSE state END,
+             updated_at = ?
+         WHERE id = ? AND active_request_id = ? AND exec_epoch = ?`,
       ),
       countSessions: db.prepare("SELECT COUNT(*) AS n FROM sessions"),
       countPayments: db.prepare("SELECT COUNT(*) AS n FROM payments"),
       insertRequest: db.prepare(
-        "INSERT INTO exec_requests (id, session_id, op, state, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?)",
+        "INSERT INTO exec_requests (id, session_id, op, state, epoch, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
       ),
       getRequest: db.prepare("SELECT * FROM exec_requests WHERE session_id = ? AND id = ?"),
       finishRequest: db.prepare(

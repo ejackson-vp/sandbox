@@ -32,6 +32,11 @@ type supervisor struct {
 	inflight map[string]context.CancelFunc
 	slots    chan struct{}
 
+	// Execution-epoch high-water mark and the request holding the single slot.
+	// Guarded by mu. The controller reads both through the relay.
+	epoch  int64
+	active string
+
 	// Long-running local services (HTTP servers) started by the customer.
 	services map[string]*runner.Service
 	// Streaming HTTP responses opened by the customer.
@@ -42,6 +47,9 @@ type supervisor struct {
 }
 
 func (s *supervisor) serve(ctx context.Context) error {
+	// The controller must be able to tell "idle" apart from "has not reported
+	// status yet", so publish once before the first frame.
+	s.publishStatus(ctx)
 	for {
 		readCtx, cancel := context.WithDeadline(ctx, s.lease)
 		frame, err := s.conn.Read(readCtx)
@@ -83,6 +91,36 @@ func (s *supervisor) cancel(id string) {
 	}
 }
 
+// admitEpoch fences requests against the highest execution epoch this guest has
+// accepted. epoch 0 means "no fence" (legacy callers/tests); real controller
+// frames always carry a positive epoch.
+func (s *supervisor) admitEpoch(epoch int64) bool {
+	if epoch <= 0 {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if epoch < s.epoch {
+		return false
+	}
+	if epoch > s.epoch {
+		s.epoch = epoch
+	}
+	return true
+}
+
+// publishStatus reports the execution slot to the relay. Failure is logged but
+// never fails the operation: the controller then keeps its recovery fence
+// closed, which is the safe direction.
+func (s *supervisor) publishStatus(ctx context.Context) {
+	s.mu.Lock()
+	active, epoch := s.active, s.epoch
+	s.mu.Unlock()
+	if err := s.conn.SendStatus(ctx, active, epoch); err != nil {
+		logEvent("guest_status_failed", map[string]any{"error": err.Error()})
+	}
+}
+
 func (s *supervisor) shutdownAll() {
 	s.transfers.shutdown()
 	s.stopAllWS()
@@ -115,7 +153,6 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 	// the guest does so again so a buggy/compromised client cannot race.
 	select {
 	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
 	case <-ctx.Done():
 		return
 	case <-time.After(10 * time.Second):
@@ -125,15 +162,35 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 		return
 	}
 
+	// Admit the request's execution epoch under the slot. A frame forwarded by
+	// a controller generation older than one we have already accepted is
+	// rejected: it must never start after recovery.
+	if !s.admitEpoch(frame.Epoch) {
+		<-s.slots
+		s.replyPlain(ctx, frame.ID, protocol.ErrorResult(&protocol.Request{
+			V: 2, SessionID: s.sessionID, ClientNonce: s.clientNonce, RequestID: frame.ID, Op: "exec",
+		}, "stale_epoch", "the request belongs to a previous controller generation"))
+		return
+	}
+
 	opCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	s.mu.Lock()
 	s.inflight[frame.ID] = cancel
+	s.active = frame.ID
 	s.mu.Unlock()
+	s.publishStatus(ctx)
 	defer func() {
+		cancel()
 		s.mu.Lock()
 		delete(s.inflight, frame.ID)
+		if s.active == frame.ID {
+			s.active = ""
+		}
 		s.mu.Unlock()
+		// Publish idle before releasing the slot so the next operation's start
+		// status can never overtake this one.
+		s.publishStatus(ctx)
+		<-s.slots
 	}()
 
 	req, err := s.decrypt(frame)

@@ -30,10 +30,13 @@ tests. Full suite: 180 passed, 3 skipped.
   fail-closed: every operation fails or becomes indeterminate, every session
   ends `FAILED`, payment records remain, and Pods/reservations drain to zero.
 - `SCENARIO=lifecycle` (default 50 sessions): split the sessions across READY,
-  ACTIVE and SUSPENDED, kill the controller, then require every operation gate
-  to clear, non-suspended sessions to execute again, suspended sessions to stay
-  suspended, and the suspended group to resume successfully. Pod and
-  reservation counts must match each phase.
+  ACTIVE and SUSPENDED, start one long operation per ACTIVE session, kill the
+  controller, then require every interrupted request to report
+  `outcome_unknown`, every ACTIVE session to stay busy, and a new operation to
+  be refused without reaching the guest. After cancelling the old commands,
+  every operation gate must clear, non-suspended sessions must execute again,
+  suspended sessions must stay suspended, and the suspended group must resume
+  successfully. Pod and reservation counts must match each phase.
 
 Each run records time from injection to convergence, terminal states, Pod count
 and reservation counts, then destroys all sessions and requires an empty
@@ -61,6 +64,15 @@ The earlier API-kill run reported 18 `fetch failed` errors while Pods and
 reservations were already correct. That was a client bug: `waitForReady`
 treated a restarting API as a session failure. It now retries transport errors
 and 5xx responses until its deadline.
+
+The lifecycle row above was measured before the operation-fence assertions
+existed. `scripts/control-faults.ts` now additionally requires
+`outcome_unknown` for the interrupted request, a closed gate and refused new
+operation while the guest is busy, and a higher execution epoch for the next
+operation. That updated profile requires a real cluster and was not run while
+implementing the fence; the in-process integration test
+(`tests/integration/operation-fencing.test.ts`) exercises the same contract
+against the real guest and a surviving relay.
 
 A cluster-backed finalizer case (`keeps a Pod terminating under a finalizer
 until the finalizer is removed`) holds a real sandbox Pod in `Terminating`
@@ -183,7 +195,7 @@ when `API_URL` is loopback, so no manual forwarding is needed.
 | Destroy during `SUSPENDING` | `lets destroy win while a suspend is between SUSPENDING and SUSPENDED` | destroy wins; final state `DESTROYED`, no Pod left |
 | Destroy during `RESUMING` | `lets destroy win while a resume is between SUSPENDED and RESUMING` | destroy wins; final state `DESTROYED`, no Pod left |
 | Duplicate destroy | `accepts duplicate destroys and still reaches a single terminal state` | one terminal `DESTROYED` row, no Pod left |
-| In-flight operation at controller crash | `clears an interrupted operation slot after a controller restart` | request is marked `abandoned`, the session gate is cleared, and a new operation succeeds after restart |
+| In-flight operation at controller crash | `fences an operation interrupted by a controller crash`, `keeps the gate closed until the guest finishes, then admits the next operation` | request becomes `outcome_unknown`; the gate stays closed until the guest reports its slot idle; no new operation is forwarded while fenced; the next operation runs under a higher execution epoch |
 | Replayed relay request | `does not re-execute a completed request and keeps the first response` | retry sees the cached outcome; the guest receives one request; a delayed duplicate response cannot replace the first |
 | Retry of an in-flight relay request | `treats a retry of an in-flight request as pending without re-forwarding` | guest receives one frame |
 | Late success after a guest error | `keeps a guest error terminal for late and duplicate responses` | late/duplicate responses cannot turn the recorded error into success |
@@ -199,12 +211,34 @@ still existed. Release now requires the Pod object to be gone, and the orphan
 sweeper reports deletion failures instead of logging that an undeleted Pod was
 reaped.
 
-A controller crash during an operation left `active_request_id` set in SQLite,
-so the paid session stayed `busy` forever. Startup now marks pending requests
-`abandoned` and clears the gate. The old outcome remains available if the relay
-cached the result; otherwise it is explicitly `result_expired`. The guest's own
-single-operation slot still prevents overlapping work if the old command is
-still running.
+A controller crash during an operation used to leave `active_request_id` set in
+SQLite, so the paid session stayed `busy` forever; a later fix cleared the gate
+but forgot which request was running, so the next operation could be forwarded
+into the guest's busy slot and the old outcome became `result_expired`.
+Recovery now fences the old generation instead of forgetting it:
+
+1. Startup marks every pending request `outcome_unknown` and bumps the session's
+   execution epoch (`sessions.exec_epoch`) in the same transaction. The
+   single-operation gate stays closed.
+2. Every relay request frame carries that epoch. The guest keeps a high-water
+   mark and rejects a frame from an older epoch with `stale_epoch`, so a request
+   forwarded by the previous controller generation can never start after
+   recovery.
+3. The guest reports its active request id and epoch on hello, when it takes the
+   single slot, and when it releases it. `OperationFence` releases the gate only
+   when the relay reports the guest idle, or when no guest is connected (the
+   supervisor exits when its relay link drops). A connected guest that has never
+   reported status keeps the gate closed: failing closed is the contract.
+4. `GET /requests/{id}` returns `409 outcome_unknown` for a fenced request; an
+   id the controller never saw is still `404 request_not_found`. If the relay
+   had already cached the guest's signed result, that real result is returned
+   instead of the placeholder.
+
+The state transitions are driven by the guest's own status report, so the chaos
+case does not depend on sleeping long enough: it asserts the gate is still
+closed, queries the old request for `outcome_unknown`, confirms a new operation
+is refused without reaching the guest, then cancels the old command and observes
+the gate clear before the next operation runs.
 
 The Pod-adoption case required two earlier product fixes:
 

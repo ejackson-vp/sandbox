@@ -13,14 +13,19 @@ import (
 // Frame is the relay's control-plane envelope. Exactly one of the fields is
 // meaningful per type:
 //
-//	inbound:  request {id,envelope,deadlineMs} | cancel {id} | shutdown {reason} | claim {claim}
+//	inbound:  request {id,envelope,deadlineMs,epoch} | cancel {id} | shutdown {reason} | claim {claim}
 type Frame struct {
 	Type       string `json:"type"`
 	ID         string `json:"id"`
 	Envelope   string `json:"envelope"`
 	DeadlineMs int64  `json:"deadlineMs"`
-	Reason     string `json:"reason"`
-	Claim      *Claim `json:"claim,omitempty"`
+	// Epoch is the controller's execution-epoch fence on a request. Frames from
+	// a generation older than the guest's high-water mark are rejected.
+	Epoch  int64  `json:"epoch"`
+	Reason string `json:"reason"`
+	Claim  *Claim `json:"claim,omitempty"`
+	// ActiveRequestID is set on outbound status frames only.
+	ActiveRequestID string `json:"activeRequestId,omitempty"`
 }
 
 // Claim is the session identity handed to a warm guest. It is only valid on a
@@ -101,6 +106,17 @@ func (c *Client) SendResponse(ctx context.Context, id, envelope string) error {
 
 func (c *Client) SendError(ctx context.Context, id, code, message string) error {
 	return c.send(ctx, map[string]any{"type": "error", "id": id, "code": code, "message": message})
+}
+
+// SendStatus reports this guest's execution slot to the relay. The controller
+// reads it back through the relay state endpoint to decide whether a fenced
+// operation from a previous controller generation has finished.
+func (c *Client) SendStatus(ctx context.Context, activeRequestID string, epoch int64) error {
+	return c.send(ctx, map[string]any{
+		"type":            "status",
+		"activeRequestId": activeRequestID,
+		"epoch":           epoch,
+	})
 }
 
 // Read returns the next control frame.

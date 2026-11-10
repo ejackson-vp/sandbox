@@ -175,6 +175,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
           executionMode: cfg.executionMode,
           relayTokenHash: null,
           activeRequestId: null,
+          execEpoch: 1,
           relayPurgedAt: null,
           destroyRequested: 0,
           timingsJson: null,

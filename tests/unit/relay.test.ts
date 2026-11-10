@@ -88,13 +88,52 @@ async function expectNoMessage(ws: WebSocket, waitMs = 200): Promise<void> {
   expect(received).toBe(false);
 }
 
-async function request(sessionId: string, id: string, envelope: string): Promise<{ status: number; body: Record<string, unknown> }> {
+async function request(
+  sessionId: string,
+  id: string,
+  envelope: string,
+  epoch?: number,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await admin(`/internal/${encodeURIComponent(sessionId)}/request`, {
     method: "POST",
-    body: JSON.stringify({ id, envelope, deadlineMs: Date.now() + 30_000 }),
+    body: JSON.stringify({ id, envelope, deadlineMs: Date.now() + 30_000, ...(epoch === undefined ? {} : { epoch }) }),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
+
+describe("execution status and epoch forwarding", () => {
+  it("tracks the guest's slot and forwards the controller's fence epoch", async () => {
+    const sessionId = "sbx_relay_fence";
+    await register(sessionId);
+    const ws = await connect(sessionId);
+    try {
+      ws.send(JSON.stringify({ type: "status", activeRequestId: "req-active", epoch: 3 }));
+      const deadline = Date.now() + 5_000;
+      let current = await state(sessionId) as { statusAt?: number; activeRequestId?: string; execEpoch?: number };
+      while (current.statusAt === undefined && Date.now() < deadline) {
+        await sleep(25);
+        current = (await state(sessionId)) as typeof current;
+      }
+      expect(current).toMatchObject({ activeRequestId: "req-active", execEpoch: 3 });
+      expect(typeof current.statusAt).toBe("number");
+
+      const frame = nextMessage(ws);
+      expect((await request(sessionId, "request-fenced-1", "envelope", 7)).status).toBe(202);
+      expect(await frame).toMatchObject({ type: "request", id: "request-fenced-1", epoch: 7 });
+
+      ws.send(JSON.stringify({ type: "status", activeRequestId: "", epoch: 7 }));
+      const idleDeadline = Date.now() + 5_000;
+      let idle = (await state(sessionId)) as typeof current;
+      while (idle.activeRequestId !== "" && Date.now() < idleDeadline) {
+        await sleep(25);
+        idle = (await state(sessionId)) as typeof current;
+      }
+      expect(idle).toMatchObject({ activeRequestId: "", execEpoch: 7 });
+    } finally {
+      ws.close();
+    }
+  });
+});
 
 describe("relay idempotency", () => {
   it("does not re-execute a completed request and keeps the first response", async () => {

@@ -59,6 +59,7 @@ function session(id: string, key: string): SessionRecord {
     executionMode: "dev",
     relayTokenHash: "relay-token-hash",
     activeRequestId: null,
+    execEpoch: 1,
     relayPurgedAt: null,
     destroyRequested: 0,
     timingsJson: null,

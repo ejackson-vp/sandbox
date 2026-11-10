@@ -59,10 +59,10 @@ export class RelayClient {
     return this.call<RelaySessionState>(`/internal/${encodeURIComponent(sessionId)}/state`);
   }
 
-  async request(sessionId: string, id: string, envelope: string, deadlineMs: number): Promise<void> {
+  async request(sessionId: string, id: string, envelope: string, deadlineMs: number, epoch = 0): Promise<void> {
     await this.call(`/internal/${encodeURIComponent(sessionId)}/request`, {
       method: "POST",
-      body: JSON.stringify({ id, envelope, deadlineMs }),
+      body: JSON.stringify({ id, envelope, deadlineMs, epoch }),
     }, 60_000);
   }
 

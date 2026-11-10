@@ -47,6 +47,8 @@ export interface SessionRecord {
   executionMode: string | null;
   relayTokenHash: string | null;
   activeRequestId: string | null;
+  /** Monotonic fence bumped when restart recovery abandons an operation. */
+  execEpoch: number;
   relayPurgedAt: number | null;
   destroyRequested: number;
   timingsJson: string | null;
@@ -66,7 +68,13 @@ export interface ExecRequestRecord {
   id: string;
   sessionId: string;
   op: string;
-  state: "pending" | "done" | "error" | "abandoned";
+  /**
+   * `outcome_unknown` is terminal and distinct from `abandoned`: the request
+   * was in flight when the controller restarted, so it may still execute. A
+   * lookup must never turn it into a success or a plain expiry.
+   */
+  state: "pending" | "done" | "error" | "abandoned" | "outcome_unknown";
+  epoch: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -108,7 +116,7 @@ export class PaymentAlreadyRedeemedError extends Error {
 }
 
 export type ClaimOperationResult =
-  | { ok: true; requestId: string }
+  | { ok: true; requestId: string; epoch: number }
   | { ok: false; code: "busy" | "not_usable" | "lease_expired" | "duplicate"; state: SessionState; requestId?: string };
 
 export type IntentClaimResult =
@@ -125,7 +133,7 @@ export const SESSION_COLUMNS = `
   state, created_at, paid_at, ready_at, lease_expires_at, terminating_at,
   destroyed_at, termination_reason, failure_code, failure_message,
   attestation_json, guest_public_key, payment_key, pod_name, runtime_class,
-  execution_mode, relay_token_hash, active_request_id, relay_purged_at,
+  execution_mode, relay_token_hash, active_request_id, exec_epoch, relay_purged_at,
   destroy_requested, timings_json, idle_policy_json, max_lifetime_seconds,
   suspended_at, resume_count, last_activity_at, workspace_pvc,
   baseline_cpu_millis, baseline_memory_mib, node_name, updated_at
@@ -165,6 +173,7 @@ export interface RawSession {
   execution_mode: string | null;
   relay_token_hash: string | null;
   active_request_id: string | null;
+  exec_epoch: number;
   relay_purged_at: number | null;
   destroy_requested: number;
   timings_json: string | null;
@@ -217,6 +226,7 @@ export function mapSession(r: RawSession): SessionRecord {
     executionMode: r.execution_mode,
     relayTokenHash: r.relay_token_hash,
     activeRequestId: r.active_request_id,
+    execEpoch: r.exec_epoch,
     relayPurgedAt: r.relay_purged_at,
     destroyRequested: r.destroy_requested,
     timingsJson: r.timings_json,

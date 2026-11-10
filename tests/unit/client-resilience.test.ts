@@ -23,6 +23,33 @@ function client(): SandboxClient {
   });
 }
 
+describe("operation lookups after a restart", () => {
+  it("surfaces a fenced request as outcome_unknown, distinct from a never-seen id", async () => {
+    vi.stubGlobal("fetch", async () =>
+      new Response(
+        JSON.stringify({ error: "outcome_unknown", message: "the controller restarted while this operation was in flight" }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      ));
+    await expect(client().getOperation(handle, "req-fenced", 0)).rejects.toMatchObject({
+      code: "outcome_unknown",
+      status: 409,
+      requestId: "req-fenced",
+    });
+  });
+
+  it("reports a never-seen request as request_not_found", async () => {
+    vi.stubGlobal("fetch", async () =>
+      new Response(JSON.stringify({ error: "request_not_found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      }));
+    await expect(client().getOperation(handle, "req-never", 0)).rejects.toMatchObject({
+      code: "request_not_found",
+      status: 404,
+    });
+  });
+});
+
 describe("waitForReady transport resilience", () => {
   it("retries a transient API transport failure instead of reporting it as a session failure", async () => {
     let calls = 0;
