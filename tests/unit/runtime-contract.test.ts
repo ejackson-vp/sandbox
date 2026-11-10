@@ -3,8 +3,6 @@
  * route's rejection order. An unknown runtime must be a 400 before any
  * capacity check, payment requirement or 402.
  */
-import express from "express";
-import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_RUNTIME,
@@ -39,54 +37,58 @@ async function post(body: unknown) {
     res.status(402).json({ error });
   });
   const preflightCapacity = vi.fn(async () => ({ admitted: true as const, reservationId: "r" }));
-  const app = express();
-  app.use(express.json());
-  // CodeQL treats this test-only route as a production authorized route. The
-  // handler receives the real IP and payer TokenBuckets at the call site below;
-  // the query cannot see through the injected handler.
-  // codeql[js/missing-rate-limiting]
-  app.post(
-    "/v1/sessions",
-    // codeql[js/missing-rate-limiting]
-    createSessionHandler({
-      config: {
-        tiers: DEFAULT_TIERS,
-        platformLimits: limits,
-        network: "mock:local",
-        paymentMode: "mock",
-        capabilityTtlSeconds: 60,
-        intentStaleMs: 30_000,
-      },
-      controller: { preflightCapacity },
-      resourceServer: {},
-      settlementLookup: {},
-      requirementFor,
-      payment402,
-      capabilityFor: () => "capability",
-      ipCreateLimiter: new TokenBucket(100, 100),
-      createLimiter: new TokenBucket(100, 100),
-    } as never),
-  );
-
-  const server = app.listen(0);
-  await new Promise<void>((ready) => server.once("listening", () => ready()));
-  try {
-    const port = (server.address() as AddressInfo).port;
-    const response = await fetch(`http://127.0.0.1:${port}/v1/sessions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return {
-      status: response.status,
-      body: (await response.json()) as { error?: string },
-      requirementFor,
-      payment402,
-      preflightCapacity,
-    };
-  } finally {
-    await new Promise<void>((closed) => server.close(() => closed()));
-  }
+  const headers: Record<string, string> = {};
+  const response = {
+    statusCode: 200,
+    body: undefined as unknown,
+    status(code: number) {
+      this.statusCode = code;
+      return this;
+    },
+    json(value: unknown) {
+      this.body = value;
+      return this;
+    },
+    setHeader(name: string, value: string) {
+      headers[name] = value;
+      return this;
+    },
+    on(_event: string, _handler: () => void) {
+      return this;
+    },
+  };
+  const request = {
+    body,
+    ip: "127.0.0.1",
+    header: () => undefined,
+    on: () => undefined,
+  };
+  const handler = createSessionHandler({
+    config: {
+      tiers: DEFAULT_TIERS,
+      platformLimits: limits,
+      network: "mock:local",
+      paymentMode: "mock",
+      capabilityTtlSeconds: 60,
+      intentStaleMs: 30_000,
+    },
+    controller: { preflightCapacity },
+    resourceServer: {},
+    settlementLookup: {},
+    requirementFor,
+    payment402,
+    capabilityFor: () => "capability",
+    ipCreateLimiter: new TokenBucket(100, 100),
+    createLimiter: new TokenBucket(100, 100),
+  } as never);
+  await handler(request as never, response as never);
+  return {
+    status: response.statusCode,
+    body: response.body as { error?: string },
+    requirementFor,
+    payment402,
+    preflightCapacity,
+  };
 }
 
 describe("runtime contract", () => {
