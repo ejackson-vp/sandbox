@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration verify typecheck lint-structure test-property docs-check assets demo-gif security-test security-network logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-network logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -33,6 +33,7 @@ help:
 	@echo "  make demo-ws       WebSocket echo through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make verify         build, typecheck, structure lint, unit + property tests"
+	@echo "  make verify-model   model-check the lifecycle/payment/operation state machines (TLA+)"
 	@echo "  make docs-check     markdownlint + internal link check"
 	@echo "  make assets         re-render docs/assets/social-preview.png"
 	@echo "  make demo-gif       record docs/assets/demo.gif with vhs (needs a cluster)"
@@ -158,6 +159,12 @@ test-integration: cli guest
 
 # Everything a reviewer can run without a cluster.
 verify: build typecheck lint-structure test-unit test-property
+
+# Exhaustive-over-interleavings check of the session lifecycle, payment intent,
+# single-operation slot and capacity reservation. TLC is pinned; the first run
+# downloads verification/.cache/tla2tools-1.7.4.jar and verifies its SHA-256.
+verify-model:
+	./verification/run-tlc.sh
 
 typecheck:
 	npm run typecheck

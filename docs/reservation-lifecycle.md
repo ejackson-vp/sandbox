@@ -119,3 +119,12 @@ can reject, not over-admit).
 - `RELEASING` is constrained by Pod observation.
 - The capacity demo asserts `reservations.total === 0` after destroying both
   sessions.
+
+## Verification
+
+The state machine above, together with the session lifecycle, the payment
+intent and the single-operation slot, is checked exhaustively over a bounded
+model with TLC: `make verify-model`. The invariant list and the deliberately
+broken variants live in
+[verification/README.md](../verification/README.md); the overview is
+[verification.md](verification.md).
