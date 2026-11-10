@@ -6,6 +6,9 @@
  *   TARGET=api         kill the API while sessions are provisioning
  *   TARGET=relay       kill the relay during active sessions and verify the
  *                      guest exits, accounting is preserved, and cleanup drains
+ *   TARGET=relay SCENARIO=create-restart
+ *                      restart the relay while paid creates are starting; every
+ *                      create must reach READY, never a charged pod_terminated
  *
  * Every scenario measures time-to-convergence and asserts no duplicate Pods or
  * leaked reservations. TARGET=relay expects the sessions to fail closed: the
@@ -15,6 +18,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SandboxClient, SandboxError, type SessionHandle } from "@x402s/sdk";
+import { relayCreateRestart } from "./fault-scenarios/relay-create-restart.js";
 
 const API = process.env.API_URL ?? "http://localhost:8080";
 const NS = process.env.NAMESPACE ?? "sandbox-system";
@@ -611,7 +615,16 @@ async function main(): Promise<void> {
   for (let run = 1; run <= REPEAT; run += 1) {
     if (REPEAT > 1) console.log(`\n=== fault run ${run}/${REPEAT} ===`);
     if (TARGET === "relay") {
-      samples.push(ACTION === "pause" ? await relayPause() : await relayKill());
+      if (ACTION === "pause") {
+        samples.push(await relayPause());
+      } else if (SCENARIO === "create-restart") {
+        samples.push(await relayCreateRestart({
+          count: COUNT, budgetMs: CONVERGENCE_BUDGET_MS, clients: makeClients(COUNT),
+          createAll, destroyAll, podCount, capacity, waitForDrain, kill, log: (message) => console.log(message),
+        }));
+      } else {
+        samples.push(await relayKill());
+      }
     } else if (SCENARIO === "lifecycle") {
       samples.push(await lifecycleRestart());
     } else {

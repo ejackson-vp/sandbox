@@ -97,13 +97,17 @@ export class WarmPool {
     const tokenHash = sha256Hex(guestToken);
     const ttlMs = cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
     try {
-      await this.ctx.relay.register(session.id, tokenHash, ttlMs);
+      // A warm claim is a create too: register against the current relay
+      // generation so a restart between the readiness gate and here cannot
+      // leave the claim pointing at a registry that is already gone.
+      await this.ctx.relay.registerCurrent(session.id, tokenHash, ttlMs, {
+        deadlineMs: Math.min(cfg.relayRegistrationTimeoutMs, 2_000),
+        replaceConnected: true,
+      });
     } catch (err) {
-      if ((err as { status?: number }).status !== 409) {
-        log.warn("warm_relay_register_failed", { sessionId: session.id, error: (err as Error).message });
-        this.claimed.delete(warm.warmId);
-        return false;
-      }
+      log.warn("warm_relay_register_failed", { sessionId: session.id, error: (err as Error).message });
+      this.claimed.delete(warm.warmId);
+      return false;
     }
     this.ctx.store.setRelayToken(session.id, tokenHash);
     const warmRegisterMs = this.ctx.now() - registerStarted;
@@ -308,7 +312,10 @@ export class WarmPool {
     const tokenHash = sha256Hex(guestToken);
     const ttlMs = cfg.warmPoolTtlMs + 120_000;
     try {
-      await this.ctx.relay.register(poolId, tokenHash, ttlMs);
+      // One bounded attempt per housekeeping pass. If the relay is mid-restart
+      // the next pass creates the pod against the replacement instead of
+      // booting a guest whose pooled registration was already lost.
+      await this.ctx.relay.registerCurrent(poolId, tokenHash, ttlMs, { deadlineMs: 1_000 });
     } catch (err) {
       log.warn("warm_relay_register_failed", { poolId, error: (err as Error).message });
       return;

@@ -43,6 +43,31 @@ export class Provisioning {
         return;
       }
     }
+    // Admission gate: a paid create must not start while the relay is being
+    // replaced. Its registry is in memory, so a pod created now can dial a
+    // relay that never accepted the registration and never recover inside the
+    // provisioning budget. Holding the session in PAID costs nothing: no pod,
+    // no capacity claim, and the next tick re-checks after the relay is ready.
+    if (!(await this.ctx.relay.isReady())) {
+      const waited = session.paidAt === null ? 0 : this.ctx.now() - session.paidAt;
+      if (this.ctx.cfg.provisioningTimeoutMs > 0 && waited > this.ctx.cfg.provisioningTimeoutMs) {
+        metrics
+          .counter("sandbox_provisioning_relay_gate_total", "Creates held for relay readiness")
+          .inc({ result: "timeout" });
+        this.ctx.store.requestTermination(session.id, "failure:provisioning_timeout", {
+          code: "provisioning_timeout",
+          message: "the relay did not become ready in time",
+        });
+        log.warn("sandbox_relay_not_ready_timeout", { sessionId: session.id, waitedMs: waited });
+      } else {
+        metrics
+          .counter("sandbox_provisioning_relay_gate_total", "Creates held for relay readiness")
+          .inc({ result: "wait" });
+        log.info("sandbox_relay_not_ready_deferred", { sessionId: session.id, waitedMs: waited });
+      }
+      return;
+    }
+
     let reservation = this.ctx.capacity.getReservation(session.id);
     if (!reservation) {
       const admission = await this.ctx.capacity.attach(
@@ -160,18 +185,19 @@ export class Provisioning {
     const guestToken = newOpaqueToken(32);
     const tokenHash = sha256Hex(guestToken);
     const ttlMs = this.ctx.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
-    try {
-      await this.ctx.relay.register(session.id, tokenHash, ttlMs);
-    } catch (err) {
-      if ((err as { status?: number }).status === 409) {
-        // A resumed session may still have a stale relay entry (purge raced a
-        // relay restart). Replace it so the new guest token is the valid one.
-        await this.ctx.relay.purge(session.id).catch(() => undefined);
-        await this.ctx.relay.register(session.id, tokenHash, ttlMs);
-      } else {
-        throw err;
-      }
-    }
+    // Register against the relay generation that is serving now and prove it
+    // survived the call. A registration accepted by a terminating relay is
+    // discarded and retried, so the pod never boots against a registry that is
+    // about to disappear. A stale entry from a resumed session is replaced.
+    await this.ctx.relay.registerCurrent(session.id, tokenHash, ttlMs, {
+      deadlineMs: this.ctx.cfg.relayRegistrationTimeoutMs,
+      replaceConnected: true,
+      onRetry: (attempt, err) => log.warn("sandbox_relay_register_retry", {
+        sessionId: session.id,
+        attempt,
+        error: err.message,
+      }),
+    });
     this.ctx.store.setRelayToken(session.id, tokenHash);
 
     const createStarted = Date.now();
@@ -234,15 +260,39 @@ export class Provisioning {
 
     if (session.relayTokenHash) {
       try {
-        const state = await this.ctx.relay.state(session.id);
+        // Bracket the handshake with generation probes. A relay restart between
+        // these two reads means the hello came from a relay that is being
+        // replaced; marking READY here would charge the customer for a guest
+        // that is about to exit. Re-register on the next pass instead.
+        const before = await this.ctx.relay.health().catch(() => null);
+        let state = await this.ctx.relay.state(session.id);
         if (!state.registered) {
-          await this.ctx.relay.register(
-            session.id,
-            session.relayTokenHash,
-            this.ctx.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 300_000,
-          );
+          // The replacement relay does not know this session yet. Re-register
+          // inside this pass (bounded, so one slow relay cannot stall the
+          // reconcile loop) rather than waiting for the next tick or for the
+          // guest's dial window to run out.
+          await this.ctx.relay
+            .registerCurrent(
+              session.id,
+              session.relayTokenHash,
+              this.ctx.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 300_000,
+              { deadlineMs: this.ctx.cfg.relayRegistrationTimeoutMs },
+            )
+            .catch((err: Error) => {
+              log.warn("relay_reregister_failed", { sessionId: session.id, error: err.message });
+            });
+          state = await this.ctx.relay.state(session.id);
         }
         if (state.connected && state.attestation) {
+          const after = await this.ctx.relay.health().catch(() => null);
+          if (!before || !after || before.generation !== after.generation) {
+            log.warn("sandbox_relay_generation_changed", {
+              sessionId: session.id,
+              before: before?.generation ?? null,
+              after: after?.generation ?? null,
+            });
+            return;
+          }
           const readyAt = this.ctx.now();
           const leaseExpiresAt = readyAt + session.durationSeconds * 1000;
           const ok = this.ctx.store.setReady(

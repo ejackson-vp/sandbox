@@ -6,6 +6,8 @@ import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
 
 export interface RelayHttpOptions {
   adminToken: string;
+  /** Identity of this relay process; changes on every restart. */
+  generation: string;
 }
 
 export function registerRelayRoutes(
@@ -22,8 +24,11 @@ export function registerRelayRoutes(
     next();
   };
 
+  // Readiness doubles as the controller's generation probe. It is deliberately
+  // cheap and unauthenticated: the generation is a random per-process id, not a
+  // secret.
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, sessions: registry.size() });
+    res.json({ ok: true, generation: opts.generation, sessions: registry.size() });
   });
 
   app.get("/metrics", (_req, res) => {
@@ -36,9 +41,18 @@ export function registerRelayRoutes(
   });
 
   app.post("/internal/register", requireAdmin, (req, res) => {
-    const { sessionId, tokenHash, ttlMs } = req.body ?? {};
+    const { sessionId, tokenHash, ttlMs, generation } = req.body ?? {};
     if (typeof sessionId !== "string" || typeof tokenHash !== "string") {
       res.status(400).json({ error: "invalid_request" });
+      return;
+    }
+    // The controller probed /healthz first and passes the generation it saw.
+    // A mismatch means the caller reached a relay that is no longer the one it
+    // probed (a terminating pod on a stale connection, or a rollout race), so
+    // the registration would be lost. Reject and let the controller retry
+    // against the current generation.
+    if (typeof generation === "string" && generation !== opts.generation) {
+      res.status(409).json({ error: "relay_generation_changed", generation: opts.generation });
       return;
     }
     const result = registry.register(sessionId, tokenHash, Number(ttlMs));
@@ -47,10 +61,10 @@ export function registerRelayRoutes(
       return;
     }
     if (result === "already_connected") {
-      res.status(409).json({ error: "session_already_connected" });
+      res.status(409).json({ error: "session_already_connected", generation: opts.generation });
       return;
     }
-    res.status(201).json({ ok: true });
+    res.status(201).json({ ok: true, generation: opts.generation });
   });
 
   app.get("/internal/:sessionId/state", requireAdmin, (req, res) => {

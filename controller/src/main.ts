@@ -12,7 +12,7 @@ import { dirname } from "node:path";
 import { loadControllerConfig, makeProvisioner, makeRelayClient } from "./config.js";
 import { Store } from "./store.js";
 import { createControlApi } from "./control-api.js";
-import { createRelay } from "./relay.js";
+import { createRelay, notifyControllerReady } from "./relay.js";
 import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
 import { OperationFence } from "./operation-fence.js";
@@ -36,13 +36,17 @@ async function main(): Promise<void> {
   metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE");
 
   if (cfg.role === "relay") {
-    const relay = createRelay({
+    const relayOpts = {
       adminToken: cfg.relayAdminToken,
       controllerUrl: cfg.controllerUrl,
       wakeToken: cfg.wakeToken,
-    });
+    };
+    const relay = createRelay(relayOpts);
     await listen(relay.server, cfg.relayPort);
-    log.info("relay_listening", { port: cfg.relayPort });
+    log.info("relay_listening", { port: cfg.relayPort, generation: relay.generation });
+    // A replacement relay has an empty registry. Wake the controller so
+    // PROVISIONING sessions re-register now instead of on the next poll.
+    notifyControllerReady(relayOpts);
     installShutdown(async () => relay.close());
     return;
   }
@@ -77,13 +81,17 @@ async function main(): Promise<void> {
   const shutdown: Array<() => Promise<void>> = [];
 
   if (cfg.relayEnabled) {
-    const relay = createRelay({
+    const relayOpts = {
       adminToken: cfg.relayAdminToken,
       controllerUrl: cfg.controllerUrl,
       wakeToken: cfg.wakeToken,
-    });
+    };
+    const relay = createRelay(relayOpts);
     await listen(relay.server, cfg.relayPort);
-    log.info("relay_listening", { port: cfg.relayPort });
+    log.info("relay_listening", { port: cfg.relayPort, generation: relay.generation });
+    // No-op until the control listener starts; the first reconcile pass covers
+    // startup in a single process.
+    notifyControllerReady(relayOpts);
     shutdown.push(() => relay.close());
   }
 

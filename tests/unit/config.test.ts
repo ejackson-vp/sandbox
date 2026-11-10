@@ -64,6 +64,16 @@ describe("production config guards", () => {
     ).toThrow(/CAPACITY_ACCOUNTING/);
   });
 
+  it("bounds the relay registration retry window", () => {
+    expect(loadControllerConfig({ ...dev }).relayRegistrationTimeoutMs).toBe(5_000);
+    expect(
+      loadControllerConfig({ ...dev, RELAY_REGISTRATION_TIMEOUT_MS: "1500" }).relayRegistrationTimeoutMs,
+    ).toBe(1_500);
+    expect(() =>
+      loadControllerConfig({ ...dev, RELAY_REGISTRATION_TIMEOUT_MS: "0" }),
+    ).toThrow(/RELAY_REGISTRATION_TIMEOUT_MS|invalid integer/);
+  });
+
   it("accepts a pinned digest", () => {
     const cfg = loadControllerConfig({
       ...base,

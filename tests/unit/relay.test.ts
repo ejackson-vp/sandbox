@@ -135,6 +135,57 @@ describe("execution status and epoch forwarding", () => {
   });
 });
 
+describe("relay generation", () => {
+  it("reports a stable per-process generation from /healthz", async () => {
+    const first = (await (await fetch(`${base}/healthz`)).json()) as { ok: boolean; generation: string };
+    const second = (await (await fetch(`${base}/healthz`)).json()) as { ok: boolean; generation: string };
+    expect(first.ok).toBe(true);
+    expect(first.generation).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second.generation).toBe(first.generation);
+    expect(relay.generation).toBe(first.generation);
+  });
+
+  it("assigns a different generation to a replacement relay", async () => {
+    const replacement = createRelay({ adminToken: ADMIN });
+    try {
+      expect(replacement.generation).not.toBe(relay.generation);
+    } finally {
+      await replacement.close();
+    }
+  });
+
+  it("rejects a registration aimed at a previous generation", async () => {
+    const sessionId = "sbx_relay_stale_generation";
+    const res = await admin("/internal/register", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId,
+        tokenHash: sha256Hex(TOKEN),
+        ttlMs: 60_000,
+        generation: "00000000-0000-4000-8000-000000000000",
+      }),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      error: "relay_generation_changed",
+      generation: relay.generation,
+    });
+    expect((await state(sessionId)).connected).toBe(false);
+
+    const current = await admin("/internal/register", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId,
+        tokenHash: sha256Hex(TOKEN),
+        ttlMs: 60_000,
+        generation: relay.generation,
+      }),
+    });
+    expect(current.status).toBe(201);
+    expect(await current.json()).toMatchObject({ ok: true, generation: relay.generation });
+  });
+});
+
 describe("relay idempotency", () => {
   it("does not re-execute a completed request and keeps the first response", async () => {
     const sessionId = "sbx_relay_completed";

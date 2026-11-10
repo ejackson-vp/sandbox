@@ -53,6 +53,12 @@ export interface ControllerConfig {
   proxyServiceName: string;
   workspaceDir: string;
   provisioningTimeoutMs: number;
+  /**
+   * How long one create may retry relay registration against the current
+   * generation before the pass gives up (the session stays PAID and is retried
+   * on the next tick).
+   */
+  relayRegistrationTimeoutMs: number;
   leaseGraceMs: number;
   reconcileIntervalMs: number;
   maxPodAgeMs: number;
@@ -234,6 +240,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     proxyServiceName: env.PROXY_SERVICE_NAME ?? "egress-proxy",
     workspaceDir: env.WORKSPACE_DIR ?? "/workspace",
     provisioningTimeoutMs: int(env.PROVISIONING_TIMEOUT_MS, 90_000, 10_000, 600_000),
+    relayRegistrationTimeoutMs: int(env.RELAY_REGISTRATION_TIMEOUT_MS, 5_000, 500, 60_000),
     leaseGraceMs: int(env.LEASE_GRACE_MS, 2_000, 0, 60_000),
     reconcileIntervalMs: int(env.RECONCILE_INTERVAL_MS, 250, 50, 10_000),
     maxPodAgeMs: int(env.MAX_POD_AGE_MS, 3_600_000, 120_000, 7_200_000),

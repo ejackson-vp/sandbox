@@ -31,6 +31,16 @@ import (
 
 const defaultWorkspace = "/workspace"
 
+// relayDialTimeout bounds how long a session guest keeps retrying the relay.
+// It must stay comfortably longer than the controller's provisioning timeout
+// (PROVISIONING_TIMEOUT_MS, 90s by default). If the guest gives up first the
+// supervisor exits, the pod becomes terminal, and the controller observes
+// pod_terminated instead of re-registering against the replacement relay or
+// reporting a clean provisioning_timeout refund.
+func relayDialTimeout() time.Duration {
+	return time.Duration(parseIntEnv("RELAY_DIAL_TIMEOUT_SECONDS", 150)) * time.Second
+}
+
 func main() {
 	cmd := "run"
 	if len(os.Args) > 1 {
@@ -127,7 +137,7 @@ func runSession(cfg sessionConfig) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	client, err := relay.Dial(ctx, cfg.RelayURL, 60*time.Second)
+	client, err := relay.Dial(ctx, cfg.RelayURL, relayDialTimeout())
 	if err != nil {
 		return err
 	}

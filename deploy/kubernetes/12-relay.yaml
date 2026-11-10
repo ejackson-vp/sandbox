@@ -25,6 +25,13 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
+  # A terminating relay drops every registry entry anyway; a shorter grace
+  # period shrinks the window in which a stale keep-alive connection can still
+  # be answered by the old pod while the replacement is starting. The
+  # controller also gates creates on /healthz and on the relay generation, but
+  # this keeps the infrastructure window small.
+  minReadySeconds: 2
+  progressDeadlineSeconds: 120
   selector:
     matchLabels: {app: relay}
   template:
@@ -33,6 +40,10 @@ spec:
       annotations:
         reloader.stakater.com/auto: "true"
     spec:
+      # Guest links are already dropped by the relay's shutdown path. Do not
+      # hold the old pod (and its stale admin connections) open for the default
+      # 30s during a replacement.
+      terminationGracePeriodSeconds: 10
       enableServiceLinks: false
       automountServiceAccountToken: false
       nodeSelector:
