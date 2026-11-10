@@ -5,7 +5,7 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
-## Unreleased
+## 0.1.17
 
 ### Added
 
@@ -19,6 +19,11 @@ the container registry.
   older image is never claimed and is drained on the next reconcile pass; the
   guest rejects a claim whose digest differs from its own and attests only its
   own value (#49).
+
+### Testing
+
+- Nightly cluster fault matrix and short fuzz jobs for the guest, relay and API
+  boundaries (#39, #41).
 
 ## 0.1.16
 
