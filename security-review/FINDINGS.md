@@ -330,18 +330,21 @@ request-rate bound of their own.
 **Fix:** `shared/src/rate-limit.ts` now provides a bounded token bucket (the API
 limiter moved there unchanged) and a `rateLimit()` middleware. The controller
 mounts it on `/internal` before `/internal/wake` and the auth middleware; the
-relay mounts it on `/internal` before every authenticated route. Health and
-readiness probes are deliberately mounted before the limiter so a saturated
-bucket cannot make a healthy pod look unready. The key is the socket peer, the
+relay mounts it on `/internal` before the handlers. Health and readiness probes
+are deliberately mounted before the limiter so a saturated bucket cannot make a
+healthy pod look unready. The key is the socket peer, the
 scope is `internal`/`relay`, and a rejection is `429 {error:"rate_limited"}` plus
 `sandbox_rate_limited_total{scope}`.
 
 **Why the inline suppressions exist:** CodeQL's `RateLimitingMiddleware` models
 only `express-rate-limit`, `express-brute`, `express-limiter`, and
 `rate-limiter-flexible`; it does not follow a repository-owned middleware. The
-ten `codeql[js/missing-rate-limiting]` comments at the route installations are
-therefore documenting a query-model limitation, not accepting the risk. The
-limiter's burst/refill behavior, 429 response and bounded table are covered by
+two remaining `codeql[js/missing-rate-limiting]` comments in
+`controller/src/control-api.ts` document that query-model limitation, not an
+accepted risk. The relay route graph no longer performs an Express authorization
+step: the mTLS `CN=controller` check runs on the authenticated TLS socket before
+Express, so the relay no longer needs an inline suppression. The limiter's
+burst/refill behavior, 429 response and bounded table are covered by
 `tests/unit/rate-limit.test.ts`.
 
 ### F-12 `go/zipslip` (`guest/internal/files/archive.go:54`) — false positive

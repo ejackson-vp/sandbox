@@ -65,6 +65,37 @@ describe("production config guards", () => {
     expect(relay.role).toBe("relay");
   });
 
+  it("requires relay mTLS material for a cluster relay", () => {
+    expect(() =>
+      loadControllerConfig({
+        ...dev,
+        ROLE: "relay",
+        KUBERNETES_ENABLED: "true",
+        GUEST_IMAGE_DIGEST: PINNED,
+      }),
+    ).toThrow(/RELAY_TLS_/);
+  });
+
+  it("requires the client certificate pair for an https relay URL", () => {
+    expect(() =>
+      loadControllerConfig({ ...dev, RELAY_URL: "https://relay.sandbox-system.svc:8444" }),
+    ).toThrow(/RELAY_CLIENT_TLS_/);
+    const cfg = loadControllerConfig({
+      ...dev,
+      RELAY_URL: "https://relay.sandbox-system.svc:8444",
+      RELAY_CLIENT_TLS_CERT_FILE: "/relay-tls/tls.crt",
+      RELAY_CLIENT_TLS_KEY_FILE: "/relay-tls/tls.key",
+      RELAY_CLIENT_TLS_CA_FILE: "/relay-tls/ca.crt",
+    });
+    expect(cfg.relayClientTls?.caFile).toBe("/relay-tls/ca.crt");
+  });
+
+  it("rejects a partial TLS file set", () => {
+    expect(() =>
+      loadControllerConfig({ ...dev, RELAY_TLS_CERT_FILE: "/tls/tls.crt" }),
+    ).toThrow(/must be set together/);
+  });
+
   it("validates capacity accounting mode", () => {
     const cfg = loadControllerConfig({ ...dev, CAPACITY_ACCOUNTING: "peak" });
     expect(cfg.capacityAccounting).toBe("peak");

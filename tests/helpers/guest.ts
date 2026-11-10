@@ -19,14 +19,22 @@ import {
   type GuestRequest,
   type GuestResult,
 } from "../../shared/src/index.js";
-import { createRelay, type RelayServer } from "../../controller/src/relay.js";
-import { RelayClient } from "../../controller/src/relay-client.js";
+import { createRelay, type RelayServer, type RelayTlsOptions } from "../../controller/src/relay.js";
+import { RelayClient, type RelayClientTlsOptions } from "../../controller/src/relay-client.js";
 
 export const DEV_SEED = "qSgP+dPwGhb/58O0ZD/dSqCMovhhWNIQbT3MeTD35WY=";
 export const DEV_KEY_ID = "x402-dev-attestation-key-INSECURE-DEV-ONLY";
 
 export interface GuestOptions {
   port: number;
+  /**
+   * When set, the control routes move to an mTLS listener on `controlPort` and
+   * the harness's RelayClient presents the client certificate. The guest
+   * WebSocket stays on the plaintext `port`.
+   */
+  controlPort?: number;
+  relayTls?: RelayTlsOptions;
+  relayClientTls?: RelayClientTlsOptions;
   leaseSeconds?: number;
   maxFileBytes?: number;
   maxDiskMiB?: number;
@@ -56,11 +64,24 @@ export class GuestHarness {
     this.clientNonce = toBase64(await generateNonce());
     const dir = this.opts.workspaceRoot ?? (await mkdtemp(join(tmpdir(), "x402-guest-")));
     this.workspace = join(dir, "workspace");
-    this.relay = createRelay({ adminToken: "harness-admin-token-0123456789", responseTtlMs: 60_000 });
-    await new Promise<void>((r) => this.relay.server.listen(this.opts.port, "127.0.0.1", () => r()));
-    this.relayClient = new RelayClient({
-      baseUrl: `http://127.0.0.1:${this.opts.port}`,
+    this.relay = createRelay({
       adminToken: "harness-admin-token-0123456789",
+      responseTtlMs: 60_000,
+      ...(this.opts.relayTls ? { controlTls: this.opts.relayTls } : {}),
+    });
+    await new Promise<void>((r) => this.relay.server.listen(this.opts.port, "127.0.0.1", () => r()));
+    if (this.opts.relayTls) {
+      if (!this.relay.controlServer || !this.opts.controlPort) {
+        throw new Error("relay TLS requires controlPort");
+      }
+      await new Promise<void>((r) => this.relay.controlServer!.listen(this.opts.controlPort!, "127.0.0.1", () => r()));
+    }
+    this.relayClient = new RelayClient({
+      baseUrl: this.opts.relayTls
+        ? `https://127.0.0.1:${this.opts.controlPort}`
+        : `http://127.0.0.1:${this.opts.port}`,
+      adminToken: "harness-admin-token-0123456789",
+      ...(this.opts.relayClientTls ? { tls: this.opts.relayClientTls } : {}),
     });
     await this.relayClient.register(
       this.sessionId,

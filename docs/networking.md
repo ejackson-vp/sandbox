@@ -11,6 +11,38 @@ Everything else — other sandboxes, the Kubernetes API, kubelets, node IPs, clo
 metadata (`169.254.169.254`), cluster Services, and the local network — is
 blocked by Cilium NetworkPolicy and verified by `tests/security/network.test.ts`.
 
+## Control-plane paths
+
+The two relay listeners have different callers and different credentials. They
+are never interchangeable:
+
+| Path | Port | Transport | Credential | Caller |
+| --- | --- | --- | --- | --- |
+| guest WebSocket | 8443 | plaintext HTTP/WS | per-session guest bearer token | sandbox guest |
+| relay control | 8444 | mTLS | client certificate `CN=controller` | controller only |
+| readiness/liveness | 8443 | plaintext HTTP | none (bounded, non-secret body) | kubelet |
+| controller wake | 3001 | plaintext HTTP | low-privilege `x-wake-token` | relay only |
+
+The control listener is served by `https.createServer` with `requestCert`,
+`rejectUnauthorized` and a client CA. The expected `CN=controller` is enforced on
+the authenticated TLS socket at `secureConnection`, before Express sees the
+request. A plaintext connection fails the TLS handshake; a certificate signed by
+the CA for another component (for example the API's `CN=api`) is rejected at the
+transport layer (connection reset); a valid controller certificate is the only
+credential — the shared relay admin token is not accepted on this listener.
+`/internal/*` is not mounted on the guest listener at all, so
+`curl http://<relay>:8443/internal/...` returns `404`.
+
+NetworkPolicy mirrors the split: `allow-relay` admits `sandbox-workloads` only on
+8443 and the controller only on 8444, while `allow-controller` egress to the relay
+is limited to 8444. The relay's own egress to the controller stays on 3001 for
+the wake token; that listener cannot reach any other internal route.
+
+Local clusters generate a throwaway CA, relay server certificate and
+`CN=controller` client certificate in `scripts/dev-secrets.sh` (git-ignored,
+never committed). A deployed environment mounts its own `relay-tls` and
+`relay-client-tls` Secrets from the private infrastructure repository.
+
 ## DNS
 
 There is deliberately **no usable DNS** in a sandbox:

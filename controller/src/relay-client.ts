@@ -1,8 +1,23 @@
+import { readFileSync } from "node:fs";
+import { Agent, fetch as undiciFetch } from "undici";
 import type { RelaySessionState, WarmClaim } from "@x402s/shared";
 
+export interface RelayClientTlsOptions {
+  certFile: string;
+  keyFile: string;
+  caFile: string;
+}
+
 export interface RelayClientOptions {
+  /** Control URL. `https://…` when `tls` is set (the mTLS control listener). */
   baseUrl: string;
+  /** Low-privilege relay admin token; plaintext local-dev path only. */
   adminToken: string;
+  /**
+   * Client certificate, key and CA for the relay's mTLS control listener. When
+   * present the certificate is the credential and the shared token is not sent.
+   */
+  tls?: RelayClientTlsOptions;
   timeoutMs?: number;
   /**
    * How long a readiness probe may be reused. The reconcile tick is 250 ms, so
@@ -51,34 +66,57 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class RelayClient {
   private readonly baseUrl: string;
-  private readonly adminToken: string;
   private readonly timeoutMs: number;
   private readonly readinessCacheMs: number;
+  private readonly headers: Record<string, string>;
+  private readonly dispatcher?: Agent;
   private readiness: { generation: string; at: number } | null = null;
   private readinessProbe: Promise<RelayHealth> | null = null;
 
   constructor(opts: RelayClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
-    this.adminToken = opts.adminToken;
     this.timeoutMs = opts.timeoutMs ?? 5000;
     this.readinessCacheMs = opts.readinessCacheMs ?? 1000;
+    if (opts.tls) {
+      this.dispatcher = new Agent({
+        connect: {
+          cert: readFileSync(opts.tls.certFile),
+          key: readFileSync(opts.tls.keyFile),
+          ca: readFileSync(opts.tls.caFile),
+        },
+      });
+    }
+    this.headers = {
+      "content-type": "application/json",
+      // The relay's registry is in memory and the Deployment replaces the pod
+      // (maxSurge: 0). A keep-alive socket can stay pinned to the old pod
+      // through a Service after its endpoints are gone, so control calls must
+      // open a fresh connection and be routed to the current pod.
+      connection: "close",
+      // The client certificate is the credential on the mTLS path; do not also
+      // send the shared token over the wire.
+      ...(opts.tls ? {} : { "x-internal-token": opts.adminToken }),
+    };
   }
 
-  private async call<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
+  private async raw(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<Response> {
+    // undici's fetch, not the global one: the global fetch uses Node's bundled
+    // undici, and a dispatcher created by the npm package is a different
+    // instance, which fails with UND_ERR_INVALID_ARG.
+    const request = {
       ...init,
+      ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}),
       headers: {
-        "content-type": "application/json",
-        // The relay's registry is in memory and the Deployment replaces the pod
-        // (maxSurge: 0). A keep-alive socket can stay pinned to the old pod
-        // through a Service after its endpoints are gone, so admin calls must
-        // open a fresh connection and be routed to the current pod.
-        connection: "close",
-        "x-internal-token": this.adminToken,
+        ...this.headers,
         ...(init.headers ?? {}),
       },
       signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
-    });
+    } as Parameters<typeof undiciFetch>[1];
+    return undiciFetch(`${this.baseUrl}${path}`, request) as unknown as Promise<Response>;
+  }
+
+  private async call<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
+    const res = await this.raw(path, init, timeoutMs);
     const text = await res.text();
     let body: unknown;
     try {
@@ -224,12 +262,10 @@ export class RelayClient {
   }
 
   async response(sessionId: string, id: string, waitMs: number): Promise<RelayResponse> {
-    const res = await fetch(
-      `${this.baseUrl}/internal/${encodeURIComponent(sessionId)}/response/${encodeURIComponent(id)}?waitMs=${Math.max(0, waitMs)}`,
-      {
-        headers: { "x-internal-token": this.adminToken, connection: "close" },
-        signal: AbortSignal.timeout(waitMs + 15_000),
-      },
+    const res = await this.raw(
+      `/internal/${encodeURIComponent(sessionId)}/response/${encodeURIComponent(id)}?waitMs=${Math.max(0, waitMs)}`,
+      {},
+      waitMs + 15_000,
     );
     const body = (await res.json().catch(() => ({}))) as {
       envelope?: string;

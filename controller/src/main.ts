@@ -10,10 +10,10 @@ import https from "node:https";
 import type { Server } from "node:http";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { loadControllerConfig, makeProvisioner, makeRelayClient } from "./config.js";
+import { loadControllerConfig, makeProvisioner, makeRelayClient, type ControllerConfig } from "./config.js";
 import { Store } from "./store.js";
 import { createControlApi } from "./control-api.js";
-import { createRelay, notifyControllerReady } from "./relay.js";
+import { createRelay, notifyControllerReady, type RelayServer } from "./relay.js";
 import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
 import { OperationFence } from "./operation-fence.js";
@@ -78,11 +78,11 @@ async function main(): Promise<void> {
       adminToken: cfg.relayAdminToken,
       controllerUrl: cfg.controllerUrl,
       wakeToken: cfg.wakeToken,
+      ...(cfg.relayTls ? { controlTls: cfg.relayTls } : {}),
     };
     const relay = createRelay(relayOpts);
     collectors.push(() => relay.collectMetrics());
-    await listen(relay.server, cfg.relayPort);
-    log.info("relay_listening", { port: cfg.relayPort, generation: relay.generation });
+    await listenRelay(relay, cfg);
     // A replacement relay has an empty registry. Wake the controller so
     // PROVISIONING sessions re-register now instead of on the next poll.
     notifyControllerReady(relayOpts);
@@ -131,11 +131,11 @@ async function main(): Promise<void> {
       adminToken: cfg.relayAdminToken,
       controllerUrl: cfg.controllerUrl,
       wakeToken: cfg.wakeToken,
+      ...(cfg.relayTls ? { controlTls: cfg.relayTls } : {}),
     };
     const relay = createRelay(relayOpts);
     collectors.push(() => relay.collectMetrics());
-    await listen(relay.server, cfg.relayPort);
-    log.info("relay_listening", { port: cfg.relayPort, generation: relay.generation });
+    await listenRelay(relay, cfg);
     // No-op until the control listener starts; the first reconcile pass covers
     // startup in a single process.
     notifyControllerReady(relayOpts);
@@ -228,6 +228,23 @@ async function main(): Promise<void> {
     closeMetrics();
     store.close();
   });
+}
+
+async function listenRelay(relay: RelayServer, cfg: ControllerConfig): Promise<void> {
+  await listen(relay.server, cfg.relayPort);
+  if (relay.controlServer) {
+    await listen(relay.controlServer, cfg.relayControlPort);
+    log.info("relay_control_listening", {
+      port: cfg.relayControlPort,
+      clientCn: "controller",
+      generation: relay.generation,
+    });
+  } else {
+    // Local-dev/test fallback only. A cluster relay refuses to start without
+    // RELAY_TLS_* (controller/src/config.ts).
+    log.warn("relay_control_plaintext", { port: cfg.relayPort, generation: relay.generation });
+  }
+  log.info("relay_listening", { port: cfg.relayPort, generation: relay.generation });
 }
 
 function listen(server: http.Server, port: number): Promise<void> {

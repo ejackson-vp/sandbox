@@ -50,9 +50,18 @@ concrete next step.
   Release but not the pullable tag; promotion-after-scan is tracked in #42.
 - **API→controller mTLS**: the controller's 3004 listener requires a client
   certificate with `CN=api`; the API presents it and no longer sends the bearer
-  token on that path. NetworkPolicy admits the API only on 3004. The relay keeps
-  the HTTP port and its low-privilege wake token — moving it to mTLS is the
-  remaining half.
+  token on that path. NetworkPolicy admits the API only on 3004.
+- **Controller→relay mTLS**: the relay's 8444 control listener requires a client
+  certificate signed by its client CA, and enforces `CN=controller` on the
+  authenticated TLS socket before Express handles the request; registration,
+  state, requests, responses, claim and purge all use it, and the shared relay
+  admin token is no longer accepted there. The guest WebSocket stays on plaintext 8443
+  with its per-session bearer token, and the relay→controller wake keeps the
+  low-privilege token on 3001. NetworkPolicy admits the controller only on 8444.
+  A cluster relay refuses to start without `RELAY_TLS_*`, and the controller
+  refuses an `https://` `RELAY_URL` without `RELAY_CLIENT_TLS_*`. Residual:
+  certificate rotation and private-key custody live in the infrastructure repo;
+  the dev CA is generated locally and git-ignored.
 - **Capability derivation**: capabilities are HMAC over the payment key *and* the
   client commitment. The paying wallet must sign
   `{paymentKey, clientPublicKey, clientNonce}`, and the commitment is part of the

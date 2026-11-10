@@ -98,8 +98,10 @@ spec:
         - podSelector:
             matchLabels: {app: relay}
       ports:
+        # mTLS control listener only. The controller never talks to the guest
+        # listener; the sandbox namespace owns that path.
         - protocol: TCP
-          port: 8443
+          port: 8444
     - to:
         - namespaceSelector:
             matchLabels:
@@ -136,7 +138,7 @@ spec:
             matchLabels: {app: controller}
       ports:
         - protocol: TCP
-          port: 8443
+          port: 8444
   egress:
     # Speculative readiness wake only (POST /internal/wake).
     - to:

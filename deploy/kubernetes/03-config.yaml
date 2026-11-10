@@ -42,7 +42,19 @@ data:
   CONTROLLER_TLS_CERT_FILE: ""
   CONTROLLER_TLS_KEY_FILE: ""
   CONTROLLER_TLS_CA_FILE: ""
-  RELAY_URL: "http://relay.sandbox-system.svc.cluster.local:8443"
+  # Controller -> relay control path is mTLS. The relay listens on 8444 with a
+  # client CA and requires CN=controller; the guest WebSocket stays on 8443.
+  # The homelab mounts these from its own Secret; kind generates them.
+  RELAY_URL: "https://relay.sandbox-system.svc.cluster.local:8444"
+  RELAY_CONTROL_PORT: "8444"
+  # Relay listener identity (server cert/key + client CA).
+  RELAY_TLS_CERT_FILE: "/tls/tls.crt"
+  RELAY_TLS_KEY_FILE: "/tls/tls.key"
+  RELAY_TLS_CA_FILE: "/tls/ca.crt"
+  # Controller client identity for the relay control listener.
+  RELAY_CLIENT_TLS_CERT_FILE: "/relay-tls/tls.crt"
+  RELAY_CLIENT_TLS_KEY_FILE: "/relay-tls/tls.key"
+  RELAY_CLIENT_TLS_CA_FILE: "/relay-tls/ca.crt"
   RELAY_SERVICE_NAME: "relay"
   PROXY_SERVICE_NAME: "egress-proxy"
   # Automated SQLite backups. Empty BACKUP_DIR disables them. To enable, set

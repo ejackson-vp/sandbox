@@ -10,6 +10,11 @@ spec:
     - name: guest
       port: 8443
       targetPort: 8443
+    # Controller-only mTLS control listener. Admission is both the client
+    # certificate (CN=controller) and the NetworkPolicy below.
+    - name: control
+      port: 8444
+      targetPort: 8444
     - name: metrics
       port: 9100
       targetPort: 9100
@@ -68,12 +73,22 @@ spec:
           ports:
             - name: guest
               containerPort: 8443
+            - name: control
+              containerPort: 8444
             - name: metrics
               containerPort: 9100
           env:
             - {name: ROLE, value: "relay"}
             - {name: X402_RELAY_PORT, value: "8443"}
+            - {name: RELAY_CONTROL_PORT, value: "8444"}
             - {name: SERVICE_NAME, value: "relay"}
+            # mTLS control listener: server identity plus the CA that must have
+            # signed the controller's client certificate.
+            - {name: RELAY_TLS_CERT_FILE, value: "/tls/tls.crt"}
+            - {name: RELAY_TLS_KEY_FILE, value: "/tls/tls.key"}
+            - {name: RELAY_TLS_CA_FILE, value: "/tls/ca.crt"}
+            # The plaintext relay admin token remains for local/dev only; the
+            # cluster control path is authenticated by the client certificate.
             - name: RELAY_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: relay-admin-token}
@@ -93,6 +108,7 @@ spec:
             limits: {cpu: "500m", memory: "256Mi", ephemeral-storage: "64Mi"}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
+            - {name: tls, mountPath: /tls, readOnly: true}
           readinessProbe:
             httpGet: {path: /readyz, port: 8443}
             initialDelaySeconds: 2
@@ -110,3 +126,9 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: "32Mi"}
+        # Server certificate/key + client CA for the control listener. Required:
+        # a cluster relay refuses to start without RELAY_TLS_* (config.ts).
+        - name: tls
+          secret:
+            secretName: relay-tls
+            defaultMode: 0444
