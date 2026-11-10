@@ -24,7 +24,8 @@
     "test:fuzz": "vitest run tests/fuzz",
     "clean": "rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist",
     "test:property": "vitest run tests/property",
-    "lint:structure": "node scripts/check-structure.mjs"
+    "lint:structure": "node scripts/check-structure.mjs",
+    "bench:ceiling": "tsx scripts/bench-reconcile-ceiling.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
