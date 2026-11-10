@@ -8,15 +8,15 @@
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import type { PaymentRequired } from "@x402/core/types";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
+import { clientCommitmentMessage } from "@x402s/shared/crypto";
 import {
   MOCK_NETWORK,
   MockExactClientScheme,
   TESTNET_NETWORK,
-  clientCommitmentMessage,
   formatUsd,
   paymentKey,
-  type CreateSessionRequest,
-} from "@x402s/shared";
+} from "@x402s/shared/payment";
+import type { CreateSessionRequest } from "@x402s/shared/protocol";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 export type PaymentMode = "mock" | "testnet";

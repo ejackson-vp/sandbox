@@ -14,6 +14,6 @@ export type {
   SessionLimits,
   SessionStatus,
   SessionTier,
-} from "@x402s/shared";
+} from "@x402s/shared/protocol";
 export * from "./sandbox.js";
 export * from "./transfers.js";

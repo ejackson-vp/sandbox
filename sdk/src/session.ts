@@ -1,7 +1,8 @@
 /**
  * Session lifecycle: create/attach/checkpoint/resume/destroy.
  */
-import { fromBase64, generateBoxKeyPair, generateNonce, toBase64, type CreateSessionRequest, type CreateSessionResponse, type SessionStatus } from "@x402s/shared";
+import { fromBase64, generateBoxKeyPair, generateNonce, toBase64 } from "@x402s/shared/crypto";
+import type { CreateSessionRequest, CreateSessionResponse, SessionStatus } from "@x402s/shared/protocol";
 import type { ClientRuntime } from "./runtime.js";
 import { sleep } from "./runtime.js";
 import {

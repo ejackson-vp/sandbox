@@ -15,7 +15,7 @@ import type {
   HttpResponse,
   SessionHandle,
 } from "./types.js";
-import type { ExecResult, FilePutResult, OperationError, SessionStatus } from "@x402s/shared";
+import type { ExecResult, FilePutResult, OperationError, SessionStatus } from "@x402s/shared/protocol";
 import type { TransferOptions, TransferOutcome } from "./transfers.js";
 
 const exec = promisify(execFile);

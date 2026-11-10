@@ -2,7 +2,7 @@
  * Public SDK facade. Composes the runtime, session, operations and data-plane
  * modules; the exported method surface is unchanged.
  */
-import type { GuestResult, SessionStatus } from "@x402s/shared";
+import type { GuestResult, SessionStatus } from "@x402s/shared/protocol";
 import { ClientRuntime } from "./runtime.js";
 import { SessionService } from "./session.js";
 import { OperationService } from "./operations.js";
@@ -172,4 +172,4 @@ export class SandboxClient {
 }
 
 export * from "./types.js";
-export type { FileEntry, SessionStatus } from "@x402s/shared";
+export type { FileEntry, SessionStatus } from "@x402s/shared/protocol";

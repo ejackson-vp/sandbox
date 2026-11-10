@@ -3,7 +3,7 @@
  * and always destroy. Kept separate from the facade so the ordering and cleanup
  * contract can be tested with a small stub client.
  */
-import type { ExecResult, FileGetResult, FilePutResult, OperationError } from "@x402s/shared";
+import type { ExecResult, FileGetResult, FilePutResult, OperationError } from "@x402s/shared/protocol";
 import { SandboxError } from "./types.js";
 import type {
   CreateOptions,
