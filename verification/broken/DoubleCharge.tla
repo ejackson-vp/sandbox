@@ -21,7 +21,7 @@ BrokenInsertPayment(s, p) ==
                  refund, reservations, resPayment, pod, creating, pvc, relay,
                  slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
                  guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
-                 fenceReq, recovered>>
+                 fenceReq, recovered, startGen>>
 
 BrokenCreateEntitlement(s, p) ==
   /\ intent[p] = "claimed"
@@ -39,7 +39,7 @@ BrokenCreateEntitlement(s, p) ==
   /\ UNCHANGED <<everReady, intentEpoch, charges, refund, resPayment, pod, creating,
                  pvc, relay, slots, guest, slotEpoch, final, epoch, execEpoch,
                  guestConnected, guestStatus, guestEpoch, admittedEpoch,
-                 relayPending, fence, fenceReq, recovered>>
+                 relayPending, fence, fenceReq, recovered, startGen>>
 
 BrokenSettlementActions ==
   \E s \in Sessions, p \in Payments :

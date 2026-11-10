@@ -10,10 +10,11 @@ interface Fenced {
   execEpoch: number;
 }
 
-function harness(initial: Fenced[]) {
+function harness(initial: Fenced[], opts: { raiseEpochError?: Error; reset?: boolean } = {}) {
   const sessions = new Map(initial.map((session) => [session.id, { ...session }]));
   const states = new Map<string, RelaySessionState | Error>();
   const cleared: Array<{ sessionId: string; requestId: string; epoch: number }> = [];
+  const raised: Array<{ sessionId: string; epoch: number }> = [];
 
   const store = {
     listFencedSessions: (): SessionRecord[] =>
@@ -28,6 +29,14 @@ function harness(initial: Fenced[]) {
   } as unknown as Store;
 
   const relay = {
+    raiseEpoch: async (
+      sessionId: string,
+      epoch: number,
+    ): Promise<{ result: "ok" | "unknown"; withdrawn: number; reset: boolean }> => {
+      if (opts.raiseEpochError) throw opts.raiseEpochError;
+      raised.push({ sessionId, epoch });
+      return { result: "ok", withdrawn: 0, reset: opts.reset ?? false };
+    },
     state: async (sessionId: string): Promise<RelaySessionState> => {
       const value = states.get(sessionId);
       if (value instanceof Error) throw value;
@@ -35,10 +44,25 @@ function harness(initial: Fenced[]) {
     },
   } as unknown as RelayClient;
 
-  return { fence: new OperationFence(store, relay), states, cleared, sessions };
+  return { fence: new OperationFence(store, relay), states, cleared, raised, sessions };
 }
 
 describe("operation fence", () => {
+  it("publishes the recovery epoch to the relay before trusting its state", async () => {
+    const h = harness([{ id: "sbx_1", activeRequestId: "req-old", execEpoch: 2 }]);
+    h.states.set("sbx_1", {
+      registered: true,
+      connected: true,
+      pending: 0,
+      statusAt: Date.now(),
+      activeRequestId: "",
+      epochFloor: 2,
+    });
+
+    expect(await h.fence.reconcile()).toEqual({ cleared: 1, held: 0, errors: 0 });
+    expect(h.raised).toEqual([{ sessionId: "sbx_1", epoch: 2 }]);
+  });
+
   it("holds the gate while the guest still reports the fenced request active", async () => {
     const h = harness([{ id: "sbx_1", activeRequestId: "req-old", execEpoch: 2 }]);
     h.states.set("sbx_1", {
@@ -47,6 +71,7 @@ describe("operation fence", () => {
       pending: 1,
       statusAt: Date.now(),
       activeRequestId: "req-old",
+      epochFloor: 2,
     });
 
     expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 1, errors: 0 });
@@ -62,6 +87,7 @@ describe("operation fence", () => {
       pending: 0,
       statusAt: Date.now(),
       activeRequestId: "",
+      epochFloor: 2,
     });
 
     expect(await h.fence.reconcile()).toEqual({ cleared: 1, held: 0, errors: 0 });
@@ -77,6 +103,22 @@ describe("operation fence", () => {
       pending: 1,
       statusAt: Date.now(),
       activeRequestId: "",
+      epochFloor: 2,
+    });
+
+    expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 1, errors: 0 });
+    expect(h.cleared).toEqual([]);
+  });
+
+  it("holds when the relay has not taken the recovery epoch as its floor", async () => {
+    const h = harness([{ id: "sbx_1", activeRequestId: "req-old", execEpoch: 3 }]);
+    h.states.set("sbx_1", {
+      registered: true,
+      connected: true,
+      pending: 0,
+      statusAt: Date.now(),
+      activeRequestId: "",
+      epochFloor: 2,
     });
 
     expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 1, errors: 0 });
@@ -92,7 +134,7 @@ describe("operation fence", () => {
 
   it("fails closed for a connected guest that has never reported status", async () => {
     const h = harness([{ id: "sbx_1", activeRequestId: "req-old", execEpoch: 2 }]);
-    h.states.set("sbx_1", { registered: true, connected: true, pending: 0 });
+    h.states.set("sbx_1", { registered: true, connected: true, pending: 0, epochFloor: 2 });
 
     expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 1, errors: 0 });
     expect(h.cleared).toEqual([]);
@@ -104,5 +146,28 @@ describe("operation fence", () => {
 
     expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 0, errors: 1 });
     expect(h.sessions.get("sbx_1")?.activeRequestId).toBe("req-old");
+  });
+
+  it("fails closed when the epoch cannot be published", async () => {
+    const h = harness([{ id: "sbx_1", activeRequestId: "req-old", execEpoch: 2 }], {
+      raiseEpochError: new Error("relay unavailable"),
+    });
+    // Even a state that would allow release must not be trusted: the relay was
+    // never told to refuse the old generation.
+    h.states.set("sbx_1", { registered: true, connected: false, pending: 0 });
+
+    expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 0, errors: 1 });
+    expect(h.cleared).toEqual([]);
+    expect(h.sessions.get("sbx_1")?.activeRequestId).toBe("req-old");
+  });
+
+  it("clears the gate after a reset so the session lifecycle can take over", async () => {
+    const h = harness([{ id: "sbx_1", activeRequestId: "req-old", execEpoch: 2 }], { reset: true });
+    // The relay withdrew the frame and reset the guest link; no guest remains,
+    // so the gate must clear. The reconciler then fails the dead Pod.
+    h.states.set("sbx_1", { registered: true, connected: false, pending: 0 });
+
+    expect(await h.fence.reconcile()).toEqual({ cleared: 1, held: 0, errors: 0 });
+    expect(h.sessions.get("sbx_1")?.activeRequestId).toBeNull();
   });
 });

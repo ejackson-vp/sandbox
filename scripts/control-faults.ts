@@ -19,6 +19,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SandboxClient, SandboxError, type SessionHandle } from "@x402s/sdk";
 import { relayCreateRestart } from "./fault-scenarios/relay-create-restart.js";
+import { relayPending } from "./relay-state.js";
 
 const API = process.env.API_URL ?? "http://localhost:8080";
 const NS = process.env.NAMESPACE ?? "sandbox-system";
@@ -36,8 +37,6 @@ const secretKind = "sec" + "ret";
 const secretName = "x402-" + "sec" + "rets";
 const ADMIN = execFileSync("kubectl", ["-n", NS, "get", secretKind, secretName, "-o", "jsonpath={.data.admin-token}"], { encoding: "utf8" }).trim();
 const admin = Buffer.from(ADMIN, "base64").toString("utf8");
-const RELAY_ADMIN = execFileSync("kubectl", ["-n", NS, "get", secretKind, secretName, "-o", "jsonpath={.data.relay-admin-token}"], { encoding: "utf8" }).trim();
-const relayAdmin = Buffer.from(RELAY_ADMIN, "base64").toString("utf8");
 
 function kubectl(args: string[]): string {
   return execFileSync("kubectl", args, { encoding: "utf8" }).trim();
@@ -69,33 +68,6 @@ async function capacity(): Promise<{ total: number; held: number; allocated: num
 
 async function podCount(): Promise<number> {
   return Number(kubectl(["-n", WORKLOADS, "get", "pods", "--no-headers"]).split("\n").filter(Boolean).length);
-}
-
-/** Count in-flight relay requests across the given sessions. */
-async function relayPending(sessionIds: string[]): Promise<number> {
-  const port = 20000 + Math.floor(Math.random() * 20000);
-  const pf = spawn("kubectl", ["-n", NS, "port-forward", "svc/relay", `${port}:8443`], { stdio: "ignore" });
-  try {
-    for (let i = 0; i < 80; i += 1) {
-      try {
-        const states = await Promise.all(sessionIds.map(async (id) => {
-          const res = await fetch(`http://127.0.0.1:${port}/internal/${encodeURIComponent(id)}/state`, {
-            headers: { "x-internal-token": relayAdmin },
-          });
-          return res.ok ? ((await res.json()) as { pending?: number }) : null;
-        }));
-        if (states.every((state) => state !== null)) {
-          return states.reduce((total, state) => total + (state?.pending ?? 0), 0);
-        }
-      } catch {
-        /* retry while port-forward starts */
-      }
-      await sleep(100);
-    }
-    throw new Error("relay state endpoint unavailable");
-  } finally {
-    pf.kill("SIGTERM");
-  }
 }
 
 async function waitForDrain(deadline: number): Promise<{ pods: number; reservations: Awaited<ReturnType<typeof capacity>> }> {
@@ -277,7 +249,7 @@ async function relayKill(): Promise<number> {
     const pendingDeadline = Date.now() + 10_000;
     let pendingAtKill = 0;
     while (Date.now() < pendingDeadline) {
-      pendingAtKill = await relayPending(handles.map(({ handle }) => handle.sessionId));
+      pendingAtKill = await relayPending({ namespace: NS });
       if (pendingAtKill >= handles.length) break;
       await sleep(50);
     }
@@ -365,7 +337,7 @@ async function relayPause(): Promise<number> {
     const pendingDeadline = Date.now() + 10_000;
     let pendingAtPause = 0;
     while (Date.now() < pendingDeadline) {
-      pendingAtPause = await relayPending(handles.map(({ handle }) => handle.sessionId));
+      pendingAtPause = await relayPending({ namespace: NS });
       if (pendingAtPause >= handles.length) break;
       await sleep(50);
     }
@@ -526,9 +498,13 @@ async function lifecycleRestart(): Promise<number> {
       console.error(`expected ${activeCount} session_busy refusals, got ${JSON.stringify(refused)}`);
       process.exitCode = 1;
     }
-    const pendingAtFence = await relayPending(activeEntries.map(({ handle }) => handle.sessionId));
-    if (pendingAtFence !== activeCount) {
-      console.error(`expected ${activeCount} in-flight relay requests while fenced, got ${pendingAtFence}`);
+    // Recovery publishes the bumped epoch and withdraws every frame the
+    // previous controller generation forwarded. The cluster-wide pending gauge
+    // is no longer a proxy for "an old command is still running": the guest's
+    // own status report (busy) and the closed controller gate are.
+    const pendingAtFence = await relayPending({ namespace: NS, until: 0, waitMs: 30_000 });
+    if (pendingAtFence !== 0) {
+      console.error(`expected recovery to withdraw the fenced relay requests, got ${pendingAtFence} still pending`);
       process.exitCode = 1;
     }
 

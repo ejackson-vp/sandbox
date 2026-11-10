@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import type { Socket } from "node:net";
 import type { WebSocketServer, WebSocket } from "ws";
 import type { AttestationEnvelope, GuestToRelay } from "@x402s/shared";
 import { log } from "@x402s/shared";
@@ -45,7 +46,7 @@ export function attachGuestUpgrade(
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      if (!registry.attach(sessionId, ws)) {
+      if (!registry.attach(sessionId, ws, socket as Socket)) {
         ws.close(1008, "already connected");
         return;
       }

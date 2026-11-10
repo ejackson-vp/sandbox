@@ -13,9 +13,11 @@ export interface RelayRequestMessage {
   deadlineMs: number;
   /**
    * Execution-epoch fence. The controller bumps a session's epoch when it
-   * recovers an interrupted operation; the guest refuses requests from an
-   * older epoch so a frame forwarded by a previous controller generation can
-   * never start after recovery.
+   * recovers an interrupted operation and publishes the new epoch to the relay
+   * before the fence can clear. The relay refuses a frame below that floor and
+   * withdraws a frame already forwarded from the superseded generation, so a
+   * frame from a previous controller generation can never start after
+   * recovery. The guest also refuses a frame below its own high-water mark.
    */
   epoch: number;
 }
@@ -109,6 +111,13 @@ export interface RelaySessionState {
   activeRequestId?: string;
   /** Highest execution epoch the guest has observed. */
   execEpoch?: number;
+  /**
+   * Lowest execution epoch the relay will forward. The controller raises it to
+   * `sessions.exec_epoch` on recovery; a frame below it is rejected with
+   * `stale_epoch` and never reaches the guest. Absent means the relay has no
+   * registration for the session.
+   */
+  epochFloor?: number;
   /** When the guest last reported its execution state (epoch ms). */
   statusAt?: number;
   error?: string;

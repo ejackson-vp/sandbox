@@ -18,7 +18,7 @@ BrokenFinalize(s) ==
                  refund, reservations, resPayment, pod, creating, pvc, relay,
                  slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
                  guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
-                 fenceReq, recovered>>
+                 fenceReq, recovered, startGen>>
 
 BrokenFinalizeActions == \E s \in Sessions : BrokenFinalize(s)
 

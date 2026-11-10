@@ -24,7 +24,7 @@ BrokenReserveCapacity(s, p) ==
                  charges, refund, pod, creating, pvc, relay, slots, guest,
                  slotEpoch, final, epoch, execEpoch, guestConnected, guestStatus,
                  guestEpoch, admittedEpoch, relayPending, fence, fenceReq,
-                 recovered>>
+                 recovered, startGen>>
 
 BrokenReservationActions ==
   \/ \E s \in Sessions, p \in Payments : BrokenReserveCapacity(s, p)

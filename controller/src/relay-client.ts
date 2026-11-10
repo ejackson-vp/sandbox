@@ -254,6 +254,40 @@ export class RelayClient {
     return this.call<RelaySessionState>(`/internal/${encodeURIComponent(sessionId)}/state`);
   }
 
+  /**
+   * Publish the session's current execution epoch to the relay before the
+   * operation fence is trusted. The relay then refuses frames below it and
+   * withdraws a frame that was forwarded but never observed. `reset` reports
+   * that the relay ended the guest link to discard such a frame.
+   *
+   * `result` is `unknown` when the relay has no registration for the session (a
+   * relay restart): there is nothing to fence on the old generation.
+   */
+  async raiseEpoch(
+    sessionId: string,
+    epoch: number,
+  ): Promise<{ result: "ok" | "unknown"; withdrawn: number; reset: boolean }> {
+    try {
+      const body = await this.call<{ withdrawn?: unknown; reset?: unknown }>(
+        `/internal/${encodeURIComponent(sessionId)}/epoch`,
+        {
+          method: "POST",
+          body: JSON.stringify({ epoch }),
+        },
+      );
+      return {
+        result: "ok",
+        withdrawn: typeof body?.withdrawn === "number" ? body.withdrawn : 0,
+        reset: body?.reset === true,
+      };
+    } catch (err) {
+      if (err instanceof RelayUnavailableError && err.status === 404) {
+        return { result: "unknown", withdrawn: 0, reset: false };
+      }
+      throw err;
+    }
+  }
+
   async request(sessionId: string, id: string, envelope: string, deadlineMs: number, epoch = 0): Promise<void> {
     await this.call(`/internal/${encodeURIComponent(sessionId)}/request`, {
       method: "POST",

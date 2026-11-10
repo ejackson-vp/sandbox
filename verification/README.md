@@ -59,7 +59,7 @@ state space finite; they are not claims about production sizing.
 | Payment intent | `claimPaymentIntent`, `completeEntitlement`, `recoverInterruptedOperations` | `intent`, `intentEpoch`, `settledTo`, `charges`; a claim is reclaimable only from an older controller epoch |
 | Ledger and refunds | `payment_ledger`, `RefundService` | `charges` (one row per key), `refund` in `none -> pending -> refunded`, set only for a terminal session that was never READY |
 | Operation slot | `claimOperation`, `finishOperation` | `slots` (controller gate) and `guest` (the guest's own gate), keyed by request id; `slotEpoch` is the epoch the gate was claimed in |
-| Execution-epoch fence | `recoverInterruptedOperations`, `listFencedSessions`, `clearFencedGate`, `OperationFence.reconcile`, `guest/supervisor.go` `admitEpoch`/`publishStatus` | `execEpoch`, `fence`, `fenceReq`, `guestStatus`, `guestEpoch`, `admittedEpoch`, `relayPending`: recovery bumps the epoch and holds the gate; only `FenceRelease` clears it, on an idle/disconnected guest; a frame below the guest high-water is rejected |
+| Execution-epoch fence | `recoverInterruptedOperations`, `listFencedSessions`, `clearFencedGate`, `OperationFence.reconcile`, `relay/registry.ts` `raiseEpoch`/`request`, `guest/supervisor.go` `admitEpoch`/`publishStatus` | `execEpoch`, `fence`, `fenceReq`, `guestStatus`, `guestEpoch`, `admittedEpoch`, `startGen`, `relayPending`: recovery bumps the epoch and holds the gate; only `FenceRelease` clears it, on an idle/disconnected guest; the relay refuses and withdraws frames below `execEpoch`, and the guest rejects a frame below its own high-water |
 | Capacity reservation | `admit`, `attachToSession`, `resume`, `beginRelease`, `confirmRelease` | `reservations` over `NONE/ATTACHED/ALLOCATED/SUSPENDED/RELEASING/RELEASED`, plus `usedCompute` |
 | Provisioning | `Provisioning.provision`, `deletePod`, PVC lifecycle | `pod` (recorded instance), `creating` (created by Kubernetes, not yet recorded), `pvc`, `relay`, `guestConnected` |
 | Faults | control-plane fault harness | `CrashRestart` bumps `epoch` and forces startup recovery; `RelayLost` fails one session closed; `GuestDisconnect` drops the relay link without failing the session; `ProvisioningTimeout`; client retries are ordinary re-enabled actions |
@@ -73,11 +73,14 @@ interesting traces reachable:
 - `BeginRelease` moves `ALLOCATED` (and `SUSPENDED`) rows to `RELEASING`, and
   `usedCompute` counts only `ATTACHED` and `ALLOCATED`. See the note on
   `holdsCompute` under [Findings](#findings).
-- A "stale frame" is a frame whose epoch is below the guest's own high-water
-  mark (`guestEpoch`), which is exactly what `admitEpoch` compares. A frame at
-  or above the high-water is not stale to the guest; it may be the fenced
-  request that was forwarded before the crash. See
-  [Findings](#findings) for the one window this leaves open.
+- A "stale frame" is a frame whose epoch is below the session's `exec_epoch`.
+  Recovery publishes that epoch to the relay before the fence can clear, so the
+  relay refuses the frame and withdraws one it already forwarded (the
+  implementation resets the guest link, discarding unread bytes). `DispatchOp`
+  therefore requires `slotEpoch >= execEpoch`. The guest's own high-water
+  check (`guestEpoch`) remains as defence in depth for a frame a restarted
+  guest reads before any recovery epoch. See [Findings](#findings) for the
+  residual, which is a frame the guest has already read.
 
 Time is not modeled. Hold expiry, lease expiry and suspended expiry are
 nondeterministic environment steps, which is the strongest schedule (any
@@ -104,7 +107,8 @@ and `StaleEpoch` variants.
 | I4 | `SingleActiveOperation` | At most one controller slot per session. | The single-operation contract; `claimOperation` enforces it under `BEGIN IMMEDIATE`. |
 | I5 | `SingleGuestOperation` | At most one command in flight at the guest. | The guest's own gate still holds after a restart abandons a request whose command is running. |
 | I5b | `GuestRunsGateHeldRequest` | Any command at the guest is a request the controller gate still names. | A stale or rejected frame cannot take the guest slot without a gate; a fenced request remains named until the fence releases. |
-| I5c | `StaleFrameNeverStarts` | An active guest command carries an epoch at least as high as the guest's high-water mark. | `admitEpoch` rejects a frame from an older generation below the guest's high-water; this is what `StaleEpoch` falsifies. |
+| I5c | `StaleFrameNeverStarts` | An active guest command carries an epoch at least as high as the guest's high-water mark. | `admitEpoch` rejects a frame from an older generation below the guest's high-water. This is defence in depth behind the relay floor. |
+| I5d | `NoStaleFrameStarts` | An active command whose epoch is below `execEpoch` was started by an earlier controller generation (`startGen < epoch`). | The relay's epoch floor: a frame claimed before recovery can never take the guest slot after it. `StaleEpoch` models the pre-#88 high-water check and falsifies this. |
 | I6 | `NoSlotAfterTerminal` | Terminal sessions have no slot, in-flight command or held fence. | A dead session cannot hold the gate. |
 | I7 | `NoOrphanedWorkloadAfterTerminal` | Terminal sessions have no Pod (recorded or not), no PVC and no relay entry. | No orphaned Pod/PVC after a terminal state. |
 | I8 | `AtMostOnePod` | A session owns at most one Pod instance. | The adopt-don't-recreate window cannot leave a duplicate. |
@@ -144,7 +148,7 @@ single property.
 | `CapacityRace` | Admission counts only `ALLOCATED` and ignores the `ATTACHED` crash window. | `NoCapacityOverReservation` | 5 states |
 | `OrphanPod` | `Finalize` runs without observing Pod/PVC/relay cleanup. | `NoOrphanedWorkloadAfterTerminal` | 7 states |
 | `FenceRelease` | `OperationFence` clears a recovery fence without the guest's idle status or an empty relay pending set. | `NoPrematureFenceRelease` | 13 states |
-| `StaleEpoch` | `admitEpoch` accepts a frame whose epoch is below the guest's high-water mark. | `StaleFrameNeverStarts` | 17 states |
+| `StaleEpoch` | The relay forwards — and the guest starts — a frame claimed in an older controller generation, comparing only against the guest's high-water mark (the pre-#88 contract). | `NoStaleFrameStarts` | 12 states |
 | `NoRefund` | The refund path is removed (and its fairness with it). | `PaidSessionProgress` | liveness |
 | `NoRelease` | The reaper never confirms a release (and its fairness with it). | `TerminalReleasesCapacity` | liveness |
 
@@ -174,18 +178,42 @@ longer admits the bug) or if it is rejected by an unexpected invariant.
   `completeEntitlement` relies on the unique payment key). `DoubleCharge`
   removes both because removing either one alone leaves the model correct -
   which is the point: the invariant is doing real work only when both are gone.
-- **"Stale" is relative to the guest's high-water mark, not the session
-  epoch.** `admitEpoch` rejects `frame.epoch < s.epoch`; it does not compare
-  the frame to `sessions.exec_epoch`. After a recovery bumps `exec_epoch` from
-  1 to 2, a frame from the previous generation that the guest has never seen
-  (high-water 0 or 1) is still admitted. The controller gate stays fenced and
-  `OperationFence` waits for that old command to finish, so no new command
-  overlaps it, but the old command can still start after recovery. That is
-  consistent with `outcome_unknown` (the request may have run), and the model
-  encodes the rejection contract the guest actually implements. Closing the
-  window completely would need the recovery epoch to reach the guest before
-  any relay frame; the model would then compare the frame against `execEpoch`
-  instead of `guestEpoch`.
+- **A frame below the session epoch is withdrawn at the relay, not by the
+  guest.** Before #88, `admitEpoch` compared a frame only with the guest's own
+  high-water mark (`s.epoch`), never with `sessions.exec_epoch`. After a
+  recovery bumped the epoch from 1 to 2, a frame from the previous generation
+  that the guest had never observed (high-water 0 or 1) was still admitted. The
+  controller gate stayed fenced, so no new command overlapped it, but the old
+  command could start after recovery and duplicate side effects the client was
+  retrying as `outcome_unknown`.
+  The contract now has the relay enforce the session epoch: `OperationFence`
+  publishes `exec_epoch` to `POST /internal/:sessionId/epoch` before it may
+  clear the gate; the relay refuses a `request` below that floor with
+  `stale_epoch`, and withdraws a frame that was already forwarded but never
+  answered. Dropping it from the pending set does not unsend it, so if the
+  guest has not itself reported an epoch at or above the floor and has no
+  command running, the relay resets the guest connection (TCP reset, so unread
+  bytes are discarded rather than delivered after a close frame). That is the
+  existing "a command cannot survive its relay link" contract: the supervisor
+  exits on the read error and the fence clears.
+  The reset ends the guest, and sandbox Pods use `restartPolicy: Never`, so the
+  session does not stay `READY` without a guest: the reconciler's Pod health
+  probe sees the terminal Pod and fails it with `failure:guest_exited`.
+  `tests/integration/stale-frame-reset-outcome.test.ts` drives the real
+  reconciler and asserts that path end to end.
+  Residual: a frame the guest has already read (the read returned before the
+  reset reached it) is an observed frame. It may start, and the fence waits for
+  it exactly like the pre-#88 path; it cannot overlap a new command. Closing
+  that last microsecond would need a start-time round trip per command (the
+  guest asks the relay "is this still current?" before taking the slot), which
+  is a larger protocol change than this issue needs.
+- **The model compares the same epoch the implementation enforces.**
+  `DispatchOp` requires `slotEpoch >= execEpoch` (the relay floor), not
+  `slotEpoch >= guestEpoch`. `startGen` records the controller generation that
+  started the active command, so `NoStaleFrameStarts` can distinguish "the old
+  command was already running when recovery fenced it" (`startGen < epoch`)
+  from "an old frame started after recovery" (`startGen = epoch`), which is the
+  bug the `StaleEpoch` variant injects.
 - **The guest's response must reach the relay before its idle status.** The
   first version of the fence model let `GuestDone` (idle status) happen before
   `GuestResponse` (relay pending cleared). TLC found a liveness counterexample:
@@ -228,7 +256,7 @@ The spec is organised to mirror the code:
 | `Provision` .. `GuestStopped`, `ResumeRequest` | `shared/src/domain/session.ts`, `lifecycle.ts` |
 | `StartOp`, `DispatchOp`, `GuestResponse`, `GuestDone`, `FinishOp` | `store.ts`, `relay/` |
 | `GuestConnect`, `GuestDisconnect`, `GuestReady` | `relay/registry.ts`, `relay/ws.ts` |
-| `RecoverInterruptedOps`, `FenceRelease`, `RejectStaleFrame` | `store.ts` (`recoverInterruptedOperations`, `clearFencedGate`), `operation-fence.ts`, `guest/supervisor.go` (`admitEpoch`) |
+| `RecoverInterruptedOps`, `FenceRelease`, `RejectStaleFrame` | `store.ts` (`recoverInterruptedOperations`, `clearFencedGate`), `operation-fence.ts`, `relay/registry.ts` (`raiseEpoch`, `request`), `guest/supervisor.go` (`admitEpoch`) |
 | `RequestDestroy`, `ExpireLease`, `RelayLost`, `ProvisioningTimeout` | `reconciler.ts`, `termination.ts` |
 | `KillGuest`, `DeleteWorkspace`, `PurgeRelay`, `BeginRelease`, `ConfirmRelease`, `Finalize` | `termination.ts`, `capacity/reservations.ts` |
 

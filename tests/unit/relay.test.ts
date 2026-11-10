@@ -135,6 +135,132 @@ describe("execution status and epoch forwarding", () => {
   });
 });
 
+describe("relay execution-epoch floor", () => {
+  async function raiseEpoch(sessionId: string, epoch: number): Promise<Response> {
+    return admin(`/internal/${encodeURIComponent(sessionId)}/epoch`, {
+      method: "POST",
+      body: JSON.stringify({ epoch }),
+    });
+  }
+
+  function nextClose(ws: WebSocket, timeoutMs = 5_000): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timed out waiting for the guest socket to close")), timeoutMs);
+      ws.once("close", (code: number) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+  }
+
+  it("withdraws a forwarded-but-unobserved frame and resets the guest connection", async () => {
+    const sessionId = "sbx_relay_epoch_withdraw";
+    await register(sessionId);
+    const ws = await connect(sessionId);
+    try {
+      ws.send(JSON.stringify({ type: "status", activeRequestId: "", epoch: 1 }));
+      const statusDeadline = Date.now() + 5_000;
+      while ((await state(sessionId) as { statusAt?: number }).statusAt === undefined) {
+        if (Date.now() > statusDeadline) throw new Error("guest status was not recorded");
+        await sleep(25);
+      }
+
+      // The previous controller generation forwards the frame...
+      const id = "request-before-recovery";
+      const frame = nextMessage(ws);
+      expect((await request(sessionId, id, "envelope", 1)).status).toBe(202);
+      expect(await frame).toMatchObject({ type: "request", id, epoch: 1 });
+      const closed = nextClose(ws);
+
+      // ...then recovery bumps the session epoch and publishes it.
+      const raised = await raiseEpoch(sessionId, 2);
+      expect(raised.status).toBe(200);
+      expect(await raised.json()).toMatchObject({ ok: true, epoch: 2, withdrawn: 1, reset: true });
+
+      // The guest has not observed epoch 2, so the link is reset (1006) and the
+      // queued frame is discarded rather than read.
+      expect(await closed).toBe(1006);
+      const current = await state(sessionId) as {
+        connected: boolean;
+        pending: number;
+        epochFloor: number;
+      };
+      expect(current).toMatchObject({ connected: false, pending: 0, epochFloor: 2 });
+
+      // The withdrawn frame is no longer in flight; a waiter is told it is not
+      // pending rather than being left to time out.
+      const withdrawn = await admin(`/internal/${encodeURIComponent(sessionId)}/response/${id}`);
+      expect(withdrawn.status).toBe(202);
+      expect(await withdrawn.json()).toEqual({ pending: false });
+
+      // A frame from the superseded generation is refused at the relay.
+      const stale = await request(sessionId, "request-stale-generation", "envelope", 1);
+      expect(stale.status).toBe(409);
+      expect(stale.body).toEqual({ error: "stale_epoch" });
+    } finally {
+      ws.terminate();
+    }
+  });
+
+  it("keeps the guest link when it has already reported an epoch at or above the floor", async () => {
+    const sessionId = "sbx_relay_epoch_observed";
+    await register(sessionId);
+    const ws = await connect(sessionId);
+    try {
+      ws.send(JSON.stringify({ type: "status", activeRequestId: "", epoch: 1 }));
+      const id = "request-observed-before-recovery";
+      const frame = nextMessage(ws);
+      expect((await request(sessionId, id, "envelope", 1)).status).toBe(202);
+      expect(await frame).toMatchObject({ type: "request", id, epoch: 1 });
+
+      // The guest reports that it has already observed the newer generation.
+      ws.send(JSON.stringify({ type: "status", activeRequestId: "", epoch: 2 }));
+      const deadline = Date.now() + 5_000;
+      while ((await state(sessionId) as { execEpoch?: number }).execEpoch !== 2) {
+        if (Date.now() > deadline) throw new Error("guest epoch was not recorded");
+        await sleep(25);
+      }
+
+      const observed = await raiseEpoch(sessionId, 2);
+      expect(observed.status).toBe(200);
+      expect(await observed.json()).toMatchObject({ ok: true, epoch: 2, withdrawn: 1, reset: false });
+      const current = await state(sessionId) as {
+        connected: boolean;
+        pending: number;
+        epochFloor: number;
+      };
+      expect(current).toMatchObject({ connected: true, pending: 0, epochFloor: 2 });
+
+      // New work at the floor is forwarded on the surviving connection.
+      const nextFrame = nextMessage(ws);
+      expect((await request(sessionId, "request-after-recovery", "envelope", 2)).status).toBe(202);
+      expect(await nextFrame).toMatchObject({ type: "request", id: "request-after-recovery", epoch: 2 });
+    } finally {
+      ws.terminate();
+    }
+  });
+
+  it("is monotonic and survives re-registration", async () => {
+    const sessionId = "sbx_relay_epoch_monotonic";
+    await register(sessionId);
+    expect((await raiseEpoch(sessionId, 3)).status).toBe(200);
+    expect((await state(sessionId) as { epochFloor?: number }).epochFloor).toBe(3);
+    expect((await raiseEpoch(sessionId, 2)).status).toBe(200);
+    expect((await state(sessionId) as { epochFloor?: number }).epochFloor).toBe(3);
+
+    await register(sessionId);
+    expect((await state(sessionId) as { epochFloor?: number }).epochFloor).toBe(3);
+  });
+
+  it("reports an unknown session and rejects an invalid epoch", async () => {
+    expect((await raiseEpoch("sbx_relay_epoch_absent", 2)).status).toBe(404);
+    const sessionId = "sbx_relay_epoch_validation";
+    await register(sessionId);
+    expect((await raiseEpoch(sessionId, 0)).status).toBe(400);
+    expect((await raiseEpoch(sessionId, 1.5)).status).toBe(400);
+  });
+});
+
 describe("relay generation", () => {
   it("rejects an unauthenticated control call on the plaintext fallback", async () => {
     const res = await fetch(`${base}/internal/register`, {

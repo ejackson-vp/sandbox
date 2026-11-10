@@ -108,6 +108,30 @@ export function registerRelayControlRoutes(
     res.json(registry.state(String(req.params.sessionId ?? "")));
   });
 
+  // Recovery publishes the bumped session execution epoch here before the
+  // controller's fence may clear. The relay refuses every later frame below it
+  // and withdraws any frame still pending from the superseded generation.
+  app.post("/internal/:sessionId/epoch", (req: Request, res: Response) => {
+    const sessionId = String(req.params.sessionId ?? "");
+    const { epoch } = req.body ?? {};
+    if (typeof epoch !== "number" || !Number.isInteger(epoch) || epoch < 1) {
+      res.status(400).json({ error: "invalid_epoch" });
+      return;
+    }
+    const raised = registry.raiseEpoch(sessionId, epoch);
+    if (raised.result === "unknown") {
+      res.status(404).json({ error: "session_not_registered" });
+      return;
+    }
+    log.info("relay_epoch_raised", {
+      sessionId,
+      epoch,
+      withdrawn: raised.withdrawn,
+      reset: raised.reset,
+    });
+    res.json({ ok: true, epoch, withdrawn: raised.withdrawn, reset: raised.reset });
+  });
+
   app.post("/internal/:sessionId/request", (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const { id, envelope, deadlineMs, epoch } = req.body ?? {};
@@ -126,6 +150,11 @@ export function registerRelayControlRoutes(
     const result = registry.request(sessionId, id, envelope, Number(deadlineMs), Number(epoch ?? 0));
     if (result === "not_registered") {
       res.status(404).json({ error: "session_not_registered" });
+      return;
+    }
+    if (result === "stale_epoch") {
+      log.warn("relay_stale_epoch_rejected", { sessionId, requestId: id, epoch: Number(epoch ?? 0) });
+      res.status(409).json({ error: "stale_epoch" });
       return;
     }
     if (result === "cached") {

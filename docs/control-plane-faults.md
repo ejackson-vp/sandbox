@@ -367,7 +367,7 @@ when `API_URL` is loopback, so no manual forwarding is needed.
 | Destroy during `SUSPENDING` | `lets destroy win while a suspend is between SUSPENDING and SUSPENDED` | destroy wins; final state `DESTROYED`, no Pod left |
 | Destroy during `RESUMING` | `lets destroy win while a resume is between SUSPENDED and RESUMING` | destroy wins; final state `DESTROYED`, no Pod left |
 | Duplicate destroy | `accepts duplicate destroys and still reaches a single terminal state` | one terminal `DESTROYED` row, no Pod left |
-| In-flight operation at controller crash | `fences an operation interrupted by a controller crash`, `keeps the gate closed until the guest finishes, then admits the next operation` | request becomes `outcome_unknown`; the gate stays closed until the guest reports its slot idle; no new operation is forwarded while fenced; the next operation runs under a higher execution epoch |
+| In-flight operation at controller crash | `fences an operation interrupted by a controller crash`, `keeps the gate closed until the guest finishes, then admits the next operation`, `recovery withdraws a stale frame the guest has not observed` | request becomes `outcome_unknown`; the gate stays closed until the guest reports its slot idle; no new operation is forwarded while fenced; the relay refuses and withdraws a frame below the recovery epoch; the next operation runs under a higher execution epoch |
 | Replayed relay request | `does not re-execute a completed request and keeps the first response` | retry sees the cached outcome; the guest receives one request; a delayed duplicate response cannot replace the first |
 | Retry of an in-flight relay request | `treats a retry of an in-flight request as pending without re-forwarding` | guest receives one frame |
 | Late success after a guest error | `keeps a guest error terminal for late and duplicate responses` | late/duplicate responses cannot turn the recorded error into success |
@@ -392,10 +392,15 @@ Recovery now fences the old generation instead of forgetting it:
 1. Startup marks every pending request `outcome_unknown` and bumps the session's
    execution epoch (`sessions.exec_epoch`) in the same transaction. The
    single-operation gate stays closed.
-2. Every relay request frame carries that epoch. The guest keeps a high-water
-   mark and rejects a frame from an older epoch with `stale_epoch`, so a request
-   forwarded by the previous controller generation can never start after
-   recovery.
+2. Every relay request frame carries that epoch, and `OperationFence` publishes
+   the bumped epoch to the relay before it may release the gate. The relay
+   refuses a frame below the session epoch with `stale_epoch` and withdraws one
+   it already forwarded by resetting the guest link (unread bytes are
+   discarded). The guest keeps its own high-water mark as defence in depth, so
+   a request forwarded by the previous controller generation can never start
+   after recovery. A reset is a real link loss: the supervisor exits, the Pod is
+   terminal (`restartPolicy: Never`), and the session ends `FAILED` with
+   `failure:guest_exited` rather than lingering `READY` with no guest.
 3. The guest reports its active request id and epoch on hello, when it takes the
    single slot, and when it releases it. `OperationFence` releases the gate only
    when the relay reports the guest idle, or when no guest is connected (the

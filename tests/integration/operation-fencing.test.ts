@@ -297,7 +297,9 @@ describe("controller restart fences an in-flight operation", () => {
     expect(result.stdout.trim()).toBe("after-fence");
     expect(store.getExecRequest(sessionId, newRequestId)).toMatchObject({ state: "done", epoch: 2 });
 
-    // 7. A frame from the old generation is rejected by the guest itself.
+    // 7. A frame from the old generation is refused before it can reach the
+    //    guest. The relay enforces the session epoch floor that recovery
+    //    published; the guest's own high-water check remains defense in depth.
     const staleRequestId = "fence-stale-request-01";
     const staleEnvelope = await sealJsonTo(guest.guestKey!, {
       v: 2,
@@ -308,16 +310,9 @@ describe("controller restart fences an in-flight operation", () => {
       command: ["echo", "must-not-run"],
       timeoutMs: 5_000,
     });
-    await relay.request(sessionId, staleRequestId, staleEnvelope, Date.now() + 60_000, 1);
-    const stale = await relay.response(sessionId, staleRequestId, 10_000);
-    expect(stale.kind).toBe("envelope");
-    if (stale.kind === "envelope") {
-      const rejected = await openSealedJson<{
-        ok: boolean;
-        error?: { code: string; message: string };
-      }>(stale.envelope, guest.clientKeys.publicKey, guest.clientKeys.privateKey);
-      expect(rejected.ok).toBe(false);
-      expect(rejected.error?.code).toBe("stale_epoch");
-    }
+    await expect(
+      relay.request(sessionId, staleRequestId, staleEnvelope, Date.now() + 60_000, 1),
+    ).rejects.toThrowError(/stale_epoch/);
+    expect((await relay.state(sessionId)).pending).toBe(0);
   }, 60_000);
 });
