@@ -62,6 +62,13 @@ export interface ControllerConfig {
   relayBaseUrl: string;
   relayServiceName: string;
   proxyServiceName: string;
+  /**
+   * Headless Services that publish per-pod endpoint hostnames (`relay-0`).
+   * Shard resolution reads these: the ClusterIP Service's EndpointSlice entries
+   * carry addresses but no hostname, so a shard can never be matched there.
+   */
+  relayHeadlessService: string;
+  proxyHeadlessService: string;
   workspaceDir: string;
   provisioningTimeoutMs: number;
   /**
@@ -341,6 +348,10 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     relayBaseUrl: env.RELAY_URL ?? "http://127.0.0.1:8443",
     relayServiceName: env.RELAY_SERVICE_NAME ?? "relay",
     proxyServiceName: env.PROXY_SERVICE_NAME ?? "egress-proxy",
+    relayHeadlessService:
+      env.RELAY_HEADLESS_SERVICE ?? `${env.RELAY_SERVICE_NAME ?? "relay"}-headless`,
+    proxyHeadlessService:
+      env.PROXY_HEADLESS_SERVICE ?? `${env.PROXY_SERVICE_NAME ?? "egress-proxy"}-headless`,
     workspaceDir: env.WORKSPACE_DIR ?? "/workspace",
     provisioningTimeoutMs: int(env.PROVISIONING_TIMEOUT_MS, 90_000, 10_000, 600_000),
     relayRegistrationTimeoutMs: int(env.RELAY_REGISTRATION_TIMEOUT_MS, 5_000, 500, 60_000),

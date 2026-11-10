@@ -131,10 +131,10 @@ export class WarmPool {
     const proxyShard = pinnedShard(cfg, "proxy", session.id);
     const relay = relayShard === null
       ? (await this.ctx.serviceAddress(cfg.relayServiceName)) ?? relayAddr
-      : (await this.ctx.serviceAddress(cfg.relayServiceName, relayShard)) ?? relayAddr;
+      : (await this.ctx.serviceAddress(cfg.relayHeadlessService, relayShard)) ?? relayAddr;
     const proxy = proxyShard === null
       ? proxyAddr
-      : (await this.ctx.serviceAddress(cfg.proxyServiceName, proxyShard)) ?? proxyAddr;
+      : (await this.ctx.serviceAddress(cfg.proxyHeadlessService, proxyShard)) ?? proxyAddr;
     const claim: WarmClaim = {
       sessionId: session.id,
       relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(session.id)}`,
@@ -360,10 +360,10 @@ export class WarmPool {
     const proxyShard = pinnedShard(cfg, "proxy", poolId);
     const relay = relayShard === null
       ? relayAddr
-      : await this.ctx.serviceAddress(cfg.relayServiceName, relayShard);
+      : await this.ctx.serviceAddress(cfg.relayHeadlessService, relayShard);
     const proxy = proxyShard === null
       ? proxyAddr
-      : await this.ctx.serviceAddress(cfg.proxyServiceName, proxyShard);
+      : await this.ctx.serviceAddress(cfg.proxyHeadlessService, proxyShard);
     if (!relay || !proxy) {
       log.warn("warm_pool_endpoint_unavailable", { poolId });
       return;

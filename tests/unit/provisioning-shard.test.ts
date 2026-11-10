@@ -142,7 +142,7 @@ describe("provisioning data-plane placement", () => {
     const cfg = config({ RELAY_REPLICAS: "2", PROXY_REPLICAS: "2" });
     const serviceAddress = vi.fn(async (name: string, shard?: number) => {
       const ordinal = (shard ?? 0) + 1;
-      return name === cfg.relayServiceName
+      return name === cfg.relayHeadlessService
         ? { host: `10.1.1.${ordinal}`, port: cfg.relayPort }
         : { host: `10.1.2.${ordinal}`, port: cfg.proxyPort };
     });
@@ -175,8 +175,8 @@ describe("provisioning data-plane placement", () => {
     // name would be unresolvable, so neither URL may contain one.
     expect(first.relayUrl).not.toContain("relay-headless");
     expect(first.proxyUrl).not.toContain("egress-proxy-headless");
-    expect(serviceAddress).toHaveBeenCalledWith(cfg.relayServiceName, firstShard);
-    expect(serviceAddress).toHaveBeenCalledWith(cfg.proxyServiceName, firstShard);
+    expect(serviceAddress).toHaveBeenCalledWith(cfg.relayHeadlessService, firstShard);
+    expect(serviceAddress).toHaveBeenCalledWith(cfg.proxyHeadlessService, firstShard);
   });
 
   it("defers, without creating a pod, when the session's shard has no ready endpoint", async () => {

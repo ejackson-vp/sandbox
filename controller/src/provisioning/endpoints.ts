@@ -18,7 +18,12 @@ export type EndpointPair = { relay: Endpoint | null; proxy: Endpoint | null };
 
 /** What address resolution needs: placement config plus the Service lookup. */
 export interface EndpointRuntime {
-  readonly cfg: DataPlanePlacement & { relayServiceName: string; proxyServiceName: string };
+  readonly cfg: DataPlanePlacement & {
+    relayServiceName: string;
+    proxyServiceName: string;
+    relayHeadlessService: string;
+    proxyHeadlessService: string;
+  };
   serviceAddress(name: string, shard?: number): Promise<Endpoint | null>;
 }
 
@@ -52,10 +57,17 @@ export class DataPlaneEndpoints {
   private endpoint(service: DataPlaneService, sessionId: string): Promise<Endpoint | null> {
     const name =
       service === "relay" ? this.ctx.cfg.relayServiceName : this.ctx.cfg.proxyServiceName;
+    // Only the headless Service publishes endpoint hostnames (`relay-0`), so a
+    // shard can only be matched there. The ClusterIP Service's endpoints carry
+    // addresses with no hostname.
+    const headless =
+      service === "relay"
+        ? this.ctx.cfg.relayHeadlessService
+        : this.ctx.cfg.proxyHeadlessService;
     const shard = pinnedShard(this.ctx.cfg, service, sessionId);
     return shard === null
       ? this.ctx.serviceAddress(name)
-      : this.ctx.serviceAddress(name, shard);
+      : this.ctx.serviceAddress(headless, shard);
   }
 
   /**
