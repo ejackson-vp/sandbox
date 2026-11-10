@@ -99,7 +99,9 @@ export class Reconciler {
       capacity,
       snapshotter: deps.snapshotter ?? new NoopSnapshotter(),
       now: () => this.now(),
-      serviceAddress: (name, shard) => this.serviceAddress(name, shard),
+      // Bound, not wrapped: a wrapper with a shorter parameter list silently
+      // drops arguments, which is how the shard pod prefix was lost.
+      serviceAddress: this.serviceAddress.bind(this),
     };
     this.warm = new WarmPool(this.ctx);
     this.provisioning = new Provisioning(this.ctx, this.warm);

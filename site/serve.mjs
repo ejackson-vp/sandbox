@@ -14,8 +14,9 @@ const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const port = Number(process.env.PORT ?? 4173);
 const host = process.env.HOST ?? "127.0.0.1";
 
-const types = new Map([
-  [".html", "text/html; charset=utf-8"],
+const aliases = new Map([["/latency.json", resolve(root, "../docs/perf/latency.json")]]);
+
+const types = new Map([  [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
   [".mjs", "text/javascript; charset=utf-8"],
@@ -55,7 +56,10 @@ const server = createServer(async (req, res) => {
   }
 
   const requested = pathname.endsWith("/") ? join(pathname, "index.html") : pathname;
-  const file = resolve(root, `.${requested}`);
+  /* Dev only: the page reads ./latency.json as its last fallback, so serve the
+     real file from docs/perf instead of keeping a copy next to index.html. */
+  const aliased = aliases.get(requested);
+  const file = aliased ?? resolve(root, `.${requested}`);
 
   if (file !== root && !file.startsWith(root + sep)) {
     send(res, 403, "Forbidden\n");

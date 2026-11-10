@@ -62,26 +62,21 @@
             </h1>
 
             <p class="lede reveal">
-              <strong>sandbox</strong> rents Kata microVMs by the session. Pay once with x402, run the thing
-              you came to run, and the machine forgets everything when the lease ends.
+              <strong>sandbox</strong> sells Kata microVMs by the session. Five cents buys five minutes. Run your
+              thing. The lease ends and the machine is gone.
             </p>
 
             <div class="cta-row reveal">
-              <a class="button primary" href="https://github.com/ejackson-vp/sandbox">
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path
-                    d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
-                  />
-                </svg>
-                Take one for a spin
+              <a class="button primary" href="#run">
+                Run it in two minutes
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" /></svg>
               </a>
               <a class="button ghost" href="#agents">
                 Read the agent handoff
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" /></svg>
               </a>
             </div>
 
-            <p class="micro reveal">MIT · self-hosted reference · mock or testnet payments</p>
+            <p class="micro reveal">MIT · self-hosted · no hosted endpoint</p>
           </div>
 
           <div class="hero-art reveal">
@@ -102,7 +97,7 @@
                         <path d="M60 47 V58 Q60 60 58 60 H47" />
                         <rect class="eye" x="25.5" y="25.5" width="13" height="13" rx="3.5" />
                       </svg>
-                      SANDBOX TRANSIT CO.
+                      SANDBOX · ONE SESSION
                     </span>
                     <span class="pass-serial">NO. 6174-X402</span>
                   </div>
@@ -124,7 +119,7 @@
                 </div>
 
                 <div class="pass-stub">
-                  <span class="stub-text">ADMIT ONE AGENT</span>
+                  <span class="stub-text">ONE AGENT</span>
                   <svg class="mark stub-mark" viewBox="0 0 64 64" aria-hidden="true">
                     <path d="M17 4 H6 Q4 4 4 6 V17" />
                     <path d="M47 4 H58 Q60 4 60 6 V17" />
@@ -136,16 +131,6 @@
                 </div>
               </article>
 
-              <div class="mascot-note" aria-hidden="true">
-                <svg viewBox="0 0 64 64">
-                  <path d="M17 4 H6 Q4 4 4 6 V17" />
-                  <path d="M47 4 H58 Q60 4 60 6 V17" />
-                  <path d="M4 47 V58 Q4 60 6 60 H17" />
-                  <path d="M60 47 V58 Q60 60 58 60 H47" />
-                  <rect class="eye" x="25.5" y="25.5" width="13" height="13" rx="3.5" />
-                </svg>
-                <span>hi. i have<br />300 seconds.</span>
-              </div>
             </div>
 
             <svg class="star" viewBox="0 0 40 40" aria-hidden="true">
@@ -154,39 +139,39 @@
           </div>
         </div>
 
-        <dl class="stats reveal" aria-label="Measured performance">
+        <dl class="stats reveal" aria-label="Measured performance" id="stats">
           <div><dt>127 ms</dt><dd>warm session ready, p50</dd></div>
           <div><dt>53 ms</dt><dd>exec round trip, p50</dd></div>
           <div><dt>182 MiB</dt><dd>idle guest memory</dd></div>
           <div><dt>0</dt><dd>accounts, keys, signups</dd></div>
         </dl>
-        <p class="stat-note">Two-node Kata cluster, control 0.1.16, 2026-11-09. A baseline, not a promise. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/performance-cluster.md">Method and caveats</a>.</p>
+        <p class="stat-note" id="stat-note">Two-node Kata cluster, control 0.1.16, 2026-11-09. A baseline, not a promise. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/performance-cluster.md">Method and caveats</a>.</p>
       </section>
 
       <section class="section" id="idea">
         <div class="section-head">
           <p class="kicker reveal">the idea</p>
           <h2 class="reveal">Rent the machine,<br /><span class="serif">not the relationship.</span></h2>
-          <p class="lede reveal">No signup, no dashboard, no key rotation. A signed payment buys one VM for one task, and the lease is the only thing that can keep it alive.</p>
+          <p class="lede reveal">No signup, no dashboard, no key rotation.</p>
         </div>
 
         <div class="laws">
           <article class="law reveal">
             <span class="law-num">01</span>
             <h3>No account.</h3>
-            <p>The payment is the identity. x402 settles before the VM exists, and a retried payment returns the same session instead of charging twice.</p>
+            <p>The payment is the identity. A retried payment returns the same session instead of billing twice.</p>
             <p class="law-note">one payment → one session</p>
           </article>
           <article class="law reveal">
             <span class="law-num">02</span>
             <h3>No peeking.</h3>
-            <p>Commands and files are sealed to the guest's ephemeral key. The API, controller and relay route ciphertext and hold no decryption key.</p>
+            <p>Commands and files are sealed to the guest's key. The API and controller route ciphertext only.</p>
             <p class="law-note">transport only · no hardware root of trust</p>
           </article>
           <article class="law reveal">
             <span class="law-num">03</span>
             <h3>No leftovers.</h3>
-            <p>The lease ends three ways: guest watchdog, controller deadline, Kubernetes. The pod and its memory-backed workspace go with it.</p>
+            <p>Three things end the lease: the guest watchdog, the controller deadline, Kubernetes. The pod and its memory-backed workspace go with it.</p>
             <p class="law-note">delete is idempotent</p>
           </article>
         </div>
@@ -195,35 +180,35 @@
       <section class="section life" id="life">
         <div class="life-head">
           <div>
-            <p class="kicker reveal">the whole life</p>
+            <p class="kicker reveal">the life</p>
             <h2 class="reveal">Born, useful,<br /><span class="serif">gone.</span></h2>
           </div>
-          <p class="lede reveal">The interesting part is not the VM. It is how little ceremony stands between the request and the work.</p>
+          <p class="lede reveal">The lease is the only thing that can keep it alive.</p>
         </div>
 
         <ol class="timeline">
           <li class="reveal">
             <span class="time">0 ms</span>
             <h3>Knock</h3>
-            <p>The client posts a spec and its public key. The API answers with a price for that exact spec.</p>
+            <p>Post a spec and a public key. Get a price for that spec.</p>
             <code>POST /v1/sessions → 402</code>
           </li>
           <li class="reveal">
             <span class="time">127 ms</span>
             <h3>Wake</h3>
-            <p>Warm pool or cold boot. The capability and the session come back once, and only once.</p>
+            <p>Warm pool or cold boot. Capability and session come back once.</p>
             <code>201 · READY</code>
           </li>
           <li class="reveal">
             <span class="time">300 s</span>
             <h3>Work</h3>
-            <p>Sealed commands, files under <code>/workspace</code>, one foreground operation at a time.</p>
+            <p>Sealed commands, files under <code>/workspace</code>, one foreground operation.</p>
             <code>exec · file.put · http</code>
           </li>
           <li class="reveal">
             <span class="time">0 s</span>
             <h3>Gone</h3>
-            <p>The lease ends. The pod is deleted. The workspace is purged. There is no cleanup step to forget.</p>
+            <p>Lease ends, pod deleted, workspace purged. There is nothing to clean up.</p>
             <code>DELETE → 200</code>
           </li>
         </ol>
@@ -237,9 +222,9 @@
 
       <section class="section" id="interfaces">
         <div class="section-head">
-          <p class="kicker reveal">three ways to hold it</p>
+          <p class="kicker reveal">three handles</p>
           <h2 class="reveal">Pick the smallest <span class="serif">handle.</span></h2>
-          <p class="lede reveal">The CLI and SDK build the payment and the sealed envelopes for you. If you are writing an agent, use one of them. Do not hand-roll the cryptography.</p>
+          <p class="lede reveal">Use the CLI or the SDK. Don't hand-roll the envelopes.</p>
         </div>
 
         <div class="rows reveal">
@@ -269,8 +254,8 @@
           <div class="menu-copy">
             <p class="kicker reveal">the nickel menu</p>
             <h2 class="reveal">A nickel buys<br /><span class="serif">five minutes.</span></h2>
-            <p class="lede reveal">A dime buys fifteen. A quarter buys half an hour. The machine is the same machine, and the clock starts when it is ready.</p>
-            <p class="reveal menu-note">Prices are configuration, not economics. The live table is <code>GET /v1/pricing</code>. Today the payment rail is mock or testnet.</p>
+            <p class="lede reveal">Same machine at every size. The clock starts when it is ready.</p>
+            <p class="reveal menu-note">Prices are config, not economics. Live table at <code>GET /v1/pricing</code>. Payments are mock or testnet today.</p>
             <div class="house-limits reveal">
               <p class="house-limits-title">house limits</p>
               <dl>
@@ -326,12 +311,12 @@
           <div class="agents-copy">
             <p class="kicker light reveal">for your agent</p>
             <h2 class="reveal">Now hand the robot<br /><span class="serif">the manual.</span></h2>
-            <p class="lede reveal"><code>llms.txt</code> is one file with the install, the one-shot path, the HTTP flow, the limits and the ways to fail. Point the model at it before it writes code.</p>
+            <p class="lede reveal">Install, one-shot path, HTTP flow, limits, failure modes. One file.</p>
             <ul class="agents-list reveal">
               <li>Why hand-rolled envelopes fail</li>
               <li>How to destroy in a <code>finally</code> block</li>
-              <li>What <code>outcome_unknown</code> really means</li>
-              <li>What the isolation does and does not promise</li>
+              <li>What <code>outcome_unknown</code> means</li>
+              <li>What isolation does not promise</li>
             </ul>
             <div class="agents-actions reveal">
               <button class="button butter" id="copy-prompt" type="button">
@@ -374,7 +359,7 @@ blindly retry a side effect.</code></pre>
         <div class="section-head">
           <p class="kicker reveal">on your laptop</p>
           <h2 class="reveal">Two minutes to <span class="serif">your own.</span></h2>
-          <p class="lede reveal">The demo buys a session, runs a command, uploads a file, downloads a result and destroys the VM. Same API, relay and guest as a real deployment.</p>
+          <p class="lede reveal">Same API, relay and guest as a real deployment.</p>
         </div>
 
         <div class="run-grid">
@@ -387,7 +372,7 @@ blindly retry a side effect.</code></pre>
             <pre><code><span class="cmd">make up</span>            <span class="comment"># kind + cilium + images + deploy</span>
 <span class="cmd">make demo-session</span>  <span class="comment"># pay, create, exec, upload, download</span>
 <span class="cmd">make down</span></code></pre>
-            <p>Needs Docker, <code>kind</code>, <code>kubectl</code>, the Cilium CLI, Node 24+ and Go 1.26+. Local clusters use <code>runc</code>, not microVMs. The API lands on <code>http://localhost:8080</code>; <code>GET /healthz</code> is the cheapest check.</p>
+            <p>Needs Docker, <code>kind</code>, <code>kubectl</code>, the Cilium CLI, Node 24+ and Go 1.26+. Local clusters use <code>runc</code>, not microVMs. API on <code>http://localhost:8080</code>; <code>GET /healthz</code> is the cheapest check.</p>
           </div>
 
           <div class="recipe reveal">
@@ -399,13 +384,13 @@ blindly retry a side effect.</code></pre>
             <pre><code><span class="cmd">npm ci</span>
 <span class="cmd">make verify</span>  <span class="comment"># typecheck, structure lint, unit + property</span>
 <span class="cmd">make test</span>    <span class="comment"># adds integration against the guest binary</span></code></pre>
-            <p>Most of the system is testable in under a minute. <code>make security-test</code> needs a live cluster and runs the packet-level isolation suite.</p>
+            <p>Most of the system is testable in under a minute. <code>make security-test</code> needs a cluster and runs the packet-level isolation suite.</p>
           </div>
         </div>
 
         <div class="callout reveal">
           <span class="callout-icon" aria-hidden="true">!</span>
-          <p><strong>This is an alpha reference deployment, not a hosted service.</strong> Payments are mock or testnet, there is no hardware attestation, and checkpoints are plaintext on disk. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md">What is missing, in order</a>.</p>
+          <p><strong>Alpha reference deployment, not a hosted service.</strong> Mock or testnet payments, no hardware attestation, checkpoints plaintext on disk. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md">What is missing, in order</a>.</p>
         </div>
       </section>
 
@@ -413,15 +398,15 @@ blindly retry a side effect.</code></pre>
         <div class="section-head">
           <p class="kicker reveal">the small print</p>
           <h2 class="reveal">In large type, <span class="serif">because it matters.</span></h2>
-          <p class="lede reveal">Every claim below has a test or a doc behind it. The gaps are listed with the same care as the guarantees.</p>
+          <p class="lede reveal">Every claim has a test or a doc behind it. The gaps are listed the same way.</p>
         </div>
 
         <div class="claims">
           <article class="claim yes reveal">
             <h3>Holds today</h3>
             <ul>
-              <li>The lease ends on time: guest watchdog, controller deadline and Kubernetes each enforce it</li>
-              <li>Commands and files stay sealed in transit; the API, controller and relay only route ciphertext</li>
+              <li>The lease ends on time: guest watchdog, controller deadline, Kubernetes</li>
+              <li>Commands and files stay sealed in transit; the API, controller and relay see ciphertext</li>
               <li>One Kata microVM per session, on tainted, default-deny nodes</li>
               <li>The guest dials out to the relay; egress only through an allowlisting proxy on 443</li>
               <li>No inbound sandbox networking</li>
@@ -431,10 +416,10 @@ blindly retry a side effect.</code></pre>
             <h3>Not yet</h3>
             <ul>
               <li>No hardware root of trust: the dev attestation key ships in the repo</li>
-              <li>Suspended workspace checkpoints are plaintext on disk, readable by the storage admin</li>
-              <li>Mock or testnet payments only, no mainnet</li>
+              <li>Checkpoints are plaintext on disk, readable by the storage admin</li>
+              <li>Mock or testnet payments, no mainnet</li>
               <li>No GPUs, no arbitrary OCI images, no memory snapshots</li>
-              <li>Not feature parity with a general-purpose sandbox platform</li>
+              <li>Not parity with a general-purpose sandbox platform</li>
             </ul>
           </article>
         </div>
@@ -442,21 +427,17 @@ blindly retry a side effect.</code></pre>
       </section>
 
       <section class="closing">
-        <div class="closing-mascot reveal" aria-hidden="true">
-          <svg viewBox="0 0 64 64">
-            <path d="M17 4 H6 Q4 4 4 6 V17" />
-            <path d="M47 4 H58 Q60 4 60 6 V17" />
-            <path d="M4 47 V58 Q4 60 6 60 H17" />
-            <path d="M60 47 V58 Q60 60 58 60 H47" />
-            <rect class="eye" x="25.5" y="25.5" width="13" height="13" rx="3.5" />
-          </svg>
-        </div>
-        <h2 class="reveal">Take one. <span class="serif">It won't remember you.</span></h2>
-        <p class="lede reveal">Clone it, bring a cluster, or read the protocol. The repo is the product.</p>
+        <h2 class="reveal">Clone it. <span class="serif">It won't remember you.</span></h2>
+        <p class="lede reveal">Bring a cluster, read the protocol, or just read the code. The repo is the product.</p>
         <div class="cta-row center reveal">
           <a class="button primary" href="https://github.com/ejackson-vp/sandbox">Open on GitHub</a>
           <a class="button ghost" href="llms.txt">Read llms.txt</a>
         </div>
+        <p class="vitals reveal" id="vitals">
+          <i aria-hidden="true"></i>
+          <a href="https://github.com/ejackson-vp/sandbox">github.com/ejackson-vp/sandbox</a>
+          <span class="vitals-data" id="vitals-data"></span>
+        </p>
       </section>
     </main>
 

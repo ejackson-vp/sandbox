@@ -1,0 +1,22 @@
+{
+  "$comment": "The landing page reads this file at the latest release tag. Re-run the cluster harness, update the figures, and commit before tagging.",
+  "control": "0.1.16",
+  "guest": "0.1.6",
+  "measured": "2026-11-09",
+  "samples": 50,
+  "warm_pool": 20,
+  "metrics": [
+    { "value": "127 ms", "label": "warm session ready, p50" },
+    { "value": "53 ms", "label": "exec round trip, p50" },
+    { "value": "182 MiB", "label": "idle guest memory" },
+    { "value": "0", "label": "accounts, keys, signups" }
+  ],
+  "caveat": {
+    "text": "0.1.22 measured 292-354 ms server ready across two 50-sample runs.",
+    "link": {
+      "label": "issue #116",
+      "href": "https://github.com/ejackson-vp/sandbox/issues/116"
+    }
+  },
+  "source": "docs/performance-cluster.md"
+}
