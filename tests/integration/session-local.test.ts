@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import { GuestHarness } from "../helpers/guest.js";
 import { makeTar } from "../helpers/tar.js";
+import { testPort } from "./ports.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -14,7 +15,7 @@ let guest: GuestHarness;
 
 beforeAll(async () => {
   guest = new GuestHarness({
-    port: 18500,
+    port: testPort(18500),
     leaseSeconds: 120,
     maxDiskMiB: 2,
     maxFileBytes: 8 * 1024 * 1024,
@@ -215,7 +216,7 @@ describe("workspace safety", () => {
 
 describe("lease enforcement", () => {
   it("terminates the supervisor when the lease ends and refuses further work", async () => {
-    const short = new GuestHarness({ port: 18501, leaseSeconds: 3 });
+    const short = new GuestHarness({ port: testPort(18501), leaseSeconds: 3 });
     await short.start();
     // Register the exit listener before the lease can fire.
     const exitedPromise = new Promise<boolean>((resolve) => short.proc!.once("exit", () => resolve(true)));

@@ -38,11 +38,12 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { SandboxClient, FileSessionStore, SandboxError, type SessionHandle } from "../../sdk/src/index.js";
 import { createSessionPayment, requestChallenge } from "../helpers/x402.js";
 import { makeTar } from "../helpers/tar.js";
+import { testPort } from "./ports.js";
 
-const API_PORT = 13300;
-const FACILITATOR_PORT = 13302;
-const CONTROLLER_PORT = 13301;
-const RELAY_PORT = 18455;
+const API_PORT = testPort(13300);
+const FACILITATOR_PORT = testPort(13302);
+const CONTROLLER_PORT = testPort(13301);
+const RELAY_PORT = testPort(18455);
 const ADMIN = "integration-admin-token-0123456789";
 const RELAY_ADMIN = "r".repeat(24);
 const WAKE = "w".repeat(24);

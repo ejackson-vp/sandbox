@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GuestHarness } from "../helpers/guest.js";
 import { makeTestPki, type TestPki } from "../helpers/tls.js";
+import { testPort } from "./ports.js";
 
 let pki: TestPki;
 let guest: GuestHarness;
@@ -15,8 +16,8 @@ let guest: GuestHarness;
 beforeAll(async () => {
   pki = makeTestPki();
   guest = new GuestHarness({
-    port: 18520,
-    controlPort: 18521,
+    port: testPort(18520),
+    controlPort: testPort(18521),
     relayTls: { certFile: pki.serverCertFile, keyFile: pki.serverKeyFile, caFile: pki.caFile },
     relayClientTls: {
       certFile: pki.clientCertFile,
@@ -46,6 +47,6 @@ describe("relay control mTLS with a real guest", () => {
   }, 30_000);
 
   it("rejects plaintext on the control port", async () => {
-    await expect(fetch("http://127.0.0.1:18521/internal/register", { method: "POST" })).rejects.toThrow();
+    await expect(fetch(`http://127.0.0.1:${testPort(18521)}/internal/register`, { method: "POST" })).rejects.toThrow();
   });
 });

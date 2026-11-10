@@ -27,6 +27,7 @@ import {
   type SessionRecord,
 } from "../../controller/src/store.js";
 import { GuestHarness } from "../helpers/guest.js";
+import { testPort } from "./ports.js";
 
 const limits: SessionLimits = {
   cpuMillis: 500,
@@ -128,7 +129,7 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
   it("never starts the superseded generation's command and admits the next epoch", async () => {
     const workDir = mkdtempSync(join(tmpdir(), "x402-stale-frame-"));
     const dbPath = join(workDir, "controller.db");
-    const guest = new GuestHarness({ port: 18890, leaseSeconds: 120, maxCommandSeconds: 120 });
+    const guest = new GuestHarness({ port: testPort(18890), leaseSeconds: 120, maxCommandSeconds: 120 });
     await guest.start();
     let store: Store | undefined;
 
@@ -217,7 +218,7 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
   it("clears the fence without a guest connection so recovery still progresses", async () => {
     const workDir = mkdtempSync(join(tmpdir(), "x402-stale-frame-idle-"));
     const dbPath = join(workDir, "controller.db");
-    const guest = new GuestHarness({ port: 18891, leaseSeconds: 120 });
+    const guest = new GuestHarness({ port: testPort(18891), leaseSeconds: 120 });
     await guest.start();
     let store: Store | undefined;
 

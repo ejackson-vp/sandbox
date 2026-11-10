@@ -26,9 +26,10 @@ import {
 } from "../../controller/src/store.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
 import { GuestHarness } from "../helpers/guest.js";
+import { testPort } from "./ports.js";
 
-const RELAY_PORT = 18870;
-const CONTROLLER_PORT = 18871;
+const RELAY_PORT = testPort(18870);
+const CONTROLLER_PORT = testPort(18871);
 const ADMIN = "fencing-admin-token-0123456789";
 const CONFIG = loadControllerConfig({
   ADMIN_TOKEN: ADMIN,
