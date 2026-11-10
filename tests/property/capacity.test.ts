@@ -61,9 +61,26 @@ const reservationArb: fc.Arbitrary<CapacityReservation> = fc
   })
   .map((r) => ({ ...r, id: r.id, nodeId: r.nodeId }));
 
+/**
+ * Node names are unique in Kubernetes, so the model must generate unique ids:
+ * the eligibility assertions resolve a decision back to a node by id, and a
+ * duplicated id would make that lookup ambiguous. Collisions only get a
+ * suffix; non-colliding ids stay untouched so independently generated
+ * reservation nodeIds still match often enough to exercise accounting.
+ */
+function uniqueNodeIds(nodes: NodeCapacity[]): NodeCapacity[] {
+  const seen = new Set<string>();
+  return nodes.map((node) => {
+    let id = node.id;
+    for (let suffix = 1; seen.has(id); suffix += 1) id = `${node.id}~${suffix}`;
+    seen.add(id);
+    return { ...node, id };
+  });
+}
+
 const snapshotArb = (nodes: fc.Arbitrary<NodeCapacity[]>) =>
   fc.record({
-    nodes,
+    nodes: nodes.map(uniqueNodeIds),
     reservations: fc.array(reservationArb, { maxLength: 20 }),
     now: fc.integer({ min: 0, max: 100_000 }),
     accounting: fc.constantFrom("baseline" as const, "peak" as const),
@@ -123,13 +140,21 @@ describe("pure capacity admission", () => {
         const reserved = snapshot.reservations
           .filter((r) => r.nodeId === decision.nodeId && r.state !== "RELEASED")
           .reduce(
-            (sum, r) =>
-              addResources(
+            (sum, r) => {
+              // Storage is charged from the same accounting vector as compute.
+              // A suspended reservation drops CPU/memory but keeps storage.
+              const committed = snapshot.accounting === "peak" ? r.peak : r.baseline;
+              return addResources(
                 sum,
                 holdsCompute(r.state)
-                  ? snapshot.accounting === "peak" ? r.peak : r.baseline
-                  : { cpuMillicores: 0, memoryBytes: 0, storageBytes: r.baseline.storageBytes },
-              ),
+                  ? committed
+                  : {
+                      cpuMillicores: 0,
+                      memoryBytes: 0,
+                      storageBytes: committed.storageBytes,
+                    },
+              );
+            },
             { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },
           );
         const need = snapshot.accounting === "peak" ? request.peak : request.baseline;
@@ -250,6 +275,46 @@ describe("pure capacity admission", () => {
     };
     expect(admitCapacity({ nodes: [node], reservations: [], now: 0, accounting: "baseline" }, request).admitted).toBe(true);
     expect(admitCapacity({ nodes: [node], reservations: [], now: 0, accounting: "peak" }, request).admitted).toBe(false);
+  });
+
+  it("rejects a peak request that would over-allocate storage by one byte (seed 1935550885)", () => {
+    // Regression for issue #68. fast-check seed 1935550885 shrank to this case:
+    // the existing HELD reservation reserves 1 byte of peak storage while its
+    // baseline storage is 0. Admission charged baseline storage for existing
+    // reservations but peak storage for the request, so it admitted the full
+    // allocatable storage on top of the reserved byte (5478233296 > 5478233295).
+    const node: NodeCapacity = {
+      id: "node",
+      allocatable: { cpuMillicores: 0, memoryBytes: 0, storageBytes: 5_478_233_295 },
+      platformOverhead: { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },
+      labels: { "x402.io/sandbox-pool": "true" },
+      taints: [],
+      ready: true,
+      schedulable: true,
+    };
+    const held: CapacityReservation = {
+      id: "held",
+      sessionId: null,
+      nodeId: "node",
+      state: "HELD",
+      baseline: { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },
+      peak: { cpuMillicores: 0, memoryBytes: 0, storageBytes: 1 },
+      expiresAt: null,
+    };
+    const request: SandboxResourceRequest = {
+      baseline: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
+      peak: { cpuMillicores: 0, memoryBytes: 0, storageBytes: 5_478_233_295 },
+    };
+    const snapshot: CapacitySnapshot = {
+      nodes: [node],
+      reservations: [held],
+      now: 0,
+      accounting: "peak",
+    };
+
+    const decision = admitCapacity(snapshot, request);
+    expect(decision.admitted).toBe(false);
+    if (!decision.admitted) expect(decision.reason).toBe("insufficient_storage");
   });
 
   it("orders equal-score nodes bytewise, not by locale", () => {
