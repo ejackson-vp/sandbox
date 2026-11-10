@@ -8,6 +8,7 @@
   <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/codeql.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/codeql.yml/badge.svg?branch=main" alt="codeql"></a>
   <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/docs.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/docs.yml/badge.svg?branch=main" alt="docs"></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/ejackson-vp/sandbox"><img src="https://api.scorecard.dev/projects/github.com/ejackson-vp/sandbox/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/ejackson-vp/sandbox/badges/coverage.json" alt="coverage"></a>
   <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/release.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/release.yml/badge.svg" alt="release"></a>
 </p>
 

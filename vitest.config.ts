@@ -26,4 +26,20 @@ export default defineConfig({
     pool: "forks",
     fileParallelism: false,
   },
+  coverage: {
+    provider: "v8",
+    // `json-summary` feeds the README badge; `lcov` is what a reviewer opens.
+    reporter: ["text-summary", "json-summary", "lcov"],
+    reportsDirectory: "coverage",
+    // Only shipped TypeScript counts. Tests, build output and the guest (Go)
+    // are measured separately, so mixing them in would hide regressions.
+    include: [
+      "shared/src/**/*.ts",
+      "sdk/src/**/*.ts",
+      "api/src/**/*.ts",
+      "controller/src/**/*.ts",
+      "cli/src/**/*.ts",
+    ],
+    exclude: ["**/*.d.ts", "**/*.test.ts"],
+  },
 });
