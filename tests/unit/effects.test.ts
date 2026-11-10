@@ -12,7 +12,7 @@
  *  - a guarded write that loses the race stops the sequence, so no external
  *    effect runs for a transition that did not happen.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SOURCE_STATES,
   SESSION_STATES,
@@ -32,6 +32,9 @@ import {
   type EffectRuntime,
 } from "../../controller/src/effects.js";
 import type { SessionRecord } from "../../controller/src/store/models.js";
+import { Termination } from "../../controller/src/termination.js";
+import { loadControllerConfig } from "../../controller/src/config.js";
+import type { ReconcilerContext } from "../../controller/src/reconciler-context.js";
 
 const NOW = 1_700_000_000_000;
 
@@ -197,6 +200,90 @@ describe("effect interpreter", () => {
     expect(calls).toEqual(["markSuspending"]);
   });
 });
+
+describe("termination", () => {
+  it("cleans up through the effects of entering TERMINATING, then finalises", async () => {
+    const calls: string[] = [];
+    const row = session({ state: "TERMINATING", terminationReason: "client_destroy" });
+    const ctx = {
+      cfg: controllerConfig(),
+      store: {
+        clearPod: () => calls.push("clearPod"),
+        clearWorkspacePvc: () => calls.push("clearWorkspacePvc"),
+        markRelayPurged: () => calls.push("markRelayPurged"),
+        finalizeTermination: () => {
+          calls.push("finalizeTermination");
+          return "DESTROYED";
+        },
+        mergeTimings: () => calls.push("mergeTimings"),
+        getLedgerBySession: () => null,
+        markSuspending: () => false,
+        markSuspended: () => false,
+        setReady: () => false,
+        getSession: () => row,
+        requestTermination: () => true,
+      },
+      provisioner: {
+        deletePod: vi.fn(async () => {
+          calls.push("deletePod");
+        }),
+        suspendPod: vi.fn(async () => undefined),
+        deleteWorkspacePvc: async () => {
+          calls.push("deleteWorkspacePvc");
+        },
+      },
+      relay: {
+        shutdown: async () => {
+          calls.push("shutdown");
+        },
+        purge: async () => {
+          calls.push("purge");
+        },
+      },
+      capacity: {
+        beginRelease: () => calls.push("beginRelease"),
+      },
+      snapshotter: {
+        discard: async () => {
+          calls.push("discard");
+        },
+      },
+      now: () => NOW,
+      serviceAddress: async () => null,
+    } as unknown as ReconcilerContext;
+
+    await new Termination(ctx).terminate(row);
+
+    expect(calls).toEqual([
+      "shutdown",
+      "deletePod",
+      "clearPod",
+      "purge",
+      "markRelayPurged",
+      "discard",
+      "deleteWorkspacePvc",
+      "clearWorkspacePvc",
+      "beginRelease",
+      "mergeTimings",
+      "finalizeTermination",
+    ]);
+    expect(ctx.provisioner.deletePod).toHaveBeenCalledWith("sbx-effects-0001", 1);
+  });
+});
+
+function controllerConfig() {
+  return loadControllerConfig({
+    ADMIN_TOKEN: "p".repeat(24),
+    ROLE: "all",
+    EXECUTION_MODE: "dev",
+    ALLOW_INSECURE_DEV: "true",
+    KUBERNETES_ENABLED: "false",
+    DB_PATH: ":memory:",
+    RELAY_ADMIN_TOKEN: "r".repeat(24),
+    WAKE_TOKEN: "w".repeat(24),
+    PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
+  });
+}
 
 /** Every event the table accepts, with a value for the ones that carry one. */
 function tableEvents(): SessionEvent[] {
