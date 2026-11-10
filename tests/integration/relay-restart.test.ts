@@ -236,9 +236,11 @@ async function scenario(mode: "ready" | "refund"): Promise<Scenario> {
   const nonce = toBase64(await generateNonce());
   const sessionId = `sbx_relay_restart_${mode}_${Date.now().toString(36)}`;
   const paymentKey = `${mode}`.padEnd(64, "0");
-  store.claimPaymentIntent(paymentKey, `relay-restart-${mode}`, 30_000);
+  const claim = store.claimPaymentIntent(paymentKey, `relay-restart-${mode}`, 30_000);
+  if (claim.status !== "claimed") throw new Error(`could not claim ${paymentKey}: ${claim.status}`);
   store.completeEntitlement(
     paymentKey,
+    claim.token,
     paymentRecord(paymentKey),
     sessionRecord(sessionId, paymentKey, toBase64(keys.publicKey), nonce),
   );
