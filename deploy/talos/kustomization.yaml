@@ -30,7 +30,7 @@ resources:
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: 0.1.19
+    newTag: 0.1.20
   # 0.1.9 adds the mTLS controller listener and the inlined release gate. (npm removed from the
   # runtime, Go 1.27.3 + x/crypto 0.58.0 in the guest).
 
@@ -42,13 +42,13 @@ patches:
     patch: |-
       - op: replace
         path: /data/GUEST_IMAGE
-        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.19
-      # Index digest from the v0.1.19 release. The controller pulls
+        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.20
+      # Index digest from the v0.1.20 release. The controller pulls
       # `repo@sha256:…` whenever a digest is set (dev mode or not), so a moved
       # tag cannot change what runs inside the sandbox.
       - op: replace
         path: /data/GUEST_IMAGE_DIGEST
-        value: sha256:e39eb72766251f6cfdaeeff6772d10d3d9c2e6c780c1f806b5c71a906139b8a2
+        value: sha256:71f60a862c552ad9b3473488c7e8b134e5a4a3e69dd17651e9aa5aee19a64379
       - op: replace
         path: /data/PUBLIC_BASE_URL
         value: https://sandbox.example.ts.net
