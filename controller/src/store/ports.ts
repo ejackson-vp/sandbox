@@ -57,6 +57,8 @@ export interface EffectStore {
 
 export interface ProvisioningStore {
   listNonTerminal(): SessionRecord[];
+  /** Guarded write that names the resumed pod; false when the row moved on. */
+  markResuming(id: string, podName: string): boolean;
   mergeTimings(id: string, patch: Record<string, number | undefined>): void;
   requestTermination(
     id: string,
@@ -109,7 +111,6 @@ export interface LifecycleStore {
   listNonTerminal(): SessionRecord[];
   listTerminalWithPvc(): SessionRecord[];
   markRelayPurged(id: string): void;
-  markResuming(id: string, podName: string): boolean;
   markSuspended(id: string, suspendedAt: number): boolean;
   markSuspending(id: string): boolean;
   requestTermination(

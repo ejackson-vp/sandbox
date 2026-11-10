@@ -3,9 +3,9 @@
  *
  * Three things are worth pinning here:
  *
- *  - every `SessionEffect` variant is either executed or refused by name, so a
- *    new variant cannot be silently ignored (the switch's `assertNever` is the
- *    compile-time half, this is the runtime half);
+ *  - every `SessionEffect` variant is executed, so a new variant cannot be
+ *    silently ignored (the switch's `assertNever` is the compile-time half,
+ *    this is the runtime half);
  *  - the transition table only emits variants the interpreter inventories, and
  *    `terminationEffects` is exactly what the table returns when it enters
  *    TERMINATING;
@@ -26,14 +26,16 @@ import {
 } from "../../shared/src/index.js";
 import {
   EFFECT_VARIANTS,
+  EffectContextError,
   OK,
-  UnwiredEffectError,
+  createPath,
   deferred,
   effectContext,
   executeEffect,
   executeEffects,
   isOk,
   refused,
+  type CreatePath,
   type EffectOutcome,
   type EffectRuntime,
 } from "../../controller/src/effects.js";
@@ -47,12 +49,29 @@ import type { Provisioning } from "../../controller/src/provisioning.js";
 const NOW = 1_700_000_000_000;
 
 /**
- * The effects no use case executes yet. Provisioning builds the guest token,
- * the pod spec and the workspace volume in one admission path, so splitting
- * them into separate calls would change when a pod starts. Listed here so the
- * set stays deliberate rather than accidental.
+ * The create-path machinery, recorded the same way. The interpreter delegates
+ * all three provisioning effects to it, so their bodies are exactly "call the
+ * use case once": registering the guest credential, making the workspace
+ * volume, and starting the pod are not reimplemented in the switch.
  */
-const UNWIRED = new Set<SessionEffect["type"]>(["register_relay", "ensure_workspace_pvc", "start_pod"]);
+function recordingCreatePath(opts: { started?: boolean } = {}) {
+  const calls: string[] = [];
+  const path: CreatePath = {
+    registerRelay: async (row) => {
+      calls.push("registerRelay");
+      return { guestToken: `guest-${row.id}`, tokenHash: "token-hash", generation: "gen-1" };
+    },
+    ensureWorkspace: async () => {
+      calls.push("ensureWorkspace");
+      return "x402-ws-effects-0001";
+    },
+    startPod: async (_row, _registration, request) => {
+      calls.push(`startPod:${request.warm ? "warm" : "cold"}`);
+      return opts.started ?? true;
+    },
+  };
+  return { path, calls };
+}
 
 function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -142,26 +161,73 @@ const READY = {
 };
 
 describe("effect interpreter", () => {
-  it("executes every variant or refuses it by name", async () => {
+  it("executes every variant, reaching the create path for the three it owns", async () => {
     for (const effect of Object.values(EFFECT_VARIANTS)) {
       const { runtime, calls } = recordingRuntime();
-      const ctx = effectContext(runtime, session(), { ready: READY });
-      if (UNWIRED.has(effect.type)) {
-        await expect(executeEffect(effect, ctx), effect.type).rejects.toBeInstanceOf(UnwiredEffectError);
-        continue;
-      }
-      await executeEffect(effect, ctx);
-      expect(calls, `${effect.type} reached the world`).not.toHaveLength(0);
+      const create = recordingCreatePath();
+      const ctx = effectContext(runtime, session(), {
+        ready: READY,
+        create: createPath(create.path, {
+          relay: { host: "10.0.0.1", port: 8443 },
+          proxy: { host: "10.0.0.9", port: 3128 },
+        }),
+      });
+      // `start_pod` boots the credential `register_relay` staged, exactly as
+      // the table orders them, so the pair runs in order.
+      if (effect.type === "start_pod") await executeEffect(EFFECT_VARIANTS.register_relay, ctx);
+      const outcome = await executeEffect(effect, ctx);
+      expect(outcome, effect.type).toEqual(OK);
+      expect(calls.length + create.calls.length, `${effect.type} reached the world`).toBeGreaterThan(0);
     }
   });
 
-  it("names the variant it could not execute", async () => {
+  it("throws when the context lacks what an effect acts on", async () => {
     const { runtime } = recordingRuntime();
-    const ctx = effectContext(runtime, session());
-    await expect(executeEffect({ type: "start_pod", warm: true }, ctx)).rejects.toMatchObject({
-      name: "UnwiredEffectError",
-      effect: "start_pod",
+    const noHandshake = effectContext(runtime, session());
+    await expect(executeEffect(EFFECT_VARIANTS.persist_ready, noHandshake)).rejects.toMatchObject({
+      name: "EffectContextError",
+      effect: "persist_ready",
     });
+    // A create-path effect with no create path is a caller bug, not a state the
+    // loop can recover from: it fails loudly instead of skipping a paid session.
+    await expect(executeEffect(EFFECT_VARIANTS.start_pod, noHandshake)).rejects.toBeInstanceOf(
+      EffectContextError,
+    );
+  });
+
+  it("defers when the create path cannot supply a workspace yet", async () => {
+    const { runtime } = recordingRuntime();
+    const create = recordingCreatePath();
+    const ctx = effectContext(runtime, session(), {
+      create: createPath(
+        { ...create.path, ensureWorkspace: async () => undefined },
+        { relay: { host: "10.0.0.1", port: 8443 }, proxy: { host: "10.0.0.9", port: 3128 } },
+      ),
+    });
+    expect(await executeEffect(EFFECT_VARIANTS.ensure_workspace_pvc, ctx)).toEqual({
+      status: "deferred",
+      effect: "ensure_workspace_pvc",
+      reason: "not_ready",
+    });
+  });
+
+  it("refuses a lost guarded write in start_pod and stops the list", async () => {
+    const { runtime } = recordingRuntime();
+    const create = recordingCreatePath({ started: false });
+    const ctx = effectContext(runtime, session(), {
+      create: createPath(create.path, {
+        relay: { host: "10.0.0.1", port: 8443 },
+        proxy: { host: "10.0.0.9", port: 3128 },
+      }),
+    });
+    // A synthetic order: the table never emits an effect after `start_pod`, so
+    // the interpreter's stop-on-refusal contract is what is under test.
+    const outcome = await executeEffects(
+      [EFFECT_VARIANTS.register_relay, EFFECT_VARIANTS.start_pod, EFFECT_VARIANTS.ensure_workspace_pvc],
+      ctx,
+    );
+    expect(outcome).toEqual({ status: "refused", effect: "start_pod", reason: "guard_lost" });
+    expect(create.calls).toEqual(["registerRelay", "startPod:cold"]);
   });
 
   it("only emits effects it has an execution for", () => {
@@ -229,10 +295,10 @@ describe("effect interpreter", () => {
   });
 
   it("treats a deferred outcome as a stop, not a success", () => {
-    // Nothing defers yet: provisioning will, once admission and endpoint
-    // resolution can say "not yet". The outcome is constructed here, and the
-    // loop above stops on anything `isOk` rejects, so deferred stops the list
-    // exactly like the refusal case.
+    // `ensure_workspace_pvc` is the variant that defers today: a volume that
+    // cannot be made yet stops the list and leaves the row where it is. This
+    // pins the vocabulary itself, and the loop above stops on anything `isOk`
+    // rejects, so deferred stops exactly like a refusal.
     const outcome: EffectOutcome = deferred(EFFECT_VARIANTS.persist_suspending);
     expect(outcome).toEqual({
       status: "deferred",
@@ -434,6 +500,34 @@ describe("lifecycle suspend", () => {
     });
     expect(calls).toEqual([]);
   });
+
+  it("replays the stop of an interrupted suspend as a table transition", () => {
+    const snapshot = snapshots("SUSPENDING")[0]!;
+    const retry = transition(snapshot, { type: "suspend_retry" });
+    expect(retry.ok).toBe(true);
+    if (retry.ok) {
+      // A self-transition: the stop is replayed, the row does not move until
+      // the checkpoint is committed by `guest_stopped`.
+      expect(retry.value.state).toBe("SUSPENDING");
+      expect(retry.value.effects).toEqual([{ type: "stop_guest", intent: "suspend" }]);
+    }
+    expect(SOURCE_STATES.suspend_retry).toEqual(["SUSPENDING"]);
+  });
+
+  it("drives the replay and then the commit of an interrupted suspend", async () => {
+    const { lifecycle, calls } = harness("SUSPENDING");
+    await lifecycle.reconcileSuspend(session({ state: "SUSPENDING" }));
+    expect(calls).toEqual([
+      "shutdown",
+      "capture",
+      "suspendPod",
+      "clearPod",
+      "markSuspended",
+      "purge",
+      "markRelayPurged",
+      "capacity.suspend",
+    ]);
+  });
 });
 
 function controllerConfig() {
@@ -460,6 +554,7 @@ function tableEvents(): SessionEvent[] {
     { type: "operation_finished" },
     { type: "suspend_requested" },
     { type: "guest_stopped" },
+    { type: "suspend_retry" },
     { type: "resume_requested" },
     { type: "lease_expired" },
     { type: "terminate_requested", reason: "client_destroy" },

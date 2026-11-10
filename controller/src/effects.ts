@@ -11,12 +11,20 @@
  *  - `persist_*` effects are guarded writes, and the guard is the authority. A
  *    refusal means the row moved on; the remaining effects are skipped and the
  *    next reconcile pass retries. No effect runs after a lost guard.
- *  - A `deferred` outcome means not now, try again next pass: admission and
- *    endpoint resolution are neither done nor failed, so they need a third
- *    answer. It stops the list exactly like a refusal.
+ *  - A `deferred` outcome means not now, try again next pass: a volume that
+ *    cannot be created yet, an endpoint that has not appeared. It stops the list
+ *    exactly like a refusal.
  *  - External failures follow the call they replace: a lost pod delete during
  *    termination is logged and cleanup continues, a lost pod suspend aborts so
  *    the suspend is retried, a failed checkpoint discard is logged.
+ *
+ * The create path (`register_relay`, `ensure_workspace_pvc`, `start_pod`) is
+ * the one place the interpreter needs more than a session row, because the
+ * token registered with the relay is the token the pod boots with and the
+ * volume has to exist before the pod that mounts it. `CreatePath` is that
+ * dependency, implemented by the provisioning use case, so the machinery stays
+ * where the pod spec and the guarded writes live and this file stays a
+ * dispatcher.
  */
 import { assertNever, log, type SessionEffect } from "@x402s/shared";
 import type { Provisioner } from "./k8s.js";
@@ -24,6 +32,7 @@ import type { RelayClient } from "./relay-client.js";
 import type { Snapshotter } from "./snapshotter.js";
 import type { SessionRecord } from "./store/models.js";
 import type { EffectStore } from "./store/ports.js";
+import type { Endpoint, RelayRegistration } from "./provisioning/endpoints.js";
 
 /** Values the readiness handshake contributes to `persist_ready`. */
 export interface ReadyHandshake {
@@ -31,6 +40,84 @@ export interface ReadyHandshake {
   leaseExpiresAt: number;
   attestationJson: string;
   guestPublicKey: string;
+}
+
+/**
+ * What `start_pod` needs that the table cannot know: the addresses admission
+ * resolved and the placement the capacity reservation asked for.
+ *
+ * The table decides *whether* a pod starts and whether it may be a warm claim;
+ * the shell decides *where*, because that answer depends on the cluster this
+ * controller is talking to and must be resolved before the transition (an
+ * unavailable endpoint is a defer, not a failed session).
+ */
+export interface StartPodPlan {
+  readonly relay: Endpoint;
+  readonly proxy: Endpoint;
+  /** Node the compute reservation pinned; absent when placement is free. */
+  readonly nodeName?: string;
+  /** Boot against the checkpointed workspace instead of a fresh one. */
+  readonly resume?: boolean;
+  /** When this pass began; the warm claim records it in the session timings. */
+  readonly provisionBeginAt?: number;
+}
+
+/** One `start_pod`: the plan, the table's warm decision, the staged volume. */
+export interface StartPodRequest extends StartPodPlan {
+  readonly warm: boolean;
+  /** Volume `ensure_workspace_pvc` staged for this create, when it made one. */
+  readonly workspacePvc?: string;
+}
+
+/**
+ * The provisioning machinery the three create-path effects delegate to.
+ *
+ * Declared here and implemented by the provisioning use case, so the arrow
+ * points interpreter -> use case: an effect cannot reach Kubernetes without a
+ * caller that has already admitted the session and can name its endpoints. The
+ * implementations live where the pod spec, the claim and the guarded writes
+ * live, not in this switch.
+ */
+export interface CreatePath {
+  /** Register the credential a create presents; `start_pod` boots with it. */
+  registerRelay(session: SessionRecord): Promise<RelayRegistration>;
+  /**
+   * The workspace volume a suspendable session needs before its pod, or
+   * undefined when it cannot be provisioned this pass.
+   */
+  ensureWorkspace(session: SessionRecord): Promise<string | undefined>;
+  /**
+   * Claim a warm pod or create a cold one, then perform the guarded write that
+   * names it. False means that write lost the race, so nothing after it may run.
+   */
+  startPod(
+    session: SessionRecord,
+    registration: RelayRegistration,
+    request: StartPodRequest,
+  ): Promise<boolean>;
+}
+
+/**
+ * The create path for one transition: the machinery, what admission decided,
+ * and the values `register_relay` and `ensure_workspace_pvc` stage for the
+ * `start_pod` that follows them in the same list.
+ *
+ * The staged fields are the only mutable state in the interpreter. They exist
+ * because the table splits one admission into three effects: the token
+ * registered with the relay is the token the guest boots with, and the volume
+ * has to exist before the pod that mounts it.
+ */
+export interface CreatePathContext {
+  readonly path: CreatePath;
+  readonly plan: StartPodPlan;
+  /** Credential `register_relay` staged for the create that follows. */
+  staged?: RelayRegistration;
+  /** Workspace volume `ensure_workspace_pvc` staged for that same create. */
+  workspacePvc?: string;
+}
+
+export function createPath(path: CreatePath, plan: StartPodPlan): CreatePathContext {
+  return { path, plan };
 }
 
 /**
@@ -50,14 +137,21 @@ export interface EffectContext extends EffectRuntime {
   readonly session: SessionRecord;
   /** Supplied by the readiness path; `persist_ready` cannot run without it. */
   readonly ready?: ReadyHandshake;
+  /** Supplied by the create paths; the three provisioning effects need it. */
+  readonly create?: CreatePathContext;
 }
 
 export function effectContext(
   runtime: EffectRuntime,
   session: SessionRecord,
-  extra: { ready?: ReadyHandshake } = {},
+  extra: { ready?: ReadyHandshake; create?: CreatePathContext } = {},
 ): EffectContext {
-  return { ...runtime, session, ...(extra.ready ? { ready: extra.ready } : {}) };
+  return {
+    ...runtime,
+    session,
+    ...(extra.ready ? { ready: extra.ready } : {}),
+    ...(extra.create ? { create: extra.create } : {}),
+  };
 }
 
 /**
@@ -115,17 +209,30 @@ export function isOk(outcome: EffectOutcome): outcome is Extract<EffectOutcome, 
 }
 
 /**
- * An effect the table can emit but no use case executes yet. Thrown rather than
- * silently ignored: the alternative is a session that looks handled.
+ * An effect the context cannot satisfy. Thrown rather than silently skipped:
+ * the alternative is a session that looks handled. It is never an excuse for an
+ * unimplemented variant, only for a caller that did not supply what the effect
+ * acts on (a readiness handshake, a create path).
  */
-export class UnwiredEffectError extends Error {
+export class EffectContextError extends Error {
   constructor(
     readonly effect: SessionEffect["type"],
     reason: string,
   ) {
-    super(`${effect} is not wired: ${reason}`);
-    this.name = "UnwiredEffectError";
+    super(`${effect} cannot run: ${reason}`);
+    this.name = "EffectContextError";
   }
+}
+
+/** The create path an effect needs, or a loud failure naming the effect. */
+function requireCreate(ctx: EffectContext, effect: SessionEffect): CreatePathContext {
+  if (!ctx.create) {
+    throw new EffectContextError(
+      effect.type,
+      "the caller must supply a create path (only the provision and resume use cases start pods)",
+    );
+  }
+  return ctx.create;
 }
 
 /**
@@ -154,7 +261,7 @@ export async function executeEffect(
   switch (effect.type) {
     case "persist_ready": {
       if (!ctx.ready) {
-        throw new UnwiredEffectError(
+        throw new EffectContextError(
           "persist_ready",
           "no ready handshake in the effect context (the readiness path supplies one)",
         );
@@ -260,24 +367,44 @@ export async function executeEffect(
       return OK;
     }
 
-    // The provisioning use case owns these. It creates the guest token, the
-    // pod spec, the workspace volume and the relay registration together, so
-    // they cannot be split into separate effect calls without changing when
-    // and how a pod is admitted.
-    case "register_relay":
-      throw new UnwiredEffectError(
-        "register_relay",
-        "the guest token is shared with the pod spec that Provisioning.createPod builds",
-      );
+    // The three create-path effects delegate to the provisioning use case. The
+    // table splits one admission into register -> volume -> pod because each
+    // step has its own retry and its own failure; the machinery behind them
+    // lives in provisioning/, so this switch stays a dispatcher.
+    case "register_relay": {
+      const create = requireCreate(ctx, effect);
+      create.staged = await create.path.registerRelay(ctx.session);
+      return OK;
+    }
 
-    case "ensure_workspace_pvc":
-      throw new UnwiredEffectError(
-        "ensure_workspace_pvc",
-        "workspace creation is part of provisioning admission",
-      );
+    case "ensure_workspace_pvc": {
+      const create = requireCreate(ctx, effect);
+      const pvc = await create.path.ensureWorkspace(ctx.session);
+      // No volume, no pod: the session stays where it is and the next pass
+      // asks again. Nothing has been created that would need undoing.
+      if (!pvc) return deferred(effect);
+      create.workspacePvc = pvc;
+      return OK;
+    }
 
-    case "start_pod":
-      throw new UnwiredEffectError("start_pod", "pod construction lives in the provisioning use case");
+    case "start_pod": {
+      const create = requireCreate(ctx, effect);
+      if (!create.staged) {
+        throw new EffectContextError(
+          "start_pod",
+          "no relay registration in the effect context (register_relay must run first)",
+        );
+      }
+      const started = await create.path.startPod(ctx.session, create.staged, {
+        ...create.plan,
+        warm: effect.warm,
+        ...(create.workspacePvc ? { workspacePvc: create.workspacePvc } : {}),
+      });
+      // False is the guarded write having lost the race: the row moved on, so
+      // the row is not PROVISIONING/RESUMING and nothing else may run.
+      if (!started) return refused(effect);
+      return OK;
+    }
 
     default:
       return assertNever(effect, "SessionEffect");

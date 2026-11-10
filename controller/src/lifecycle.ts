@@ -23,7 +23,8 @@ type LifecycleContext = Omit<ReconcilerContext, "store"> & {
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { Provisioning } from "./provisioning.js";
-import { effectContext, executeEffects, isOk } from "./effects.js";
+import { createPath, effectContext, executeEffects, isOk } from "./effects.js";
+import type { EffectOutcome, StartPodPlan } from "./effects.js";
 
 export class LifecycleError extends Error {
   constructor(
@@ -217,33 +218,36 @@ export class Lifecycle {
         },
       );
     }
-    let podName: string;
+    // SUSPENDED + resume_requested is the table's decision: register the guest
+    // credential, then boot a cold pod against the checkpointed workspace. Its
+    // guarded write moves the row to RESUMING only once that pod exists.
+    const plan: StartPodPlan = {
+      relay: relayAddr,
+      proxy: proxyAddr,
+      resume: true,
+      ...(this.ctx.cfg.pinCheckpointNode && session.nodeName ? { nodeName: session.nodeName } : {}),
+    };
+    let outcome: EffectOutcome;
     try {
       await this.ctx.snapshotter.restore(session);
-      ({ podName } = await this.provisioning.createPod(session, relayAddr, proxyAddr, {
-        workspacePvc: session.workspacePvc,
-        resume: true,
-        ...(this.ctx.cfg.pinCheckpointNode && session.nodeName ? { nodeName: session.nodeName } : {}),
-      }));
+      const decision = transition(snapshotOf(session), { type: "resume_requested" });
+      if (!decision.ok) {
+        throw new LifecycleError("not_suspended", "session changed state while resuming", 409);
+      }
+      outcome = await executeEffects(
+        decision.value.effects,
+        effectContext(this.ctx, session, { create: createPath(this.provisioning, plan) }),
+      );
     } catch (err) {
       // The compute reservation is no longer usable; return it before the
       // caller retries. The workspace stays SUSPENDED.
       this.ctx.capacity.suspend(id);
       throw err;
     }
-    this.ctx.capacity.updatePod(id, podName);
-    if (!this.ctx.store.markResuming(id, podName)) {
-      await this.ctx.provisioner.deletePod(podName, 0).catch(() => undefined);
-      await this.ctx.relay.purge(id).catch(() => undefined);
-      this.ctx.capacity.suspend(id);
+    if (!isOk(outcome)) {
+      // The guarded write refused, so the pod was already rolled back inside
+      // the effect: the caller retries from SUSPENDED.
       throw new LifecycleError("not_suspended", "session changed state while resuming", 409);
     }
-    // The reaper may have seen the session as SUSPENDED while the pod was
-    // being created and re-suspended the reservation we just admitted. The
-    // session is RESUMING now, so reassert the allocation before it is
-    // observable as READY with suspended capacity.
-    this.ctx.capacity.reassertAllocated(id);
-    metrics.counter("sandbox_sessions_resumed_total", "Sessions resumed").inc();
-    log.info("sandbox_resuming", { sessionId: id, podName, resumeCount: session.resumeCount + 1 });
   }
 }
