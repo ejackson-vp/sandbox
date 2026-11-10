@@ -1,0 +1,5 @@
+# Verified TLC download (pinned in run-tlc.sh); never commit the jar.
+.cache/
+# TLC scratch state written next to the spec.
+states/
+*.log
