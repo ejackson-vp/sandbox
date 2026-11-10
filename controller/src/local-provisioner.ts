@@ -8,9 +8,10 @@
  * KUBERNETES_ENABLED=true.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, rmSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { WorkspacePvcInfo } from "./checkpoint-retention.js";
 import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodInfo, WarmPodSpec } from "./k8s.js";
 import { GUEST_TOOLS } from "./k8s.js";
 
@@ -215,6 +216,32 @@ export class LocalProvisioner implements Provisioner {
   async workspacePvcExists(pvcName: string): Promise<boolean> {
     const sessionId = pvcName.replace(/^local-ws-/, "sbx_");
     return existsSync(join(this.workRoot, sessionId, "workspace"));
+  }
+
+  async listWorkspacePvcs(): Promise<WorkspacePvcInfo[]> {
+    // Local mode keeps each session's workspace under workRoot/<session>/workspace.
+    // There is no controller-owned PVC object, so the directory mtime is the age.
+    if (!existsSync(this.workRoot)) return [];
+    const out: WorkspacePvcInfo[] = [];
+    for (const sessionId of readdirSync(this.workRoot)) {
+      if (!sessionId.startsWith("sbx_")) continue;
+      const dir = join(this.workRoot, sessionId, "workspace");
+      if (!existsSync(dir)) continue;
+      let createdAt = 0;
+      try {
+        const stat = statSync(dir);
+        createdAt = stat.birthtimeMs || stat.mtimeMs;
+      } catch {
+        /* raced with deletion; leave the age unknown */
+      }
+      out.push({
+        name: `local-ws-${sessionId.replace(/^sbx_/, "")}`,
+        sessionId,
+        createdAt,
+        deleting: false,
+      });
+    }
+    return out;
   }
 
   async getPod(podName: string): Promise<{

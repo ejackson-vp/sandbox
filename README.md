@@ -174,7 +174,9 @@ testnet, and there is no hardware attestation. What is missing, in order:
 [ROADMAP.md](ROADMAP.md).
 
 Current limitations: no memory snapshots (filesystem checkpoints only), no GPUs,
-no arbitrary OCI images, and mock or testnet payments only.
+no arbitrary OCI images, mock or testnet payments only, and checkpoints are
+plaintext on disk (see
+[docs/adr/0007](docs/adr/0007-checkpoint-at-rest-plaintext.md)).
 
 Non-goals: a hosted commercial service, accounts, managed wallets, mainnet
 payments, hardware-attestation claims, feature parity with general-purpose

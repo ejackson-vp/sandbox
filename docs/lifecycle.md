@@ -113,13 +113,18 @@ local-path checkpoint is a single-node feature.
 ## Security properties
 
 - **Workspace at rest:** suspendable sessions use a PVC, not a memory-backed
-  `emptyDir`. The workspace is therefore readable by the node/storage
-  administrator, and at-rest encryption depends on the StorageClass. Use an
-  encrypted StorageClass in production.
+  `emptyDir`. A suspended workspace is **plaintext**: the node and storage
+  administrators can read it, and no encryption at rest is provided by this
+  repository or by the homelab's `local-path` `standard` StorageClass. See
+  [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) for why an encrypted
+  StorageClass is not claimed as a guarantee, and
+  [Checkpoint at rest, expiry and backup](#checkpoint-at-rest-expiry-and-backup)
+  for the exact boundary.
 - **No controller plaintext:** the controller creates and deletes the PVC but
   never mounts or reads it. The guest is the only reader/writer.
-- **No reuse:** the PVC is per session and deleted on terminate / max lifetime;
-  it is never handed to another session.
+- **No reuse:** the PVC is per session and deleted on terminate, suspended
+  expiry or max lifetime; it is never handed to another session. A PVC that no
+  session owns is reaped after a grace period.
 - **Fresh keys on resume:** the new guest generates a new keypair; the old
   private key is gone with the pod. The client capability is payment-bound and
   remains valid, but the client must refresh the guest public key (the SDK does).
@@ -128,6 +133,61 @@ local-path checkpoint is a single-node feature.
   works.
 - **Relay state:** the suspended session has no relay entry; resume registers a
   new one and purges it on terminate.
+
+## Checkpoint at rest, expiry and backup
+
+Status: **plaintext, no encryption.** This is the exact boundary; see
+[ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) for the decision and the
+rejected alternatives.
+
+What the checkpoint is:
+
+- A suspendable session's `/workspace` is a per-session PVC (`x402-ws-<id>`) on
+  `WORKSPACE_STORAGE_CLASS` (default `standard`). The PVC *is* the checkpoint;
+  there is no separate snapshot object and no copy.
+- The controller creates, checks and deletes the PVC. It never mounts it, so the
+  controller, API, relay, SQLite database and their logs never hold the
+  checkpoint's contents.
+- The guest is the only reader/writer, and only while a pod is running. When the
+  pod is gone, nothing in this system can read the files except whoever controls
+  the storage backend.
+
+What that means:
+
+| Question | Answer |
+| --- | --- |
+| Is a suspended workspace encrypted at rest? | No. Not by the guest, not by the controller, not by `local-path`. |
+| Who can read it? | The node administrator, the storage administrator, anyone who can read the node's filesystem or copy the volume, and any backup of that volume. |
+| Does the controller hold a key? | No. There is no checkpoint key anywhere in the control plane. |
+| Is it protected by the StorageClass? | No class in this repository provides encryption. An encrypted CSI class, where one exists, protects a detached disk against a third party — not against the node admin — and the controller does not verify it. |
+| Is it in the SQLite backups (`BACKUP_DIR`)? | No. Backups contain session metadata only; a restore does not restore workspaces. |
+| Is it ever reused by another session? | No. One PVC per session; never relabelled or handed on. |
+
+Retention and expiry:
+
+| End of life | Mechanism |
+| --- | --- |
+| Client destroy | `DELETE /v1/sessions/{id}` → terminate → PVC deleted |
+| Max lifetime (`maxLifetimeSeconds`, default and maximum 8 h) | `EXPIRED` → terminate → PVC deleted |
+| Suspended expiry (`idlePolicy.suspendedDurationSeconds`, default 8 h) | `EXPIRED` → terminate → PVC deleted |
+| Terminal state reached but cleanup interrupted | `Lifecycle.cleanup` deletes every terminal session's recorded PVC each housekeeping tick |
+| Session row lost (database restore, manual deletion) | Orphan-PVC sweep deletes a labelled workspace PVC that no session owns after `ORPHAN_PVC_GRACE_MS` (default 1 h) |
+
+The last two rows are backstops, not guarantees: they bound how long an
+unclaimed plaintext volume can sit in the namespace, and they run while the
+controller is up. If the controller is down, nothing expires. There is no
+Kubernetes-level TTL on a PVC.
+
+Operational rules that follow from this:
+
+- Size the suspended window to the data, not the other way round. An 8 h
+  default is a product choice, not a security control.
+- Do not put a checkpoint on a volume you also use for anything else, and do not
+  copy it into a backup or support bundle without treating the copy as
+  plaintext.
+- If the cluster offers an encrypted CSI class, use it and record that as a
+  deployment property; it improves disk-loss exposure and changes nothing about
+  the node-admin threat.
 
 ## Limits and caveats
 
@@ -192,6 +252,10 @@ first.
 - The pod mounts the PVC at `/workspace` instead of the memory `emptyDir`.
 - `fsGroup: 65532` makes the volume writable by the unprivileged guest.
 - The PVC is deleted when the session is terminated or its lifetime expires.
+- The housekeeping loop also reaps a `x402.io/pool=workspace` PVC that no
+  session owns once it is older than `ORPHAN_PVC_GRACE_MS` (default 1 h). This
+  covers a lost session row, not a live controller: if the controller is down,
+  nothing expires.
 
 ## Measured workspace-size behaviour
 

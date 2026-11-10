@@ -1,6 +1,6 @@
 /**
  * Termination use case: stop the guest, delete pod/PVC, purge relay, finalise,
- * and reap orphan pods.
+ * reap orphan pods, and delete workspace PVCs that no live session owns.
  */
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
 import { log } from "@x402s/shared";
@@ -9,6 +9,7 @@ import type { TerminationStore } from "./store/ports.js";
 
 type TerminationContext = Omit<ReconcilerContext, "store"> & { store: TerminationStore };
 import { RefundService } from "./refunds.js";
+import { workspacePvcReapReason } from "./checkpoint-retention.js";
 import type { SessionRecord } from "./store.js";
 
 export class Termination {
@@ -89,7 +90,60 @@ export class Termination {
     });
   }
 
+  /**
+   * Delete workspace PVCs that no live session owns.
+   *
+   * Termination deletes the volume on the normal path; this covers the residues
+   * (a terminal session whose cleanup was interrupted, a volume left after a
+   * database restore, and an unattributable volume in the workspace pool).
+   * Checkpoint volumes are plaintext, so the sweep is the only bound on how long
+   * an unowned one survives.
+   */
+  async sweepPvcs(): Promise<void> {
+    let pvcs;
+    try {
+      pvcs = await this.ctx.provisioner.listWorkspacePvcs();
+    } catch {
+      return;
+    }
+    const now = this.ctx.now();
+    for (const pvc of pvcs) {
+      if (!pvc.name) continue;
+      const session = pvc.sessionId ? this.ctx.store.getSession(pvc.sessionId) : null;
+      const reason = workspacePvcReapReason({
+        pvc,
+        session,
+        now,
+        orphanGraceMs: this.ctx.cfg.orphanPvcGraceMs,
+      });
+      if (!reason) continue;
+      try {
+        await this.ctx.provisioner.deleteWorkspacePvc(pvc.name);
+      } catch (err) {
+        log.warn("workspace_pvc_reap_failed", {
+          pvc: pvc.name,
+          sessionId: pvc.sessionId || undefined,
+          error: (err as Error).message,
+        });
+        continue;
+      }
+      if (session) this.ctx.store.clearWorkspacePvc(session.id);
+      metrics
+        .counter(
+          "sandbox_workspace_pvcs_reaped_total",
+          "Workspace PVCs deleted without a live session",
+        )
+        .inc({ reason });
+      log.warn("workspace_pvc_reaped", {
+        pvc: pvc.name,
+        sessionId: pvc.sessionId || undefined,
+        reason,
+      });
+    }
+  }
+
   /** Delete pods that no session owns, or that outlived every possible deadline. */
+
   async sweep(): Promise<void> {
     let pods;
     try {

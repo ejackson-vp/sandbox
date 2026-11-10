@@ -76,7 +76,13 @@ data:
   # rewrites this to the digest of the locally loaded image.
   GUEST_IMAGE_DIGEST: "sha256:dev-unpinned-image"
   # StorageClass for checkpointed (suspendable) session workspaces.
+  # `standard` is local-path on the homelab: the checkpoint is plaintext and
+  # the node/storage admin can read it. See docs/adr/0007.
   WORKSPACE_STORAGE_CLASS: "standard"
+  # Delete a workspace PVC that no session owns once it is this old. This is
+  # the backstop for a lost session row (for example after a database restore);
+  # the normal path deletes the PVC during termination.
+  ORPHAN_PVC_GRACE_MS: "3600000"
   PROVISIONING_TIMEOUT_MS: "90000"
   LEASE_GRACE_MS: "2000"
   # 0 = unlimited. In production cap cold provisioning so a burst cannot

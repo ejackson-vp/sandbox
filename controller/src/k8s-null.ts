@@ -41,6 +41,9 @@ export class NullProvisioner implements Provisioner {
   async workspacePvcExists(): Promise<false> {
     return false;
   }
+  async listWorkspacePvcs(): Promise<[]> {
+    return [];
+  }
   async listSandboxPods(): Promise<[]> {
     return [];
   }

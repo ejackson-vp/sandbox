@@ -16,11 +16,11 @@ concrete next step.
 | 6 | **No refunds (real modes)** | a settled payment whose provisioning fails is not returned | mock mode now auto-refunds terminal-before-READY sessions; real modes record `REFUND_PENDING` and need an on-chain/facilitator refund worker or an explicit credit policy. See [payment-ledger.md](payment-ledger.md) |
 | 7 | **Image is pinned by digest, not by admission control** | the controller refuses to start with an unpinned guest image when `KUBERNETES_ENABLED=true`, and pulls `repo@sha256:…` whenever a digest is configured, dev mode or not, so a moved tag cannot change what runs inside the VM. A compromised *node* can still run anything | add Kyverno or sigstore admission control as a second layer |
 | 8 | **Dev attestation key is public by design** | anyone can forge dev evidence, so it is only safe while `ALLOW_INSECURE_DEV=true` | hardware attestation. The other credentials are no longer in the public repo: local runs generate them, and the homelab injects its own from SOPS |
-| 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; local-path has no encryption | use an encrypted StorageClass / CSI encryption, document the trust boundary, and expire PVCs aggressively |
+| 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; the homelab's `local-path` has no encryption and the controller cannot verify a CSI driver's parameters | decided in [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md): no at-rest encryption is claimed anywhere, the boundary is stated in [security-guarantees.md](security-guarantees.md) and [lifecycle.md](lifecycle.md), and PVC expiry plus an orphan-volume sweep are implemented. The real fix — client-side encrypted checkpoint objects with a client-held key — is a protocol change and is split into follow-up 1 in the ADR |
 | 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |
 | 11 | **Suspend/resume pricing undefined** | a resume starts a fresh lease in the mock model | bill active time + storage, or charge per resume; decide before charging real money |
 | 12 | **Checkpoints are node-pinned** | local-path PVCs cannot resume after node loss; `resume_unavailable` is fail-fast, not HA | RWX/network storage or Firecracker snapshot/restore before promising node-failure recovery |
-| 13 | **Checkpoint storage has no backup/replication** | deleting/corrupting the PVC makes the session unrecoverable (`checkpoint_missing`) | object-store checkpoint with client-side encryption, or storage-level snapshots/backups |
+| 13 | **Checkpoint storage has no backup/replication** | deleting or corrupting the PVC makes the session unrecoverable (`checkpoint_missing`); the SQLite backups do **not** contain workspaces, so a restore does not bring sessions back | encrypted object-store checkpoint (same follow-up as item 9), or storage-level snapshots/backups with their own retention. Document the RPO/RTO for checkpoint data separately from the ledger |
 
 ## 2. Security hardening backlog
 
@@ -86,7 +86,10 @@ concrete next step.
   workspace is single-customer, so the impact is self-inflicted.
 - **Suspend/resume**: the capability is extended to `maxLifetimeSeconds`, so a
   leaked capability remains valid across suspends. The workspace PVC is a new
-  at-rest data store; include it in backup/retention/encryption policy.
+  at-rest data store and it is **plaintext**; treat it as such in backup,
+  retention and incident-response policy ([ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md)).
+  Do not add it to a backup corpus unless that corpus is itself encrypted and
+  has its own retention.
 - **Suspendable sessions bypass the warm pool**: first READY and resume are cold
   (~0.9–5.8 s on the local rig), so the pool does not hide the checkpoint cost.
 

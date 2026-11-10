@@ -4,10 +4,14 @@ Read this before making any claim about the system.
 
 ## 0. One sentence
 
-The provider's **control plane, storage, logs and payment layer** never see
-plaintext commands, file contents or output. Isolation between sandboxes comes
-from the **VM boundary** (Kata), not from cryptography, and there is **no
-hardware root of trust**: a malicious operator could run a different guest.
+The provider's **control plane, logs and payment layer** never see plaintext
+commands, file contents or output. That does not extend to checkpoint storage: a
+suspended session's workspace PVC is plaintext on the storage backend and
+readable by the node/storage administrator
+([ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md)). Isolation between
+sandboxes comes from the **VM boundary** (Kata), not from cryptography, and there
+is **no hardware root of trust**: a malicious operator could run a different
+guest.
 
 ## 1. Guarantee matrix
 
@@ -17,7 +21,9 @@ hardware root of trust**: a malicious operator could run a different guest.
 | One settled payment -> one session | Enforced + tested | Enforced |
 | Duplicate settlement / replay rejected | Enforced + tested | Enforced |
 | API accepts only ciphertext | Enforced + tested | Enforced |
-| Control-plane logs and storage free of plaintext | Enforced + tested | Enforced |
+| Control-plane logs and database free of plaintext | Enforced + tested | Enforced |
+| Suspended workspace PVC free of plaintext | **No** | **No** |
+| Checkpoint encrypted at rest | **No** | **No** |
 | Per-session ephemeral key exchange | Enforced | Enforced |
 | Client verifies the session key binding | Enforced + tested | Enforced |
 | Evidence is hardware-rooted | **No** | **No** |
@@ -36,6 +42,15 @@ hardware root of trust**: a malicious operator could run a different guest.
 "Enforced + tested" means there is a test in `tests/` that fails if the property
 regresses. `make security-test` runs the packet-level ones against a live
 cluster.
+
+The two checkpoint rows are not a gap in the ciphertext-only claim; they are the
+end of it. Encryption covers transport and the data sealed inside it. A
+suspendable session's files are written to its PVC as ordinary files — the guest
+never encrypts them, so there is nothing to decrypt when the pod is gone. The
+controller never mounts the PVC, which is why the control plane still holds no
+plaintext; but "the control plane cannot read it" is not the same as "it is
+encrypted". See [lifecycle.md](lifecycle.md#checkpoint-at-rest-expiry-and-backup)
+and [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md).
 
 ## 2. There is no hardware root of trust
 
@@ -73,7 +88,8 @@ Protected against:
 
 Not protected against:
 
-- the node/host administrator (in any mode available here),
+- the node/host administrator (in any mode available here), including reading or
+  copying a suspended session's workspace PVC,
 - a compromised guest supervisor (it must decrypt to execute),
 - runtime side channels.
 
@@ -102,9 +118,14 @@ kernel. Nothing here removes the host.
 - Ordinary sessions: the workspace is a memory-backed `emptyDir` and disappears
   with the pod.
 - Suspendable sessions: the workspace is a per-session PVC, deleted on terminate,
-  suspended expiry or max lifetime, and never reused. The controller never mounts
-  it; at-rest encryption depends on the StorageClass. See
-  [lifecycle.md](lifecycle.md).
+  suspended expiry or max lifetime, and never reused. It is **plaintext**: no
+  component encrypts it, the controller never mounts it, and there is no
+  checkpoint key in the control plane. The node/storage administrator can read
+  it, and the repository provides no at-rest encryption for the homelab's
+  `local-path` storage. A labelled PVC that no session owns is reaped after
+  `ORPHAN_PVC_GRACE_MS`. See
+  [lifecycle.md](lifecycle.md#checkpoint-at-rest-expiry-and-backup) and
+  [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md).
 - Paths are canonicalised and must stay inside the workspace; `..` and symlink
   escapes are rejected for read, write, list and stat.
 - Uploads are size- and quota-checked before writing; archives are validated

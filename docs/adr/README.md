@@ -12,6 +12,7 @@ were rejected, and the cost we accepted.
 | [0004](0004-sqlite-single-writer.md) | SQLite as the single writer, with an outbox | accepted |
 | [0005](0005-kata-isolation-boundary.md) | Kata microVMs as the isolation boundary | accepted |
 | [0006](0006-immutable-lease.md) | The lease is immutable and enforced in three places | accepted |
+| [0007](0007-checkpoint-at-rest-plaintext.md) | Checkpoint workspaces are plaintext, and stay documented as such | accepted |
 
 ## Writing a record
 

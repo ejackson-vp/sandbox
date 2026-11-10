@@ -2,6 +2,7 @@
  * Kubernetes provisioner contract and pod specs.
  */
 import type { SessionLimits } from "@x402s/shared";
+import type { WorkspacePvcInfo } from "./checkpoint-retention.js";
 
 export interface SandboxPodSpec {
   sessionId: string;
@@ -100,6 +101,8 @@ export interface Provisioner {
   nodeAvailable(nodeName: string): Promise<boolean>;
   /** True when the per-session workspace PVC still exists. */
   workspacePvcExists(pvcName: string): Promise<boolean>;
+  /** Labelled workspace PVCs, for orphan retention. */
+  listWorkspacePvcs(): Promise<WorkspacePvcInfo[]>;
   listSandboxPods(): Promise<Array<{ name: string; sessionId: string; createdAt: number; phase: string }>>;
   listWarmPods(): Promise<WarmPodInfo[]>;
   /** Relabel a warm pod as a claimed sandbox (or update its session id). */
