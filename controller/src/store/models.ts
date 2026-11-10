@@ -138,6 +138,25 @@ export type IntentClaimResult =
   | { status: "failed"; reason: string | null }
   | { status: "mismatch" };
 
+/**
+ * Session states that still need reconcile work. The due query and the
+ * `sessions_due` partial index are both built from this list, so the index
+ * predicate can never drift away from the query it serves.
+ */
+export const NON_TERMINAL_STATES = [
+  "PAID",
+  "PROVISIONING",
+  "READY",
+  "ACTIVE",
+  "SUSPENDING",
+  "SUSPENDED",
+  "RESUMING",
+  "TERMINATING",
+] as const;
+
+/** The same list as a SQL `IN` body: `'PAID','PROVISIONING',...`. */
+export const NON_TERMINAL_STATE_SQL = NON_TERMINAL_STATES.map((state) => `'${state}'`).join(",");
+
 export const SESSION_COLUMNS = `
   id, capability_hash, capability_expires_at, client_public_key, client_nonce, client_signer,
   tier, duration_seconds, cpu_millis, memory_mib, disk_mib, max_output_bytes,
