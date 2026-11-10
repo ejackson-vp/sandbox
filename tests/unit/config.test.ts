@@ -163,6 +163,21 @@ describe("production config guards", () => {
       ).toThrow(/pinned sha256.*KUBERNETES_ENABLED/);
     });
 
+    it("does not require a guest digest for a role that never provisions", () => {
+      const cfg = loadControllerConfig({
+        ...dev,
+        ROLE: "relay",
+        KUBERNETES_ENABLED: "true",
+        GUEST_IMAGE_DIGEST: PLACEHOLDER,
+        RELAY_TLS_CERT_FILE: "/tls/tls.crt",
+        RELAY_TLS_KEY_FILE: "/tls/tls.key",
+        RELAY_TLS_CA_FILE: "/tls/ca.crt",
+      });
+      expect(cfg.role).toBe("relay");
+      expect(cfg.kubeEnabled).toBe(true);
+      expect(cfg.guestImageDigest).toBe(PLACEHOLDER);
+    });
+
     it("accepts a pinned digest with the local process provisioner", () => {
       const cfg = loadControllerConfig({
         ...dev,
