@@ -7,8 +7,21 @@
  * silently downgraded.
  */
 import type { DatabaseSync } from "node:sqlite";
+import { NON_TERMINAL_STATE_SQL } from "./models.js";
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
+
+/**
+ * Due-time index. The due query filters on exactly the states in
+ * `NON_TERMINAL_STATE_SQL` and orders by `next_due_ms`; a partial index over
+ * those rows lets SQLite walk live sessions in due order and stop at `LIMIT`
+ * without indexing (or visiting) terminal rows. The predicate is generated
+ * from the same constant as the query so the two cannot drift.
+ */
+const DUE_INDEX = `
+    CREATE INDEX IF NOT EXISTS sessions_due ON sessions(next_due_ms)
+      WHERE state IN (${NON_TERMINAL_STATE_SQL});
+`;
 
 /** Tables created for a brand-new database (always the current shape). */
 const BASE_SCHEMA = `
@@ -98,6 +111,7 @@ const BASE_SCHEMA = `
     baseline_cpu_millis INTEGER,
     baseline_memory_mib INTEGER,
     node_name TEXT,
+    next_due_ms INTEGER,
     updated_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS reservations (
@@ -133,7 +147,7 @@ const BASE_SCHEMA = `
     );
     CREATE INDEX IF NOT EXISTS sessions_state ON sessions(state);
     CREATE INDEX IF NOT EXISTS exec_requests_session ON exec_requests(session_id);
-`;
+${DUE_INDEX}`;
 
 /**
  * v7 -> v8: record the wallet that signed the client commitment. Additive only;
@@ -164,6 +178,17 @@ function migrateV9toV10(db: DatabaseSync): void {
   db.exec("ALTER TABLE payment_intents ADD COLUMN claim_expires_at INTEGER;");
 }
 
+/**
+ * v10 -> v11: the reconcile loop becomes due-time driven. `next_due_ms` is the
+ * earliest time a session needs another pass; NULL (pre-v11 rows and fresh
+ * inserts) means "due immediately". Additive only: no session data is rewritten
+ * and the existing sweep keeps working through `listNonTerminal`.
+ */
+function migrateV10toV11(db: DatabaseSync): void {
+  db.exec("ALTER TABLE sessions ADD COLUMN next_due_ms INTEGER;");
+  db.exec(DUE_INDEX);
+}
+
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = FULL;");
@@ -187,6 +212,7 @@ export function migrate(db: DatabaseSync): void {
       if (version < 8) migrateV7toV8(db);
       if (version < 9) migrateV8toV9(db);
       if (version < 10) migrateV9toV10(db);
+      if (version < 11) migrateV10toV11(db);
       // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

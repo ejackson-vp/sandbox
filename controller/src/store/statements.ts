@@ -1,6 +1,6 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { SOURCE_STATES } from "@x402s/shared";
-import { SESSION_COLUMNS } from "./models.js";
+import { NON_TERMINAL_STATE_SQL, SESSION_COLUMNS } from "./models.js";
 
 const statesIn = (event: keyof typeof SOURCE_STATES): string =>
   SOURCE_STATES[event].map((state) => `'${state}'`).join(",");
@@ -69,8 +69,25 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
          WHERE payment_key=? AND status != 'settled'`,
       ),
       listNonTerminal: db.prepare(
-        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDING','SUSPENDED','RESUMING','TERMINATING')`,
+        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN (${NON_TERMINAL_STATE_SQL})`,
       ),
+      /**
+       * Due-time read for the reconcile loop: live sessions whose next pass is
+       * due (NULL means "never scheduled yet"), earliest first. `LIMIT` bounds
+       * the work per tick.
+       *
+       * `INDEXED BY` is deliberate: without table statistics SQLite prefers the
+       * narrow `sessions_state` index and then sorts every live row, which is
+       * the O(all sessions) behaviour this column exists to remove.
+       */
+      listDue: db.prepare(
+        `SELECT ${SESSION_COLUMNS} FROM sessions INDEXED BY sessions_due
+         WHERE state IN (${NON_TERMINAL_STATE_SQL})
+           AND (next_due_ms IS NULL OR next_due_ms <= ?)
+         ORDER BY next_due_ms LIMIT ?`,
+      ),
+      /** Move one session's next pass; cadence policy lives in the caller. */
+      bumpDue: db.prepare("UPDATE sessions SET next_due_ms = ? WHERE id = ?"),
       listTerminalWithPod: db.prepare(
         `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('EXPIRED','FAILED','DESTROYED') AND pod_name IS NOT NULL`,
       ),
@@ -86,22 +103,22 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
         "UPDATE sessions SET last_activity_at=?, updated_at=? WHERE id=? AND state IN ('READY','ACTIVE')",
       ),
       markSuspending: db.prepare(
-        `UPDATE sessions SET state='SUSPENDING', updated_at=? WHERE id=? AND state IN (${statesIn("suspend_requested")})`,
+        `UPDATE sessions SET state='SUSPENDING', next_due_ms=?, updated_at=? WHERE id=? AND state IN (${statesIn("suspend_requested")})`,
       ),
       markSuspended: db.prepare(
         `UPDATE sessions SET state='SUSPENDED', suspended_at=?, lease_expires_at=NULL,
-           pod_name=NULL, updated_at=? WHERE id=? AND state IN (${statesIn("guest_stopped")})`,
+           pod_name=NULL, next_due_ms=?, updated_at=? WHERE id=? AND state IN (${statesIn("guest_stopped")})`,
       ),
       markResuming: db.prepare(
         `UPDATE sessions SET state='RESUMING', pod_name=?, suspended_at=NULL,
-           resume_count=resume_count+1, lease_expires_at=NULL, updated_at=?
+           resume_count=resume_count+1, lease_expires_at=NULL, next_due_ms=?, updated_at=?
          WHERE id=? AND state IN (${statesIn("resume_requested")})`,
       ),
       setWorkspacePvc: db.prepare("UPDATE sessions SET workspace_pvc=?, updated_at=? WHERE id=?"),
       setNodeName: db.prepare("UPDATE sessions SET node_name=?, updated_at=? WHERE id=?"),
       clearWorkspacePvc: db.prepare("UPDATE sessions SET workspace_pvc=NULL, updated_at=? WHERE id=?"),
       setProvisioning: db.prepare(
-        `UPDATE sessions SET pod_name = ?, state = 'PROVISIONING', updated_at = ? WHERE id = ? AND state IN (${statesIn("provision_requested")})`,
+        `UPDATE sessions SET pod_name = ?, state = 'PROVISIONING', next_due_ms = ?, updated_at = ? WHERE id = ? AND state IN (${statesIn("provision_requested")})`,
       ),
       setProvisioningPod: db.prepare(
         `UPDATE sessions SET pod_name = ?, updated_at = ? WHERE id = ? AND state = 'PROVISIONING'`,
@@ -109,19 +126,20 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       setRelayToken: db.prepare("UPDATE sessions SET relay_token_hash = ?, updated_at = ? WHERE id = ?"),
       setReady: db.prepare(
         `UPDATE sessions SET state='READY', ready_at=?, lease_expires_at=?, attestation_json=?,
-           guest_public_key=?, last_activity_at=?, updated_at=?
+           guest_public_key=?, last_activity_at=?, next_due_ms=?, updated_at=?
          WHERE id=? AND state IN (${statesIn("guest_ready")})
            AND pod_name IS NOT NULL AND relay_token_hash IS NOT NULL`,
       ),
       requestTermination: db.prepare(
-        `UPDATE sessions SET state='TERMINATING', terminating_at=?, termination_reason=?, updated_at=?
+        `UPDATE sessions SET state='TERMINATING', terminating_at=?, termination_reason=?,
+           next_due_ms=?, updated_at=?
          WHERE id=? AND state IN (${statesIn("terminate_requested")})`,
       ),
       setFailure: db.prepare(
         "UPDATE sessions SET failure_code = ?, failure_message = ?, updated_at = ? WHERE id = ?",
       ),
       finalize: db.prepare(
-        `UPDATE sessions SET state=?, destroyed_at=?, active_request_id=NULL, updated_at=?
+        `UPDATE sessions SET state=?, destroyed_at=?, active_request_id=NULL, next_due_ms=?, updated_at=?
          WHERE id=? AND state IN (${statesIn("terminated")})`,
       ),
       requestDestroy: db.prepare(
@@ -133,7 +151,11 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
         "UPDATE sessions SET timings_json = json_patch(COALESCE(timings_json, '{}'), ?), updated_at = ? WHERE id = ?",
       ),
       clearActive: db.prepare(
-        "UPDATE sessions SET active_request_id = NULL, state = CASE WHEN state='ACTIVE' THEN 'READY' ELSE state END, updated_at = ? WHERE id = ? AND active_request_id = ?",
+        "UPDATE sessions SET active_request_id = NULL, state = CASE WHEN state='ACTIVE' THEN 'READY' ELSE state END, next_due_ms = ?, updated_at = ? WHERE id = ? AND active_request_id = ?",
+      ),
+      /** Claim the single operation slot and move READY -> ACTIVE in one write. */
+      claimActive: db.prepare(
+        "UPDATE sessions SET active_request_id = ?, state = CASE WHEN state='READY' THEN 'ACTIVE' ELSE state END, next_due_ms = ?, updated_at = ? WHERE id = ?",
       ),
       /** Recovery: an in-flight request may still be running; never report success/failure. */
       markPendingOutcomeUnknown: db.prepare(
@@ -156,6 +178,7 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
         `UPDATE sessions
          SET active_request_id = NULL,
              state = CASE WHEN state='ACTIVE' THEN 'READY' ELSE state END,
+             next_due_ms = ?,
              updated_at = ?
          WHERE id = ? AND active_request_id = ? AND exec_epoch = ?`,
       ),

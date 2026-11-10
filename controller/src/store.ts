@@ -9,15 +9,11 @@
  * Schema changes are additive and transactional; a database from a newer build
  * is refused rather than downgraded.
  */
-import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import { backup as sqliteBackup, DatabaseSync, type StatementSync } from "node:sqlite";
 import {
-  mapIntent,
   mapLedger,
   mapSession,
-  PaymentAlreadyRedeemedError,
-  PaymentClaimLostError,
   type ClaimOperationResult,
   type ExecRequestRecord,
   type IntentClaimResult,
@@ -32,6 +28,7 @@ import {
 import { migrate } from "./store/schema.js";
 import { checkStoreHealth, type StoreHealth } from "./store/health.js";
 import { prepareStatements } from "./store/statements.js";
+import { PaymentRepository } from "./store/payments.js";
 import { finalStateForReason, metrics, SOURCE_STATES } from "@x402s/shared";
 
 import { ReservationRepository } from "./capacity/reservations.js";
@@ -73,6 +70,15 @@ function boundedFailureReason(reason: string): string {
   return PROVISION_FAILURE_REASONS.has(reason) ? reason : "other";
 }
 
+/**
+ * Placeholder re-due interval applied by every state change: the default
+ * reconcile tick (250ms). Per-state cadence policy — how long PROVISIONING,
+ * READY or SUSPENDED should wait before the next pass — is deliberately not
+ * implemented here; the due-time scheduler owns that. Until then this keeps a
+ * due-time tick visiting the same sessions as today's full sweep.
+ */
+export const DEFAULT_REDUE_INTERVAL_MS = 250;
+
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -81,6 +87,7 @@ export class Store {
   private readonly db: DatabaseSync;
   private readonly stmts: Record<string, StatementSync>;
   readonly reservations: ReservationStore;
+  readonly payments: PaymentRepository;
   /** Path of the main database file (`:memory:` in tests). */
   readonly path: string;
 
@@ -105,6 +112,7 @@ export class Store {
     this.reservations = new ReservationRepository(this.db);
 
     this.stmts = prepareStatements(this.db);
+    this.payments = new PaymentRepository(this.db, this.stmts);
   }
 
   close(): void {
@@ -143,169 +151,27 @@ export class Store {
 
   /* ---------------- payment intents (outbox) ---------------- */
 
-  /**
-   * Lease an intent to this caller. The returned token is the ownership fence:
-   * only the holder of the current token may complete. A claim older than its
-   * recorded lease, or older than the caller's `staleMs`, is a crash path and
-   * can be reclaimed; the previous owner then loses the token.
-   */
+  /** Lease an intent; see PaymentRepository for the ownership contract. */
   claimPaymentIntent(paymentKey: string, specHashValue: string, staleMs: number): IntentClaimResult {
-    const now = Date.now();
-    const token = randomBytes(16).toString("hex");
-    const expiresAt = now + staleMs;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const raw = this.stmts.getIntent!.get(paymentKey) as Record<string, unknown> | undefined;
-      if (raw) {
-        const intent = mapIntent(raw);
-        if (intent.specHash !== specHashValue) {
-          this.db.exec("COMMIT");
-          return { status: "mismatch" };
-        }
-        if (intent.status === "settled" && intent.sessionId) {
-          this.db.exec("COMMIT");
-          return { status: "settled", sessionId: intent.sessionId };
-        }
-        if (intent.status === "failed") {
-          this.db.exec("COMMIT");
-          return { status: "failed", reason: intent.reason };
-        }
-        // claimed: either in flight or stale after a crash. The recorded lease
-        // is authoritative; the age check keeps the original `staleMs` recovery
-        // path (and pre-v10 rows, which have no lease) working.
-        const leaseExpired = intent.claimExpiresAt !== null && now >= intent.claimExpiresAt;
-        const agedOut = now - intent.updatedAt >= staleMs;
-        if (!leaseExpired && !agedOut) {
-          this.db.exec("COMMIT");
-          return { status: "in_progress" };
-        }
-        const reclaimed = this.stmts.reclaimIntent!.run(token, expiresAt, now, paymentKey);
-        this.db.exec("COMMIT");
-        if (reclaimed.changes === 0) return { status: "in_progress" };
-        return { status: "claimed", recovered: true, token, expiresAt };
-      }
-      this.stmts.insertIntent!.run(paymentKey, specHashValue, token, expiresAt, now, now);
-      this.db.exec("COMMIT");
-      return { status: "claimed", recovered: false, token, expiresAt };
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    return this.payments.claimPaymentIntent(paymentKey, specHashValue, staleMs);
   }
 
   getPaymentIntent(paymentKey: string): PaymentIntentRecord | null {
-    const raw = this.stmts.getIntent!.get(paymentKey) as Record<string, unknown> | undefined;
-    return raw ? mapIntent(raw) : null;
+    return this.payments.getPaymentIntent(paymentKey);
   }
 
   failPaymentIntent(paymentKey: string, reason: string): void {
-    this.stmts.failIntent!.run(reason.slice(0, 500), Date.now(), paymentKey);
+    this.payments.failPaymentIntent(paymentKey, reason);
   }
 
-  /**
-   * Atomically: record the payment, create the session, and mark the intent
-   * settled. The caller must present the claim token it was given by
-   * `claimPaymentIntent`; a stale owner is rejected.
-   *
-   * Idempotent: if another worker already settled the intent, this returns that
-   * session with `created: false` instead of throwing. A crash before this
-   * leaves the intent `claimed`, which the API resolves by asking the
-   * facilitator whether settlement happened.
-   */
+  /** Settle the intent and create the paid session (see PaymentRepository). */
   completeEntitlement(
     paymentKey: string,
     claimToken: string,
     payment: PaymentRecord,
     session: SessionRecord,
   ): { sessionId: string; created: boolean } {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const raw = this.stmts.getIntent!.get(paymentKey) as Record<string, unknown> | undefined;
-      if (!raw) throw new PaymentClaimLostError(paymentKey);
-      const intent = mapIntent(raw);
-      // Already settled: the winner's session is the answer, not an error.
-      if (intent.status === "settled" && intent.sessionId) {
-        this.db.exec("COMMIT");
-        return { sessionId: intent.sessionId, created: false };
-      }
-      if (intent.status !== "claimed" || intent.claimToken !== claimToken) {
-        throw new PaymentClaimLostError(paymentKey);
-      }
-
-      this.stmts.insertPayment!.run(
-        payment.paymentKey,
-        payment.network,
-        payment.scheme,
-        payment.asset,
-        payment.amount,
-        payment.payTo,
-        payment.payer ?? null,
-        payment.transaction ?? null,
-        payment.mode,
-        Date.now(),
-      );
-      this.stmts.insertLedger!.run(
-        payment.paymentKey,
-        session.id,
-        payment.payer ?? null,
-        payment.amount,
-        payment.asset,
-        payment.network,
-        payment.mode,
-        Date.now(),
-        Date.now(),
-      );
-      this.stmts.insertSession!.run(
-        session.id,
-        session.capabilityHash,
-        session.capabilityExpiresAt,
-        session.clientPublicKey,
-        session.clientNonce,
-        session.clientSigner ?? null,
-        session.tier,
-        session.durationSeconds,
-        session.limits.cpuMillis,
-        session.limits.memoryMiB,
-        session.limits.diskMiB,
-        session.limits.maxOutputBytes,
-        session.limits.maxFileBytes,
-        session.limits.maxCommandSeconds,
-        session.limits.maxProcesses,
-        session.state,
-        session.createdAt,
-        session.paidAt,
-        session.paymentKey,
-        session.runtimeClass,
-        session.executionMode,
-        session.relayTokenHash,
-        session.updatedAt,
-      );
-      this.stmts.initLifecycle!.run(
-        session.idlePolicyJson ?? null,
-        session.maxLifetimeSeconds ?? null,
-        session.lastActivityAt ?? session.createdAt,
-        session.workspacePvc ?? null,
-        session.suspendedAt ?? null,
-        session.resumeCount ?? 0,
-        session.baselineCpuMillis ?? null,
-        session.baselineMemoryMib ?? null,
-        session.updatedAt,
-        session.id,
-      );
-      // Conditional on the token: a concurrent reclaim inside this transaction
-      // has already changed it, so the stale owner cannot settle.
-      const settled = this.stmts.settleIntent!.run(session.id, Date.now(), paymentKey, claimToken);
-      if (settled.changes === 0) throw new PaymentClaimLostError(paymentKey);
-      this.db.exec("COMMIT");
-      return { sessionId: session.id, created: true };
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      const msg = (err as Error).message;
-      if (msg.includes("UNIQUE") || msg.includes("PRIMARY KEY")) {
-        throw new PaymentAlreadyRedeemedError(paymentKey);
-      }
-      throw err;
-    }
+    return this.payments.completeEntitlement(paymentKey, claimToken, payment, session);
   }
 
   /* ---------------- sessions ---------------- */
@@ -362,6 +228,16 @@ export class Store {
     return (this.stmts.listNonTerminal!.all() as unknown as RawSession[]).map(mapSession);
   }
 
+  /** Move a session's next reconcile pass. Cadence policy belongs to the caller. */
+  bumpDue(id: string, atMs: number): boolean {
+    return this.stmts.bumpDue!.run(atMs, id).changes > 0;
+  }
+
+  /** Live sessions whose next pass is due, earliest first, bounded by `limit`. */
+  listDue(nowMs: number, limit: number): SessionRecord[] {
+    return (this.stmts.listDue!.all(nowMs, limit) as unknown as RawSession[]).map(mapSession);
+  }
+
   listTerminalWithPod(): SessionRecord[] {
     return (this.stmts.listTerminalWithPod!.all() as unknown as RawSession[]).map(mapSession);
   }
@@ -375,7 +251,8 @@ export class Store {
   }
 
   setProvisioning(id: string, podName: string): boolean {
-    return this.stmts.setProvisioning!.run(podName, Date.now(), id).changes > 0;
+    const now = Date.now();
+    return this.stmts.setProvisioning!.run(podName, now + DEFAULT_REDUE_INTERVAL_MS, now, id).changes > 0;
   }
 
   /** Replace the pod of a session that is already PROVISIONING (relay restart). */
@@ -394,6 +271,7 @@ export class Store {
     attestationJson: string,
     guestPublicKey: string,
   ): boolean {
+    const now = Date.now();
     return (
       this.stmts.setReady!.run(
         readyAt,
@@ -401,7 +279,8 @@ export class Store {
         attestationJson,
         guestPublicKey,
         readyAt,
-        Date.now(),
+        now + DEFAULT_REDUE_INTERVAL_MS,
+        now,
         id,
       ).changes > 0
     );
@@ -413,15 +292,24 @@ export class Store {
   }
 
   markSuspending(id: string): boolean {
-    return this.stmts.markSuspending!.run(Date.now(), id).changes > 0;
+    const now = Date.now();
+    return this.stmts.markSuspending!.run(now + DEFAULT_REDUE_INTERVAL_MS, now, id).changes > 0;
   }
 
   markSuspended(id: string, suspendedAt: number): boolean {
-    return this.stmts.markSuspended!.run(suspendedAt, suspendedAt, id).changes > 0;
+    return (
+      this.stmts.markSuspended!.run(
+        suspendedAt,
+        suspendedAt + DEFAULT_REDUE_INTERVAL_MS,
+        suspendedAt,
+        id,
+      ).changes > 0
+    );
   }
 
   markResuming(id: string, podName: string): boolean {
-    return this.stmts.markResuming!.run(podName, Date.now(), id).changes > 0;
+    const now = Date.now();
+    return this.stmts.markResuming!.run(podName, now + DEFAULT_REDUE_INTERVAL_MS, now, id).changes > 0;
   }
 
   setWorkspacePvc(id: string, pvcName: string): void {
@@ -442,7 +330,13 @@ export class Store {
 
   requestTermination(id: string, reason: string, failure?: { code: string; message: string }): boolean {
     const now = Date.now();
-    const changed = this.stmts.requestTermination!.run(now, reason, now, id).changes > 0;
+    const changed = this.stmts.requestTermination!.run(
+      now,
+      reason,
+      now + DEFAULT_REDUE_INTERVAL_MS,
+      now,
+      id,
+    ).changes > 0;
     if (changed && reason.startsWith("failure:")) {
       metrics
         .counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason")
@@ -460,7 +354,8 @@ export class Store {
     if (!session || session.state !== "TERMINATING") return null;
     const reason = session.terminationReason ?? "";
     const final = finalStateForReason(reason);
-    this.stmts.finalize!.run(final, Date.now(), Date.now(), id);
+    const now = Date.now();
+    this.stmts.finalize!.run(final, now, now + DEFAULT_REDUE_INTERVAL_MS, now, id);
     return final;
   }
 
@@ -525,7 +420,16 @@ export class Store {
    * nothing.
    */
   clearFencedGate(sessionId: string, requestId: string, epoch: number): boolean {
-    return this.stmts.clearFencedGate!.run(Date.now(), sessionId, requestId, epoch).changes > 0;
+    const now = Date.now();
+    return (
+      this.stmts.clearFencedGate!.run(
+        now + DEFAULT_REDUE_INTERVAL_MS,
+        now,
+        sessionId,
+        requestId,
+        epoch,
+      ).changes > 0
+    );
   }
 
   /**
@@ -562,9 +466,7 @@ export class Store {
         return { ok: false, code: "busy", state: session.state, requestId: session.activeRequestId };
       }
       this.stmts.insertRequest!.run(requestId, sessionId, op, session.execEpoch, now, now);
-      this.db
-        .prepare("UPDATE sessions SET active_request_id = ?, state = CASE WHEN state='READY' THEN 'ACTIVE' ELSE state END, updated_at = ? WHERE id = ?")
-        .run(requestId, now, sessionId);
+      this.stmts.claimActive!.run(requestId, now + DEFAULT_REDUE_INTERVAL_MS, now, sessionId);
       this.db.exec("COMMIT");
       return { ok: true, requestId, epoch: session.execEpoch };
     } catch (err) {
@@ -581,7 +483,7 @@ export class Store {
       // restart fenced it. Recovery owns that request now; a stale finish must
       // not clear the gate or overwrite `outcome_unknown`.
       const finished = this.stmts.finishRequest!.run(outcome, now, sessionId, requestId).changes;
-      if (finished > 0) this.stmts.clearActive!.run(now, sessionId, requestId);
+      if (finished > 0) this.stmts.clearActive!.run(now + DEFAULT_REDUE_INTERVAL_MS, now, sessionId, requestId);
       this.db.exec("COMMIT");
     } catch (err) {
       this.db.exec("ROLLBACK");
