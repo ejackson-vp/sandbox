@@ -24,7 +24,7 @@ BrokenStartOp(s, r) ==
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
                  guest, final, epoch, execEpoch, guestConnected, guestStatus,
-                 guestEpoch, admittedEpoch, relayPending, recovered>>
+                 guestEpoch, admittedEpoch, relayPending, recovered, startGen>>
 
 BrokenOperationActions ==
   \/ \E s \in Sessions, r \in Requests :

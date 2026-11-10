@@ -27,14 +27,16 @@ verified), so the run is reproducible offline once the jar is cached.
 | Session lifecycle | READY implies a Pod and relay, SUSPENDED implies a checkpoint, terminal sessions hold no slot |
 | Payment intent and ledger | no double charge, atomic settlement, one session per payment key, refund only without service |
 | Operation slot | one controller slot and one-in-guest command per session |
-| Execution-epoch fence | a stale epoch never starts, a fenced gate keeps the old request and never overlaps a new one, and it clears only after the guest reports idle (or disconnects) |
+| Execution-epoch fence | a frame below the session epoch never starts (the relay refuses it and withdraws one already forwarded), a fenced gate keeps the old request and never overlaps a new one, and it clears only after the guest reports idle (or disconnects) |
 | Reservation | no capacity over-reservation, terminal sessions release capacity, `RELEASING` only after the Pod is gone |
 
-The fence is the #19 restart-recovery protocol: `recoverInterruptedOperations`
-marks the interrupted request `outcome_unknown` and bumps `sessions.exec_epoch`
-without clearing the gate; `OperationFence` releases it only from the guest's
-own idle/disconnected status, and the guest rejects a frame below its epoch
-high-water with `stale_epoch`.
+The fence is the #19 restart-recovery protocol plus the #88 epoch floor:
+`recoverInterruptedOperations` marks the interrupted request `outcome_unknown`
+and bumps `sessions.exec_epoch` without clearing the gate; `OperationFence`
+publishes that epoch to the relay, releases the gate only from the guest's own
+idle/disconnected status, and the relay refuses a frame below the floor
+(`stale_epoch`) and withdraws a frame it already forwarded but the guest never
+observed. The guest's own high-water check remains as defence in depth.
 
 The full list, with the meaning and code location of each invariant, is in
 [`verification/README.md`](../verification/README.md).
@@ -63,12 +65,13 @@ cache, Kubernetes scheduling and the warm pool. Those are either covered by
 tests in `tests/` or documented as non-goals in
 [control-plane-faults.md](control-plane-faults.md).
 
-One property is deliberately weaker than "the guest never runs an old frame":
-`admitEpoch` compares a frame with the guest's high-water mark, not with
-`sessions.exec_epoch`. A frame from the previous generation that the guest has
-not yet observed can still start after recovery; the controller gate stays
-fenced and the old command must finish before a new one is admitted, so no
-commands overlap. This window is recorded in
+The property is now as strong as the protocol claim: a frame from a controller
+generation older than `sessions.exec_epoch` cannot start. Recovery publishes
+that epoch to the relay, which refuses a lower epoch and withdraws a frame it
+had already forwarded by resetting the guest link. The only residual is a frame
+the guest has already read before the reset arrives; it is treated as an
+observed command and the fence waits for it, so it can never overlap a new one.
+This is recorded in
 [`verification/README.md`](../verification/README.md#findings).
 
 ## Nightly run

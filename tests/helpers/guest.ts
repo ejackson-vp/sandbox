@@ -42,6 +42,8 @@ export interface GuestOptions {
   maxCommandSeconds?: number;
   workspaceRoot?: string;
   extraEnv?: Record<string, string>;
+  /** Execution epoch this harness's controller generation sends on frames. */
+  execEpoch?: number;
 }
 
 export class GuestHarness {
@@ -155,7 +157,8 @@ export class GuestHarness {
       ...request,
     };
     const envelope = await sealJsonTo(this.guestKey, payload);
-    await this.relayClient.request(this.sessionId, requestId, envelope, Date.now() + 120_000);
+    const epoch = this.opts.execEpoch ?? 1;
+    await this.relayClient.request(this.sessionId, requestId, envelope, Date.now() + 120_000, epoch);
     const response = await this.relayClient.response(this.sessionId, requestId, 30_000);
     if (response.kind !== "envelope") throw new Error(`unexpected relay response: ${JSON.stringify(response)}`);
     return openSealedJson<GuestResult>(response.envelope, this.clientKeys.publicKey, this.clientKeys.privateKey);
@@ -167,7 +170,42 @@ export class GuestHarness {
     return result;
   }
 
+  /**
+   * Stop the guest process with SIGSTOP. Used to make "a frame forwarded but
+   * not yet observed" deterministic: the process cannot read its socket while
+   * stopped, so a forwarded frame stays queued in the kernel.
+   */
+  pause(): void {
+    if (!this.proc?.pid) throw new Error("guest not running");
+    process.kill(this.proc.pid, "SIGSTOP");
+  }
+
+  resume(): void {
+    if (!this.proc?.pid) throw new Error("guest not running");
+    process.kill(this.proc.pid, "SIGCONT");
+  }
+
+  /** Exit code once the guest process ends, or null if it is still running. */
+  async waitForExit(timeoutMs = 10_000): Promise<number | null> {
+    if (!this.proc || this.proc.exitCode !== null) return this.proc?.exitCode ?? null;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), timeoutMs);
+      this.proc!.once("exit", (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+  }
+
   async stop(): Promise<void> {
+    if (this.proc?.pid) {
+      // A stopped process does not act on SIGKILL until it is continued.
+      try {
+        process.kill(this.proc.pid, "SIGCONT");
+      } catch {
+        /* already gone */
+      }
+    }
     this.proc?.kill("SIGKILL");
     await this.relayClient?.purge(this.sessionId).catch(() => undefined);
     await this.relay?.close();

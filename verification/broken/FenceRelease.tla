@@ -26,7 +26,7 @@ BrokenFenceRelease(s) ==
                  refund, reservations, resPayment, pod, creating, pvc, relay,
                  guest, slotEpoch, final, epoch, execEpoch, guestConnected,
                  guestStatus, guestEpoch, admittedEpoch, relayPending, fenceReq,
-                 recovered>>
+                 recovered, startGen>>
 
 BrokenOperationActions ==
   \/ \E s \in Sessions, r \in Requests :

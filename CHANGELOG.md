@@ -7,6 +7,19 @@ the container registry.
 
 ## Unreleased
 
+### Security
+
+- Recovery now closes the stale-frame window in the execution-epoch fence. The
+  relay enforces the session's `exec_epoch` as a forwarding floor and withdraws
+  a frame that the previous controller generation forwarded but the guest never
+  observed, so such a frame cannot start after recovery (#88). The guest's
+  high-water check remains as defence in depth. A withdrawal resets the guest
+  link; because the supervisor exits on link loss and sandbox Pods use
+  `restartPolicy: Never`, that session ends `FAILED` with
+  `failure:guest_exited` (no refund, since it had reached READY) instead of
+  staying `READY` without a guest. See
+  [ADR 0008](docs/adr/0008-relay-enforces-execution-epoch.md).
+
 ### Changed
 
 - Monitoring is split by ownership: this repository keeps the portable contract

@@ -303,6 +303,17 @@ export class LocalProvisioner implements Provisioner {
     return null;
   }
 
+  /**
+   * Test/dev hook: deliver a signal to a running guest process. Used to make
+   * "a frame forwarded but not yet observed" deterministic (`SIGSTOP`), which
+   * is not otherwise reproducible without a real network fault.
+   */
+  signalPod(podName: string, signal: NodeJS.Signals): boolean {
+    const pod = this.pods.get(podName);
+    if (!pod || pod.proc.exitCode !== null) return false;
+    return pod.proc.kill(signal);
+  }
+
   diagnostics(podName: string): string | undefined {
     return this.pods.get(podName)?.stderr;
   }

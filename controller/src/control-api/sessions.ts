@@ -143,6 +143,18 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     } catch (err) {
       store.finishOperation(id, requestId, "abandoned");
       const status = (err as { status?: number }).status;
+      if (status === 409 && (err as Error).message === "stale_epoch") {
+        // The relay refused the frame because this controller's epoch is below
+        // the session's: another generation has already recovered the session.
+        log.warn("operation_stale_epoch", { sessionId: id, requestId, epoch: claim.epoch });
+        res.status(409).json({
+          error: "stale_epoch",
+          state: store.getSession(id)?.state,
+          requestId,
+          message: "the request belongs to an older controller generation",
+        });
+        return;
+      }
       log.warn("operation_delivery_failed", { sessionId: id, requestId, status, error: (err as Error).message });
       res.status(409).json({ error: "guest_not_available", state: store.getSession(id)?.state });
       return;

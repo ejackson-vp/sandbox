@@ -12,6 +12,8 @@ export type WaiterValue = { envelope: string } | { error: string } | null;
 
 interface Pending {
   at: number;
+  /** Execution epoch the frame was forwarded under, for withdrawal. */
+  epoch: number;
   waiter?: (value: WaiterValue) => void;
 }
 
@@ -30,6 +32,11 @@ interface Entry {
   tokenHash: string;
   expiresAt: number;
   ws: WebSocket | null;
+  /**
+   * The TCP socket behind `ws`. Kept so recovery can reset the connection
+   * (discarding unread frames) rather than closing it gracefully.
+   */
+  socket: { resetAndDestroy?: () => void } | null;
   connectedAt: number | null;
   hello: AttestationEnvelope | null;
   helloAt: number | null;
@@ -41,6 +48,12 @@ interface Entry {
   activeRequestId: string | null;
   execEpoch: number | null;
   statusAt: number | null;
+  /**
+   * Lowest execution epoch the relay may forward. The controller raises it to
+   * the session's `exec_epoch` on recovery, so a frame from an older controller
+   * generation is refused here before it can reach the guest.
+   */
+  epochFloor: number;
 }
 
 export interface RelayRegistryOptions {
@@ -53,7 +66,23 @@ export interface RelayRegistryOptions {
 }
 
 export type RegisterResult = "ok" | "already_connected" | "at_capacity";
-export type RequestResult = "sent" | "cached" | "pending" | "too_many" | "not_connected" | "not_registered";
+export type RequestResult =
+  | "sent"
+  | "cached"
+  | "pending"
+  | "too_many"
+  | "not_connected"
+  | "not_registered"
+  | "stale_epoch";
+export type EpochResult = "ok" | "unknown";
+
+export interface RaiseEpochResult {
+  result: EpochResult;
+  /** Pending frames dropped from the superseded generation. */
+  withdrawn: number;
+  /** Whether the guest link was reset to discard an unread frame. */
+  reset: boolean;
+}
 export type SendResult = "sent" | "not_registered" | "not_connected";
 export type AttachResult = "ok" | "not_found" | "expired" | "bad_token" | "connected";
 
@@ -93,6 +122,7 @@ export class RelayRegistry {
       tokenHash,
       expiresAt: Date.now() + (ttlMs || 3_600_000),
       ws: null,
+      socket: null,
       connectedAt: null,
       hello: null,
       helloAt: existing?.helloAt ?? null,
@@ -105,6 +135,9 @@ export class RelayRegistry {
       activeRequestId: null,
       execEpoch: null,
       statusAt: null,
+      // The epoch is a property of the session, not of one guest process, so a
+      // registration keeps a floor that recovery already raised.
+      epochFloor: existing?.epochFloor ?? 0,
     });
     return "ok";
   }
@@ -126,27 +159,104 @@ export class RelayRegistry {
           }
         : {}),
       ...(entry.lastError ? { error: entry.lastError.message } : {}),
+      epochFloor: entry.epochFloor,
     };
   }
 
   request(sessionId: string, id: string, envelope: string, deadlineMs?: number, epoch = 0): RequestResult {
     const entry = this.entries.get(sessionId);
     if (!entry) return "not_registered";
+    const requestedEpoch = Number(epoch) || 0;
+    // A frame below the floor belongs to a controller generation that recovery
+    // has already superseded. Epoch 0 is only admissible while no floor has
+    // been raised (the relay's floor starts at 0).
+    if (requestedEpoch < entry.epochFloor) return "stale_epoch";
     if (entry.responses.has(id) || entry.errors.has(id)) return "cached";
     if (entry.pending.has(id)) return "pending";
     if (entry.pending.size >= MAX_PENDING) return "too_many";
     if (!entry.ws || entry.ws.readyState !== 1) return "not_connected";
-    entry.pending.set(id, { at: Date.now() });
+    entry.pending.set(id, { at: Date.now(), epoch: requestedEpoch });
     entry.ws.send(
       JSON.stringify({
         type: "request",
         id,
         envelope,
         deadlineMs: Number(deadlineMs) || Date.now() + 60_000,
-        epoch: Number(epoch) || 0,
+        epoch: requestedEpoch,
       }),
     );
     return "sent";
+  }
+
+  /**
+   * Raise the session's execution-epoch floor to at least `epoch`, then
+   * withdraw any frame the guest could still start from a superseded
+   * generation.
+   *
+   * A request that is still awaiting a response was forwarded under an older
+   * epoch; dropping it from the pending set stops the relay waiting for a
+   * frame that must never run. Dropping it does not unsend it, though: the
+   * frame may already be queued on the guest's socket. If the guest has not
+   * itself reported an epoch at or above the floor and has no command running,
+   * the only way to guarantee it never reads that frame is to end the
+   * connection. That matches the existing contract: the supervisor exits when
+   * its relay link drops, so a command cannot survive the link. A command the
+   * guest has already started is observed; the fence waits for it instead.
+   */
+  raiseEpoch(sessionId: string, epoch: number): RaiseEpochResult {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return { result: "unknown", withdrawn: 0, reset: false };
+    const requested = Math.trunc(Number(epoch));
+    if (!Number.isFinite(requested) || requested <= entry.epochFloor) {
+      return { result: "ok", withdrawn: 0, reset: false };
+    }
+    entry.epochFloor = requested;
+
+    let withdrawn = 0;
+    for (const [id, pending] of entry.pending) {
+      if (pending.epoch < requested) {
+        entry.pending.delete(id);
+        pending.waiter?.({ error: "request superseded by controller recovery" });
+        withdrawn += 1;
+      }
+    }
+
+    const guestBehind = entry.execEpoch === null || entry.execEpoch < requested;
+    let reset = false;
+    if (withdrawn > 0) {
+      this.metrics
+        .counter("sandbox_relay_frames_withdrawn_total", "Frames withdrawn after a recovery epoch increase")
+        .inc({ reason: guestBehind ? "guest_reset" : "guest_ahead" }, withdrawn);
+    }
+    if (withdrawn > 0 && guestBehind && !entry.activeRequestId) {
+      reset = this.resetConnection(entry);
+    }
+    return { result: "ok", withdrawn, reset };
+  }
+
+  /**
+   * End a guest connection with a TCP reset, not a WebSocket close. A close
+   * frame is ordered after every frame already queued on the socket, so the
+   * guest would still read them; a reset discards unread bytes. The guest
+   * supervisor exits on the read error and reconnects (or the session ends),
+   * which is the same path as any other relay link loss.
+   */
+  private resetConnection(entry: Entry): boolean {
+    const ws = entry.ws;
+    if (!ws) return false;
+    const socket = entry.socket;
+    entry.ws = null;
+    entry.socket = null;
+    for (const pending of entry.pending.values()) pending.waiter?.({ error: "guest disconnected" });
+    entry.pending.clear();
+    try {
+      if (socket && typeof socket.resetAndDestroy === "function") socket.resetAndDestroy();
+      else ws.terminate();
+      return true;
+    } catch {
+      /* the pod is going away anyway */
+      return false;
+    }
   }
 
   /** Record the guest's own view of its single execution slot. */
@@ -235,11 +345,12 @@ export class RelayRegistry {
     return "ok";
   }
 
-  attach(sessionId: string, ws: WebSocket): boolean {
+  attach(sessionId: string, ws: WebSocket, socket?: { resetAndDestroy?: () => void } | null): boolean {
     const entry = this.entries.get(sessionId);
     if (!entry || entry.ws) return false;
     const reconnecting = entry.connectedAt !== null;
     entry.ws = ws;
+    entry.socket = socket ?? null;
     entry.connectedAt = Date.now();
     if (reconnecting) {
       this.metrics
@@ -289,6 +400,7 @@ export class RelayRegistry {
     const entry = this.entries.get(sessionId);
     if (!entry || entry.ws !== ws) return;
     entry.ws = null;
+    entry.socket = null;
     for (const pending of entry.pending.values()) pending.waiter?.({ error: "guest disconnected" });
     entry.pending.clear();
   }

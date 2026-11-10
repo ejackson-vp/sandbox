@@ -49,6 +49,10 @@ export function registerRelayMetrics(registry: MetricsRegistry = metrics): void 
   registry.gauge("sandbox_relay_pending_requests", "Requests awaiting a guest response");
   registry.counter("sandbox_relay_reconnects_total", "Guest reconnections to an existing registration");
   registry.counter("sandbox_relay_disconnects_total", "Guest disconnections by close reason");
+  registry.counter(
+    "sandbox_relay_frames_withdrawn_total",
+    "Frames withdrawn from the pending set after a recovery epoch increase",
+  );
 }
 
 export function collectRelayMetrics(registry: MetricsRegistry, relay: RelayRegistry): void {

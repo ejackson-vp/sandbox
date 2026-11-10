@@ -490,9 +490,10 @@ export class Store {
    *
    * The session's execution epoch is bumped in the same transaction. The gate
    * is released only by `clearFencedGate` after the relay reports that the
-   * guest no longer has that request active (see OperationFence). A frame
-   * forwarded by the previous generation carries the old epoch and is rejected
-   * by the guest, so it cannot run after recovery.
+   * guest no longer has that request active (see OperationFence). Recovery
+   * publishes the new epoch to the relay before the fence can clear: the relay
+   * then refuses frames from an older generation and withdraws one that was
+   * forwarded but never observed, so it cannot start at the guest afterwards.
    */
   recoverInterruptedOperations(): { requests: number; sessions: number } {
     const now = Date.now();

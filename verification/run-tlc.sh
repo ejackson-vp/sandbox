@@ -167,7 +167,7 @@ run_broken() {
   expect_violation CapacityRace "Invariant NoCapacityOverReservation is violated"
   expect_violation OrphanPod "Invariant NoOrphanedWorkloadAfterTerminal is violated"
   expect_violation FenceRelease "Invariant NoPrematureFenceRelease is violated"
-  expect_violation StaleEpoch "Invariant StaleFrameNeverStarts is violated"
+  expect_violation StaleEpoch "Invariant NoStaleFrameStarts is violated"
   expect_violation NoRefund "" PaidSessionProgress
   expect_violation NoRelease "" TerminalReleasesCapacity
 }
