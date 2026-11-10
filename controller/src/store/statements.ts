@@ -163,7 +163,7 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       ),
       getRequest: db.prepare("SELECT * FROM exec_requests WHERE session_id = ? AND id = ?"),
       finishRequest: db.prepare(
-        "UPDATE exec_requests SET state = ?, updated_at = ? WHERE session_id = ? AND id = ?",
+        "UPDATE exec_requests SET state = ?, updated_at = ? WHERE session_id = ? AND id = ? AND state = 'pending'",
       ),
     };
 }

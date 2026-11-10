@@ -572,8 +572,11 @@ export class Store {
     const now = Date.now();
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.stmts.finishRequest!.run(outcome, now, sessionId, requestId);
-      this.stmts.clearActive!.run(now, sessionId, requestId);
+      // A caller may have read this request as pending before a controller
+      // restart fenced it. Recovery owns that request now; a stale finish must
+      // not clear the gate or overwrite `outcome_unknown`.
+      const finished = this.stmts.finishRequest!.run(outcome, now, sessionId, requestId).changes;
+      if (finished > 0) this.stmts.clearActive!.run(now, sessionId, requestId);
       this.db.exec("COMMIT");
     } catch (err) {
       this.db.exec("ROLLBACK");
