@@ -24,11 +24,18 @@ export function registerRelayRoutes(
     next();
   };
 
-  // Readiness doubles as the controller's generation probe. It is deliberately
-  // cheap and unauthenticated: the generation is a random per-process id, not a
-  // secret.
+  // Liveness plus the controller's generation probe. Deliberately cheap and
+  // unauthenticated: the generation is a random per-process id, not a secret.
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, generation: opts.generation, sessions: registry.size() });
+  });
+
+  // Readiness. The relay's only dependency is its own in-memory registry, so a
+  // process that answers this can accept registrations. Kept separate from
+  // /healthz so the probe semantics match the other components and a future
+  // dependency can be added here without changing liveness.
+  app.get("/readyz", (_req, res) => {
+    res.json({ ok: true });
   });
 
   app.get("/metrics", (_req, res) => {

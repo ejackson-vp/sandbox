@@ -174,6 +174,7 @@ beforeAll(async () => {
         cfg: controllerCfg,
         store,
         relay: relayClient,
+        provisioner,
         capacity,
         suspend: (id) => {
           if (!suspendFn) return Promise.reject(new Error("reconciler not started"));
@@ -237,6 +238,25 @@ afterAll(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("readiness", () => {
+  it("reports ready for the API and controller before serving creates", async () => {
+    const apiReady = await fetch(`${apiUrl}/readyz`);
+    expect(apiReady.status).toBe(200);
+    expect(await apiReady.json()).toMatchObject({ ok: true, components: { controller: { ok: true } } });
+
+    const controllerReady = await fetch(`http://127.0.0.1:${CONTROLLER_PORT}/internal/readyz`);
+    expect(controllerReady.status).toBe(200);
+    const body = (await controllerReady.json()) as {
+      ok: boolean;
+      components: Record<string, { ok: boolean }>;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.components.store).toMatchObject({ ok: true });
+    expect(body.components.relay).toMatchObject({ ok: true });
+    expect(body.components.provisioner).toMatchObject({ ok: true });
+  });
 });
 
 describe("payments and entitlements", () => {

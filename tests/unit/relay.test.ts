@@ -136,6 +136,12 @@ describe("execution status and epoch forwarding", () => {
 });
 
 describe("relay generation", () => {
+  it("answers readiness without exposing registry state", async () => {
+    const res = await fetch(`${base}/readyz`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
   it("reports a stable per-process generation from /healthz", async () => {
     const first = (await (await fetch(`${base}/healthz`)).json()) as { ok: boolean; generation: string };
     const second = (await (await fetch(`${base}/healthz`)).json()) as { ok: boolean; generation: string };

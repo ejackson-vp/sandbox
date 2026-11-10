@@ -18,6 +18,80 @@ that was added without a local cluster run; see
 3. A terminal session eventually stops consuming compute; Pod deletion
    uncertainty keeps capacity in `RELEASING` rather than freeing it.
 
+## Health probes
+
+Liveness and readiness answer different questions. A process whose dependency
+is down is still a live process: restarting it does not heal the dependency, and
+for the single-writer controller a restart can make recovery slower. Liveness
+therefore checks only that the event loop still answers. Readiness checks what
+the process needs in order to serve traffic.
+
+| Component | Liveness | Readiness | Readiness checks |
+| --- | --- | --- | --- |
+| API (`10-api.yaml`) | `GET /healthz` | `GET /readyz` | Controller readiness reachable |
+| Controller (`11-controller.yaml`) | `GET /internal/healthz` | `GET /internal/readyz` | Store writable and migrated, relay reachable, provisioner reachable |
+| Relay (`12-relay.yaml`) | `GET /healthz` | `GET /readyz` | In-memory registry serving (no external dependency) |
+
+The relay's `/healthz` additionally returns its per-process `generation`; the
+controller's registration path depends on that value, so it stays on the
+liveness endpoint. The controller's `/healthz` and `/internal/readyz`, and the
+relay's `/healthz` and `/readyz`, are unauthenticated: kubelet cannot present
+the admin token. NetworkPolicy still limits who can reach them, and no response
+contains tokens, session ids, payloads or exception text.
+
+### Semantics
+
+- **Store.** Readiness reads `PRAGMA user_version` and requires it to equal the
+  build's `SCHEMA_VERSION`, then runs a no-op `UPDATE` inside a transaction and
+  rolls it back. A read-only connection accepts `BEGIN IMMEDIATE` but rejects
+  the write, so the probe detects a read-only file and a locked database, not
+  just an open handle. The probe lowers `busy_timeout` to 200 ms so Kubernetes
+  owns the timeout budget instead of a stuck write.
+- **Relay.** A bounded `GET /healthz` (1.5 s) on the relay. A failed probe means
+  the controller cannot register or forward operations, which is exactly when a
+  paid create would stall in `PAID`.
+- **Provisioner.** One-pod list against the sandbox namespace, proving the
+  Kubernetes API is reachable and the controller identity can still read what it
+  writes. In local process mode it checks that the guest binary exists. A
+  provisioner without a `healthCheck` is omitted rather than treated as failed.
+- **API.** The API holds no durable state and must reach the controller for
+  every create, so its only readiness dependency is the controller. The API
+  does not forward the controller's component detail; `/readyz` is reachable
+  through the ingress and reports only `controller: ok | not_ready |
+  unreachable`.
+
+### Caching and failure
+
+Dependency results are cached for about 2 s, including negative results, and
+concurrent probes share one in-flight check. Kubernetes readiness probes run
+every 5 s with `failureThreshold: 3`, so a dependency outage removes the pod
+from Service endpoints within roughly the probe period without turning each
+probe into a store write or Kubernetes API call. Liveness probes are on a
+longer period (15 s) and never touch a dependency, so a store lock or relay
+blip cannot restart a healthy process.
+
+A failed readiness check returns HTTP 503 with a bounded component map:
+
+```json
+{
+  "ok": false,
+  "checkedAt": 1731000000000,
+  "cached": false,
+  "components": {
+    "store": { "ok": false, "reason": "read_only" },
+    "relay": { "ok": true },
+    "provisioner": { "ok": true }
+  }
+}
+```
+
+Reason codes are a closed set (`closed`, `unavailable`,
+`migrations_incomplete`, `read_only`, `locked`, `write_failed`, `unreachable`,
+`not_ready`). Dependency exception messages are never returned.
+
+Readiness is an admission signal, not a recovery mechanism: the reconciler
+still owns retries, refunds and session convergence for the faults below.
+
 ## Real cluster harness
 
 `make test-control-faults` runs `scripts/control-faults.ts`.

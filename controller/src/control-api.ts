@@ -9,7 +9,7 @@
  * contents and results never appear in this process.
  */
 import express, { type NextFunction, type Request, type Response } from "express";
-import { metrics } from "@x402s/shared";
+import { metrics, ReadinessCache, type ComponentCheck } from "@x402s/shared";
 import { constantTimeEqual } from "./tokens.js";
 import { log } from "@x402s/shared";
 import { createCapacityRouter } from "./capacity/routes.js";
@@ -25,8 +25,46 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   app.disable("x-powered-by");
   app.use(express.json({ limit: "32mb" }));
 
+  // Liveness only: if this handler runs, the event loop is turning. Kubernetes
+  // restarts the process when this stops answering. Dependency health belongs
+  // in /internal/readyz; a store or relay blip must not restart a live process.
   app.get("/internal/healthz", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  const readinessChecks: Record<string, ComponentCheck> = {
+    store: () => {
+      const health = deps.store.healthCheck();
+      return health.ok ? { ok: true } : { ok: false, reason: health.reason };
+    },
+    relay: async () => {
+      try {
+        await deps.relay.health(1_500);
+        return { ok: true };
+      } catch {
+        return { ok: false, reason: "unreachable" };
+      }
+    },
+  };
+  const provisionerHealth = deps.provisioner?.healthCheck?.bind(deps.provisioner);
+  if (provisionerHealth) {
+    readinessChecks.provisioner = async () => {
+      try {
+        await provisionerHealth();
+        return { ok: true };
+      } catch {
+        return { ok: false, reason: "unreachable" };
+      }
+    };
+  }
+  const readiness = new ReadinessCache(readinessChecks);
+
+  // Readiness: can this controller serve creates right now? Unauthenticated for
+  // the same reason as liveness (kubelet has no admin token); the body contains
+  // only bounded component states, never tokens, paths or session ids.
+  app.get("/internal/readyz", async (_req, res) => {
+    const report = await readiness.check();
+    res.status(report.ok ? 200 : 503).json(report);
   });
 
   // A client certificate signed by the internal CA with CN=api is an

@@ -9,6 +9,7 @@ import type {
   SessionSpec,
   SessionState,
   ControllerSessionView,
+  ReadinessReport,
 } from "@x402s/shared";
 
 export type SessionView = ControllerSessionView;
@@ -114,6 +115,21 @@ export class ControllerClient {
       throw new ControllerError(res.status, b?.error ?? "controller_error", b?.message ?? `controller ${res.status}`, body);
     }
     return body as T;
+  }
+
+  /* ---------------- readiness ---------------- */
+
+  /**
+   * Fetch the controller's readiness report. A 503 is a normal answer (the
+   * controller is up but a dependency is not), not a transport failure.
+   */
+  async readiness(timeoutMs = 2_000): Promise<ReadinessReport> {
+    const res = await this.raw("/internal/readyz", {}, timeoutMs);
+    const body = (await res.json().catch(() => undefined)) as ReadinessReport | undefined;
+    if (!body || typeof body.ok !== "boolean") {
+      throw new ControllerError(res.status, "readiness_failed", `controller readiness ${res.status}`);
+    }
+    return body;
   }
 
   /* ---------------- payment intents ---------------- */

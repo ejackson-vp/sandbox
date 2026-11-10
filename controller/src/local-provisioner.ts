@@ -8,7 +8,7 @@
  * KUBERNETES_ENABLED=true.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodInfo, WarmPodSpec } from "./k8s.js";
@@ -44,6 +44,11 @@ export class LocalProvisioner implements Provisioner {
   constructor(private readonly opts: LocalProvisionerOptions) {
     this.workRoot = opts.workRoot ?? join(tmpdir(), "x402-local-sandboxes");
     mkdirSync(this.workRoot, { recursive: true });
+  }
+
+  async healthCheck(): Promise<void> {
+    // A local provisioner is only as ready as the guest binary it spawns.
+    accessSync(this.opts.binary, constants.X_OK);
   }
 
   async createPod(spec: SandboxPodSpec): Promise<{ podName: string }> {

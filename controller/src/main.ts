@@ -126,6 +126,7 @@ async function main(): Promise<void> {
     cfg,
     store,
     relay,
+    provisioner,
     capacity,
     wake: () => wake?.(),
     suspend: (id) => {

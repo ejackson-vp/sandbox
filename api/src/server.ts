@@ -21,6 +21,7 @@ import {
   LATENCY_BUCKETS,
   MOCK_NETWORK,
   MockExactServerScheme,
+  ReadinessCache,
   metrics,
   type SessionSpec,
 } from "@x402s/shared";
@@ -169,6 +170,26 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, paymentMode: config.paymentMode, network: config.network });
+  });
+
+  // Readiness: the API holds no durable state, so its dependency is the
+  // controller (which in turn checks the store, relay and provisioner). Do not
+  // forward the controller's component detail: /readyz is reachable through the
+  // ingress, while the controller's report is cluster-internal.
+  const readiness = new ReadinessCache({
+    controller: async () => {
+      try {
+        const report = await controller.readiness();
+        return report.ok ? { ok: true } : { ok: false, reason: "not_ready" };
+      } catch {
+        return { ok: false, reason: "unreachable" };
+      }
+    },
+  });
+
+  app.get("/readyz", async (_req, res) => {
+    const report = await readiness.check();
+    res.status(report.ok ? 200 : 503).json(report);
   });
 
   // Aggregate metrics only; bounded labels, no session ids or payload data.

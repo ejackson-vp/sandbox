@@ -29,12 +29,14 @@ import {
   type SessionState,
 } from "./store/models.js";
 import { migrate } from "./store/schema.js";
+import { checkStoreHealth, type StoreHealth } from "./store/health.js";
 import { prepareStatements } from "./store/statements.js";
 import { finalStateForReason, SOURCE_STATES } from "@x402s/shared";
 
 import { ReservationRepository } from "./capacity/reservations.js";
 import type { ReservationStore } from "./capacity/reservation-store.js";
 
+export type { StoreHealth } from "./store/health.js";
 export type {
   ClaimOperationResult,
   ExecRequestRecord,
@@ -81,6 +83,14 @@ export class Store {
 
   close(): void {
     this.db.close();
+  }
+
+  /**
+   * Readiness probe: schema is current and the database accepts a write.
+   * Runs on the store connection so it sees exactly what the reconciler sees.
+   */
+  healthCheck(): StoreHealth {
+    return checkStoreHealth(this.db);
   }
 
   /** Consistent online copy for the backup service. */
