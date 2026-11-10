@@ -47,6 +47,7 @@ async function post(body: unknown) {
   // codeql[js/missing-rate-limiting]
   app.post(
     "/v1/sessions",
+    // codeql[js/missing-rate-limiting]
     createSessionHandler({
       config: {
         tiers: DEFAULT_TIERS,
