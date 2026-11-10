@@ -55,6 +55,17 @@ Anything that can provision a `ReadWriteOnce` volume works —
 `local-path-provisioner` is enough for a single node. Without it, sessions can
 be created and executed but `suspend`/`resume` fails.
 
+On this cluster `standard` is `local-path-provisioner`, so a suspended session's
+workspace is a directory on the node and is **not encrypted**. `local-path` has
+no encryption parameter, there is no CSI driver to configure, and no key exists
+in the guest or the controller once the pod is gone: the node and storage
+administrators can read the files. Do not describe a checkpoint as encrypted on
+this deployment. An encrypted CSI StorageClass, on a cloud that provides one,
+reduces exposure to a detached disk; it does not remove the node admin and the
+controller cannot verify it. See
+[ADR 0007](../../docs/adr/0007-checkpoint-at-rest-plaintext.md) and
+[lifecycle.md](../../docs/lifecycle.md#checkpoint-at-rest-expiry-and-backup).
+
 ## 3. Images
 
 `release.yml` publishes two images on a `v*` tag:

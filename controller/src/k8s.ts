@@ -16,9 +16,12 @@ import { log } from "@x402s/shared";
 import { annotationsFor, baselineOf, bootstrapEnvFor, buildPod, guestEnvFor } from "./k8s-pod.js";
 import { WARM_IDENTITY_ANNOTATION, WARM_IMAGE_DIGEST_ANNOTATION } from "./warm-pool-identity.js";
 import { listNodes } from "./k8s-nodes.js";
+import type { WorkspacePvcInfo } from "./checkpoint-retention.js";
 import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
 
 export type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
+export type { WorkspacePvcInfo } from "./checkpoint-retention.js";
+
 export { NullProvisioner } from "./k8s-null.js";
 
 const LABEL_APP = "app.kubernetes.io/name";
@@ -282,6 +285,21 @@ export class KubeProvisioner implements Provisioner {
       if ((err as { code?: number }).code === 404) return false;
       throw err;
     }
+  }
+
+  async listWorkspacePvcs(): Promise<WorkspacePvcInfo[]> {
+    const res = await this.core.listNamespacedPersistentVolumeClaim({
+      namespace: this.namespace,
+      labelSelector: `${LABEL_POOL}=workspace`,
+    });
+    return (res.items ?? []).map((pvc) => ({
+      name: pvc.metadata?.name ?? "",
+      sessionId: pvc.metadata?.labels?.[LABEL_SESSION] ?? "",
+      createdAt: pvc.metadata?.creationTimestamp
+        ? new Date(pvc.metadata.creationTimestamp).getTime()
+        : 0,
+      deleting: Boolean(pvc.metadata?.deletionTimestamp),
+    }));
   }
 
   async listSandboxPods(): Promise<Array<{ name: string; sessionId: string; createdAt: number; phase: string }>> {
