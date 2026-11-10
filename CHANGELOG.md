@@ -5,6 +5,15 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
+## Unreleased
+
+### Added
+
+- Lightweight homelab monitoring under `deploy/monitoring/`: VictoriaMetrics
+  single-node, Grafana and vmalert with 14-day retention, a provisioned
+  dashboard and the issue #38 SLO rules (including target-down and
+  blast-radius) (#38).
+
 ## 0.1.19
 
 ### Added

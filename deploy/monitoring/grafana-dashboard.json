@@ -202,6 +202,23 @@
       ],
       "fieldConfig": { "defaults": {}, "overrides": [] },
       "options": { "showHeader": true }
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Firing SLO alerts (vmalert)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 40 },
+      "targets": [
+        {
+          "expr": "ALERTS{alertstate=\"firing\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true }
     }
   ],
   "refresh": "30s",
@@ -210,13 +227,23 @@
   "templating": {
     "list": [
       {
-        "current": {},
+        "current": {
+          "selected": true,
+          "text": "VictoriaMetrics",
+          "value": "vmsingle"
+        },
         "hide": 0,
         "includeAll": false,
         "label": "Prometheus",
         "multi": false,
         "name": "DS_PROMETHEUS",
-        "options": [],
+        "options": [
+          {
+            "selected": true,
+            "text": "VictoriaMetrics",
+            "value": "vmsingle"
+          }
+        ],
         "query": "prometheus",
         "refresh": 1,
         "regex": "",

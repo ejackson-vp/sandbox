@@ -80,6 +80,25 @@ stops a moved tag from changing what runs inside the VM.
 to reach the API. With the Tailscale operator this is the MagicDNS name of the
 API's `Ingress`, e.g. `https://sandbox.<tailnet>.ts.net`.
 
+## 5. Monitoring
+
+The metrics stack is deliberately a separate overlay:
+[`../monitoring`](../monitoring/README.md) installs VictoriaMetrics
+single-node, Grafana and vmalert into the `monitoring` namespace. In the
+homelab, Flux should reconcile it as a second `Kustomization` (path
+`./deploy/monitoring`) rather than folding it into `apps/sandbox`; by hand,
+apply the app first and then the stack:
+
+```bash
+kubectl apply -k deploy/talos
+kubectl apply -k deploy/monitoring
+```
+
+The stack scrapes the three roles on their private `:9100` listener. It does
+not create an Ingress and does not expose metrics through the public API
+Service. Retention is 14 days and the PVC uses the cluster default
+StorageClass; on this cluster that is `standard`.
+
 ## What is verified on this cluster
 
 | Check | Command |
