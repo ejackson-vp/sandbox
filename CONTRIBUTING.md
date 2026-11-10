@@ -15,6 +15,77 @@ make up
 make security-test
 ```
 
+## Fuzzing
+
+The guest parsers, the relay frame handling and the API schemas are fuzzed.
+None of it needs a cluster. PR CI runs every target for a short fixed budget
+(20 s per Go target, one pass of the fast-check properties).
+
+Go targets (`testing.F`, in-package):
+
+| Target | Package | Boundary |
+| --- | --- | --- |
+| `FuzzOpen` | `guest/internal/envelope` | sealed-box / base64 envelope decode |
+| `FuzzResolve` | `guest/internal/files` | workspace path validation and containment |
+| `FuzzTransferFraming` | `guest` | chunked upload framing: order, duplicates, size and digest |
+| `FuzzChunkDecode` | `guest` | base64 transfer chunk decode |
+| `FuzzSupervisorDecrypt` | `guest` | envelope open, JSON decode and session binding before dispatch |
+| `FuzzFrameDecode` | `guest` | relay control-frame JSON decode |
+
+TypeScript targets (`fast-check` + Vitest, `tests/fuzz/`): API create/operation
+schemas, plaintext rejection, payment header decoding, the real operations
+router (malformed input must produce a 4xx, never a 500), relay registry bounds
+(pending and response caches), relay HTTP and guest WebSocket frames.
+
+Short run (the CI budget):
+
+```bash
+npm run test:fuzz
+
+cd guest
+go test ./internal/envelope -run=^$ -fuzz=FuzzOpen -fuzztime=20s
+go test ./internal/files -run=^$ -fuzz=FuzzResolve -fuzztime=20s
+go test . -run=^$ -fuzz=FuzzTransferFraming -fuzztime=20s
+go test . -run=^$ -fuzz=FuzzSupervisorDecrypt -fuzztime=20s
+go test . -run=^$ -fuzz=FuzzFrameDecode -fuzztime=20s
+go test . -run=^$ -fuzz=FuzzChunkDecode -fuzztime=20s
+```
+
+Longer local soak (recommended before touching a parser or a size cap):
+
+```bash
+cd guest
+go test ./internal/envelope -run=^$ -fuzz=FuzzOpen -fuzztime=10m
+go test ./internal/files -run=^$ -fuzz=FuzzResolve -fuzztime=10m
+go test . -run=^$ -fuzz=FuzzTransferFraming -fuzztime=10m
+go test . -run=^$ -fuzz=FuzzSupervisorDecrypt -fuzztime=10m
+go test . -run=^$ -fuzz=FuzzFrameDecode -fuzztime=10m
+go test . -run=^$ -fuzz=FuzzChunkDecode -fuzztime=10m
+```
+
+`-fuzztime` is wall-clock per target. Add `-parallel=1` when reproducing a
+timing-sensitive report, and keep the Fuzz worker count down on a loaded
+machine so the per-target budget is not starved.
+
+### Corpora and reproducers
+
+- Seeds are registered with `f.Add` in the `*_fuzz_test.go` files, using
+  shapes from the existing unit tests. `go test ./...` replays every seed and
+  every committed corpus entry, so a fixed crash stays covered.
+- When a run finds a new input, Go writes the reproducer to
+  `testdata/fuzz/<Target>/` next to the package (`guest/testdata/fuzz/` or
+  `guest/internal/<pkg>/testdata/fuzz/`). Commit the file as-is; it is the
+  regression. `go test ./...` will replay it without fuzzing.
+- Inputs worth keeping that the fuzzer only found in its cache live under
+  `$(go env GOCACHE)/fuzz`. Copy the interesting file into the same
+  `testdata/fuzz/<Target>/` directory rather than editing it.
+- Regenerating a corpus from scratch means deleting that target's
+  `testdata/fuzz/<Target>/` directory and re-running the fuzzer; do not delete
+  a file that reproduces a reported crash.
+- TypeScript failures print `{ seed, path }`. Replay with
+  `FUZZ_SEED=<seed> npm run test:fuzz`. Add the shrunk counterexample as a
+  normal assertion so it is covered on every run, not only under a seed.
+
 ## Rules
 
 - **Modules stay reviewable.** `npm run lint:structure` enforces 650 lines. Split

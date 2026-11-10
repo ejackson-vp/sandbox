@@ -28,6 +28,35 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:property
 
+  # Short deterministic budget so PR CI stays fast. The longer soak runs are
+  # documented in CONTRIBUTING.md; the nightly fault lane owns the soak.
+  fuzz:
+    name: fuzz (short)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: guest/go.mod
+          cache-dependency-path: guest/go.sum
+      - run: npm ci
+      - run: npm run build
+      - name: go fuzz targets (20s each)
+        working-directory: guest
+        run: |
+          go test ./internal/envelope -run=^$ -fuzz=FuzzOpen -fuzztime=20s
+          go test ./internal/files -run=^$ -fuzz=FuzzResolve -fuzztime=20s
+          go test . -run=^$ -fuzz=FuzzTransferFraming -fuzztime=20s
+          go test . -run=^$ -fuzz=FuzzSupervisorDecrypt -fuzztime=20s
+          go test . -run=^$ -fuzz=FuzzFrameDecode -fuzztime=20s
+          go test . -run=^$ -fuzz=FuzzChunkDecode -fuzztime=20s
+      - name: typescript fuzz targets
+        run: npm run test:fuzz
+
   integration:
     name: integration (local guest)
     runs-on: ubuntu-latest
