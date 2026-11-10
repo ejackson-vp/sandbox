@@ -17,6 +17,12 @@ quote for this deployment.
 | Warm pool | 20 pre-booted guests |
 | Client | macOS, SDK over Tailscale |
 | Payments | mock x402 |
+| Measured | 2026-11-09 |
+
+> These results are from control `0.1.16`. `0.1.20` removes a create-path round
+> trip (session view in the create response, no post-payment session re-read)
+> but has not been re-measured, so the warm numbers here are a conservative
+> floor until the cluster benchmark runs again.
 
 ## Method
 
