@@ -24,7 +24,7 @@ export interface EndpointRuntime {
     relayHeadlessService: string;
     proxyHeadlessService: string;
   };
-  serviceAddress(name: string, shard?: number): Promise<Endpoint | null>;
+  serviceAddress(name: string, shard?: number, podPrefix?: string): Promise<Endpoint | null>;
 }
 
 export class DataPlaneEndpoints {
@@ -67,7 +67,7 @@ export class DataPlaneEndpoints {
     const shard = pinnedShard(this.ctx.cfg, service, sessionId);
     return shard === null
       ? this.ctx.serviceAddress(name)
-      : this.ctx.serviceAddress(headless, shard);
+      : this.ctx.serviceAddress(headless, shard, name);
   }
 
   /**

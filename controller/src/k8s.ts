@@ -368,12 +368,20 @@ export class KubeProvisioner implements Provisioner {
    * the previous behaviour for container runtimes that can use it.
    *
    * `shard` selects one replica of a StatefulSet behind a headless Service. The
-   * endpoint hostname is the pod name (`relay-0`), so `${name}-${shard}` picks
-   * the replica. There is no ClusterIP fallback on this path: a ClusterIP
-   * load-balances across replicas, which is the misrouting the shard prevents.
+   * endpoint hostname is the StatefulSet pod name (`relay-0`), which is not
+   * derived from the Service name: a sharded lookup reads `relay-headless`, and
+   * its endpoints are still named `relay-0`. Match the ordinal suffix, not
+   * `${name}-${shard}`, which would look for `relay-headless-0`. The suffix
+   * cannot collide because `-1` does not suffix `-11`.
+   * There is no ClusterIP fallback on this path: a ClusterIP load-balances
+   * across replicas, which is the misrouting the shard prevents.
    * A shard with no ready endpoint resolves to null.
    */
-  async getServiceAddress(name: string, shard?: number): Promise<{ host: string; port: number } | null> {
+  async getServiceAddress(
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ): Promise<{ host: string; port: number } | null> {
     try {
       const svc = await this.core.readNamespacedService({ name, namespace: this.controlNamespace });
       const port = svc.spec?.ports?.[0]?.port;
@@ -388,7 +396,11 @@ export class KubeProvisioner implements Provisioner {
         .filter((endpoint) => endpoint.conditions?.ready !== false);
 
       if (shard !== undefined) {
-        const hostname = `${name}-${shard}`;
+        // Endpoint hostnames are the StatefulSet pod names (`relay-0`), which
+        // come from the workload, not from the headless Service
+        // (`relay-headless`). Match the workload prefix exactly, so an endpoint
+        // from another workload cannot be mistaken for this shard.
+        const hostname = `${podPrefix ?? name}-${shard}`;
         const shardIp = ready
           .filter((endpoint) => endpoint.hostname === hostname)
           .flatMap((endpoint) => endpoint.addresses ?? [])[0];

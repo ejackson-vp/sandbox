@@ -297,7 +297,7 @@ export class LocalProvisioner implements Provisioner {
     if (labels["x402.io/pool"] === "sandbox") pod.warm = false;
   }
 
-  async getServiceAddress(name: string, _shard?: number): Promise<{ host: string; port: number } | null> {
+  async getServiceAddress(name: string, _shard?: number, _podPrefix?: string): Promise<{ host: string; port: number } | null> {
     // Local process mode has one of each service and no sharding.
     if (name === "relay") return { host: this.opts.relayHost, port: this.opts.relayPort };
     if (name === "egress-proxy") return { host: this.opts.proxyHost, port: this.opts.proxyPort };

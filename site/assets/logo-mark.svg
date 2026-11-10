@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t">
+  <title id="t">sandbox mark</title>
+  <style>
+    :root { --bracket: #14395c; --dot: #0f8f72; }
+    @media (prefers-color-scheme: dark) { :root { --bracket: #b9d4e2; --dot: #4fe0b8; } }
+    .b { fill: none; stroke: var(--bracket); stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; }
+    .d { fill: var(--dot); }
+  </style>
+  <path class="b" d="M17 4 H6 Q4 4 4 6 V17"/>
+  <path class="b" d="M47 4 H58 Q60 4 60 6 V17"/>
+  <path class="b" d="M4 47 V58 Q4 60 6 60 H17"/>
+  <path class="b" d="M60 47 V58 Q60 60 58 60 H47"/>
+  <rect class="d" x="25.5" y="25.5" width="13" height="13" rx="3.5"/>
+</svg>

@@ -1,0 +1,254 @@
+# sandbox
+
+> Pay once with x402, get a temporary Linux machine. No account, no API key, no signup. The control plane routes sealed commands and files, and the VM is destroyed when the lease ends.
+
+This repository is an **alpha, self-hosted reference deployment**, not a hosted service. There is no documented public API host. Run it on your own cluster, or use the local demo at `http://localhost:8080`. Payments are **mock** or **testnet** only.
+
+- Source: https://github.com/ejackson-vp/sandbox
+- Licence: MIT
+- Status: alpha
+- Local API base URL: `http://localhost:8080`
+
+## Start here
+
+- [Quickstart](https://github.com/ejackson-vp/sandbox/blob/main/docs/quickstart.md): the shortest path from zero to a paid session through the SDK.
+- [Architecture](https://github.com/ejackson-vp/sandbox/blob/main/docs/architecture.md): components, warm pool, relay and request path.
+- [CLI and SDK](https://github.com/ejackson-vp/sandbox/blob/main/docs/cli.md): every command and client method.
+- [HTTP API](https://github.com/ejackson-vp/sandbox/blob/main/docs/api.md): routes, envelopes, status codes.
+- [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md): what is enforced and what is not. Read before repeating a security claim.
+- [Threat model](https://github.com/ejackson-vp/sandbox/blob/main/docs/threat-model.md): STRIDE by component.
+- [Production readiness](https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md): the ordered gap to a hosted service.
+- [Workload compatibility](https://github.com/ejackson-vp/sandbox/blob/main/docs/workload-compatibility.md): what actually runs in the guest.
+
+## What an agent should do
+
+Use the CLI or the SDK. Do not hand-roll the sealed envelopes, the x402 payment, or the key exchange. The cryptography is load-bearing and easy to get subtly wrong.
+
+1. Build the project: `npm ci && npm run build`.
+2. Prefer the one-shot path for a single task: `sandbox run --json ...`.
+3. For multi-step work, create a session, run operations, then destroy it in a `finally` block.
+4. Collect outputs before the lease ends. Nothing survives termination.
+5. Treat command failures as data, not transport errors. Results carry `ok: false` and a stable `error.code`.
+
+### Install and build
+
+```bash
+git clone https://github.com/ejackson-vp/sandbox.git
+cd sandbox
+npm ci
+npm run build
+node cli/dist/index.js --help
+
+# optional, puts `sandbox` on PATH
+npm link -w @x402s/cli
+```
+
+The CLI stores each session handle in `~/.config/x402-sandbox/<session-id>.json` with mode `0600`. Set `X402_SANDBOX_HOME` to move it. The file contains the session id, capability and client key pair.
+
+### One-shot run (preferred for agents)
+
+```bash
+sandbox run --json \
+  --file data.csv=data.csv \
+  --file analyze.py=analyze.py \
+  --return out.csv \
+  -- python3 analyze.py
+```
+
+This creates a fresh session, uploads the files, runs the command, downloads the requested outputs, and always destroys the session. File paths are workspace-relative; `/workspace` is implied.
+
+- Only the `base` runtime exists today. Anything else fails with `unsupported_runtime` before a session is created.
+- `--return` writes the downloaded file to the same relative path in the current directory.
+- `--timeout` bounds the command.
+- `--json` is the machine-readable form. `--quiet` suppresses progress notes.
+
+### Sessions and commands
+
+```bash
+sandbox create --tier standard
+sandbox status <id>
+sandbox exec <id> -- python3 --version
+sandbox exec <id> --env GREETING=hi -- bash -c 'echo "$GREETING"'
+sandbox exec <id> --timeout 5s -- bash -c 'sleep 60'     # exits 124
+
+sandbox upload   <id> ./src /workspace/src               # directory -> tar
+sandbox download <id> /workspace/out.txt ./out.txt
+sandbox download <id> /workspace/src ./src --extract
+sandbox ls       <id> /workspace --recursive
+sandbox stat     <id> /workspace/out.txt
+
+sandbox suspend <id>
+sandbox resume  <id>
+sandbox destroy <id>
+```
+
+Custom limits:
+
+```bash
+sandbox create --duration 15m --cpu 2 --memory 2Gi --disk 2Gi
+```
+
+### SDK
+
+```ts
+import { SandboxClient } from "@x402s/sdk";
+
+const client = new SandboxClient({
+  apiUrl: "http://localhost:8080",
+  paymentMode: "mock",
+});
+
+const run = await client.run({
+  runtime: "base", // optional, currently the only runtime
+  command: ["bash", "-c", "python3 analyze.py > out.csv"],
+  files: { "analyze.py": "print('hello')" }, // workspace-relative
+  returnFiles: ["out.csv"],
+  tier: "short",
+});
+
+console.log(run.sessionId, run.exitCode, run.stdout);
+console.log(Buffer.from(run.files["out.csv"]).toString());
+```
+
+`run` always destroys the session. For a long-lived handle:
+
+```ts
+const session = await client.createSession({ tier: "standard" });
+await client.waitForReady(session);
+const result = await client.exec(session, { command: ["python3", "--version"] });
+await client.destroy(session);
+```
+
+`SandboxError` is thrown for transport or session problems. Command failures come back as results with `ok: false`.
+
+## HTTP flow
+
+There are no accounts, cookies or API keys. A paid session is accessed with a short-lived capability token:
+
+```http
+X-Sandbox-Capability: <capability>
+```
+
+The server stores only `SHA-256(capability)`, scoped to one session id and valid until `lease + 900s` by default.
+
+### Create
+
+```http
+POST /v1/sessions
+Content-Type: application/json
+PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
+```
+
+An unpaid request returns `402` with a base64 `PAYMENT-REQUIRED` header containing the price. Sign it and retry with `PAYMENT-SIGNATURE`. A retry with the same payment returns the same session and capability, not a second charge.
+
+Request body (tiers: `short`, `standard`, `extended`, `long`, `custom`):
+
+```json
+{
+  "tier": "standard",
+  "clientPublicKey": "<base64 X25519 public key, 32 bytes>",
+  "clientNonce": "<base64 32-byte freshness nonce>"
+}
+```
+
+Custom tiers additionally require `durationSeconds`, `cpuMillis`, `memoryMiB` and `diskMiB`. Optional checkpoint fields: `idlePolicy`, `maxLifetimeSeconds`, `baselineCpuMillis`, `baselineMemoryMiB`.
+
+The response carries `sessionId`, `capability`, `state`, `limits`, `capabilityExpiresAt` and payment details. `201` is a new session, `200` is an idempotent replay.
+
+### Status, run, destroy
+
+```http
+GET    /v1/sessions/{id}
+POST   /v1/sessions/{id}/operations
+GET    /v1/sessions/{id}/operations?request=<url-encoded envelope>&requestId=<id>
+GET    /v1/sessions/{id}/requests/{requestId}?waitMs=20000
+DELETE /v1/sessions/{id}
+```
+
+`POST /operations` takes `{ requestId, envelope, timeoutMs?, waitMs? }`. The `requestId` is an 8 to 128 character idempotency key. Reusing it returns the same result and does not execute twice. One foreground operation per session; a second gets `409 busy`.
+
+The envelope is a sealed box. The API never sees the operation type, command, environment or output. Ops include `exec`, `file.put`, `file.get`, `file.list`, `file.stat`, `service.start`, `service.list`, `service.stop`, `http.request`, HTTP streams and WebSockets. Use the SDK or CLI.
+
+`202` means still running; poll the request. `409 outcome_unknown` is terminal and means the controller restarted with the request in flight: the command may have run. Do not blindly retry with a new id if the command is not idempotent.
+
+### Suspend and resume
+
+```http
+POST /v1/sessions/{id}/suspend   -> 200 SUSPENDED
+POST /v1/sessions/{id}/resume    -> 202 RESUMING; poll until READY
+```
+
+A checkpoint is **disk only**. Processes, memory and sockets do not survive. Resume boots a fresh guest with a new key against the same workspace. The checkpoint is plaintext on disk and readable by the storage administrator. Do not park secrets in a suspended workspace.
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Tiers | `short` 60 s / 0.5 vCPU / 512 MiB / 256 MiB / $0.02 |
+| | `standard` 300 s / 1 vCPU / 1 GiB / 1 GiB / $0.05 |
+| | `extended` 900 s / 2 vCPU / 2 GiB / 2 GiB / $0.10 |
+| | `long` 1800 s / 2 vCPU / 4 GiB / 4 GiB / $0.20 |
+| Custom ceiling | 2 vCPU / 4 GiB / 8 GiB, up to 30 minutes by default |
+| Workspace | `/workspace`, paths confined to it |
+| File or archive | 8 MiB per payload |
+| Command output | 256 KiB, then truncated |
+| Command time | `min(requested, remaining lease, maxCommandSeconds)` |
+| Listing | 5000 entries |
+| Concurrency | one active foreground operation per session |
+| Processes | pod `pids.max` 1024; `maxProcesses` is advisory |
+| Networking | no inbound; egress only through an allowlisting proxy on 443 |
+
+Prices are configuration (`SESSION_TIERS`), not economics. Read `GET /v1/pricing` for the live table.
+
+## Error codes
+
+| HTTP | code | meaning |
+| --- | --- | --- |
+| 400 | `invalid_request`, `tier_duration_mismatch`, `invalid_duration`, `plaintext_not_accepted` | bad input |
+| 401 | `capability_required` | missing capability |
+| 402 | `payment_required`, `payment_invalid:*`, `payment_settlement_rejected:*` | payment problem |
+| 404 | `session_not_found` | wrong capability or unknown session |
+| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `outcome_unknown`, `session_not_usable`, `session_suspended`, `resume_unavailable` | conflict |
+| 410 | `lease_expired`, `capability_expired`, `result_expired` | gone |
+| 413 | `payload_too_large` | envelope too big |
+| 429 | `rate_limited` (`scope: payer` or `ip`) | honour `Retry-After` |
+| 503 | `control_plane_unavailable`, `provisioning_unavailable` | transient |
+
+Command-level errors (`ok: false`) include `path_outside_workspace`, `quota_exceeded`, `file_too_large`, `unsafe_archive`, `not_found`, `invalid_cwd`, `spawn_failed`, `service_not_found`, `port_in_use`, `service_not_listening`.
+
+## Rules for agents
+
+- Always destroy a session in a `finally` block, even if the command failed.
+- Collect output files before the lease expires.
+- Do not put secrets inline in command strings. Pass them with `--env` or the SDK's env field, and remember they are inside the sealed envelope but still visible to the guest process.
+- Keep payloads under 8 MiB. Chunk or split larger inputs.
+- Use `--json` or the SDK's typed results. Do not scrape human output.
+- Do not retry a non-idempotent command with a new `requestId` after `outcome_unknown`.
+- Use the warm-pool path through the API; do not try to talk to a guest directly. There is no inbound networking.
+- For an HTTP service, start it with `service.start` and call it with the relay `http.request` operation. Do not expect a routable port.
+
+## Security scope, in one paragraph
+
+The transport is sealed client-side to the guest's ephemeral key. The API, controller, relay, database and payment layer route ciphertext and hold no decryption key. Isolation between sandboxes is the Kata VM boundary, not cryptography. There is **no hardware root of trust**: the development attestation key ships in the repository, so anyone can produce the binding. Suspended workspace PVCs are plaintext at rest and readable by the node or storage administrator. Do not describe this system as confidential computing, attested, or provider-blind. The full matrix is in [security-guarantees.md](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md).
+
+## Local verification
+
+```bash
+make up             # kind + Cilium + images + deploy (~2 min)
+make demo-session   # pay, create, exec, upload, download, destroy
+make down
+
+npm ci
+make verify         # typecheck, structure lint, unit + property tests
+make test           # adds integration against the real guest binary
+```
+
+Local clusters use `runc`, not microVMs, but exercise the same API, relay and guest. Prerequisites: Docker, `kind`, `kubectl`, Cilium CLI, Node >= 24, Go >= 1.26.
+
+## Optional
+
+- [Roadmap](https://github.com/ejackson-vp/sandbox/blob/main/ROADMAP.md): what comes next.
+- [Changelog](https://github.com/ejackson-vp/sandbox/blob/main/CHANGELOG.md): release history.
+- [Benchmarks](https://github.com/ejackson-vp/sandbox-bench): the measurement harness.
+- [ADRs](https://github.com/ejackson-vp/sandbox/tree/main/docs/adr): why the load-bearing choices were made.
+- [HTML overview](https://github.com/ejackson-vp/sandbox/tree/main/site): this page, for humans.

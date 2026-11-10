@@ -94,4 +94,21 @@ describe("getServiceAddress", () => {
 
     await expect(kube.getServiceAddress("relay", 0)).resolves.toBeNull();
   });
+
+  // Regression: a sharded lookup reads the headless Service, whose endpoints
+  // are named after the StatefulSet pod (`relay-0`), not the Service
+  // (`relay-headless-0`). The workload prefix is passed explicitly.
+  it("matches the pod ordinal of the workload when the Service name differs", async () => {
+    const kube = provisioner({ port: 8443 }, [
+      { addresses: ["10.1.0.5"], hostname: "relay-0" },
+      { addresses: ["10.1.0.6"], hostname: "relay-1" },
+    ]);
+
+    await expect(kube.getServiceAddress("relay-headless", 1, "relay")).resolves.toEqual({
+      host: "10.1.0.6",
+      port: 8443,
+    });
+    // Without the prefix the Service name is used, so nothing matches.
+    await expect(kube.getServiceAddress("relay-headless", 1)).resolves.toBeNull();
+  });
 });

@@ -108,7 +108,7 @@ export interface Provisioner {
   /** Relabel a warm pod as a claimed sandbox (or update its session id). */
   patchPodLabels(podName: string, labels: Record<string, string | null>): Promise<void>;
   /** Resolve a Service to a dialable endpoint; `shard` selects one replica. */
-  getServiceAddress(name: string, shard?: number): Promise<{ host: string; port: number } | null>;
+  getServiceAddress(name: string, shard?: number, podPrefix?: string): Promise<{ host: string; port: number } | null>;
   /** Capacity planning only; Kubernetes remains the real scheduler. */
   listNodes(): Promise<NodeInfo[]>;
 }

@@ -7,12 +7,13 @@ if (year) year.textContent = String(new Date().getFullYear());
 
 /* The docs URL follows wherever this page is served from. */
 const servedFromHttp = location.protocol === "http:" || location.protocol === "https:";
-const docsUrl = servedFromHttp
-  ? `${location.origin}/llms.txt`
-  : "https://raw.githubusercontent.com/ejackson-vp/sandbox/main/site/llms.txt";
+const origin = servedFromHttp
+  ? location.origin
+  : "https://raw.githubusercontent.com/ejackson-vp/sandbox/main/site";
+const docsUrl = `${origin}/llms.txt`;
 
-for (const el of document.querySelectorAll(".agent-code code, .agent-code-foot code")) {
-  el.innerHTML = el.innerHTML.replaceAll("{origin}", docsUrl.replace(/\/llms\.txt$/, ""));
+for (const el of document.querySelectorAll(".dossier code")) {
+  el.innerHTML = el.innerHTML.replaceAll("{origin}", origin);
 }
 
 /* ---------- nav shadow ---------- */
@@ -51,29 +52,6 @@ if (reduceMotion || !("IntersectionObserver" in window)) {
     }
   }
 }
-
-/* ---------- terminal demo ---------- */
-
-const terminal = document.querySelector("#terminal");
-const replay = document.querySelector("#replay");
-
-const playTerminal = () => {
-  if (!terminal) return;
-  terminal.classList.add("animate");
-  terminal.classList.remove("is-playing");
-  void terminal.offsetWidth;
-  terminal.classList.add("is-playing");
-};
-
-if (terminal) {
-  if (reduceMotion) {
-    terminal.classList.remove("animate");
-  } else {
-    playTerminal();
-  }
-}
-
-replay?.addEventListener("click", playTerminal);
 
 /* ---------- clipboard ---------- */
 

@@ -47,7 +47,11 @@ export interface ReconcilerDeps {
   /** Injectable for tests; defaults to the real capacity service. */
   capacity?: CapacityService;
   /** Override for tests: resolves service addresses without Kubernetes. */
-  serviceAddress?: (name: string, shard?: number) => Promise<{ host: string; port: number } | null>;
+  serviceAddress?: (
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ) => Promise<{ host: string; port: number } | null>;
   /** Restart-recovery fence; defaults to one bound to the store and relay. */
   fence?: OperationFence;
 }
@@ -393,17 +397,21 @@ export class Reconciler {
     return this.lifecycle.resume(id);
   }
 
-  private async serviceAddress(name: string, shard?: number): Promise<{ host: string; port: number } | null> {
+  private async serviceAddress(
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ): Promise<{ host: string; port: number } | null> {
     // The relay resolves to a ready endpoint Pod IP. A replacement relay gets a
     // new IP, so caching it would boot new guests against the old process.
     // Resolve it on every use; only the stable proxy address is cached. The key
     // carries the shard: two proxy replicas have different endpoints and must
     // not share a cache entry.
     return this.serviceAddresses.resolve(
-      shard === undefined ? name : `${name}#${shard}`,
+      shard === undefined ? name : `${name}#${shard}#${podPrefix ?? name}`,
       () => this.deps.serviceAddress
-        ? this.deps.serviceAddress(name, shard)
-        : this.deps.provisioner.getServiceAddress(name, shard),
+        ? this.deps.serviceAddress(name, shard, podPrefix)
+        : this.deps.provisioner.getServiceAddress(name, shard, podPrefix),
       { cache: name !== this.deps.cfg.relayServiceName },
     );
   }

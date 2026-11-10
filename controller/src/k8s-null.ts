@@ -51,7 +51,7 @@ export class NullProvisioner implements Provisioner {
     return [];
   }
   async patchPodLabels(): Promise<void> {}
-  async getServiceAddress(_name?: string, _shard?: number): Promise<null> {
+  async getServiceAddress(_name?: string, _shard?: number, _podPrefix?: string): Promise<null> {
     return null;
   }
 }
