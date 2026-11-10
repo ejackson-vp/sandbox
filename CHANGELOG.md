@@ -14,6 +14,14 @@ the container registry.
   for this gauge before killing the controller, so it tests an observed
   operation rather than racing the guest's status frame (#108).
 
+### Fixed
+
+- A stale operation response can no longer clear the recovery fence. After a
+  controller restart, `finishOperation` only clears `active_request_id` when the
+  request still transitions from `pending`; a request already marked
+  `outcome_unknown` remains owned by `OperationFence` until the guest reports
+  it idle at the new epoch (#111).
+
 ## 0.1.20
 
 ### Added
