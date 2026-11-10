@@ -5,6 +5,32 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
+## 0.1.22
+
+### Added
+
+- Keyless SLSA build provenance for both release images. The Sigstore bundle and
+  its in-toto statement are attached as `sandbox-<name>.sigstore.json` and
+  `sandbox-<name>.intoto.jsonl`, and the attestation is pushed to GHCR (#121).
+- TypeScript coverage is measured in CI and published as a README badge (#121).
+
+### Changed
+
+- Readiness reads one relay snapshot stamped with the relay process generation
+  and reuses the connection for read-only snapshots. Writes still open a fresh
+  connection. This removes two mTLS probes from every readiness pass (#127).
+- The docs gate runs on every pull request instead of only when a Markdown path
+  changes, so non-Markdown PRs no longer wait on checks that never report (#125).
+- README leads with the demo, and the logo, architecture diagram and social
+  preview use the navy and mint palette (#126).
+
+### Fixed
+
+- Coverage options moved under `test.coverage`, where Vitest 5 reads them, so
+  the badge job finds `coverage-summary.json` (#124).
+- The performance claim is corrected: the 0.1.16 numbers are a baseline, and a
+  0.1.20 spot check measured 287 ms server-side readiness (#116, #127).
+
 ## 0.1.21
 
 ### Added
