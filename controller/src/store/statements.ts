@@ -103,6 +103,9 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       setProvisioning: db.prepare(
         `UPDATE sessions SET pod_name = ?, state = 'PROVISIONING', updated_at = ? WHERE id = ? AND state IN (${statesIn("provision_requested")})`,
       ),
+      setProvisioningPod: db.prepare(
+        `UPDATE sessions SET pod_name = ?, updated_at = ? WHERE id = ? AND state = 'PROVISIONING'`,
+      ),
       setRelayToken: db.prepare("UPDATE sessions SET relay_token_hash = ?, updated_at = ? WHERE id = ?"),
       setReady: db.prepare(
         `UPDATE sessions SET state='READY', ready_at=?, lease_expires_at=?, attestation_json=?,

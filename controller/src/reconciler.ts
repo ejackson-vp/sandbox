@@ -29,6 +29,7 @@ import { CapacityService } from "./capacity/service.js";
 import { BackupService } from "./backup.js";
 import { OperationFence } from "./operation-fence.js";
 import { runBounded } from "./bounded-queue.js";
+import { ServiceAddressResolver } from "./service-address.js";
 import { log } from "@x402s/shared";
 
 export { LifecycleError } from "./lifecycle.js";
@@ -65,8 +66,8 @@ export class Reconciler {
   private readonly healthCheckedAt = new Map<string, number>();
   /** Consecutive *successful* probes reporting a missing/terminal pod. */
   private readonly healthStrikes = new Map<string, number>();
-  /** ClusterIPs are stable; avoid two K8s Service reads on every provision. */
-  private readonly serviceCache = new Map<string, { host: string; port: number; at: number }>();
+  /** Proxy addresses are stable; the relay endpoint is not (see serviceAddress). */
+  private readonly serviceAddresses: ServiceAddressResolver;
   private readonly ctx: ReconcilerContext;
   private readonly warm: WarmPool;
   private readonly provisioning: Provisioning;
@@ -78,6 +79,7 @@ export class Reconciler {
 
   constructor(private readonly deps: ReconcilerDeps) {
     this.now = deps.now ?? (() => Date.now());
+    this.serviceAddresses = new ServiceAddressResolver(() => this.now());
     const capacity = deps.capacity ?? new CapacityService({
       cfg: deps.cfg,
       store: deps.store,
@@ -318,15 +320,16 @@ export class Reconciler {
   }
 
   private async serviceAddress(name: string): Promise<{ host: string; port: number } | null> {
-    const cached = this.serviceCache.get(name);
-    if (cached && this.now() - cached.at < 30_000) {
-      return { host: cached.host, port: cached.port };
-    }
-    const addr = this.deps.serviceAddress
-      ? await this.deps.serviceAddress(name)
-      : await this.deps.provisioner.getServiceAddress(name);
-    if (addr) this.serviceCache.set(name, { ...addr, at: this.now() });
-    return addr;
+    // The relay resolves to a ready endpoint Pod IP. A replacement relay gets a
+    // new IP, so caching it would boot new guests against the old process.
+    // Resolve it on every use; only the stable proxy address is cached.
+    return this.serviceAddresses.resolve(
+      name,
+      () => this.deps.serviceAddress
+        ? this.deps.serviceAddress(name)
+        : this.deps.provisioner.getServiceAddress(name),
+      { cache: name !== this.deps.cfg.relayServiceName },
+    );
   }
 
   private async enforceLease(session: SessionRecord): Promise<void> {
