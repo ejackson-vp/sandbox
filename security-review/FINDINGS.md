@@ -23,7 +23,7 @@ executed), `theoretical` (no concrete path found).
 | F-13 | — | reviewed | CodeQL `go/request-forgery` (`relay.go:61`) | False positive under the deploy assumption |
 | F-14 | Low | reviewed | CodeQL `js/resource-exhaustion` (`registry.ts:181`) | Bounded; residual |
 | F-15 | Medium | code-confirmed | GitHub Actions and base images pinned by tag, not digest/SHA | **Open** |
-| F-16 | — | reviewed | CodeQL `js/missing-rate-limiting` ×10 on controller/relay `/internal` routes | Fixed by shared TokenBucket; query model gap documented |
+| F-16 | — | reviewed | CodeQL `js/missing-rate-limiting` ×10 on controller/relay `/internal` routes | Fixed by shared TokenBucket; query model gap documented; alerts #217/#218 dismissed as false positive |
 
 ---
 
@@ -346,6 +346,19 @@ step: the mTLS `CN=controller` check runs on the authenticated TLS socket before
 Express, so the relay no longer needs an inline suppression. The limiter's
 burst/refill behavior, 429 response and bounded table are covered by
 `tests/unit/rate-limit.test.ts`.
+
+**Alert state:** the two comments above are on `main`, but code scanning did not
+honour them, so alerts #217 (`/internal/wake`, line 110) and #218 (the `/internal`
+auth middleware, line 132) stayed open. Both were dismissed as **false positive**
+with a comment pointing at this finding and at the limiter mount
+(`controller/src/control-api.ts:93`). The dismissal records a query-model gap, not
+an accepted risk: nothing was silenced that is not bounded, and no auth or
+rate-limit behaviour changed. Re-verification: `npx vitest run
+tests/unit/rate-limit.test.ts` — 6/6 passing, including the over-burst
+`/internal/wake` → `429 {error:"rate_limited"}` case.
+
+The remaining code-scanning alerts are OpenSSF Scorecard process checks, triaged
+in [#99](https://github.com/ejackson-vp/sandbox/issues/99).
 
 ### F-12 `go/zipslip` (`guest/internal/files/archive.go:54`) — false positive
 
