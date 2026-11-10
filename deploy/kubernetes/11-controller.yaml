@@ -121,9 +121,21 @@ spec:
             - {name: backups, mountPath: /backups}
             - {name: tls, mountPath: /tls, readOnly: true}
           readinessProbe:
-            httpGet: {path: /internal/healthz, port: 3001}
+            # Store writable and migrated, relay reachable, provisioner
+            # reachable. Results are cached for ~2s inside the process.
+            httpGet: {path: /internal/readyz, port: 3001}
             initialDelaySeconds: 2
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            # Event loop only; a locked store or unreachable relay must not
+            # restart the single-writer controller.
+            httpGet: {path: /internal/healthz, port: 3001}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 3
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: "64Mi"}

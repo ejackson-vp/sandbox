@@ -75,13 +75,20 @@ spec:
             - {name: tmp, mountPath: /tmp}
             - {name: tls, mountPath: /tls, readOnly: true}
           readinessProbe:
-            httpGet: {path: /healthz, port: 3000}
+            # Controller reachable, and therefore the controller's own store,
+            # relay and provisioner checks pass.
+            httpGet: {path: /readyz, port: 3000}
             initialDelaySeconds: 2
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
+            # Event loop only; a dependency blip must not restart the API.
             httpGet: {path: /healthz, port: 3000}
             initialDelaySeconds: 10
             periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 3
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: "64Mi"}

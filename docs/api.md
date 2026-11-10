@@ -300,6 +300,18 @@ Returns the tier table, custom-session bounds and the payment network.
 GET /healthz
 ```
 
+Liveness only: the process answers. It does not check the controller, store,
+relay or provisioner.
+
+```http
+GET /readyz
+```
+
+Readiness: `200` with `{ "ok": true, "components": { "controller": { "ok": true } } }`
+when the controller (and therefore its store, relay and provisioner checks)
+can serve creates; `503` with a bounded component map otherwise. No tokens,
+session ids or exception text are returned.
+
 ## Error codes
 
 | HTTP | code | meaning |

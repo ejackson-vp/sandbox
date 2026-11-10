@@ -4,6 +4,8 @@
 import type { NodeInfo, Provisioner } from "./k8s-types.js";
 
 export class NullProvisioner implements Provisioner {
+  async healthCheck(): Promise<void> {}
+
   async createPod(): Promise<{ podName: string }> {
     throw new Error("NullProvisioner cannot create pods");
   }

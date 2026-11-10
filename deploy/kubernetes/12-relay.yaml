@@ -88,9 +88,19 @@ spec:
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
           readinessProbe:
-            httpGet: {path: /healthz, port: 8443}
+            httpGet: {path: /readyz, port: 8443}
             initialDelaySeconds: 2
             periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            # /healthz also carries the generation the controller probes before
+            # registering; liveness stays on the trivial endpoint.
+            httpGet: {path: /healthz, port: 8443}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 3
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: "32Mi"}

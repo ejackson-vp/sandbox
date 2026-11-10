@@ -74,6 +74,12 @@ export interface NodeInfo {
 }
 
 export interface Provisioner {
+  /**
+   * Cheap readiness probe: throws when the provisioner cannot reach the
+   * Kubernetes API (or, locally, cannot spawn the guest). Optional so test
+   * doubles and future provisioners do not have to implement it.
+   */
+  healthCheck?(): Promise<void>;
   createPod(spec: SandboxPodSpec): Promise<{ podName: string }>;
   createWarmPod(spec: WarmPodSpec): Promise<{ podName: string }>;
   createWorkspacePvc(sessionId: string, sizeMiB: number): Promise<string>;

@@ -44,6 +44,13 @@ export class KubeProvisioner implements Provisioner {
     this.discovery = kc.makeApiClient(k8s.DiscoveryV1Api);
   }
 
+  async healthCheck(): Promise<void> {
+    // One-pod list: proves the API server is reachable and that this identity
+    // can still read the namespace the controller writes to. The result is
+    // cached by the readiness probe, so this is not called at probe frequency.
+    await this.core.listNamespacedPod({ namespace: this.namespace, limit: 1 });
+  }
+
   async createPod(spec: SandboxPodSpec): Promise<{ podName: string }> {
     const podName = `sbx-${spec.sessionId.replace(/^sbx_/, "")}`;
     // No hardware-evidence path exists, so the guest always needs the dev key.
