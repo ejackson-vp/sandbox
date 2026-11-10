@@ -17,6 +17,9 @@ export type Role = "controller" | "relay" | "proxy" | "all";
 export interface ControllerConfig {
   role: Role;
   controllerPort: number;
+  /** Private scrape listener. 0 disables it (tests / non-Kubernetes runs). */
+  metricsPort: number;
+  metricsHost: string;
   /** Optional HTTPS listener for the API; a client cert with CN=api is required. */
   tlsPort?: number;
   tlsCertFile?: string;
@@ -233,6 +236,8 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   return {
     role,
     controllerPort: int(env.X402_CONTROLLER_PORT ?? env.CONTROLLER_PORT, 3001, 1, 65535),
+    metricsPort: int(env.METRICS_PORT, 9100, 0, 65535),
+    metricsHost: env.METRICS_HOST ?? "0.0.0.0",
     ...tls,
     relayPort: int(env.X402_RELAY_PORT ?? env.RELAY_PORT, 8443, 1, 65535),
     proxyPort: int(env.X402_PROXY_PORT ?? env.PROXY_PORT, 3128, 1, 65535),

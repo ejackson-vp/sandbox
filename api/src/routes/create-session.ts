@@ -16,6 +16,8 @@ import {
   clientCommitmentMessage,
   paymentAuthorizer,
   paymentKey,
+  recordAuthFailure,
+  recordRateLimited,
   resolveSessionSpec,
   sha256Hex,
   specHash,
@@ -68,6 +70,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     });
     const sourceIp = req.ip ?? "unknown";
     if (!deps.ipCreateLimiter.take(sourceIp)) {
+      recordRateLimited("ip");
       res.setHeader("Retry-After", String(deps.ipCreateLimiter.retryAfterSeconds(sourceIp)));
       res.status(429).json({ error: "rate_limited", scope: "ip" });
       return;
@@ -128,6 +131,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     // payment is settled, so a throttled payer is never charged.
     const payerKey = paymentPayerKey(payload, sourceIp);
     if (!deps.createLimiter.take(payerKey)) {
+      recordRateLimited("payer");
       res.setHeader("Retry-After", String(deps.createLimiter.retryAfterSeconds(payerKey)));
       res.status(429).json({
         error: "rate_limited",
@@ -148,6 +152,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       return;
     }
     if (!body.clientSignature) {
+      recordAuthFailure("client_proof_missing");
       res.status(401).json({ error: "client_proof_required" });
       return;
     }
@@ -166,6 +171,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       proofOk = false;
     }
     if (!proofOk) {
+      recordAuthFailure("client_proof_invalid");
       log.warn("client_commitment_invalid", { paymentKeyPrefix: key.slice(0, 12) });
       res.status(401).json({ error: "client_proof_invalid" });
       return;

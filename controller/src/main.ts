@@ -7,6 +7,7 @@
  */
 import http from "node:http";
 import https from "node:https";
+import type { Server } from "node:http";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadControllerConfig, makeProvisioner, makeRelayClient } from "./config.js";
@@ -17,7 +18,14 @@ import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
 import { OperationFence } from "./operation-fence.js";
 import { CapacityService } from "./capacity/service.js";
-import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
+import { collectSqliteMetrics, registerSqliteMetrics } from "./store-metrics.js";
+import {
+  LATENCY_BUCKETS,
+  metrics,
+  registerBuildInfo,
+  registerRuntimeMetrics,
+  startMetricsServer,
+} from "@x402s/shared";
 import { log } from "@x402s/shared";
 
 async function main(): Promise<void> {
@@ -33,7 +41,30 @@ async function main(): Promise<void> {
   metrics.counter("sandbox_sessions_created_total", "Entitlements created");
   metrics.counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED");
   metrics.counter("sandbox_refunds_total", "Payment refund outcomes");
+  metrics.counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason");
   metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE");
+  registerSqliteMetrics(metrics);
+
+  // Scrape-time collectors. The listener exists for every role so a scrape
+  // config can target API, controller and relay on the same port.
+  const runtime = registerRuntimeMetrics();
+  registerBuildInfo();
+  const collectors: Array<() => void> = [() => runtime.collect()];
+  let metricsServer: Server | undefined;
+  if (cfg.metricsPort > 0) {
+    metricsServer = await startMetricsServer({
+      port: cfg.metricsPort,
+      host: cfg.metricsHost,
+      onScrape: () => {
+        for (const collect of collectors) collect();
+      },
+    });
+    log.info("metrics_listening", { port: cfg.metricsPort, host: cfg.metricsHost, role: cfg.role });
+  }
+  const closeMetrics = () => {
+    runtime.stop();
+    metricsServer?.close();
+  };
 
   if (cfg.role === "relay") {
     const relayOpts = {
@@ -42,12 +73,16 @@ async function main(): Promise<void> {
       wakeToken: cfg.wakeToken,
     };
     const relay = createRelay(relayOpts);
+    collectors.push(() => relay.collectMetrics());
     await listen(relay.server, cfg.relayPort);
     log.info("relay_listening", { port: cfg.relayPort, generation: relay.generation });
     // A replacement relay has an empty registry. Wake the controller so
     // PROVISIONING sessions re-register now instead of on the next poll.
     notifyControllerReady(relayOpts);
-    installShutdown(async () => relay.close());
+    installShutdown(async () => {
+      closeMetrics();
+      await relay.close();
+    });
     return;
   }
 
@@ -66,13 +101,17 @@ async function main(): Promise<void> {
       allowedPorts: cfg.allowedPorts,
       deniedCidrs: cfg.deniedCidrs,
     });
-    installShutdown(async () => proxy.close());
+    installShutdown(async () => {
+      closeMetrics();
+      await proxy.close();
+    });
     return;
   }
 
   // controller (or "all": controller + relay + proxy in one process)
   mkdirSync(dirname(cfg.dbPath), { recursive: true });
   const store = new Store(cfg.dbPath);
+  collectors.push(() => collectSqliteMetrics(store));
   const recovered = store.recoverInterruptedOperations();
   if (recovered.requests > 0 || recovered.sessions > 0) {
     log.warn("sandbox_operations_recovered", recovered);
@@ -87,6 +126,7 @@ async function main(): Promise<void> {
       wakeToken: cfg.wakeToken,
     };
     const relay = createRelay(relayOpts);
+    collectors.push(() => relay.collectMetrics());
     await listen(relay.server, cfg.relayPort);
     log.info("relay_listening", { port: cfg.relayPort, generation: relay.generation });
     // No-op until the control listener starts; the first reconcile pass covers
@@ -178,6 +218,7 @@ async function main(): Promise<void> {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     if (tlsServer) await new Promise<void>((resolve) => tlsServer!.close(() => resolve()));
     for (const fn of shutdown) await fn();
+    closeMetrics();
     store.close();
   });
 }

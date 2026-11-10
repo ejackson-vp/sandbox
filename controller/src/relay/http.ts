@@ -1,5 +1,5 @@
 import type { Express, NextFunction, Request, Response } from "express";
-import { metrics } from "@x402s/shared";
+import { recordAuthFailure } from "@x402s/shared";
 import { log } from "@x402s/shared";
 import { constantTimeEqual } from "../tokens.js";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
@@ -18,6 +18,7 @@ export function registerRelayRoutes(
   const requireAdmin = (req: Request, res: Response, next: NextFunction): void => {
     const token = req.header("x-internal-token") ?? "";
     if (!opts.adminToken || !constantTimeEqual(token, opts.adminToken)) {
+      recordAuthFailure("relay_admin_token");
       res.status(401).json({ error: "unauthorized" });
       return;
     }
@@ -38,14 +39,8 @@ export function registerRelayRoutes(
     res.json({ ok: true });
   });
 
-  app.get("/metrics", (_req, res) => {
-    metrics.gauge("sandbox_relay_sessions", "Registered relay sessions").set({}, registry.size());
-    metrics
-      .gauge("sandbox_relay_pending_requests", "Requests awaiting a guest response")
-      .set({}, registry.pendingTotal());
-    res.setHeader("content-type", "text/plain; version=0.0.4");
-    res.send(metrics.render());
-  });
+  // Guest-facing relay metrics are published on the private METRICS_PORT
+  // listener in the composition root, not on this mTLS-reachable listener.
 
   app.post("/internal/register", requireAdmin, (req, res) => {
     const { sessionId, tokenHash, ttlMs, generation } = req.body ?? {};

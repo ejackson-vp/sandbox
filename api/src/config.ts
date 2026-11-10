@@ -21,6 +21,9 @@ const TESTNET_NETWORKS = new Set(["eip155:84532", "solana:EtWTRABZaYq6iMfeYKouRu
 
 export interface ApiConfig {
   port: number;
+  /** Private scrape listener. 0 disables it (tests / non-Kubernetes runs). */
+  metricsPort: number;
+  metricsHost: string;
   paymentMode: PaymentMode;
   network: string;
   payTo: string;
@@ -163,6 +166,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
 
   return {
     port,
+    // Dedicated scrape listener, never the public ingress port.
+    metricsPort: int(env.METRICS_PORT, 9100, 0, 65535),
+    metricsHost: env.METRICS_HOST ?? "0.0.0.0",
     ...payment,
     ...credentials,
     controllerUrl,

@@ -10,6 +10,9 @@ spec:
     - name: guest
       port: 8443
       targetPort: 8443
+    - name: metrics
+      port: 9100
+      targetPort: 9100
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -63,7 +66,10 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["node", "controller/dist/main.js"]
           ports:
-            - containerPort: 8443
+            - name: guest
+              containerPort: 8443
+            - name: metrics
+              containerPort: 9100
           env:
             - {name: ROLE, value: "relay"}
             - {name: X402_RELAY_PORT, value: "8443"}
