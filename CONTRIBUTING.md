@@ -6,7 +6,13 @@
 npm ci
 make verify         # build, typecheck, structure lint, unit + property tests
 make test           # adds integration tests against the real guest binary
+make guest && npm run test:coverage   # same suites with coverage (CI badge source)
 ```
+
+Coverage covers the shipped TypeScript (`shared`, `sdk`, `api`, `controller`,
+`cli`), not tests or the Go guest. CI publishes the number to the `badges`
+branch, which is what the README badge reads; there is no fixed threshold yet,
+so a drop shows up as a smaller badge rather than a red build.
 
 Cluster-backed tests need a live cluster:
 

@@ -3,11 +3,30 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <!-- Quality and security: does it work, and is it checked? -->
+  <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml/badge.svg?branch=main" alt="ci"></a>
+  <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/codeql.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/codeql.yml/badge.svg?branch=main" alt="codeql"></a>
+  <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/docs.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/docs.yml/badge.svg?branch=main" alt="docs"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/ejackson-vp/sandbox"><img src="https://api.scorecard.dev/projects/github.com/ejackson-vp/sandbox/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/ci.yml"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/ejackson-vp/sandbox/badges/coverage.json" alt="coverage"></a>
   <a href="https://github.com/ejackson-vp/sandbox/actions/workflows/release.yml"><img src="https://github.com/ejackson-vp/sandbox/actions/workflows/release.yml/badge.svg" alt="release"></a>
+</p>
+
+<p align="center">
+  <!-- Release and toolchain -->
+  <a href="https://github.com/ejackson-vp/sandbox/releases"><img src="https://img.shields.io/github/v/release/ejackson-vp/sandbox?include_prereleases&label=version" alt="latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
+  <img src="https://img.shields.io/badge/status-alpha-orange" alt="status: alpha">
   <a href="guest/go.mod"><img src="https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white" alt="go 1.26"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D24-5FA04E?logo=nodedotjs&logoColor=white" alt="node >= 24"></a>
+</p>
+
+<p align="center">
+  <!-- What it is -->
+  <img src="https://img.shields.io/badge/runtime-Kata%20microVMs-blue" alt="runtime: Kata microVMs">
+  <img src="https://img.shields.io/badge/payments-x402-purple" alt="payments: x402">
+  <img src="https://img.shields.io/badge/commands-client--sealed-blue" alt="commands sealed client-side">
+  <img src="https://img.shields.io/badge/accounts-none-brightgreen" alt="no accounts">
 </p>
 
 **Pay once with x402, get a temporary Linux machine.** No account, no API key, no
@@ -17,9 +36,10 @@ signup — and the control plane never sees what you run.
 
 | Warm session ready | Exec round trip | Host cost per idle guest | Test suite |
 | :---: | :---: | :---: | :---: |
-| **127 ms** p50 | **53 ms** p50 | **~182 MiB** | **254 CI tests** |
+| **127 ms** p50 | **53 ms** p50 | **~182 MiB** | **411 CI tests** |
 
-Kata on two nodes with a 20-guest warm pool, control 0.1.16; p50 unless stated.
+Kata on two nodes with a 20-guest warm pool, control **0.1.16** (measured
+2026-11-09); test count from CI on `main` (2026-11-10); p50 unless stated.
 [Method and caveats](docs/performance-cluster.md).
 
 ## Why
@@ -150,6 +170,11 @@ All session endpoints require `X-Sandbox-Capability`. Reference:
 0.1.16 caches the x402 challenge for repeat creates and removes a redundant
 capacity round trip; warm client ready fell from 665 ms to 395 ms (p50, steady
 client with the challenge cached) and the server side from 179 ms to 127 ms.
+
+These numbers were taken on **0.1.16**. They have not been re-measured on 0.1.20,
+which removes another create-path round trip (the create response now carries
+the session view, and the API no longer re-reads the session after payment), so
+treat them as a conservative floor until the cluster benchmark is re-run.
 
 60 concurrent held sessions and 25/25 burst creates completed with zero failures;
 the bottleneck is the create queue at ~1.3/s, not VM boot. Sources:
