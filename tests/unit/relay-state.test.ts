@@ -11,8 +11,11 @@ import { MetricsRegistry, startMetricsServer } from "../../shared/src/index.js";
 import { RelayRegistry } from "../../controller/src/relay/registry.js";
 import { collectRelayMetrics } from "../../controller/src/relay/metrics.js";
 import {
+  parseActiveGauge,
   parsePendingGauge,
+  readRelayActive,
   readRelayPending,
+  RELAY_ACTIVE_GAUGE,
   RELAY_PENDING_GAUGE,
 } from "../../scripts/relay-state.js";
 
@@ -84,5 +87,48 @@ describe("relay pending gauge", () => {
 
   it("returns null for an unreachable or wrong listener", async () => {
     expect(await readRelayPending("http://127.0.0.1:1")).toBeNull();
+    expect(await readRelayActive("http://127.0.0.1:1")).toBeNull();
+  });
+});
+
+describe("relay active gauge", () => {
+  it("reflects guest-reported active operations, not controller gates", async () => {
+    const registry = new MetricsRegistry({ cacheMs: 0 });
+    const sessions = new RelayRegistry({ maxSessions: 1, responseTtlMs: 60_000, metricsRegistry: registry });
+    const sessionId = "sbx_relay_active_probe";
+    sessions.register(sessionId, "hash", 60_000);
+    const socket = { readyState: 1, send: () => undefined, terminate: () => undefined } as unknown as WebSocket;
+    sessions.attach(sessionId, socket);
+    sessions.request(sessionId, "request-active-probe", "e30=", Date.now() + 60_000, 1);
+
+    server = await startMetricsServer({
+      port: 0,
+      host: "127.0.0.1",
+      registry,
+      onScrape: () => collectRelayMetrics(registry, sessions),
+    });
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    // The controller has a frame pending, but the guest has not reported it.
+    expect(await readRelayPending(base)).toBe(1);
+    expect(await readRelayActive(base)).toBe(0);
+
+    expect(sessions.status(sessionId, "request-active-probe", 1)).toBe("ok");
+    expect(await readRelayActive(base)).toBe(1);
+    expect(sessions.activeTotal()).toBe(1);
+
+    expect(sessions.status(sessionId, "", 1)).toBe("ok");
+    expect(await readRelayActive(base)).toBe(0);
+  });
+
+  it("parses the active gauge and rejects lookalikes", () => {
+    const body = [
+      `# TYPE ${RELAY_ACTIVE_GAUGE} gauge`,
+      `${RELAY_ACTIVE_GAUGE} 4`,
+      `${RELAY_ACTIVE_GAUGE}_total 9`,
+      "",
+    ].join("\n");
+    expect(parseActiveGauge(body)).toBe(4);
+    expect(parseActiveGauge("# TYPE x gauge\nother_metric 1\n")).toBeNull();
+    expect(parseActiveGauge("")).toBeNull();
   });
 });
