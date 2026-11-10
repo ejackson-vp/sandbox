@@ -9,7 +9,7 @@ import {
   type SessionState,
 } from "@x402s/shared";
 import { log } from "@x402s/shared";
-import { PaymentAlreadyRedeemedError, PaymentClaimLostError, type LedgerStatus } from "../store.js";
+import { PaymentAlreadyRedeemedError, PaymentClaimLostError, type LedgerStatus } from "../store/models.js";
 import { completeSchema, intentClaimSchema } from "../control-api-schemas.js";
 import { describeSession } from "../session-view.js";
 import type { ControlApiDeps } from "./types.js";

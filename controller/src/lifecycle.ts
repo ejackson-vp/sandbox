@@ -7,7 +7,7 @@ import type { ReconcilerContext } from "./reconciler-context.js";
 import type { LifecycleStore } from "./store/ports.js";
 
 type LifecycleContext = Omit<ReconcilerContext, "store"> & { store: LifecycleStore };
-import type { SessionRecord } from "./store.js";
+import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { Provisioning } from "./provisioning.js";
 
