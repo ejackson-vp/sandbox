@@ -41,6 +41,10 @@ async function post(body: unknown) {
   const preflightCapacity = vi.fn(async () => ({ admitted: true as const, reservationId: "r" }));
   const app = express();
   app.use(express.json());
+  // CodeQL treats this test-only route as a production authorized route. The
+  // handler receives the real IP and payer TokenBuckets at the call site below;
+  // the query cannot see through the injected handler.
+  // codeql[js/missing-rate-limiting]
   app.post(
     "/v1/sessions",
     createSessionHandler({
