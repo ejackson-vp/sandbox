@@ -30,17 +30,20 @@
 </p>
 
 **Pay once with x402, get a temporary Linux machine.** No account, no API key, no
-signup — and the control plane never sees what you run.
+signup, and the control plane never sees what you run.
 
-![Architecture: client, x402 API, controller, relay, Kata microVM, egress proxy](docs/assets/architecture.svg)
+<p align="center">
+  <img src="docs/assets/demo.gif" width="900" alt="Terminal recording: pay, create, exec, upload, run, download, destroy">
+</p>
 
-| Warm session ready | Exec round trip | Host cost per idle guest | Test suite |
+Unedited recording of `make demo-session` against a local kind cluster.
+
+| Warm session ready | Exec round trip | Cold start | Idle host cost |
 | :---: | :---: | :---: | :---: |
-| **127 ms** p50 | **53 ms** p50 | **~182 MiB** | **411 CI tests** |
+| **127 ms** p50 | **53 ms** p50 | **2.69 s** | **~182 MiB** |
 
 Kata on two nodes with a 20-guest warm pool, control **0.1.16** (measured
-2026-11-09); test count from CI on `main` (2026-11-10); p50 unless stated.
-[Method and caveats](docs/performance-cluster.md).
+2026-11-09); p50 unless stated. [Method and caveats](docs/performance-cluster.md).
 
 ## Why
 
@@ -52,37 +55,16 @@ the API, controller and relay only route ciphertext.
 Good fits: agent tool execution, CI and build isolation, code-runner backends,
 one-off data jobs that should not touch your laptop.
 
-## Quick start
-
-Prerequisites: Docker, `kind`, `kubectl`, Cilium CLI, Node >= 24, Go >= 1.26.
-
-```bash
-make up             # kind + Cilium + images + deploy (~2 min)
-make demo-session   # pay, create, exec, upload, run, download, destroy
-make down
-```
-
-Local clusters use `runc`, not microVMs. The demo exercises the same API, relay
-and guest as a real deployment.
-
-<details>
-<summary>What the demo looks like</summary>
-
-![Terminal recording: pay, create, exec, upload, run, download, destroy](docs/assets/demo.gif)
-
-</details>
-
-Without a cluster, most of the system is testable in under a minute:
-
-```bash
-npm ci
-make verify         # typecheck, structure lint, unit + property tests
-make test           # adds integration tests against the real guest binary
-```
-
-`make security-test` runs the packet-level isolation suite against a live cluster.
-
 ## How it works
+
+1. **Pay.** `POST /v1/sessions` answers `402` with a price. A signed payment is
+   the entitlement, so there is no account to create.
+2. **Provision.** The controller runs one Kata microVM per session, from the
+   warm pool or cold.
+3. **Run.** Commands and files are sealed to the guest's ephemeral key. The API,
+   controller and relay move opaque frames and cannot read them.
+4. **Destroy.** The lease ends, the pod is deleted, and the memory-backed
+   workspace disappears with it.
 
 ```mermaid
 sequenceDiagram
@@ -106,18 +88,56 @@ sequenceDiagram
 ```
 
 The lease starts at `READY` and is immutable: the guest watchdog, the controller
-deadline and `activeDeadlineSeconds` enforce it independently. On destroy or
-expiry the pod is deleted and the memory-backed workspace disappears with it.
+deadline and `activeDeadlineSeconds` enforce it independently.
 
 More: [architecture](docs/architecture.md) · [sessions](docs/sessions.md) ·
 [warm pool](docs/warm-pool.md).
 
+## What holds, and what does not
+
+| Claim | How it is enforced |
+| --- | --- |
+| The lease ends on time | Guest watchdog, controller deadline and `activeDeadlineSeconds`, independently |
+| Commands and files stay private | Sealed client-side to the guest; the API, controller and relay only route ciphertext |
+| Nothing can dial in | The guest dials out to the relay; egress only through an allowlisting proxy on 443 |
+| Isolation is a VM, not a container | One Kata microVM per session, on tainted, default-deny nodes |
+
+What this is not: no hardware attestation, no mainnet payments, no accounts. The
+[threat model](docs/threat-model.md) spells out what that costs, and
+[production readiness](docs/production-readiness.md) lists the gap to a hosted
+service.
+
+## Try it
+
+Prerequisites: Docker, `kind`, `kubectl`, Cilium CLI, Node >= 24, Go >= 1.26.
+
+```bash
+make up             # kind + Cilium + images + deploy (~2 min)
+make demo-session   # pay, create, exec, upload, run, download, destroy
+make down
+```
+
+Local clusters use `runc`, not microVMs. The demo exercises the same API, relay
+and guest as a real deployment.
+
+Without a cluster, most of the system is testable in under a minute:
+
+```bash
+npm ci
+make verify          # typecheck, structure lint, unit + property tests
+make test            # adds integration tests against the real guest binary
+```
+
+`make security-test` runs the packet-level isolation suite against a live
+cluster. `make guest && npm run test:coverage` prints the TypeScript coverage
+behind the README badge.
+
 ## Interfaces
 
 ```bash
+sandbox run -- python3 --version               # one-shot: create, run, destroy
 sandbox create --tier standard                 # 5 minutes, 1 vCPU, 1 GiB
 sandbox exec <id> -- python3 --version
-sandbox run -- python3 --version               # one-shot: create, run, destroy
 sandbox run --file data.csv=data.csv --return out.csv -- python3 analyze.py
 sandbox upload <id> ./src /workspace/src       # directory -> tar
 sandbox download <id> /workspace/out.txt ./out.txt
@@ -148,6 +168,9 @@ console.log(run.exitCode, run.stdout, run.files["out.txt"]);
 
 `@x402s/sdk` builds from source (`npm ci && npm run build`), not npm.
 
+<details>
+<summary>HTTP API</summary>
+
 ```http
 POST   /v1/sessions                            # x402-protected; body has no plaintext
 POST   /v1/sessions/{id}/operations            # { requestId, envelope }; op is inside
@@ -157,6 +180,8 @@ DELETE /v1/sessions/{id}                       # destroy now
 
 All session endpoints require `X-Sandbox-Capability`. Reference:
 [docs/api.md](docs/api.md) · [docs/cli.md](docs/cli.md).
+
+</details>
 
 ## Performance
 
@@ -182,12 +207,27 @@ the bottleneck is the create queue at ~1.3/s, not VM boot. Sources:
 [engineering notes](docs/engineering-notes.md) ·
 [harness](https://github.com/ejackson-vp/sandbox-bench).
 
+## Lab notebook
+
+Three things the benchmarks changed my mind about:
+
+- **The VM was never the bottleneck.** 127 ms server-side against 395 ms
+  client-side, so ~268 ms is paid create and polling. That gap is the product
+  target. [Read more](docs/engineering-notes.md#the-create-path-is-the-product-not-the-vm-boot)
+- **Bursts queue, they do not thrash.** 25 simultaneous creates finished 25/25
+  in 19 s, which is exactly the ~1.3 creates/s the queue allows. Latency grows
+  predictably and nothing fails.
+  [Read more](docs/engineering-notes.md#burst-traffic-queues-it-does-not-thrash)
+- **A warm pool costs memory, not time.** ~182 MiB per idle guest, about 3.6 GiB
+  for a pool of 20 across two nodes, which is why pool size is a knob.
+  [Read more](docs/engineering-notes.md#held-sessions-are-admission-bound-not-memory-bound)
+
 ## Documentation
 
-- **New here** — [quickstart](docs/quickstart.md) · [architecture](docs/architecture.md)
-- **Security reviewer** — [guarantees](docs/security-guarantees.md) · [threat model](docs/threat-model.md) · [networking](docs/networking.md)
-- **Operator** — [Talos deploy](deploy/talos/README.md) · [capacity model](docs/capacity-model.md) · [production readiness](docs/production-readiness.md)
-- **Contributor** — [ADRs](docs/adr/) · [CONTRIBUTING.md](CONTRIBUTING.md)
+- **New here:** [quickstart](docs/quickstart.md) · [architecture](docs/architecture.md)
+- **Security reviewer:** [guarantees](docs/security-guarantees.md) · [threat model](docs/threat-model.md) · [networking](docs/networking.md)
+- **Operator:** [Talos deploy](deploy/talos/README.md) · [capacity model](docs/capacity-model.md) · [production readiness](docs/production-readiness.md)
+- **Contributor:** [ADRs](docs/adr/) · [CONTRIBUTING.md](CONTRIBUTING.md)
 
 Full index: [docs/README.md](docs/README.md).
 
