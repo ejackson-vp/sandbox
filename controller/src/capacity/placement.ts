@@ -46,13 +46,17 @@ function reservedOnNode(
     if (reservation.state === "HELD" && reservation.expiresAt !== null && reservation.expiresAt <= now) {
       continue;
     }
+    // All three dimensions come from the same accounting vector. Storage used
+    // to always charge baseline here, which let a peak-mode request that fit
+    // the request peak be admitted against existing reservations charged at
+    // baseline storage, over-allocating by the difference (issue #68).
+    const committed = accounting === "peak" ? reservation.peak : reservation.baseline;
     if (holdsCompute(reservation.state)) {
-      const committed = accounting === "peak" ? reservation.peak : reservation.baseline;
       cpu += committed.cpuMillicores;
       memory += committed.memoryBytes;
     }
     // Suspended sessions release compute but keep their workspace.
-    storage += reservation.baseline.storageBytes;
+    storage += committed.storageBytes;
   }
   return { cpuMillicores: cpu, memoryBytes: memory, storageBytes: storage };
 }

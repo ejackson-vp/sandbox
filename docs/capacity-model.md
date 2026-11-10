@@ -45,6 +45,11 @@ measured density; `peak` is the strict mode for workloads where the limit is
 the real commitment. The reservation table always stores both vectors, so the
 mode can change without a schema migration.
 
+All three dimensions move together: in `peak` mode CPU, memory **and storage**
+are charged from `peak`; in `baseline` mode all three come from `baseline`.
+Mixing vectors (for example, request peak against reservation baseline storage)
+is an accounting error, not an optimisation.
+
 ## Configuration
 
 | Env | Default | Meaning |
@@ -107,7 +112,9 @@ reconciliation.
 
 ## Storage and suspended sessions
 
-Storage is included in the reservation and remains charged while suspended.
+Storage is included in the reservation and remains charged while suspended,
+using the storage value of the selected accounting vector (peak storage in
+`peak` mode).
 For local-path PVCs this is also the node-affinity anchor: a resume request sets
 `requiredNodeId` to the checkpoint's node. If that node has no free compute, the
 resume is rejected and the session stays `SUSPENDED`.
@@ -128,6 +135,7 @@ Property tests assert:
 - reservation order does not change a decision,
 - adding a compute reservation never increases available capacity,
 - increasing a request cannot turn a rejection into an admission,
-- admitted baseline never exceeds allocatable minus overhead,
+- admitted request vector (baseline or peak, per accounting mode) never exceeds
+  allocatable minus overhead,
 - suspended reservations release compute but retain storage,
 - node affinity is always respected.
