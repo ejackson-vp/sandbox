@@ -1,0 +1,242 @@
+name: nightly faults
+
+# Cluster-backed reliability and security tests. Restart convergence, relay
+# loss and warm-pool recovery need a real kind + Cilium cluster, so this never
+# runs on GitHub-hosted runners and is deliberately not part of PR CI.
+#
+# Enable it by setting the repository variable SANDBOX_FAULT_RUNNER to a JSON
+# array of runner labels, for example:
+#
+#   ["self-hosted","linux","x64","sandbox-faults"]
+#
+# The runner contract (docker, kind, kubectl, cilium, or a kubeconfig secret
+# for an existing cluster) is documented in docs/control-plane-faults.md.
+# When the variable is unset the workflow skips with a notice instead of
+# failing a scheduled run that has nowhere to execute.
+
+on:
+  schedule:
+    # 04:17 UTC daily. Nightly is enough for the cluster matrix; a red run is
+    # triaged the next morning, and PR CI stays fast.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      matrix:
+        description: Fault matrix preset to run
+        type: choice
+        options:
+          - full
+          - smoke
+        default: full
+      fail_fast:
+        description: Stop after the first failing scenario
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-faults
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+      runner: ${{ steps.check.outputs.runner }}
+      cluster: ${{ steps.check.outputs.cluster }}
+      matrix: ${{ steps.check.outputs.matrix }}
+    steps:
+      - name: check the fault runner is configured
+        id: check
+        env:
+          FAULT_RUNNER: ${{ vars.SANDBOX_FAULT_RUNNER }}
+          CLUSTER_MODE: ${{ vars.SANDBOX_FAULT_CLUSTER }}
+          KUBECONFIG_DATA: ${{ secrets.SANDBOX_FAULT_KUBECONFIG }}
+          MATRIX_INPUT: ${{ inputs.matrix }}
+        run: |
+          set -euo pipefail
+          # Values used when the job is skipped; a skipped job never selects a
+          # runner, but the expression must still evaluate to valid JSON.
+          {
+            echo 'runner=["ubuntu-latest"]'
+            echo "enabled=false"
+            echo "cluster=kind"
+            echo "matrix=${MATRIX_INPUT:-full}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ -z "${FAULT_RUNNER:-}" ]; then
+            {
+              echo "### Nightly fault matrix skipped"
+              echo ""
+              echo "Repository variable \`SANDBOX_FAULT_RUNNER\` is unset, so there is no"
+              echo "runner with a cluster to target. Set it to a JSON array of runner"
+              echo "labels (for example \`[\"self-hosted\",\"linux\",\"x64\",\"sandbox-faults\"]\`),"
+              echo "then re-run this workflow. PR CI is unaffected."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Nightly fault matrix skipped::SANDBOX_FAULT_RUNNER is unset; set it to a JSON array of runner labels."
+            exit 0
+          fi
+
+          node - "$FAULT_RUNNER" <<'NODE'
+          const raw = process.argv[2];
+          let labels;
+          try {
+            labels = JSON.parse(raw);
+          } catch {
+            console.error(`SANDBOX_FAULT_RUNNER is not valid JSON: ${raw}`);
+            process.exit(1);
+          }
+          if (!Array.isArray(labels) || labels.length === 0 ||
+              labels.some((label) => typeof label !== "string" || label.trim() === "")) {
+            console.error("SANDBOX_FAULT_RUNNER must be a non-empty JSON array of runner label strings");
+            process.exit(1);
+          }
+          NODE
+
+          mode="${CLUSTER_MODE:-auto}"
+          if [ "$mode" = "auto" ]; then
+            if [ -n "${KUBECONFIG_DATA:-}" ]; then
+              mode="existing"
+            else
+              mode="kind"
+            fi
+          fi
+          case "$mode" in
+            kind|existing) ;;
+            *)
+              echo "::error::SANDBOX_FAULT_CLUSTER must be 'kind' or 'existing' (got '$mode')"
+              exit 1
+              ;;
+          esac
+          if [ "$mode" = "existing" ] && [ -z "${KUBECONFIG_DATA:-}" ]; then
+            echo "::error::SANDBOX_FAULT_CLUSTER=existing requires the SANDBOX_FAULT_KUBECONFIG secret"
+            exit 1
+          fi
+
+          {
+            echo "enabled=true"
+            echo "runner=$FAULT_RUNNER"
+            echo "cluster=$mode"
+          } >> "$GITHUB_OUTPUT"
+
+  faults:
+    name: fault matrix + security
+    needs: preflight
+    if: needs.preflight.outputs.enabled == 'true'
+    runs-on: ${{ fromJSON(needs.preflight.outputs.runner) }}
+    timeout-minutes: 150
+    env:
+      KIND_CLUSTER: ${{ vars.SANDBOX_FAULT_KIND_CLUSTER || 'x402-sandbox' }}
+      API_URL: ${{ vars.SANDBOX_FAULT_API_URL || 'http://localhost:8080' }}
+      NAMESPACE: sandbox-system
+      FAULT_MATRIX: ${{ needs.preflight.outputs.matrix }}
+      FAULT_FAIL_FAST: ${{ inputs.fail_fast && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: guest/go.mod
+          cache-dependency-path: guest/go.sum
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: build the guest binaries
+        run: make guest
+
+      - name: prepare the cluster
+        env:
+          KUBECONFIG_DATA: ${{ secrets.SANDBOX_FAULT_KUBECONFIG }}
+          CLUSTER_MODE: ${{ needs.preflight.outputs.cluster }}
+        run: |
+          set -euo pipefail
+          if [ "$CLUSTER_MODE" = "existing" ]; then
+            # Never echo the kubeconfig: it is written with owner-only mode and
+            # exported through GITHUB_ENV for the remaining steps.
+            install -m 600 /dev/null "$RUNNER_TEMP/kubeconfig"
+            printf '%s' "$KUBECONFIG_DATA" > "$RUNNER_TEMP/kubeconfig"
+            echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+            echo "==> using the kubeconfig from SANDBOX_FAULT_KUBECONFIG"
+          else
+            echo "==> creating kind + Cilium and deploying from this checkout"
+            make up
+          fi
+          # The fault harness and the security suite both resolve the context
+          # from the kubeconfig; pin it explicitly so a stale KUBECONFIG on a
+          # shared runner cannot target the wrong cluster.
+          context="$(kubectl config current-context)"
+          echo "KUBECTL_CONTEXT=$context" >> "$GITHUB_ENV"
+          echo "==> kubectl context: $context"
+
+      - name: verify the cluster is reachable
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" rollout status deploy/controller --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status deploy/relay --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status deploy/api --timeout=300s
+          kubectl get nodes
+          kubectl -n "$NAMESPACE" get pods
+
+      - name: run the fault matrix
+        run: node scripts/fault-matrix.mjs
+
+      - name: run the cluster security suite
+        if: always()
+        env:
+          GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/security
+
+          # The fault matrix only forwards the API for its own process; the
+          # security suite talks to the same API, so forward it for this step.
+          case "${API_URL:-}" in
+            http://localhost:*|http://127.0.0.1:*)
+              if ! curl -fsS "$API_URL/healthz" > /dev/null 2>&1; then
+                port="${API_URL#http://}"
+                port="${port%%/*}"
+                port="${port##*:}"
+                kubectl -n "$NAMESPACE" port-forward svc/api "${port}:3000" \
+                  > artifacts/security/port-forward.log 2>&1 &
+                forward=$!
+                trap 'kill "$forward" 2>/dev/null || true' EXIT
+                for _ in $(seq 1 60); do
+                  if curl -fsS "$API_URL/healthz" > /dev/null 2>&1; then break; fi
+                  sleep 1
+                done
+              fi
+              ;;
+          esac
+
+          # Equivalent to `make security-test`, with a JUnit reporter so the
+          # artifact can be summarised and annotated.
+          npx vitest run tests/security \
+            --reporter=default \
+            --reporter=junit \
+            --outputFile.junit=artifacts/security/junit.xml 2>&1 | tee artifacts/security/vitest.log
+
+      - name: summarise results
+        if: always()
+        run: node scripts/fault-matrix.mjs report
+
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nightly-faults-${{ github.run_id }}
+          path: |
+            artifacts/faults
+            artifacts/security
+          if-no-files-found: warn
+          retention-days: 30
