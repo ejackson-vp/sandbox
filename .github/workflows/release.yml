@@ -98,6 +98,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          # Stamp the promoted images so sandbox_build_info and the OCI labels
+          # identify the exact release, not the Dockerfile defaults.
+          build-args: |
+            BUILD_VERSION=${{ github.ref_name }}
+            BUILD_COMMIT=${{ github.sha }}
           # Publish an SBOM and build provenance alongside each image. Both are
           # attached as OCI attestations, so `docker buildx imagetools inspect`
           # can show what went in without trusting the build log. `imagetools

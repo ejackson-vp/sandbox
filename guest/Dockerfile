@@ -25,6 +25,10 @@ COPY --from=build /out/x402-guest /usr/local/bin/x402-guest
 COPY --from=build /out/x402-netprobe /usr/local/bin/x402-netprobe
 ENV PIP_NO_CACHE_DIR=1 \
     NPM_CONFIG_CACHE=/tmp/npm-cache
+ARG BUILD_VERSION=dev
+ARG BUILD_COMMIT=unknown
+LABEL org.opencontainers.image.version=$BUILD_VERSION \
+      org.opencontainers.image.revision=$BUILD_COMMIT
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/x402-guest"]
 CMD ["run"]
