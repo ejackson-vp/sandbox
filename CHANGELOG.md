@@ -5,15 +5,6 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
-## Unreleased
-
-### Added
-
-- Lightweight homelab monitoring under `deploy/monitoring/`: VictoriaMetrics
-  single-node, Grafana and vmalert with 14-day retention, a provisioned
-  dashboard and the issue #38 SLO rules (including target-down and
-  blast-radius) (#38).
-
 ## 0.1.19
 
 ### Added
@@ -25,10 +16,20 @@ the container registry.
   and relay, a bounded-label scrape contract, process/event-loop/GC metrics, a
   Grafana dashboard and a scrape manifest. The public ingress no longer serves
   `/metrics` (#37).
+- Lightweight homelab monitoring under `deploy/monitoring/`: VictoriaMetrics
+  single-node, Grafana and vmalert with 14-day retention, a provisioned
+  dashboard and the issue #38 SLO rules (including target-down and
+  blast-radius) (#38).
 - Nightly TLA+ model checking with a pinned Java/TLC toolchain and failure
   artifacts (#73).
 - Execution-epoch, guest-status and fence-release modeling, plus `FenceRelease`
   and `StaleEpoch` broken variants (#75).
+
+### Security
+
+- Relay control endpoints require mTLS with a client certificate whose CN is
+  `controller`; plaintext and wrong-identity clients are rejected. The guest
+  WebSocket listener and its per-session bearer token are unchanged (#23).
 
 ### Changed
 
