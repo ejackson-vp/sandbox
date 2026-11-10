@@ -178,6 +178,15 @@ jobs:
           esac
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+      # `push-to-registry` reads the registry credentials from the Docker
+      # config; it does not use the GitHub token on its own. Without this step
+      # it fails with "No credentials found for registry ghcr.io".
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
