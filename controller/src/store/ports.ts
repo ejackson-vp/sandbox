@@ -30,6 +30,31 @@ import type { StoreHealth } from "./health.js";
  * collector), so a signature mismatch fails `tsc`.
  */
 
+/**
+ * Guarded session writes and local field clears the effect interpreter
+ * performs (`controller/src/effects.ts`).
+ *
+ * Separate from the use-case ports because every use case shares the
+ * interpreter: a module that executes effects depends on this, plus only the
+ * reads it needs. Each write is the same guarded UPDATE the reconciler used
+ * before the table became the runtime, so a lost race still refuses.
+ */
+export interface EffectStore {
+  clearPod(id: string): void;
+  clearWorkspacePvc(id: string): void;
+  finalizeTermination(id: string): SessionState | null;
+  markRelayPurged(id: string): void;
+  markSuspended(id: string, suspendedAt: number): boolean;
+  markSuspending(id: string): boolean;
+  setReady(
+    id: string,
+    readyAt: number,
+    leaseExpiresAt: number,
+    attestationJson: string,
+    guestPublicKey: string,
+  ): boolean;
+}
+
 export interface ProvisioningStore {
   listNonTerminal(): SessionRecord[];
   mergeTimings(id: string, patch: Record<string, number | undefined>): void;
@@ -83,6 +108,7 @@ export interface LifecycleStore {
   getSession(id: string): SessionRecord | null;
   listNonTerminal(): SessionRecord[];
   listTerminalWithPvc(): SessionRecord[];
+  markRelayPurged(id: string): void;
   markResuming(id: string, podName: string): boolean;
   markSuspended(id: string, suspendedAt: number): boolean;
   markSuspending(id: string): boolean;
