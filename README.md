@@ -38,9 +38,9 @@ signup, and the control plane never sees what you run.
 
 Unedited recording of `make demo-session` against a local kind cluster.
 
-| Warm session ready | Exec round trip | Cold start | Idle host cost |
+| Warm session ready | Exec round trip | Cold start (image cached) | Idle cost per guest |
 | :---: | :---: | :---: | :---: |
-| **127 ms** p50 | **53 ms** p50 | **2.69 s** | **~182 MiB** |
+| **127 ms** p50 | **53 ms** p50 | **2.69 s** p50 | **~182 MiB** |
 
 Kata on two nodes with a 20-guest warm pool, control **0.1.16** (measured
 2026-11-09); p50 unless stated. [Method and caveats](docs/performance-cluster.md).
