@@ -1,14 +1,14 @@
 // Package canonical implements the deterministic JSON encoding used for
 // attestation signatures. It must byte-for-byte match the TypeScript
-// `canonicalJson` implementation: sorted object keys, no whitespace, no HTML
-// escaping, UTF-8 strings, integer numbers.
+// `canonicalJson` implementation: sorted object keys (UTF-16 code unit order,
+// as JS compares them), no whitespace, no HTML escaping, UTF-8 strings, and
+// ECMAScript number formatting.
 package canonical
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strconv"
 )
 
@@ -53,11 +53,10 @@ func write(buf *bytes.Buffer, v any) error {
 		buf.WriteString(strconv.FormatUint(t, 10))
 		return nil
 	case float64:
-		if t == float64(int64(t)) {
-			buf.WriteString(strconv.FormatInt(int64(t), 10))
-		} else {
-			buf.WriteString(strconv.FormatFloat(t, 'g', -1, 64))
-		}
+		// Always the ECMAScript form: the old integer fast path printed the
+		// wrong digits outside int64 and %g disagreed with JSON.stringify on
+		// both exponent thresholds.
+		buf.WriteString(formatNumber(t))
 		return nil
 	case []any:
 		buf.WriteByte('[')
@@ -88,7 +87,7 @@ func write(buf *bytes.Buffer, v any) error {
 		for k := range t {
 			keys = append(keys, k)
 		}
-		sort.Strings(keys)
+		sortKeys(keys)
 		buf.WriteByte('{')
 		for i, k := range keys {
 			if i > 0 {

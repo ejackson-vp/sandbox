@@ -1,0 +1,500 @@
+{
+  "description": "Canonical JSON conformance vectors shared by shared/src/crypto.ts (canonicalJson) and guest/internal/canonical (Marshal). Both suites must reproduce every expected string byte for byte.",
+  "numberPolicy": "JSON numbers are IEEE-754 doubles on both sides: JS has one number type and Go decodes into float64. Encoding follows ECMAScript Number::toString(10), which is what JSON.stringify emits: shortest round-trip digits, plain notation when the decimal exponent is in -6..20, exponential form outside that range with a signed, unpadded exponent. Literals beyond 2^53 pin the double they collapse to, not the digits as written.",
+  "vectors": [
+  {
+    "name": "null",
+    "input": null,
+    "expected": "null",
+    "note": "JSON null encodes as the literal null."
+  },
+  {
+    "name": "true",
+    "input": true,
+    "expected": "true"
+  },
+  {
+    "name": "false",
+    "input": false,
+    "expected": "false"
+  },
+  {
+    "name": "number-zero",
+    "input": 0,
+    "expected": "0"
+  },
+  {
+    "name": "number-negative-zero",
+    "input": -0,
+    "expected": "0",
+    "note": "ECMAScript Number::toString renders -0 as 0; the encoder must never emit -0."
+  },
+  {
+    "name": "number-one",
+    "input": 1,
+    "expected": "1"
+  },
+  {
+    "name": "number-negative-one",
+    "input": -1,
+    "expected": "-1"
+  },
+  {
+    "name": "number-integral-float",
+    "input": 1,
+    "expected": "1",
+    "note": "1.0 is the double 1, so it encodes as 1 with no fraction or exponent."
+  },
+  {
+    "name": "number-tenth",
+    "input": 0.1,
+    "expected": "0.1",
+    "note": "Shortest round-trip digits, plain notation."
+  },
+  {
+    "name": "number-negative-fraction",
+    "input": -0.5,
+    "expected": "-0.5"
+  },
+  {
+    "name": "number-repeating",
+    "input": 0.3333333333333333,
+    "expected": "0.3333333333333333",
+    "note": "17 significant digits: shortest that round-trips."
+  },
+  {
+    "name": "number-1e21",
+    "input": 1e+21,
+    "expected": "1e+21",
+    "note": "At 1e21 ECMAScript switches to exponential form, with a signed, unpadded exponent."
+  },
+  {
+    "name": "number-1e20",
+    "input": 100000000000000000000,
+    "expected": "100000000000000000000",
+    "note": "Integral but above int64: must print 21 digits, not 1e+20."
+  },
+  {
+    "name": "number-1e6",
+    "input": 1000000,
+    "expected": "1000000",
+    "note": "Integral boundary of ECMAScript plain notation."
+  },
+  {
+    "name": "number-large-fraction",
+    "input": 1234567.5,
+    "expected": "1234567.5",
+    "note": "Fractional value with decimal exponent 6: ECMAScript stays plain, Go %g would emit 1.2345675e+06."
+  },
+  {
+    "name": "number-1e-4",
+    "input": 0.0001,
+    "expected": "0.0001",
+    "note": "Lower boundary of plain notation: 0.0001."
+  },
+  {
+    "name": "number-1e-5",
+    "input": 0.00001,
+    "expected": "0.00001",
+    "note": "ECMAScript keeps plain notation down to 1e-6; Go %g switches at 1e-5."
+  },
+  {
+    "name": "number-1e-6",
+    "input": 0.000001,
+    "expected": "0.000001"
+  },
+  {
+    "name": "number-1e-7",
+    "input": 1e-7,
+    "expected": "1e-7",
+    "note": "ECMAScript exponents are not zero padded: 1e-7, not 1e-07."
+  },
+  {
+    "name": "number-subnormal",
+    "input": 5e-324,
+    "expected": "5e-324"
+  },
+  {
+    "name": "number-max",
+    "input": 1.7976931348623157e+308,
+    "expected": "1.7976931348623157e+308"
+  },
+  {
+    "name": "number-max-safe-integer",
+    "input": 9007199254740991,
+    "expected": "9007199254740991",
+    "note": "2^53-1, the largest integer every double holds exactly."
+  },
+  {
+    "name": "number-below-min-safe-integer",
+    "input": -9007199254740992,
+    "expected": "-9007199254740992",
+    "note": "-2^53."
+  },
+  {
+    "name": "number-beyond-max-safe-integer",
+    "input": 9007199254740993,
+    "expected": "9007199254740992",
+    "note": "The literal is 2^53+1, which is not a double. Both sides read JSON numbers as IEEE-754 doubles, so the literal collapses to 9007199254740992 before encoding. Pinned deliberately: number handling is float64 on both sides."
+  },
+  {
+    "name": "number-thirty-digit-integer",
+    "input": 123456789012345678901234567890,
+    "expected": "1.2345678901234568e+29",
+    "note": "Beyond int64 and beyond 2^53: reads as the nearest double and encodes in exponential form."
+  },
+  {
+    "name": "string-empty",
+    "input": "",
+    "expected": "\"\""
+  },
+  {
+    "name": "string-ascii",
+    "input": "hello",
+    "expected": "\"hello\""
+  },
+  {
+    "name": "string-quote",
+    "input": "say \"hi\"",
+    "expected": "\"say \\\"hi\\\"\""
+  },
+  {
+    "name": "string-backslash",
+    "input": "C:\\tmp\\x",
+    "expected": "\"C:\\\\tmp\\\\x\""
+  },
+  {
+    "name": "string-whitespace-escapes",
+    "input": "a\nb\tc\rd",
+    "expected": "\"a\\nb\\tc\\rd\"",
+    "note": "\\n, \\t and \\r use short escapes in both implementations."
+  },
+  {
+    "name": "string-backspace-formfeed",
+    "input": "\b\f",
+    "expected": "\"\\b\\f\"",
+    "note": "ECMAScript emits \\b and \\f; older Go encoders emitted \\u0008 and \\u000c."
+  },
+  {
+    "name": "string-control-characters",
+    "input": "\u0000\u0001\u0007\u001f",
+    "expected": "\"\\u0000\\u0001\\u0007\\u001f\"",
+    "note": "Other C0 controls use lowercase \\u00XX hex."
+  },
+  {
+    "name": "string-del-and-c1",
+    "input": "",
+    "expected": "\"\"",
+    "note": "U+007F and U+0085 are escaped by neither side."
+  },
+  {
+    "name": "string-bmp",
+    "input": "héllo → 日本 Ω",
+    "expected": "\"héllo → 日本 Ω\""
+  },
+  {
+    "name": "string-astral",
+    "input": "😀🎉",
+    "expected": "\"😀🎉\"",
+    "note": "Non-BMP characters are emitted as raw UTF-8, never as surrogate escapes."
+  },
+  {
+    "name": "string-mixed-planes",
+    "input": "a😀é𝄞ÿ",
+    "expected": "\"a😀é𝄞ÿ\"",
+    "note": "Astral rune between BMP runes: no surrogate pair escaping."
+  },
+  {
+    "name": "string-line-separator",
+    "input": "a b c",
+    "expected": "\"a b c\"",
+    "note": "U+2028/U+2029 are legal raw in JSON and must not be \\u escaped."
+  },
+  {
+    "name": "string-html-characters",
+    "input": "<script>&\"'</script>",
+    "expected": "\"<script>&\\\"'</script>\"",
+    "note": "No HTML escaping: <, > and & stay raw."
+  },
+  {
+    "name": "string-combining-and-bom",
+    "input": "﻿x́",
+    "expected": "\"﻿x́\""
+  },
+  {
+    "name": "string-all-classes",
+    "input": "q\"\\\n\t\u0000é😀 <&>",
+    "expected": "\"q\\\"\\\\\\n\\t\\u0000é😀 <&>\""
+  },
+  {
+    "name": "keys-insertion-order-irrelevant",
+    "input": {
+      "z": 1,
+      "a": 2,
+      "m": 3
+    },
+    "expected": "{\"a\":2,\"m\":3,\"z\":1}",
+    "note": "Insertion order never survives: keys sort by code unit."
+  },
+  {
+    "name": "keys-case-and-length",
+    "input": {
+      "a": 1,
+      "B": 2,
+      "aa": 3,
+      "A": 4
+    },
+    "expected": "{\"A\":4,\"B\":2,\"a\":1,\"aa\":3}",
+    "note": "Uppercase sorts before lowercase; a prefix sorts before its extension."
+  },
+  {
+    "name": "keys-numeric-like",
+    "input": {
+      "1": "one",
+      "9": "nine",
+      "10": "ten"
+    },
+    "expected": "{\"1\":\"one\",\"10\":\"ten\",\"9\":\"nine\"}",
+    "note": "Integer-index keys are re-ordered by JS object semantics before the sort; canonical order is lexicographic, not numeric."
+  },
+  {
+    "name": "keys-empty-string",
+    "input": {
+      "": 1,
+      "a": 2
+    },
+    "expected": "{\"\":1,\"a\":2}"
+  },
+  {
+    "name": "keys-non-ascii",
+    "input": {
+      "é": 1,
+      "e": 2,
+      "E": 3
+    },
+    "expected": "{\"E\":3,\"e\":2,\"é\":1}"
+  },
+  {
+    "name": "keys-escaped-content",
+    "input": {
+      "k\"quote": 1,
+      "k\\back": 2,
+      "k\nline": 3
+    },
+    "expected": "{\"k\\nline\":3,\"k\\\"quote\":1,\"k\\\\back\":2}"
+  },
+  {
+    "name": "keys-astral-before-bmp",
+    "input": {
+      "�": 1,
+      "😀": 2
+    },
+    "expected": "{\"😀\":2,\"�\":1}",
+    "note": "JS compares UTF-16 code units, so surrogate 0xD83D sorts before 0xFFFD. Go byte order sorts F0.. after EF.. and disagrees."
+  },
+  {
+    "name": "keys-astral-before-private-use",
+    "input": {
+      "": 1,
+      "😀": 2
+    },
+    "expected": "{\"😀\":2,\"\":1}",
+    "note": "Same divergence against a U+E000..U+FFFF key."
+  },
+  {
+    "name": "keys-astral-before-bmp-nested",
+    "input": {
+      "outer": {
+        "￿": {
+          "�": 1,
+          "🎉": 2
+        }
+      }
+    },
+    "expected": "{\"outer\":{\"￿\":{\"🎉\":2,\"�\":1}}}"
+  },
+  {
+    "name": "array-empty",
+    "input": [],
+    "expected": "[]"
+  },
+  {
+    "name": "object-empty",
+    "input": {},
+    "expected": "{}"
+  },
+  {
+    "name": "array-order-preserved",
+    "input": [
+      3,
+      1,
+      2,
+      0,
+      null
+    ],
+    "expected": "[3,1,2,0,null]"
+  },
+  {
+    "name": "array-nested-empty",
+    "input": [
+      [],
+      {},
+      [
+        []
+      ],
+      [
+        {}
+      ]
+    ],
+    "expected": "[[],{},[[]],[{}]]"
+  },
+  {
+    "name": "object-with-empty-children",
+    "input": {
+      "a": [],
+      "b": {},
+      "c": ""
+    },
+    "expected": "{\"a\":[],\"b\":{},\"c\":\"\"}"
+  },
+  {
+    "name": "object-array-mixed",
+    "input": {
+      "list": [
+        1,
+        "two",
+        true,
+        null,
+        {
+          "done": false
+        }
+      ]
+    },
+    "expected": "{\"list\":[1,\"two\",true,null,{\"done\":false}]}"
+  },
+  {
+    "name": "nested-deep",
+    "input": {
+      "a": {
+        "b": {
+          "c": {
+            "d": {
+              "e": {
+                "f": [
+                  {
+                    "g": {
+                      "h": [
+                        1,
+                        2,
+                        {
+                          "i": null
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "z": [
+        [
+          [
+            [
+              [
+                "deep"
+              ]
+            ]
+          ]
+        ]
+      ]
+    },
+    "expected": "{\"a\":{\"b\":{\"c\":{\"d\":{\"e\":{\"f\":[{\"g\":{\"h\":[1,2,{\"i\":null}]}}]}}}}},\"z\":[[[[[\"deep\"]]]]]}"
+  },
+  {
+    "name": "nested-reordered-equals",
+    "input": {
+      "second": {
+        "b": 1,
+        "a": 2
+      },
+      "first": [
+        {
+          "d": 4,
+          "c": 3
+        }
+      ]
+    },
+    "expected": "{\"first\":[{\"c\":3,\"d\":4}],\"second\":{\"a\":2,\"b\":1}}",
+    "note": "Paired with nested-reordered-original: same content, different literal order, identical bytes."
+  },
+  {
+    "name": "nested-reordered-original",
+    "input": {
+      "first": [
+        {
+          "c": 3,
+          "d": 4
+        }
+      ],
+      "second": {
+        "a": 2,
+        "b": 1
+      }
+    },
+    "expected": "{\"first\":[{\"c\":3,\"d\":4}],\"second\":{\"a\":2,\"b\":1}}"
+  },
+  {
+    "name": "attestation-envelope",
+    "input": {
+      "v": 1,
+      "evidenceType": "dev",
+      "insecureDevOnly": true,
+      "hardwareBacked": false,
+      "sessionId": "sess_01HZY",
+      "guestPublicKey": "Z3Vlc3Q=",
+      "clientPublicKey": "Y2xpZW50",
+      "clientNonce": "bm9uY2U=",
+      "bootNonce": "Ym9vdA==",
+      "issuedAt": 1750000000000,
+      "expiresAt": 1750000300000,
+      "report": "",
+      "claims": {
+        "guestMeasurement": "sha256:abc",
+        "imageDigest": "sha256:def",
+        "runtimeClass": "gvisor",
+        "kernelRelease": "6.8.0",
+        "hardwareBacked": false,
+        "guestPolicyEnforced": false,
+        "tools": [
+          "python",
+          "node"
+        ]
+      }
+    },
+    "expected": "{\"bootNonce\":\"Ym9vdA==\",\"claims\":{\"guestMeasurement\":\"sha256:abc\",\"guestPolicyEnforced\":false,\"hardwareBacked\":false,\"imageDigest\":\"sha256:def\",\"kernelRelease\":\"6.8.0\",\"runtimeClass\":\"gvisor\",\"tools\":[\"python\",\"node\"]},\"clientNonce\":\"bm9uY2U=\",\"clientPublicKey\":\"Y2xpZW50\",\"evidenceType\":\"dev\",\"expiresAt\":1750000300000,\"guestPublicKey\":\"Z3Vlc3Q=\",\"hardwareBacked\":false,\"insecureDevOnly\":true,\"issuedAt\":1750000000000,\"report\":\"\",\"sessionId\":\"sess_01HZY\",\"v\":1}",
+    "note": "The unsigned attestation envelope shape that canonicalEvidenceBytes hashes."
+  },
+  {
+    "name": "payment-identity",
+    "input": {
+      "x402Version": 1,
+      "network": "base-sepolia",
+      "scheme": "exact",
+      "asset": "0xUSDC",
+      "payTo": "0xabc",
+      "amount": "10000",
+      "payload": {
+        "authorization": {
+          "from": "0xdef",
+          "nonce": "0x01"
+        },
+        "signature": "0xsig"
+      }
+    },
+    "expected": "{\"amount\":\"10000\",\"asset\":\"0xUSDC\",\"network\":\"base-sepolia\",\"payTo\":\"0xabc\",\"payload\":{\"authorization\":{\"from\":\"0xdef\",\"nonce\":\"0x01\"},\"signature\":\"0xsig\"},\"scheme\":\"exact\",\"x402Version\":1}",
+    "note": "The paymentKey preimage shape."
+  }
+  ]
+}
