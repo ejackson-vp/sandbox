@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Agent, fetch as undiciFetch } from "undici";
-import type { RelaySessionState, WarmClaim } from "@x402s/shared";
+import type { RelayStateSnapshot, WarmClaim } from "@x402s/shared";
 
 export interface RelayClientTlsOptions {
   certFile: string;
@@ -89,17 +89,23 @@ export class RelayClient {
     this.headers = {
       "content-type": "application/json",
       // The relay's registry is in memory and the Deployment replaces the pod
-      // (maxSurge: 0). A keep-alive socket can stay pinned to the old pod
-      // through a Service after its endpoints are gone, so control calls must
-      // open a fresh connection and be routed to the current pod.
-      connection: "close",
+      // (maxSurge: 0), so a keep-alive socket can stay pinned to a serving but
+      // terminating pod. Mutating calls therefore open a fresh connection,
+      // routed to the current pod. Read-only snapshots may reuse the pool
+      // because they carry the generation that answered, and callers that care
+      // compare it (see `state` and the readiness path).
       // The client certificate is the credential on the mTLS path; do not also
       // send the shared token over the wire.
       ...(opts.tls ? {} : { "x-internal-token": opts.adminToken }),
     };
   }
 
-  private async raw(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<Response> {
+  private async raw(
+    path: string,
+    init: RequestInit = {},
+    timeoutMs?: number,
+    opts: { reuse?: boolean } = {},
+  ): Promise<Response> {
     // undici's fetch, not the global one: the global fetch uses Node's bundled
     // undici, and a dispatcher created by the npm package is a different
     // instance, which fails with UND_ERR_INVALID_ARG.
@@ -108,6 +114,7 @@ export class RelayClient {
       ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}),
       headers: {
         ...this.headers,
+        ...(opts.reuse ? {} : { connection: "close" }),
         ...(init.headers ?? {}),
       },
       signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
@@ -115,8 +122,13 @@ export class RelayClient {
     return undiciFetch(`${this.baseUrl}${path}`, request) as unknown as Promise<Response>;
   }
 
-  private async call<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
-    const res = await this.raw(path, init, timeoutMs);
+  private async call<T>(
+    path: string,
+    init: RequestInit = {},
+    timeoutMs?: number,
+    opts: { reuse?: boolean } = {},
+  ): Promise<T> {
+    const res = await this.raw(path, init, timeoutMs, opts);
     const text = await res.text();
     let body: unknown;
     try {
@@ -250,8 +262,13 @@ export class RelayClient {
     );
   }
 
-  async state(sessionId: string): Promise<RelaySessionState> {
-    return this.call<RelaySessionState>(`/internal/${encodeURIComponent(sessionId)}/state`);
+  async state(sessionId: string, opts: { reuse?: boolean } = {}): Promise<RelayStateSnapshot> {
+    return this.call<RelayStateSnapshot>(
+      `/internal/${encodeURIComponent(sessionId)}/state`,
+      {},
+      undefined,
+      opts,
+    );
   }
 
   /**

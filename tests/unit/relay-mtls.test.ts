@@ -54,8 +54,14 @@ afterAll(async () => {
   await relay?.close();
 });
 
-async function state(sessionId: string): Promise<{ connected: boolean; attestation?: unknown }> {
-  return (await client.state(sessionId)) as unknown as { connected: boolean; attestation?: unknown };
+async function state(
+  sessionId: string,
+): Promise<{ connected: boolean; attestation?: unknown; generation?: string }> {
+  return (await client.state(sessionId)) as unknown as {
+    connected: boolean;
+    attestation?: unknown;
+    generation?: string;
+  };
 }
 
 async function connectGuest(sessionId: string): Promise<WebSocket> {
@@ -98,7 +104,9 @@ describe("mTLS control listener", () => {
 
     const health = await client.health();
     expect(health.generation).toBe(relay.generation);
-    expect((await state(sessionId)).connected).toBe(false);
+    const snapshot = await state(sessionId);
+    expect(snapshot.connected).toBe(false);
+    expect(snapshot.generation).toBe(relay.generation);
 
     await client.purge(sessionId);
     const gone = await client.state(sessionId);

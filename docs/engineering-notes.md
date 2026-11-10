@@ -20,6 +20,13 @@ repeat creates and one redundant capacity call; the VM is not the problem.
 That gap is the product target. A user does not care that the pod was ready in
 127 ms if they waited nearly 400 ms to run a command.
 
+A 0.1.20 spot check landed at 287 ms server and 522 ms client (n = 50), with 70
+of 71 creates hitting the warm pool. The leading hypothesis is the two extra
+relay control round trips added in 0.1.19 for relay-restart safety, each of
+which opened a fresh mTLS connection before the READY timestamp was written.
+That is a hypothesis from reading the code, not a profile; #116 tracks the
+measurement.
+
 ## Burst traffic queues; it does not thrash
 
 25 simultaneous creates completed 25/25 with zero failures in 19.0 s. Server-side

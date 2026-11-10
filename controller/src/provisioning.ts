@@ -2,6 +2,7 @@
  * Provisioning use case: cold pod or warm claim, then the readiness handshake.
  */
 import { LATENCY_BUCKETS, lifetimeExpired, metrics } from "@x402s/shared";
+import type { RelayStateSnapshot } from "@x402s/shared";
 import { proxyTokenFor } from "./config.js";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
@@ -321,6 +322,25 @@ export class Provisioning {
   }
 
 
+  /**
+   * Read a relay snapshot, reusing the pooled connection.
+   *
+   * A pooled socket can stay pinned to a relay pod that is being replaced. When
+   * the snapshot comes from a generation this session did not register on, it
+   * cannot be used for decisions, so ask once more on a fresh connection
+   * instead of recreating a pod or waiting out a tick.
+   */
+  private async relaySnapshot(
+    sessionId: string,
+    expectedGeneration: string | null,
+  ): Promise<RelayStateSnapshot> {
+    const state = await this.ctx.relay.state(sessionId, { reuse: true });
+    if (expectedGeneration && state.generation !== expectedGeneration) {
+      return this.ctx.relay.state(sessionId);
+    }
+    return state;
+  }
+
   async awaitReady(session: SessionRecord): Promise<void> {
     const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
     if (
@@ -353,15 +373,15 @@ export class Provisioning {
 
     if (session.relayTokenHash) {
       try {
-        // Bracket the handshake with generation probes. A relay restart between
-        // these two reads means the hello came from a relay that is being
-        // replaced; marking READY here would charge the customer for a guest
-        // that is about to exit. Re-register on the next pass instead.
-        const before = await this.ctx.relay.health().catch(() => null);
-        let state = await this.ctx.relay.state(session.id);
-        const generationAtCreate = this.relayGeneration.get(session.id) ?? null;
+        // One snapshot carries both the session state and the generation of the
+        // relay process that produced it, so the two cannot disagree. Separate
+        // probes before and after the read could: both could hit a relay that is
+        // already being replaced, and they cost two extra control round trips on
+        // every readiness pass.
+        let expectedGeneration = this.relayGeneration.get(session.id) ?? null;
+        let state = await this.relaySnapshot(session.id, expectedGeneration);
         const relayChanged = Boolean(
-          before && generationAtCreate && before.generation !== generationAtCreate,
+          expectedGeneration && state.generation !== expectedGeneration,
         );
         // A relay replacement can land after the pod was created but before
         // the guest dials. The guest holds the old endpoint IP, so it can never
@@ -380,7 +400,7 @@ export class Provisioning {
           // inside this pass (bounded, so one slow relay cannot stall the
           // reconcile loop) rather than waiting for the next tick or for the
           // guest's dial window to run out.
-          await this.ctx.relay
+          const registered = await this.ctx.relay
             .registerCurrent(
               session.id,
               session.relayTokenHash,
@@ -389,16 +409,27 @@ export class Provisioning {
             )
             .catch((err: Error) => {
               log.warn("relay_reregister_failed", { sessionId: session.id, error: err.message });
+              return null;
             });
-          state = await this.ctx.relay.state(session.id);
+          if (registered?.generation) {
+            expectedGeneration = registered.generation;
+            this.relayGeneration.set(session.id, registered.generation);
+          }
+          state = await this.relaySnapshot(session.id, expectedGeneration);
         }
         if (state.connected && state.attestation) {
-          const after = await this.ctx.relay.health().catch(() => null);
-          if (!before || !after || before.generation !== after.generation) {
+          if (!expectedGeneration) {
+            // A controller restart clears the in-memory map. The process that
+            // opened this connection started after the restart, so the snapshot
+            // cannot come from a socket pinned to a relay from before it.
+            expectedGeneration = state.generation;
+            this.relayGeneration.set(session.id, state.generation);
+          }
+          if (state.generation !== expectedGeneration) {
             log.warn("sandbox_relay_generation_changed", {
               sessionId: session.id,
-              before: before?.generation ?? null,
-              after: after?.generation ?? null,
+              expected: expectedGeneration,
+              observed: state.generation,
             });
             return;
           }
