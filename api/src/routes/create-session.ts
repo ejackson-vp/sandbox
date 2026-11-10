@@ -26,7 +26,7 @@ import {
   type SessionSpec,
 } from "@x402s/shared";
 import type { ApiConfig } from "../config.js";
-import { ControllerError, type CapacityDecision, type ControllerClient } from "../controller-client.js";
+import { ControllerError, type CapacityDecision, type ControllerClient, type IntentCompletion } from "../controller-client.js";
 import { createSchema } from "../schemas.js";
 import { RateLimiter, paymentPayerKey } from "../admission.js";
 import type { SettlementLookup } from "../settlement-lookup.js";
@@ -236,7 +236,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       // so the capability must cover that window, not just the first lease.
       const capabilityLifetime = spec.maxLifetimeSeconds ?? spec.durationSeconds;
       const capabilityExpiresAt = Date.now() + (capabilityLifetime + deps.config.capabilityTtlSeconds) * 1000;
-      let completion: { sessionId: string; state: string; created?: boolean };
+      let completion: IntentCompletion;
       try {
         completion = await deps.controller.completeIntent(key, {
           claimToken: claim.token,
@@ -294,8 +294,11 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       void deps.controller.wake();
       if (completion.created === false) {
         // A concurrent worker won the completion race. Return the session it
-        // created, with the capability derived from the same payment.
-        const winner = await deps.controller.getSession(completion.sessionId).catch(() => null);
+        // created, with the capability derived from the same payment. Newer
+        // controllers fold the view into the completion; older ones need the
+        // lookup.
+        const winner =
+          completion.session ?? (await deps.controller.getSession(completion.sessionId).catch(() => null));
         if (!winner) {
           log.error("entitlement_missing_after_idempotent_completion", {
             sessionId: completion.sessionId,
@@ -318,7 +321,10 @@ export function createSessionHandler(deps: CreateSessionDeps) {
         paymentKeyPrefix: key.slice(0, 12),
         payer: settled.payer,
       });
-      const session = await deps.controller.getSession(sessionId).catch(() => null);
+      // Newer controllers return the view with the completion, which removes
+      // one API -> controller round trip from the create critical path. Keep
+      // the lookup as the fallback for an older controller.
+      const session = completion.session ?? (await deps.controller.getSession(sessionId).catch(() => null));
       if (session) {
         res.status(201).json(createResponseFrom(session, capability, spec.limits));
       } else {

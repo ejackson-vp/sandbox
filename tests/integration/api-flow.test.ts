@@ -320,6 +320,76 @@ describe("payments and entitlements", () => {
     expect(store.countSessions()).toBe(before);
   });
 
+  it("returns the session view with the create and skips the post-create getSession", async () => {
+    const body = await createBody();
+    const { header, body: signedBody } = await createSessionPayment(apiUrl, body);
+    const lookup = vi.spyOn(apiController, "getSession");
+    try {
+      const res = await postSession(signedBody, header);
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as {
+        sessionId: string;
+        capability: string;
+        state: SessionStatus["state"];
+        limits: SessionStatus["limits"];
+        session?: SessionStatus;
+      };
+      // The view came from the completion response, not a second controller call.
+      expect(lookup).not.toHaveBeenCalled();
+      expect(created.session).toBeDefined();
+      expect(created.session).toMatchObject({
+        sessionId: created.sessionId,
+        state: created.state,
+        limits: created.limits,
+        clientNonce: body.clientNonce,
+        busy: false,
+      });
+      // PAID has no lease yet, so the embedded view agrees with the status route.
+      expect(created.session?.remainingSeconds).toBe(0);
+
+      const statusRes = await fetch(`${apiUrl}/v1/sessions/${created.sessionId}`, {
+        headers: { "x-sandbox-capability": created.capability },
+      });
+      expect(statusRes.status).toBe(200);
+      const status = (await statusRes.json()) as SessionStatus;
+      expect(status).toMatchObject({
+        sessionId: created.session?.sessionId,
+        tier: created.session?.tier,
+        durationSeconds: created.session?.durationSeconds,
+        createdAt: created.session?.createdAt,
+        limits: created.session?.limits,
+      });
+      expect(status.payment.amount).toBe(created.session?.payment.amount);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it("builds the SDK handle from the embedded create view", async () => {
+    const handle = await client.createSession({
+      tier: "custom",
+      durationSeconds: 30,
+      cpuMillis: 500,
+      memoryMiB: 512,
+      diskMiB: 256,
+    });
+    try {
+      expect(handle.status).toMatchObject({
+        sessionId: handle.sessionId,
+        state: "PAID",
+        clientNonce: handle.clientNonce,
+        busy: false,
+      });
+      expect(handle.status?.clientNonce).toBe(handle.clientNonce);
+      expect(Date.parse(handle.status!.createdAt)).toBeGreaterThan(Date.now() - 60_000);
+      expect(handle.status?.payment.priceUsd).toMatch(/^\$/);
+      // The embedded view is the server's view, not a locally invented one.
+      expect(handle.status?.tier).toBe("custom");
+    } finally {
+      await client.destroy(handle).catch(() => undefined);
+    }
+  }, 20_000);
+
   it("does not let a receipt holder bind the session to their own client key", async () => {
     // B has A's PAYMENT-SIGNATURE but not A's wallet. B tries to bind the
     // session to B's client key before A submits.

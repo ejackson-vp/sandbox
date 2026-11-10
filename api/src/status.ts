@@ -55,6 +55,10 @@ export function createResponseFrom(
   capability: string,
   limits: SessionLimits,
 ): CreateSessionResponse {
+  // The same public view as GET /v1/sessions/{id}, so the client can build its
+  // handle without a second request. Internal fields (capabilityHash,
+  // paymentKey) are dropped by toStatus.
+  const status = toStatus(session);
   return {
     sessionId: session.sessionId,
     capability,
@@ -65,7 +69,8 @@ export function createResponseFrom(
     ...(session.baseline ? { baseline: session.baseline } : {}),
     capabilityExpiresAt: new Date(session.capabilityExpiresAt).toISOString(),
     clientNonce: session.clientNonce,
-    payment: toStatus(session).payment,
+    payment: status.payment,
+    session: status,
   };
 }
 

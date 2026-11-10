@@ -11,11 +11,26 @@ import {
 import { log } from "@x402s/shared";
 import { PaymentAlreadyRedeemedError, PaymentClaimLostError, type LedgerStatus } from "../store.js";
 import { completeSchema, intentClaimSchema } from "../control-api-schemas.js";
+import { describeSession } from "../session-view.js";
 import type { ControlApiDeps } from "./types.js";
 
 export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void {
   const cfg = deps.cfg;
   const store = deps.store;
+  /**
+   * Completion response. The session view is folded in so the API does not
+   * need a second round trip (`GET /internal/sessions/:id`) on the create
+   * critical path. Kept additive: an older API ignores the extra field.
+   */
+  const completionResponse = (sessionId: string | null, created: boolean) => {
+    const session = sessionId ? describeSession(store, sessionId) : null;
+    return {
+      sessionId,
+      state: "PAID" as const,
+      created,
+      ...(session ? { session } : {}),
+    };
+  };
   app.post("/internal/payment-intents/claim", (req: Request, res: Response) => {
     const parsed = intentClaimSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -79,7 +94,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       return;
     }
     if (intent.status === "settled") {
-      res.json({ sessionId: intent.sessionId, state: "PAID", created: false });
+      res.json(completionResponse(intent.sessionId, false));
       return;
     }
     if (body.payment.paymentKey !== paymentKey) {
@@ -233,7 +248,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
         // If it has already settled, hand back the winning session.
         const current = store.getPaymentIntent(paymentKey);
         if (current?.status === "settled" && current.sessionId) {
-          res.json({ sessionId: current.sessionId, state: "PAID", created: false });
+          res.json(completionResponse(current.sessionId, false));
           return;
         }
         res.status(409).json({ error: "stale_claim", message: "this intent is no longer held by this claim" });
@@ -247,7 +262,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
         sessionId: completed.sessionId,
         paymentKeyPrefix: paymentKey.slice(0, 12),
       });
-      res.json({ sessionId: completed.sessionId, state: "PAID", created: false });
+      res.json(completionResponse(completed.sessionId, false));
       return;
     }
     log.info("entitlement_created", {
@@ -256,7 +271,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       durationSeconds: spec.durationSeconds,
       paymentKeyPrefix: paymentKey.slice(0, 12),
     });
-    res.status(201).json({ sessionId: body.sessionId, state: "PAID", created: true });
+    res.status(201).json(completionResponse(body.sessionId, true));
   });
 
   app.post("/internal/payment-intents/:paymentKey/fail", (req: Request, res: Response) => {

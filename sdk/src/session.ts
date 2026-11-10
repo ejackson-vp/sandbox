@@ -55,25 +55,32 @@ export class SessionService {
     }
 
     const created = (await paid.response.json()) as CreateSessionResponse;
+    // Newer servers embed the session view in the create response, so the
+    // handle is complete without an immediate GET /v1/sessions/{id}. Older
+    // servers omit it; keep the locally derived view as the fallback.
+    // The local nonce always wins so the handle stays bound to this client key.
+    const status: SessionStatus = created.session
+      ? { ...created.session, sessionId: created.sessionId, clientNonce }
+      : {
+          sessionId: created.sessionId,
+          state: created.state,
+          tier: created.tier,
+          durationSeconds: created.durationSeconds,
+          limits: created.limits,
+          ...(created.baseline ? { baseline: created.baseline } : {}),
+          createdAt: new Date().toISOString(),
+          remainingSeconds: created.durationSeconds,
+          clientNonce,
+          payment: created.payment,
+          busy: false,
+        };
     const handle: SessionHandle = {
       sessionId: created.sessionId,
       capability: created.capability,
       clientPublicKey: keys.publicKey,
       clientPrivateKey: keys.privateKey,
       clientNonce,
-      status: {
-        sessionId: created.sessionId,
-        state: created.state,
-        tier: created.tier,
-        durationSeconds: created.durationSeconds,
-        limits: created.limits,
-        ...(created.baseline ? { baseline: created.baseline } : {}),
-        createdAt: new Date().toISOString(),
-        remainingSeconds: created.durationSeconds,
-        clientNonce,
-        payment: created.payment,
-        busy: false,
-      },
+      status,
       createdAt: Date.now(),
     };
     this.rt.log(

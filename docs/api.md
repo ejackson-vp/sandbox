@@ -51,7 +51,7 @@ PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
 
 `201 Created` (or `200 OK` for an idempotent replay):
 
-```json
+```jsonc
 {
   "sessionId": "sbx_61744770c4f79e88223b9f9d",
   "capability": "…43-char base64url…",
@@ -69,9 +69,28 @@ PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
     "mode": "mock", "network": "mock:local", "scheme": "exact",
     "asset": "mock:usdc", "amount": "50000", "priceUsd": "$0.05",
     "payTo": "0x…", "payer": "0x…", "transaction": "mock:…"
+  },
+  "session": {                       // optional, additive: same shape as GET /v1/sessions/{id}
+    "sessionId": "sbx_61744770c4f79e88223b9f9d",
+    "state": "PAID",
+    "tier": "standard",
+    "durationSeconds": 300,
+    "limits": { "...": 0 },
+    "createdAt": "2026-11-06T01:33:56.000Z",
+    "remainingSeconds": 0,           // PAID has no lease yet
+    "clientNonce": "…",
+    "busy": false,
+    "payment": { "...": "…" }
   }
 }
 ```
+
+`session` is the controller's view at completion time, in the same shape as the
+status endpoint, and it never contains capability material. Newer SDKs build the
+local handle from it and do not need a status request after create. It is
+additive: older clients ignore it, and `GET /v1/sessions/{id}` remains the
+refresh path. A create against an older API omits the field, so clients must
+still tolerate its absence.
 
 Errors: `400` invalid spec/tier mismatch, `402` payment required/rejected,
 `409` `payment_in_progress` or `spec_mismatch`, `429` rate limited (see
