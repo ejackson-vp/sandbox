@@ -13,10 +13,19 @@ const base = {
   ...TOKENS,
   EXECUTION_MODE: "kata",
   ALLOW_INSECURE_DEV: "false",
+  KUBERNETES_ENABLED: "false",
   RUNTIME_CLASS: "kata",
 };
 
-const dev = { ...TOKENS, EXECUTION_MODE: "dev", ALLOW_INSECURE_DEV: "true" };
+const dev = {
+  ...TOKENS,
+  EXECUTION_MODE: "dev",
+  ALLOW_INSECURE_DEV: "true",
+  KUBERNETES_ENABLED: "false",
+};
+
+const PINNED = `sha256:${"c".repeat(64)}`;
+const PLACEHOLDER = "sha256:unpinned-dev-image";
 
 describe("production config guards", () => {
   it("requires a pinned image digest when insecure dev is off", () => {
@@ -99,6 +108,51 @@ describe("production config guards", () => {
       GUEST_IMAGE_DIGEST: "sha256:dev-unpinned-image",
     });
     expect(cfg.guestImageRef).toBe("x402-sandbox/guest:dev");
+  });
+
+  describe("guest image pinning follows the provisioner", () => {
+    it("accepts a pinned digest with Kubernetes enabled", () => {
+      const cfg = loadControllerConfig({
+        ...dev,
+        KUBERNETES_ENABLED: "true",
+        GUEST_IMAGE: "ghcr.io/example/guest:0.1.0",
+        GUEST_IMAGE_DIGEST: PINNED,
+      });
+      expect(cfg.kubeEnabled).toBe(true);
+      expect(cfg.guestImageRef).toBe(`ghcr.io/example/guest@${PINNED}`);
+    });
+
+    it("rejects the placeholder with Kubernetes enabled, even when insecure dev is on", () => {
+      expect(() =>
+        loadControllerConfig({
+          ...dev,
+          KUBERNETES_ENABLED: "true",
+          GUEST_IMAGE_DIGEST: PLACEHOLDER,
+        }),
+      ).toThrow(/pinned sha256.*KUBERNETES_ENABLED/);
+    });
+
+    it("accepts a pinned digest with the local process provisioner", () => {
+      const cfg = loadControllerConfig({
+        ...dev,
+        KUBERNETES_ENABLED: "false",
+        GUEST_IMAGE: "ghcr.io/example/guest:0.1.0",
+        GUEST_IMAGE_DIGEST: PINNED,
+      });
+      expect(cfg.kubeEnabled).toBe(false);
+      expect(cfg.guestImageRef).toBe(`ghcr.io/example/guest@${PINNED}`);
+    });
+
+    it("accepts the placeholder with the local process provisioner", () => {
+      const cfg = loadControllerConfig({
+        ...dev,
+        KUBERNETES_ENABLED: "false",
+        GUEST_IMAGE: "x402-sandbox/guest:dev",
+        GUEST_IMAGE_DIGEST: PLACEHOLDER,
+      });
+      expect(cfg.kubeEnabled).toBe(false);
+      expect(cfg.guestImageRef).toBe("x402-sandbox/guest:dev");
+    });
   });
 
   it("rejects a malformed digest even in dev", () => {
