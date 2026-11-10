@@ -9,7 +9,7 @@
  */
 import { metrics } from "@x402s/shared";
 import { log } from "@x402s/shared";
-import type { SessionRecord, SessionState } from "./store.js";
+import type { SessionRecord, SessionState } from "./store/models.js";
 import type { RefundStore } from "./store/ports.js";
 
 export type RefundOutcome = "refunded" | "pending" | "not_applicable";

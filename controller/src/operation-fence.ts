@@ -28,7 +28,7 @@
  */
 import { log } from "@x402s/shared";
 import type { RelayClient } from "./relay-client.js";
-import type { Store } from "./store.js";
+import type { FenceStore } from "./store/ports.js";
 
 export interface FenceReconcileResult {
   /** Fenced gates released because the guest reported the request finished. */
@@ -41,7 +41,7 @@ export interface FenceReconcileResult {
 
 export class OperationFence {
   constructor(
-    private readonly store: Store,
+    private readonly store: FenceStore,
     private readonly relay: RelayClient,
   ) {}
 

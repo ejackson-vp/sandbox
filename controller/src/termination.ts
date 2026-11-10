@@ -10,7 +10,7 @@ import type { TerminationStore } from "./store/ports.js";
 type TerminationContext = Omit<ReconcilerContext, "store"> & { store: TerminationStore };
 import { RefundService } from "./refunds.js";
 import { workspacePvcReapReason } from "./checkpoint-retention.js";
-import type { SessionRecord } from "./store.js";
+import type { SessionRecord } from "./store/models.js";
 
 export class Termination {
   private readonly refunds: RefundService;

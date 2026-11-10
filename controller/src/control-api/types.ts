@@ -1,13 +1,13 @@
 import type { ControllerConfig } from "../config.js";
 import type { TokenBucket } from "@x402s/shared";
-import type { Store } from "../store.js";
+import type { ControlApiStore } from "../store/ports.js";
 import type { RelayClient } from "../relay-client.js";
 import type { CapacityService } from "../capacity/service.js";
 import type { Provisioner } from "../k8s.js";
 
 export interface ControlApiDeps {
   cfg: ControllerConfig;
-  store: Store;
+  store: ControlApiStore;
   relay: RelayClient;
   /**
    * Checked by readiness when supplied. Omitted by unit tests that never
