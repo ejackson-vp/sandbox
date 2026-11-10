@@ -95,34 +95,24 @@ export class Provisioning {
   /**
    * Endpoints for a pod this pass will create, or null when it must not.
    *
-   * A null at one replica is the existing defer-and-retry: the Service may come
-   * back. A null for a pinned shard is terminal for this attempt, with its own
-   * failure reason: retrying cannot help until that replica is ready, and
-   * falling back to a hostname would create a guest that can never connect.
+   * A null is always a defer-and-retry, never a silent fallback. The Service or
+   * the pinned shard may come back inside the provisioning timeout, and that
+   * timeout already terminates and refunds. Failing a paid session the moment a
+   * replica rolls would make a normal restart look like a customer-visible
+   * failure. Falling back to a hostname is not an option either: sandbox pods
+   * have no DNS, so a guest handed a name can never connect.
    */
   private async podEndpoints(session: SessionRecord): Promise<{ relay: Endpoint; proxy: Endpoint } | null> {
     const { relay, proxy } = await this.endpointsFor(session.id);
     if (relay && proxy) return { relay, proxy };
 
-    const unresolved = { relay: !relay, proxy: !proxy } as const;
-    const missing = (["relay", "proxy"] as const).filter(
-      (service) => unresolved[service] && pinnedShard(this.ctx.cfg, service, session.id) !== null,
+    const pinned = (["relay", "proxy"] as const).some(
+      (service) => (service === "relay" ? !relay : !proxy) && pinnedShard(this.ctx.cfg, service, session.id) !== null,
     );
-    if (missing.length === 0) {
-      log.warn("sandbox_services_unavailable", {
-        sessionId: session.id,
-        relay: Boolean(relay),
-        proxy: Boolean(proxy),
-      });
-      return null;
-    }
-    this.ctx.store.requestTermination(session.id, "failure:data_plane_endpoint_unavailable", {
-      code: "data_plane_endpoint_unavailable",
-      message: `no ready endpoint for ${missing.join(", ")}`,
-    });
-    log.warn("sandbox_data_plane_endpoint_unavailable", {
+    log.warn(pinned ? "sandbox_data_plane_endpoint_unavailable" : "sandbox_services_unavailable", {
       sessionId: session.id,
-      services: missing.join(","),
+      relay: Boolean(relay),
+      proxy: Boolean(proxy),
     });
     return null;
   }

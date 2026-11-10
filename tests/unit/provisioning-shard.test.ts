@@ -179,22 +179,18 @@ describe("provisioning data-plane placement", () => {
     expect(serviceAddress).toHaveBeenCalledWith(cfg.proxyServiceName, firstShard);
   });
 
-  it("fails closed when the session's shard has no ready endpoint", async () => {
+  it("defers, without creating a pod, when the session's shard has no ready endpoint", async () => {
     const cfg = config({ RELAY_REPLICAS: "2", PROXY_REPLICAS: "2" });
     const { provisioning, createPod, requestTermination } = harness(cfg);
 
     await provisioning.provision(session("sbx_no_shard_endpoint"));
 
     // No pod is created: a hostname in the pod spec could never be dialled.
+    // The session is not terminated either: a rolling restart of that replica
+    // must not fail a paid session. The provisioning timeout refunds if the
+    // shard never comes back.
     expect(createPod).not.toHaveBeenCalled();
-    expect(requestTermination).toHaveBeenCalledWith(
-      "sbx_no_shard_endpoint",
-      "failure:data_plane_endpoint_unavailable",
-      {
-        code: "data_plane_endpoint_unavailable",
-        message: expect.stringContaining("relay"),
-      },
-    );
+    expect(requestTermination).not.toHaveBeenCalled();
   });
 
   it("mints shard claims into both credentials when replicas > 1", async () => {
