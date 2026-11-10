@@ -75,10 +75,12 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 128Mi
+              # Measured ~228Mi on the homelab at steady state; 128Mi made
+              # Grafana the first eviction candidate under node pressure.
+              memory: 256Mi
             limits:
               cpu: 300m
-              memory: 384Mi
+              memory: 512Mi
           securityContext:
             runAsUser: 472
             runAsGroup: 472
