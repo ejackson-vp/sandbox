@@ -1,0 +1,202 @@
+# Sandbox SLO rules.
+#
+# Portable Prometheus/vmalert rule file. The scrape job adds a `role` label
+# (`api`, `controller`, `relay`), so every expression below can select the
+# process that owns the metric instead of double-counting across roles.
+#
+# Thresholds are the ones agreed in issue #38. They are deliberately small and
+# explainable for a single-tenant homelab; tune them only with a recorded
+# reason. `reconciliation_pending` and `warm_pool_empty` carry caveats in
+# deploy/monitoring/README.md because the current API does not export a
+# per-error-code counter and the warm pool can be disabled.
+groups:
+  - name: sandbox-slo
+    interval: 30s
+    rules:
+      - alert: SandboxCreateP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(sandbox_session_create_duration_seconds_bucket{role="api"}[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Session create p95 is above 500 ms"
+          description: >-
+            The API create route has held a p95 above 500 ms for 10 minutes
+            (current {{ $value }} s). Check payment/settlement
+            latency, controller admission and SQLite busy retries before
+            assuming the API process is at fault.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxProvisioningTimeoutRateHigh
+        expr: |
+          (
+            sum(rate(sandbox_provision_failures_total{role="controller",reason="provisioning_timeout"}[10m]))
+            /
+            clamp_min(sum(rate(sandbox_sessions_created_total{role="controller"}[10m])), 0.001)
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Provisioning timeouts are above 1% of creates"
+          description: >-
+            More than 1% of entitlements have failed with
+            `provisioning_timeout` over the last 10 minutes (current ratio
+            {{ $value }}). Check controller logs, Kubernetes scheduling and the
+            guest image pull path.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxProvisioningQueueWaitP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(sandbox_provisioning_wait_seconds_bucket{role="controller"}[5m]))
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Provisioning queue wait p95 is above 5 s"
+          description: >-
+            Paid sessions have waited more than 5 s at p95 for a provisioning
+            slot for 10 minutes (current {{ $value }} s).
+            Check `sandbox_provisioning_queued`, capacity reservations and the
+            reconcile in-flight count.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxRelayPendingRequests
+        expr: max(sandbox_relay_pending_requests{role="controller"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "The relay has had a request pending for 5 minutes"
+          description: >-
+            `sandbox_relay_pending_requests` has stayed above zero for 5
+            minutes (current {{ $value }}). A guest is not answering a
+            forwarded operation; check relay disconnects and the session's
+            guest process.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxReconcileP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(sandbox_reconcile_duration_seconds_bucket{role="controller"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Reconcile pass p95 is above 1 s"
+          description: >-
+            The controller reconcile pass has held a p95 above 1 s for 10
+            minutes (current {{ $value }} s). Check
+            `sandbox_reconcile_queue_depth`, Kubernetes API latency and the
+            SQLite busy retry rate.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxSQLiteBusyRetries
+        expr: sum(rate(sandbox_sqlite_busy_retries_total{role="controller"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "SQLite is retrying writes after SQLITE_BUSY"
+          description: >-
+            The controller has retried SQLite operations for 10 minutes
+            (current rate {{ $value }} retries/s). A single writer is expected;
+            sustained retries mean a competing process, a long transaction or
+            a disk that cannot keep up.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxReconciliationPending
+        expr: |
+          sum(
+            increase(
+              sandbox_http_requests_total{
+                role="api",
+                route="/v1/sessions",
+                method="POST",
+                status="409"
+              }[10m]
+            )
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Create requests are returning 409 conflicts"
+          description: >-
+            The API returned at least one 409 on `POST /v1/sessions` in the
+            last 10 minutes and it has persisted for 5 minutes. Today this is
+            the closest existing signal for `reconciliation_pending`; it also
+            catches `payment_in_progress`, `spec_mismatch`, `entitlement_missing`
+            and non-retryable capacity conflicts until a per-code counter is
+            added. Check API logs for `settlement_lookup_failed` and
+            `payment_idempotent_replay`.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxWarmPoolEmpty
+        expr: max(sandbox_warm_pool_pods{role="controller"}) == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "The warm pool has had no pods for 5 minutes"
+          description: >-
+            `sandbox_warm_pool_pods` has been zero for 5 minutes. This rule is
+            inactive when `WARM_POOL_SIZE=0` (the metric is not exported), so
+            enable the pool before relying on it. Check pod scheduling and the
+            warm-pool creation errors.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxMetricsTargetDown
+        expr: up{job="sandbox-control"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: sandbox
+        annotations:
+          summary: "A sandbox control-plane metrics target is down"
+          description: >-
+            The {{ $labels.role }} role on {{ $labels.instance }} has been
+            unscrapeable for 2 minutes. This is the leading indicator for the
+            per-role alerts: if the process is gone, its application metrics
+            are stale rather than low.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxBlastRadius
+        expr: |
+          (
+            max_over_time(sandbox_relay_sessions{role="controller"}[15m]) >= 5
+          )
+          and on()
+          (
+            min(up{job="sandbox-control", role=~"controller|relay"}) == 0
+          )
+        for: 5m
+        labels:
+          severity: critical
+          service: sandbox
+        annotations:
+          summary: "A control-plane role is down with sessions in flight"
+          description: >-
+            The controller or relay has been down for 5 minutes while at least
+            5 relay sessions were registered in the preceding 15 minutes
+            (affected count: {{ $value }}). This is the blast-radius rule from
+            issue #38: per-component health can be green while a tenant impact
+            is large. Check the down role first, then tell the affected tenant.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"

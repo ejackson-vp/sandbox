@@ -95,11 +95,19 @@ concrete next step.
   and a Grafana dashboard, and `allow-metrics-scrape` admits only the
   monitoring namespace. HTTP route labels are templates, never session ids.
   Process/event-loop/GC families are included so application latency can be
-  separated from runtime pauses. The homelab has no monitoring stack in this
-  repository (issue #38); the manifests are verified with `kubectl kustomize`
-  and unit tests, not a live scrape.
-- Alerts: controller/relay/API down, provisioning timeout rate, settlement
-  failures, `reconciliation_pending` > 0, PVC full, pods without a live session.
+  separated from runtime pauses. The homelab stack is VictoriaMetrics
+  single-node + Grafana + vmalert under `deploy/monitoring/`: 14-day retention,
+  version-pinned images, provisioned dashboards and rules. The manifests render
+  and the rule/scrape syntax is checked, but a live scrape, NetworkPolicy
+  enforcement and steady-state memory measurement remain cluster-only.
+- Alerts: `deploy/monitoring/rules/sandbox-slo.yaml` implements the issue #38
+  set — create p95, provisioning timeout rate, queue wait, relay pending,
+  reconcile p95, SQLite busy retries, create-route 409s (the current proxy for
+  `reconciliation_pending`), warm pool empty — plus target-down and
+  blast-radius. `reconciliation_pending` is not yet a per-code counter, and the
+  warm-pool rule is inactive while `WARM_POOL_SIZE=0`. Settlement-failure,
+  PVC-full and orphan-pod alerts are still not implemented. No Alertmanager or
+  pager is shipped; vmalert evaluates and stores alert state only.
 - Load test: 100+ concurrent sessions; measure reconcile p95, relay fan-out, API
   latency for 8 MiB uploads.
 - Backup/restore of the SQLite metadata (sessions are disposable; payment records

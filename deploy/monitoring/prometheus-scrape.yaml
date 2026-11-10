@@ -2,6 +2,10 @@
 # replica in the homelab, so DNS targets are enough; a scaled deployment should
 # switch to pod discovery with `containerPort: metrics` (the pods already name
 # the port `metrics`).
+#
+# This is the bare-list contract for an existing Prometheus.
+# `vmsingle-scrape-config.yaml` mirrors the same targets in the full-document
+# form VictoriaMetrics needs; change both together.
 apiVersion: v1
 kind: ConfigMap
 metadata:

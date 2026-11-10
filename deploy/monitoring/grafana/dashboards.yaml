@@ -1,0 +1,15 @@
+# File-based dashboard provider. Grafana polls this directory, so a ConfigMap
+# change plus a pod restart is enough to publish a new dashboard version.
+apiVersion: 1
+
+providers:
+  - name: sandbox
+    orgId: 1
+    folder: Sandbox
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false
