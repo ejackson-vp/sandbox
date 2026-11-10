@@ -11,6 +11,11 @@ data:
   FACILITATOR_URL: "http://facilitator.sandbox-system.svc.cluster.local:3002"
   ALLOW_INSECURE_DEV: "true"
 
+  # --- observability ------------------------------------------------------
+  # Private scrape listener on every role. Never routed by the ingress.
+  METRICS_PORT: "9100"
+  METRICS_HOST: "0.0.0.0"
+
   # --- api ----------------------------------------------------------------
   PUBLIC_BASE_URL: "http://localhost:8080"
   CAPABILITY_GRACE_SECONDS: "900"

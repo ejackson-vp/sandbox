@@ -22,7 +22,9 @@ import {
   MOCK_NETWORK,
   MockExactServerScheme,
   ReadinessCache,
+  httpMetricsMiddleware,
   metrics,
+  registerRequestMetrics,
   type SessionSpec,
 } from "@x402s/shared";
 import type { ApiConfig } from "./config.js";
@@ -97,7 +99,10 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     "facilitator initialization",
   );
 
-  // Register metric families eagerly so /metrics is useful before the first event.
+  // Register metric families eagerly so a scrape is useful before the first
+  // event. HTTP/auth/rate-limit families live in shared so every role has the
+  // same names.
+  registerRequestMetrics(metrics);
   metrics.histogram("sandbox_payment_verify_duration_seconds", "Facilitator payment verification", LATENCY_BUCKETS);
   metrics.histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS);
   metrics.histogram("sandbox_session_create_duration_seconds", "Create request duration", LATENCY_BUCKETS);
@@ -136,6 +141,9 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   const ipCreateLimiter = new RateLimiter(config.createIpRateBurst, config.createIpRateRefill);
   const createLimiter = new RateLimiter(config.createRateBurst, config.createRateRefill);
 
+  // Counts every request by route template, method and status. Added before
+  // the body parser so a malformed body is still attributed to its route.
+  app.use(httpMetricsMiddleware(metrics));
   app.use(express.json({ limit: config.maxBodyBytes }));
   app.use((req, res, next) => {
     const started = Date.now();
@@ -192,11 +200,9 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     res.status(report.ok ? 200 : 503).json(report);
   });
 
-  // Aggregate metrics only; bounded labels, no session ids or payload data.
-  app.get("/metrics", (_req, res) => {
-    res.setHeader("content-type", "text/plain; version=0.0.4");
-    res.send(metrics.render());
-  });
+  // Aggregate metrics are published on the private METRICS_PORT listener, not
+  // here: the ingress routes `/` to this port, so a public /metrics would leak
+  // operational data to the tailnet.
 
   app.get("/v1/pricing", (_req, res) => {
     res.json({

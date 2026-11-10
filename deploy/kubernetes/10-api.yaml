@@ -15,6 +15,10 @@ spec:
     - name: http
       port: 3000
       targetPort: 3000
+    # Scraped directly by the monitoring namespace; not part of the ingress.
+    - name: metrics
+      port: 9100
+      targetPort: 9100
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -51,7 +55,10 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["node", "api/dist/main.js"]
           ports:
-            - containerPort: 3000
+            - name: http
+              containerPort: 3000
+            - name: metrics
+              containerPort: 9100
           envFrom:
             - configMapRef: {name: control-config}
           env:

@@ -10,7 +10,8 @@
  * is refused rather than downgraded.
  */
 import { randomBytes } from "node:crypto";
-import { DatabaseSync, backup as sqliteBackup, type StatementSync } from "node:sqlite";
+import { statSync } from "node:fs";
+import { backup as sqliteBackup, DatabaseSync, type StatementSync } from "node:sqlite";
 import {
   mapIntent,
   mapLedger,
@@ -31,7 +32,7 @@ import {
 import { migrate } from "./store/schema.js";
 import { checkStoreHealth, type StoreHealth } from "./store/health.js";
 import { prepareStatements } from "./store/statements.js";
-import { finalStateForReason, SOURCE_STATES } from "@x402s/shared";
+import { finalStateForReason, metrics, SOURCE_STATES } from "@x402s/shared";
 
 import { ReservationRepository } from "./capacity/reservations.js";
 import type { ReservationStore } from "./capacity/reservation-store.js";
@@ -53,6 +54,25 @@ export { PaymentAlreadyRedeemedError, PaymentClaimLostError } from "./store/mode
 
 const SCHEMA_LOCK = /database is locked|database table is locked|SQLITE_BUSY/i;
 
+/**
+ * Failure reasons produced by the provisioning/lifecycle paths. Anything else
+ * is collapsed to `other` so a new free-text reason cannot grow cardinality
+ * before it is added here deliberately.
+ */
+const PROVISION_FAILURE_REASONS = new Set([
+  "provisioning_timeout",
+  "provisioning_queue_timeout",
+  "warm_claim_timeout",
+  "pod_terminated",
+  "checkpoint_missing",
+  "guest_exited",
+  "reaped",
+]);
+
+function boundedFailureReason(reason: string): string {
+  return PROVISION_FAILURE_REASONS.has(reason) ? reason : "other";
+}
+
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -61,8 +81,11 @@ export class Store {
   private readonly db: DatabaseSync;
   private readonly stmts: Record<string, StatementSync>;
   readonly reservations: ReservationStore;
+  /** Path of the main database file (`:memory:` in tests). */
+  readonly path: string;
 
   constructor(path: string) {
+    this.path = path;
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA busy_timeout = 5000;");
     for (let attempt = 0; ; attempt += 1) {
@@ -73,6 +96,9 @@ export class Store {
         if (attempt >= 10 || !SCHEMA_LOCK.test((err as Error).message)) throw err;
         // Concurrent starts (workers, future replicas) can race idempotent DDL.
         // The statements are safe to replay, so back off and retry.
+        metrics
+          .counter("sandbox_sqlite_busy_retries_total", "SQLite operations retried after SQLITE_BUSY")
+          .inc();
         sleepSync(100 * (attempt + 1));
       }
     }
@@ -91,6 +117,23 @@ export class Store {
    */
   healthCheck(): StoreHealth {
     return checkStoreHealth(this.db);
+  }
+
+  /**
+   * On-disk size of the database and its WAL sidecar. `:memory:` databases
+   * report 0; the files may disappear between stat calls during a checkpoint,
+   * so a missing file is 0 rather than an error.
+   */
+  stats(): { sizeBytes: number; walBytes: number } {
+    const sizeOf = (path: string): number => {
+      try {
+        return statSync(path).size;
+      } catch {
+        return 0;
+      }
+    };
+    if (this.path === ":memory:") return { sizeBytes: 0, walBytes: 0 };
+    return { sizeBytes: sizeOf(this.path), walBytes: sizeOf(`${this.path}-wal`) };
   }
 
   /** Consistent online copy for the backup service. */
@@ -395,6 +438,11 @@ export class Store {
   requestTermination(id: string, reason: string, failure?: { code: string; message: string }): boolean {
     const now = Date.now();
     const changed = this.stmts.requestTermination!.run(now, reason, now, id).changes > 0;
+    if (changed && reason.startsWith("failure:")) {
+      metrics
+        .counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason")
+        .inc({ reason: boundedFailureReason(reason.slice("failure:".length)) });
+    }
     if (changed && failure) {
       this.stmts.setFailure!.run(failure.code, failure.message, now, id);
     }

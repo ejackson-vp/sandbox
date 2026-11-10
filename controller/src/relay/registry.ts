@@ -1,6 +1,8 @@
 import type { WebSocket } from "ws";
 import type { AttestationEnvelope, RelaySessionState } from "@x402s/shared";
+import { metrics, type MetricsRegistry } from "@x402s/shared";
 import { constantTimeEqual, sha256Hex } from "../tokens.js";
+import { registerRelayMetrics, type RelayDisconnectReason } from "./metrics.js";
 
 export const MAX_FRAME_BYTES = 24 * 1024 * 1024;
 export const MAX_PENDING = 8;
@@ -46,6 +48,8 @@ export interface RelayRegistryOptions {
   responseTtlMs: number;
   /** Called for a non-pool guest hello; the composition root wakes the controller. */
   onHello?: (sessionId: string) => void;
+  /** Injectable for tests; defaults to the process-wide registry. */
+  metricsRegistry?: MetricsRegistry;
 }
 
 export type RegisterResult = "ok" | "already_connected" | "at_capacity";
@@ -61,8 +65,12 @@ export type WaitResult =
 
 export class RelayRegistry {
   private readonly entries = new Map<string, Entry>();
+  private readonly metrics: MetricsRegistry;
 
-  constructor(private readonly opts: RelayRegistryOptions) {}
+  constructor(private readonly opts: RelayRegistryOptions) {
+    this.metrics = opts.metricsRegistry ?? metrics;
+    registerRelayMetrics(this.metrics);
+  }
 
   size(): number {
     return this.entries.size;
@@ -230,8 +238,14 @@ export class RelayRegistry {
   attach(sessionId: string, ws: WebSocket): boolean {
     const entry = this.entries.get(sessionId);
     if (!entry || entry.ws) return false;
+    const reconnecting = entry.connectedAt !== null;
     entry.ws = ws;
     entry.connectedAt = Date.now();
+    if (reconnecting) {
+      this.metrics
+        .counter("sandbox_relay_reconnects_total", "Guest reconnections to an existing registration")
+        .inc();
+    }
     return true;
   }
 
@@ -277,6 +291,13 @@ export class RelayRegistry {
     entry.ws = null;
     for (const pending of entry.pending.values()) pending.waiter?.({ error: "guest disconnected" });
     entry.pending.clear();
+  }
+
+  /** Record a guest disconnect with a bounded close-reason label. */
+  recordDisconnect(reason: RelayDisconnectReason): void {
+    this.metrics
+      .counter("sandbox_relay_disconnects_total", "Guest disconnections by close reason")
+      .inc({ reason });
   }
 
   remove(sessionId: string): boolean {

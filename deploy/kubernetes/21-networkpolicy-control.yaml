@@ -200,6 +200,34 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-metrics-scrape
+  namespace: sandbox-system
+spec:
+  # Additive to the per-role policies above: the metrics port is not reachable
+  # from the ingress, from sandbox pods, or from other control-plane roles.
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["api", "controller", "relay"]
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        # Homelab Prometheus/Grafana live in `monitoring`; either namespace is
+        # accepted so the manifest also fits an `observability` deployment.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 9100
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-facilitator
   namespace: sandbox-system
 spec:

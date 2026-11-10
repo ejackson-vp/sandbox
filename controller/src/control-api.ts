@@ -9,7 +9,7 @@
  * contents and results never appear in this process.
  */
 import express, { type NextFunction, type Request, type Response } from "express";
-import { metrics, ReadinessCache, type ComponentCheck } from "@x402s/shared";
+import { httpMetricsMiddleware, metrics, ReadinessCache, recordAuthFailure, registerRequestMetrics, type ComponentCheck } from "@x402s/shared";
 import { constantTimeEqual } from "./tokens.js";
 import { log } from "@x402s/shared";
 import { createCapacityRouter } from "./capacity/routes.js";
@@ -23,6 +23,8 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   const { cfg } = deps;
   const app = express();
   app.disable("x-powered-by");
+  registerRequestMetrics(metrics);
+  app.use(httpMetricsMiddleware(metrics));
   app.use(express.json({ limit: "32mb" }));
 
   // Liveness only: if this handler runs, the event loop is turning. Kubernetes
@@ -91,6 +93,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       (Boolean(cfg.wakeToken) && constantTimeEqual(token, cfg.wakeToken)) ||
       (Boolean(cfg.adminToken) && constantTimeEqual(token, cfg.adminToken));
     if (!authorized) {
+      recordAuthFailure("internal_token");
       res.status(401).json({ error: "unauthorized" });
       return;
     }
@@ -98,16 +101,14 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     res.status(202).json({ ok: true });
   });
 
-  // Aggregate metrics only (no session ids, no payloads). Scraped internally.
-  app.get("/metrics", (_req, res) => {
-    res.setHeader("content-type", "text/plain; version=0.0.4");
-    res.send(metrics.render());
-  });
+  // Aggregate metrics are served by the private METRICS_PORT listener; this
+  // listener is reachable from the API and relay and must not expose them.
 
   app.use("/internal", (req: Request, res: Response, next: NextFunction) => {
     const token = req.header("x-internal-token") ?? "";
     const mtls = mtlsCn(req) === "api";
     if (!mtls && (!cfg.adminToken || !constantTimeEqual(token, cfg.adminToken))) {
+      recordAuthFailure("internal_token");
       res.status(401).json({ error: "unauthorized" });
       return;
     }

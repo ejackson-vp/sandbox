@@ -1,10 +1,11 @@
 /**
  * API server entrypoint.
  */
+import type { Server } from "node:http";
 import { loadConfig } from "./config.js";
 import { createApp } from "./server.js";
 import { ControllerClient } from "./controller-client.js";
-import { log } from "@x402s/shared";
+import { log, registerBuildInfo, registerRuntimeMetrics, startMetricsServer } from "@x402s/shared";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -14,6 +15,20 @@ async function main(): Promise<void> {
     config.controllerTls,
   );
   const app = await createApp({ config, controller });
+
+  // Private scrape listener. Bound to the pod network; NetworkPolicy admits
+  // only the monitoring namespace. The public listener never serves /metrics.
+  const runtime = registerRuntimeMetrics();
+  registerBuildInfo();
+  let metricsServer: Server | undefined;
+  if (config.metricsPort > 0) {
+    metricsServer = await startMetricsServer({
+      port: config.metricsPort,
+      host: config.metricsHost,
+      onScrape: () => runtime.collect(),
+    });
+    log.info("metrics_listening", { port: config.metricsPort, host: config.metricsHost });
+  }
 
   const server = app.listen(config.port, "0.0.0.0", () => {
     log.info("api_listening", {
@@ -35,6 +50,8 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string) => {
     log.info("shutting_down", { signal });
+    runtime.stop();
+    metricsServer?.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();
   };

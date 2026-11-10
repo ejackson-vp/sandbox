@@ -77,7 +77,7 @@ does not re-encrypt old files, so retain the old key for the old backups.
    kubectl -n sandbox-system rollout status deploy/controller
    kubectl -n sandbox-system exec deploy/controller -- \
      ls -l /backups
-   curl -s http://controller.sandbox-system:3001/metrics | \
+   curl -s http://controller.sandbox-system:9100/metrics | \
      grep sandbox_backup
    ```
 

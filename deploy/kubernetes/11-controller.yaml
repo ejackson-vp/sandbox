@@ -35,6 +35,9 @@ spec:
     - name: tls
       port: 3004
       targetPort: 3004
+    - name: metrics
+      port: 9100
+      targetPort: 9100
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -74,8 +77,12 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["node", "controller/dist/main.js"]
           ports:
-            - containerPort: 3001
-            - containerPort: 3004
+            - name: http
+              containerPort: 3001
+            - name: tls
+              containerPort: 3004
+            - name: metrics
+              containerPort: 9100
           envFrom:
             - configMapRef: {name: control-config}
           env:

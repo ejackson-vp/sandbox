@@ -90,6 +90,14 @@ concrete next step.
 - Metrics: sessions created/expired/failed, provisioning latency, operation
   latency, timeouts, cancelled operations, relay pending, proxy denials by reason,
   reaper actions, orphan pods, intent recovery count.
+- Scrape contract: every role publishes on a private `METRICS_PORT` (9100),
+  never on the service listener; `deploy/monitoring/` contains one scrape job
+  and a Grafana dashboard, and `allow-metrics-scrape` admits only the
+  monitoring namespace. HTTP route labels are templates, never session ids.
+  Process/event-loop/GC families are included so application latency can be
+  separated from runtime pauses. The homelab has no monitoring stack in this
+  repository (issue #38); the manifests are verified with `kubectl kustomize`
+  and unit tests, not a live scrape.
 - Alerts: controller/relay/API down, provisioning timeout rate, settlement
   failures, `reconciliation_pending` > 0, PVC full, pods without a live session.
 - Load test: 100+ concurrent sessions; measure reconcile p95, relay fan-out, API

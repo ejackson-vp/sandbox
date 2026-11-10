@@ -3,6 +3,7 @@ import type { WebSocketServer, WebSocket } from "ws";
 import type { AttestationEnvelope, GuestToRelay } from "@x402s/shared";
 import { log } from "@x402s/shared";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
+import { disconnectReasonLabel } from "./metrics.js";
 
 const HELLO_TIMEOUT_MS = 15_000;
 
@@ -156,10 +157,11 @@ function handleGuestConnection(registry: RelayRegistry, sessionId: string, ws: W
     }
   });
 
-  ws.on("close", () => {
+  ws.on("close", (code: number) => {
     clearInterval(ping);
     clearTimeout(helloTimer);
     registry.detach(sessionId, ws);
+    registry.recordDisconnect(disconnectReasonLabel(code));
     log.info("relay_guest_disconnected", { sessionId });
   });
 

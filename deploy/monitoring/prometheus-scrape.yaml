@@ -1,0 +1,32 @@
+# One scrape job covers all three control-plane roles. Each role runs one
+# replica in the homelab, so DNS targets are enough; a scaled deployment should
+# switch to pod discovery with `containerPort: metrics` (the pods already name
+# the port `metrics`).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sandbox-scrape-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: sandbox
+data:
+  # A YAML list, ready for prometheus.additionalScrapeConfigs.
+  sandbox-scrape-configs.yaml: |
+    - job_name: sandbox-control
+      scheme: http
+      metrics_path: /metrics
+      scrape_interval: 15s
+      scrape_timeout: 10s
+      static_configs:
+        - targets:
+            - api.sandbox-system.svc.cluster.local:9100
+          labels:
+            role: api
+        - targets:
+            - controller.sandbox-system.svc.cluster.local:9100
+          labels:
+            role: controller
+        - targets:
+            - relay.sandbox-system.svc.cluster.local:9100
+          labels:
+            role: relay

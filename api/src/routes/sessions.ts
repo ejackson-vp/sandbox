@@ -2,7 +2,7 @@
  * Session routes: status, the single operations surface, and lifecycle.
  */
 import express, { type Request, type Response } from "express";
-import { LATENCY_BUCKETS, metrics, sha256Hex, safeEqualHex } from "@x402s/shared";
+import { LATENCY_BUCKETS, metrics, recordAuthFailure, recordRateLimited, sha256Hex, safeEqualHex } from "@x402s/shared";
 import { RateLimiter } from "../admission.js";
 import { ControllerError, type ControllerClient, type SessionView } from "../controller-client.js";
 import type { ApiConfig } from "../config.js";
@@ -21,12 +21,14 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
 
   const authorize = async (req: Request, res: Response): Promise<SessionView | null> => {
     if (!readLimiter.take(req.ip ?? "unknown")) {
+      recordRateLimited("read");
       res.status(429).json({ error: "rate_limited" });
       return null;
     }
     const id = String(req.params.id ?? "");
     const capability = req.header("x-sandbox-capability");
     if (!capability || capability.length < 20 || capability.length > 128) {
+      recordAuthFailure("capability_missing");
       res.status(401).json({ error: "capability_required" });
       return null;
     }
@@ -44,10 +46,12 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
     }
     const presented = sha256Hex(capability);
     if (!safeEqualHex(presented, session.capabilityHash)) {
+      recordAuthFailure("capability_invalid");
       res.status(404).json({ error: "session_not_found" });
       return null;
     }
     if (Date.now() > session.capabilityExpiresAt) {
+      recordAuthFailure("capability_expired");
       res.status(410).json({ error: "capability_expired" });
       return null;
     }

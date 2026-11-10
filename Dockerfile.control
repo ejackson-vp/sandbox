@@ -39,6 +39,11 @@ FROM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ea
 ENV NODE_ENV=production \
     HOME=/tmp \
     SERVICE_NAME=control-plane
+# Optional release stamp; `sandbox_build_info{version,commit}` reflects these.
+ARG BUILD_VERSION=dev
+ARG BUILD_COMMIT=unknown
+ENV BUILD_VERSION=$BUILD_VERSION \
+    BUILD_COMMIT=$BUILD_COMMIT
 WORKDIR /app
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json

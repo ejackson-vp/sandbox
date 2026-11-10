@@ -6,9 +6,11 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import express from "express";
 import { WebSocketServer } from "ws";
+import { httpMetricsMiddleware, metrics, registerRequestMetrics, type MetricsRegistry } from "@x402s/shared";
 import { MAX_FRAME_BYTES, RelayRegistry } from "./relay/registry.js";
 import { registerRelayRoutes } from "./relay/http.js";
 import { attachGuestUpgrade } from "./relay/ws.js";
+import { collectRelayMetrics } from "./relay/metrics.js";
 
 export interface RelayServer {
   app: express.Express;
@@ -23,6 +25,8 @@ export interface RelayServer {
   generation: string;
   /** Test helper: inspect registry size. */
   size(): number;
+  /** Refresh scrape-time gauges (registry size, pending requests). */
+  collectMetrics(): void;
 }
 
 export interface RelayOptions {
@@ -32,18 +36,24 @@ export interface RelayOptions {
   /** When set, a guest hello nudges the controller's reconciler. */
   controllerUrl?: string;
   wakeToken?: string;
+  /** Injectable for tests; defaults to the process-wide registry. */
+  metricsRegistry?: MetricsRegistry;
 }
 
 export function createRelay(opts: RelayOptions): RelayServer {
   const generation = randomUUID();
+  const metricsRegistry = opts.metricsRegistry ?? metrics;
+  registerRequestMetrics(metricsRegistry);
   const registry = new RelayRegistry({
     maxSessions: opts.maxSessions ?? 2000,
     responseTtlMs: opts.responseTtlMs ?? 5 * 60_000,
     onHello: () => wakeController(opts),
+    metricsRegistry,
   });
 
   const app = express();
   app.disable("x-powered-by");
+  app.use(httpMetricsMiddleware(metricsRegistry));
   app.use(express.json({ limit: "32mb" }));
   registerRelayRoutes(app, registry, { adminToken: opts.adminToken, generation });
 
@@ -56,6 +66,7 @@ export function createRelay(opts: RelayOptions): RelayServer {
     server,
     generation,
     size: () => registry.size(),
+    collectMetrics: () => collectRelayMetrics(metricsRegistry, registry),
     close: async () => {
       registry.closeAll(1001, "relay shutting down");
       wss.close();
