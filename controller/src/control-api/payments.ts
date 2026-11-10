@@ -9,7 +9,7 @@ import {
   type SessionState,
 } from "@x402s/shared";
 import { log } from "@x402s/shared";
-import { PaymentAlreadyRedeemedError, type LedgerStatus } from "../store.js";
+import { PaymentAlreadyRedeemedError, PaymentClaimLostError, type LedgerStatus } from "../store.js";
 import { completeSchema, intentClaimSchema } from "../control-api-schemas.js";
 import type { ControlApiDeps } from "./types.js";
 
@@ -43,7 +43,12 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       res.json({ status: "settled", sessionId: result.sessionId });
       return;
     }
-    res.json({ status: "claimed", recovered: result.recovered });
+    res.json({
+      status: "claimed",
+      recovered: result.recovered,
+      token: result.token,
+      expiresAt: result.expiresAt,
+    });
   });
 
   app.get("/internal/payment-intents/:paymentKey", (req: Request, res: Response) => {
@@ -74,11 +79,18 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       return;
     }
     if (intent.status === "settled") {
-      res.json({ sessionId: intent.sessionId, state: "PAID" });
+      res.json({ sessionId: intent.sessionId, state: "PAID", created: false });
       return;
     }
     if (body.payment.paymentKey !== paymentKey) {
       res.status(400).json({ error: "payment_key_mismatch" });
+      return;
+    }
+    // Early fence: never spend capacity or validate a spec for an owner whose
+    // claim was already reclaimed. The store re-checks inside the settlement
+    // transaction, which is what actually makes this safe.
+    if (intent.status !== "claimed" || intent.claimToken === null || intent.claimToken !== body.claimToken) {
+      res.status(409).json({ error: "stale_claim", message: "this intent is not held by the presented claim" });
       return;
     }
 
@@ -133,9 +145,11 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     }
 
     const now = Date.now();
+    let completed: { sessionId: string; created: boolean };
     try {
-      store.completeEntitlement(
+      completed = store.completeEntitlement(
         paymentKey,
+        body.claimToken,
         {
           paymentKey,
           network: body.payment.network,
@@ -191,20 +205,50 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
           updatedAt: now,
         },
       );
-      if (body.timings) {
-        store.mergeTimings(body.sessionId, body.timings);
+      if (completed.created) {
+        if (body.timings) {
+          store.mergeTimings(body.sessionId, body.timings);
+        }
+        metrics.counter("sandbox_sessions_created_total", "Entitlements created").inc({
+          tier: spec.tier,
+        });
+      } else {
+        // Another worker settled this intent first. Our provisional admission
+        // may have bound the payment's capacity hold to a session id that was
+        // never durable, so point it back at the winner. Best effort: the
+        // winning session already owns the entitlement.
+        await deps.capacity
+          .attach(paymentKey, completed.sessionId, expectedHash, spec)
+          .catch(() => undefined);
       }
-      metrics.counter("sandbox_sessions_created_total", "Entitlements created").inc({
-        tier: spec.tier,
-      });
     } catch (err) {
       if (err instanceof PaymentAlreadyRedeemedError) {
         const existing = store.getPaymentIntent(paymentKey);
         res.status(409).json({ error: "payment_already_redeemed", sessionId: existing?.sessionId });
         return;
       }
+      if (err instanceof PaymentClaimLostError) {
+        // The claim was reclaimed while this request was in flight. Do not free
+        // capacity here: the live owner holds the same payment reservation.
+        // If it has already settled, hand back the winning session.
+        const current = store.getPaymentIntent(paymentKey);
+        if (current?.status === "settled" && current.sessionId) {
+          res.json({ sessionId: current.sessionId, state: "PAID", created: false });
+          return;
+        }
+        res.status(409).json({ error: "stale_claim", message: "this intent is no longer held by this claim" });
+        return;
+      }
       deps.capacity.releaseSession?.(body.sessionId);
       throw err;
+    }
+    if (!completed.created) {
+      log.info("entitlement_idempotent_completion", {
+        sessionId: completed.sessionId,
+        paymentKeyPrefix: paymentKey.slice(0, 12),
+      });
+      res.json({ sessionId: completed.sessionId, state: "PAID", created: false });
+      return;
     }
     log.info("entitlement_created", {
       sessionId: body.sessionId,
@@ -212,7 +256,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       durationSeconds: spec.durationSeconds,
       paymentKeyPrefix: paymentKey.slice(0, 12),
     });
-    res.status(201).json({ sessionId: body.sessionId, state: "PAID" });
+    res.status(201).json({ sessionId: body.sessionId, state: "PAID", created: true });
   });
 
   app.post("/internal/payment-intents/:paymentKey/fail", (req: Request, res: Response) => {

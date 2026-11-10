@@ -111,8 +111,9 @@ function sessionRecord(id: string, key: string): SessionRecord {
 
 function seedReadySession(store: Store, sessionId: string): void {
   const key = "f".repeat(64);
-  store.claimPaymentIntent(key, "fence-spec", 30_000);
-  store.completeEntitlement(key, paymentRecord(key), sessionRecord(sessionId, key));
+  const claim = store.claimPaymentIntent(key, "fence-spec", 30_000);
+  if (claim.status !== "claimed") throw new Error("expected claim");
+  store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(sessionId, key));
   store.setProvisioning(sessionId, "pod-fence");
   store.setRelayToken(sessionId, "relay-hash");
   store.setReady(sessionId, Date.now(), Date.now() + 120_000, "{}", "guestpk");

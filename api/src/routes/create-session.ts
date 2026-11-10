@@ -230,8 +230,10 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       // so the capability must cover that window, not just the first lease.
       const capabilityLifetime = spec.maxLifetimeSeconds ?? spec.durationSeconds;
       const capabilityExpiresAt = Date.now() + (capabilityLifetime + deps.config.capabilityTtlSeconds) * 1000;
+      let completion: { sessionId: string; state: string; created?: boolean };
       try {
-        await deps.controller.completeIntent(key, {
+        completion = await deps.controller.completeIntent(key, {
+          claimToken: claim.token,
           sessionId,
           capabilityHash,
           capabilityExpiresAt,
@@ -284,6 +286,25 @@ export function createSessionHandler(deps: CreateSessionDeps) {
         return false;
       }
       void deps.controller.wake();
+      if (completion.created === false) {
+        // A concurrent worker won the completion race. Return the session it
+        // created, with the capability derived from the same payment.
+        const winner = await deps.controller.getSession(completion.sessionId).catch(() => null);
+        if (!winner) {
+          log.error("entitlement_missing_after_idempotent_completion", {
+            sessionId: completion.sessionId,
+            paymentKeyPrefix: key.slice(0, 12),
+          });
+          res.status(503).json({ error: "provisioning_unavailable", message: "payment settled; contact support with your receipt" });
+          return false;
+        }
+        log.info("payment_idempotent_completion", {
+          sessionId: winner.sessionId,
+          paymentKeyPrefix: key.slice(0, 12),
+        });
+        res.status(200).json(createResponseFrom(winner, capability, winner.limits));
+        return true;
+      }
       log.info("session_created", {
         sessionId,
         tier: spec.tier,

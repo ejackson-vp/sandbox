@@ -24,6 +24,28 @@ never a session without a ledger row, or a ledger row without its entitlement.
 | `reason` | why a refund was requested |
 | `refund_tx` | mock transaction id or operator-supplied real transaction id |
 
+## Claim fencing and idempotent completion
+
+`payment_intents` carries a `claim_token` and `claim_expires_at`. The token is
+the ownership fence for the outbox:
+
+- The first claim inserts the intent as `claimed` and returns a fresh token.
+- A live claim makes a second claim `in_progress`.
+- A claim past its recorded lease, or older than the caller's `staleMs` (the
+  crash path), is reclaimed with a **new** token. The previous owner is fenced
+  out.
+- `complete` must present the current token. The check happens inside the same
+  `BEGIN IMMEDIATE` transaction that writes the payment, ledger and session
+  rows, so a stalled owner that was reclaimed cannot settle.
+- Completion is idempotent: if the intent is already `settled`, the caller gets
+  the winning `sessionId` and a successful response instead of an error. No
+  second payment, ledger row or session is written. Settlement clears the claim
+  token and its deadline.
+
+The controller treats a mismatch as `409 stale_claim`. The API turns an
+idempotent completion into the normal `200` session response for the same
+capability.
+
 ## Refund policy
 
 A refund is considered only when the session reaches a terminal state with

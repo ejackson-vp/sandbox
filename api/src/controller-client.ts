@@ -32,7 +32,7 @@ export class ControllerError extends Error {
 }
 
 export type IntentClaim =
-  | { status: "claimed"; recovered: boolean }
+  | { status: "claimed"; recovered: boolean; token: string; expiresAt: number }
   | { status: "settled"; sessionId: string }
   | { status: "in_progress" }
   | { status: "failed"; reason?: string }
@@ -48,6 +48,8 @@ export type CapacityDecision =
     };
 
 export interface CompleteIntentBody extends EntitlementRequest {
+  /** Ownership token returned by the intent claim; required to settle. */
+  claimToken: string;
   timings?: {
     apiReceivedAt?: number;
     paymentVerifyMs?: number;
@@ -131,7 +133,10 @@ export class ControllerClient {
     throw new ControllerError(res.status, "intent_claim_failed", `intent claim failed (${res.status})`, body);
   }
 
-  async completeIntent(paymentKey: string, body: CompleteIntentBody): Promise<{ sessionId: string; state: SessionState }> {
+  async completeIntent(
+    paymentKey: string,
+    body: CompleteIntentBody,
+  ): Promise<{ sessionId: string; state: SessionState; created?: boolean }> {
     return this.call(`/internal/payment-intents/${encodeURIComponent(paymentKey)}/complete`, {
       method: "POST",
       body: JSON.stringify(body),

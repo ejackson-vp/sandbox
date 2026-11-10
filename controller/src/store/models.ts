@@ -104,6 +104,10 @@ export interface PaymentIntentRecord {
   sessionId: string | null;
   specHash: string;
   reason: string | null;
+  /** Owner of the current claim; null once settled or failed. */
+  claimToken: string | null;
+  /** Lease deadline for the current claim, in epoch ms. */
+  claimExpiresAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -115,12 +119,20 @@ export class PaymentAlreadyRedeemedError extends Error {
   }
 }
 
+/** The caller's claim token is no longer the intent owner (stale or mismatched). */
+export class PaymentClaimLostError extends Error {
+  constructor(paymentKey: string) {
+    super(`claim on payment ${paymentKey.slice(0, 12)}… is no longer held by this owner`);
+    this.name = "PaymentClaimLostError";
+  }
+}
+
 export type ClaimOperationResult =
   | { ok: true; requestId: string; epoch: number }
   | { ok: false; code: "busy" | "not_usable" | "lease_expired" | "duplicate"; state: SessionState; requestId?: string };
 
 export type IntentClaimResult =
-  | { status: "claimed"; recovered: boolean }
+  | { status: "claimed"; recovered: boolean; token: string; expiresAt: number }
   | { status: "settled"; sessionId: string }
   | { status: "in_progress" }
   | { status: "failed"; reason: string | null }
@@ -250,6 +262,8 @@ export function mapIntent(r: Record<string, unknown>): PaymentIntentRecord {
     sessionId: (r.session_id as string | null) ?? null,
     specHash: (r.spec_hash as string) ?? "",
     reason: (r.reason as string | null) ?? null,
+    claimToken: (r.claim_token as string | null) ?? null,
+    claimExpiresAt: (r.claim_expires_at as number | null) ?? null,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
   };

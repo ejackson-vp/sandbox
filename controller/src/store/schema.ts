@@ -8,7 +8,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /** Tables created for a brand-new database (always the current shape). */
 const BASE_SCHEMA = `
@@ -30,6 +30,8 @@ const BASE_SCHEMA = `
     session_id TEXT,
     spec_hash TEXT NOT NULL,
     reason TEXT,
+    claim_token TEXT,
+    claim_expires_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
     );
@@ -151,6 +153,17 @@ function migrateV8toV9(db: DatabaseSync): void {
   db.exec("ALTER TABLE exec_requests ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1;");
 }
 
+/**
+ * v9 -> v10: payment-intent claims carry an owner token and a lease deadline.
+ * Completion must present the current token, so a worker that stalled past its
+ * lease cannot settle after another worker reclaims the intent. Additive only;
+ * existing intents have no token and can only be recovered through `staleMs`.
+ */
+function migrateV9toV10(db: DatabaseSync): void {
+  db.exec("ALTER TABLE payment_intents ADD COLUMN claim_token TEXT;");
+  db.exec("ALTER TABLE payment_intents ADD COLUMN claim_expires_at INTEGER;");
+}
+
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = FULL;");
@@ -173,6 +186,7 @@ export function migrate(db: DatabaseSync): void {
     } else {
       if (version < 8) migrateV7toV8(db);
       if (version < 9) migrateV8toV9(db);
+      if (version < 10) migrateV9toV10(db);
       // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

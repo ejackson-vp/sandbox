@@ -87,13 +87,20 @@ function freshStore(): Store {
   return new Store(join(dir, "controller.db"));
 }
 
+/** Claim then complete, as the API does. */
+function seedEntitlement(store: Store, key: string, record: SessionRecord): void {
+  const claim = store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+  if (claim.status !== "claimed") throw new Error("expected claim");
+  store.completeEntitlement(key, claim.token, payment(key), record);
+}
+
 describe("lifecycle persistence transitions", () => {
   it("walks PAID -> PROVISIONING -> READY -> SUSPENDING -> SUSPENDED -> RESUMING -> READY", () => {
     const store = freshStore();
     try {
       const key = "b".repeat(64);
       const id = "sbx_000000000000000000000001";
-      store.completeEntitlement(key, payment(key), session(id, key));
+      seedEntitlement(store, key, session(id, key));
 
       expect(store.setProvisioning(id, "pod-1")).toBe(true);
       store.setRelayToken(id, "relay-hash-1");
@@ -127,7 +134,7 @@ describe("lifecycle persistence transitions", () => {
     try {
       const key = "c".repeat(64);
       const id = "sbx_000000000000000000000002";
-      store.completeEntitlement(key, payment(key), session(id, key));
+      seedEntitlement(store, key, session(id, key));
       store.setProvisioning(id, "pod-1");
       store.setRelayToken(id, "relay-hash");
       store.setReady(id, NOW + 1000, NOW + 60_000, "{}", "guest-pk");
