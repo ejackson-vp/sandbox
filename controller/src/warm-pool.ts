@@ -13,7 +13,7 @@ import type { ReconcilerContext } from "./reconciler-context.js";
 import type { WarmPoolStore } from "./store/ports.js";
 
 type WarmPoolContext = Omit<ReconcilerContext, "store"> & { store: WarmPoolStore };
-import type { SessionRecord } from "./store.js";
+import type { SessionRecord } from "./store/models.js";
 
 export class WarmPool {
   private readonly claimed = new Set<string>();

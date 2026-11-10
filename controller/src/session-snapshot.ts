@@ -3,7 +3,7 @@
  * place that knows how durable columns correspond to domain facts.
  */
 import type { IdlePolicy, SessionSnapshot } from "@x402s/shared";
-import type { SessionRecord } from "./store.js";
+import type { SessionRecord } from "./store/models.js";
 
 function parseIdlePolicy(json: string | null): IdlePolicy | null {
   if (!json) return null;

@@ -18,7 +18,8 @@ import { LATENCY_BUCKETS, metrics, type RelaySessionState } from "@x402s/shared"
 import type { ControllerConfig } from "./config.js";
 import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
-import type { SessionRecord, Store } from "./store.js";
+import type { SessionRecord } from "./store/models.js";
+import type { ReconcilerStore } from "./store/ports.js";
 import { WarmPool } from "./warm-pool.js";
 import { Provisioning } from "./provisioning.js";
 import { Lifecycle } from "./lifecycle.js";
@@ -37,7 +38,7 @@ export { LifecycleError } from "./lifecycle.js";
 
 export interface ReconcilerDeps {
   cfg: ControllerConfig;
-  store: Store;
+  store: ReconcilerStore;
   provisioner: Provisioner;
   relay: RelayClient;
   now?: () => number;

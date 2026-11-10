@@ -160,3 +160,28 @@ export interface FenceStore {
 export interface MetricsStore {
   stats(): { sizeBytes: number; walBytes: number };
 }
+
+/** The reconcile scheduler's own view: due selection plus the cleanup sweep. */
+export interface SchedulerStore {
+  backupTo(path: string): Promise<void>;
+  clearPod(id: string): void;
+  countDue(nowMs: number): number;
+  countLiveByState(): Partial<Record<SessionState, number>>;
+  getSession(id: string): SessionRecord | null;
+  listDue(nowMs: number, limit: number): SessionRecord[];
+  listTerminalWithPod(): SessionRecord[];
+  rearmDue(id: string, atMs: number, nowMs: number): boolean;
+}
+
+/**
+ * What the reconciler context holds, and what it hands to its sub-services.
+ * Composed from the narrow ports above, so it cannot drift wider than the
+ * reconciler's actual use and every member is owned by exactly one consumer.
+ */
+export type ReconcilerStore = ProvisioningStore &
+  LifecycleStore &
+  TerminationStore &
+  WarmPoolStore &
+  CapacityStore &
+  FenceStore &
+  SchedulerStore;
