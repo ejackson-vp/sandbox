@@ -48,7 +48,9 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate # single writer for SQLite
+    # Recreate, not RollingUpdate: the SQLite volume is ReadWriteOnce, so a
+    # second replica can only co-mount it on a single-node cluster (docs/adr/0009).
+    type: Recreate
   selector:
     matchLabels: {app: controller}
   template:
@@ -91,6 +93,12 @@ spec:
             - {name: SERVICE_NAME, value: "controller"}
             - {name: DB_PATH, value: "/data/controller.db"}
             - {name: KUBERNETES_ENABLED, value: "true"}
+            # Single-writer election (docs/adr/0009). The Lease is the only thing
+            # that decides which replica reconciles; the rest are standbys and
+            # report not-ready so the Service routes API traffic to the leader.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
             - {name: RECONCILE_INTERVAL_MS, value: "250"}
             - {name: RECONCILE_CONCURRENCY, value: "8"}
             - {name: RECONCILE_BUDGET, value: "1000"}
