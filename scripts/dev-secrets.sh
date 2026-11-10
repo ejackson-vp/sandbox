@@ -101,8 +101,15 @@ issue() {
     -extfile "${CERT_DIR}/${base}.ext" >/dev/null 2>&1
 }
 
+# The controller reaches a sharded relay at relay-<n>.relay-headless over mTLS,
+# so the dev certificate carries the per-pod names for a small replica range.
+# A production certificate needs the same names for the shard count in use.
+RELAY_SHARD_SANS=""
+for n in 0 1 2 3 4 5 6 7 8 9; do
+  RELAY_SHARD_SANS="${RELAY_SHARD_SANS},DNS:relay-${n}.relay-headless"
+done
 issue relay serverAuth relay \
-  "subjectAltName=DNS:relay,DNS:relay.sandbox-system,DNS:relay.sandbox-system.svc,DNS:relay.sandbox-system.svc.cluster.local,DNS:localhost,IP:127.0.0.1"
+  "subjectAltName=DNS:relay,DNS:relay.sandbox-system,DNS:relay.sandbox-system.svc,DNS:relay.sandbox-system.svc.cluster.local,DNS:localhost,IP:127.0.0.1${RELAY_SHARD_SANS}"
 issue controller clientAuth controller
 
 indent() { sed 's/^/    /'; }
