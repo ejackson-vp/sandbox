@@ -65,19 +65,19 @@ Grafana's first render.
 | --- | --- | --- | --- |
 | `vmsingle` | `100m` / `500m` | `128Mi` / `512Mi` | ~100–200 MiB |
 | `vmalert` | `25m` / `200m` | `64Mi` / `192Mi` | ~40–70 MiB |
-| `grafana` | `50m` / `300m` | `128Mi` / `384Mi` | ~150–220 MiB |
-| **Total** | **`175m` / `1000m`** | **`320Mi` / `1088Mi`** | **~290–490 MiB** |
+| `grafana` | `50m` / `300m` | `256Mi` / `512Mi` | ~180–260 MiB |
+| **Total** | **`175m` / `1000m`** | **`448Mi` / `1216Mi`** | **~290–490 MiB** |
 
 Storage: roughly 600 active series (three targets times the bounded families
 in `shared/src/metrics.ts`), 15 s scrapes and 14 days is on the order of
 100–300 MB before compaction headroom. The `2Gi` PVC is intentionally larger
 than the estimate.
 
-These are **estimates from the process baselines and the expected series
-count**, not measurements from a live homelab. Measuring RSS with
-`kubectl top pod -n monitoring` after a day is a cluster-only step; see
-[Validation](#validation-and-what-remains-cluster-only). Do not quote the
-table as a measurement.
+Measured on the two-node homelab on 2026-11-10 after four minutes: Grafana
+228Mi, VMSingle 40Mi, vmalert 5Mi (273Mi total); 2,140 active series; nodes at
+9%/13% CPU and 30%/31% memory. Grafana's request is now 256Mi so it is not the
+first eviction candidate. These are early measurements, not a long-run
+capacity claim; recheck `kubectl top pod -n monitoring` after a day.
 
 ## Apply
 
