@@ -19,11 +19,11 @@ quote for this deployment.
 | Payments | mock x402 |
 | Measured | 2026-11-09 |
 
-> These results are from control `0.1.16`. A `0.1.20` spot check measured warm
-> server ready at 287 ms p50 and client ready at 522 ms (n = 50, 70 of 71
-> creates were warm-pool hits), so treat this table as the baseline, not a
-> current promise. [Issue #116](https://github.com/ejackson-vp/sandbox/issues/116)
-> tracks the regression.
+> These results are from control `0.1.16`. On `0.1.22` the same 50-sample
+> harness measured 292-354 ms server and 548-595 ms client across two runs, so
+> treat this table as the baseline, not a current promise.
+> [Issue #116](https://github.com/ejackson-vp/sandbox/issues/116) tracks the
+> regression.
 
 ## Method
 
