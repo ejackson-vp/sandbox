@@ -14,6 +14,18 @@ the container registry.
   for this gauge before killing the controller, so it tests an observed
   operation rather than racing the guest's status frame (#108).
 
+### Changed
+
+- Provisioning is table-driven end to end. `PAID -> PROVISIONING` and
+  `SUSPENDED -> RESUMING` now execute the effect list their transition returns
+  through the controller's effect interpreter, so `register_relay`,
+  `ensure_workspace_pvc` and `start_pod` are no longer run out of band by the
+  use case. Admission (provisioning slot, relay readiness, capacity
+  reservation, shard endpoint) still runs before the transition: a prerequisite
+  that is not ready leaves the session in its current state and the next pass
+  retries. The SUSPENDING crash-repair replay is a new `suspend_retry` event
+  rather than a hand-built effect list.
+
 ### Fixed
 
 - A relay replacement no longer strands paid creates on the old relay Pod IP.

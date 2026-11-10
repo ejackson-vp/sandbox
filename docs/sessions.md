@@ -58,9 +58,13 @@ the final state).
 single operation slot moves READY → ACTIVE, and finishing the operation returns
 to READY. It is not a "has been used" marker.
 
-The transition table is pure (`shared/src/domain/session.ts`). The store's SQL
-guards are generated from its `SOURCE_STATES` map, and a unit test asserts that
-map matches `transition()` for every state/event pair.
+The transition table is pure (`shared/src/domain/session.ts`). Every state change
+executes the effect list its transition returns through
+`controller/src/effects.ts`, and the store's SQL guards are generated from the
+table's `SOURCE_STATES` map; a unit test asserts that map matches `transition()`
+for every state/event pair. Admission in front of a create (queue slot, relay
+readiness, capacity reservation, shard endpoint) is the shell's, not an effect:
+a prerequisite that is not ready leaves the session where it is.
 
 ## Timing rules
 

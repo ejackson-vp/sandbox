@@ -98,6 +98,11 @@ Completed slices:
 - SDK split behind a stable `SandboxClient` facade.
 - Reconciler split into warm-pool, provisioning, lifecycle, termination and a
   scheduler; persistence split into models/schema.
+- Controller use cases on the shared effect interpreter: suspend/resume,
+  termination, readiness and both create transitions execute the effect list
+  their transition returns. The create path (`register_relay`,
+  `ensure_workspace_pvc`, `start_pod`) delegates to the provisioning use case
+  through a port, so no effect is built by hand outside the table.
 - API split into create/session routers, schemas, status mapping and composition.
 - Wire protocol split by concept while keeping `@x402s/shared` exports stable.
 - Guest split into entrypoint, config, supervisor and log modules.
@@ -110,13 +115,9 @@ Completed slices:
 
 Next slices:
 
-1. Move controller use cases onto a shared effect interpreter so suspend/resume
-   and provisioning cannot drift from the pure transition table. The store's SQL
-   guards already derive from `SOURCE_STATES`, and a test asserts the map matches
-   the table; what remains is the effect execution path.
-2. Split the remaining control API payment-route handlers from session routes.
-3. Unify SSE/WebSocket poll windows in the guest (`window.go`).
-4. Add dependency-cruiser layer rules and enable `exactOptionalPropertyTypes`.
+1. Split the remaining control API payment-route handlers from session routes.
+2. Unify SSE/WebSocket poll windows in the guest (`window.go`).
+3. Add dependency-cruiser layer rules and enable `exactOptionalPropertyTypes`.
 
 ## Testing strategy
 
