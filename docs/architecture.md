@@ -73,7 +73,10 @@ The load-bearing choices behind this picture are recorded as
 
 ### Controller (`controller/src/`)
 
-Single writer for all state and the only component that mutates Kubernetes:
+Single writer for all state and the only component that mutates Kubernetes. One
+replica holds the role through a Kubernetes Lease and the rest stand by
+([ADR 0009](adr/0009-leader-election.md)); a standby reports not-ready and its
+store connection refuses writes, so the writer is still one process:
 
 - atomic payment intent → settlement → entitlement (outbox),
 - immutable lease deadline per session,

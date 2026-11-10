@@ -7,6 +7,15 @@ the container registry.
 
 ## Unreleased
 
+### Added
+
+- Controller leader election ([ADR 0009](docs/adr/0009-leader-election.md)). A
+  replica holds a `coordination.k8s.io/v1` Lease before it reconciles or reports
+  ready, so a second replica is a standby that can take over instead of a second
+  scheduler over the same rows. A standby's store connection refuses writes.
+  Failover, not throughput: the writer is still one process, and the SQLite
+  volume is still ReadWriteOnce.
+
 ### Changed
 
 - Provisioning is table-driven end to end. `PAID -> PROVISIONING` and
