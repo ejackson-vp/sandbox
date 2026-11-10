@@ -3,8 +3,8 @@ import fc from "fast-check";
 import { admitCapacity } from "../../controller/src/capacity/admission.js";
 import { availableOnNode, placementCandidates } from "../../controller/src/capacity/placement.js";
 import {
+  accountedResources,
   addResources,
-  holdsCompute,
   type CapacityReservation,
   type CapacitySnapshot,
   type NodeCapacity,
@@ -57,6 +57,7 @@ const reservationArb: fc.Arbitrary<CapacityReservation> = fc
     baseline: resourceArb(4_000),
     peak: resourceArb(8_000),
     expiresAt: fc.option(fc.integer({ min: 0, max: 100_000 }), { nil: null }),
+    podName: fc.option(fc.string({ minLength: 1, maxLength: 8 }), { nil: null }),
     sessionId: fc.option(fc.string(), { nil: null }),
   })
   .map((r) => ({ ...r, id: r.id, nodeId: r.nodeId }));
@@ -140,21 +141,7 @@ describe("pure capacity admission", () => {
         const reserved = snapshot.reservations
           .filter((r) => r.nodeId === decision.nodeId && r.state !== "RELEASED")
           .reduce(
-            (sum, r) => {
-              // Storage is charged from the same accounting vector as compute.
-              // A suspended reservation drops CPU/memory but keeps storage.
-              const committed = snapshot.accounting === "peak" ? r.peak : r.baseline;
-              return addResources(
-                sum,
-                holdsCompute(r.state)
-                  ? committed
-                  : {
-                      cpuMillicores: 0,
-                      memoryBytes: 0,
-                      storageBytes: committed.storageBytes,
-                    },
-              );
-            },
+            (sum, r) => addResources(sum, accountedResources(r, snapshot.accounting)),
             { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },
           );
         const need = snapshot.accounting === "peak" ? request.peak : request.baseline;
@@ -227,15 +214,51 @@ describe("pure capacity admission", () => {
           sessionId: "s1",
           nodeId: node.id,
           state: "ALLOCATED",
+          podName: "pod-1",
           baseline: { cpuMillicores: 100, memoryBytes: 64 * MiB, storageBytes: 256 * MiB },
           peak: { cpuMillicores: 400, memoryBytes: 256 * MiB, storageBytes: 256 * MiB },
           expiresAt: null,
         };
         const running = availableOnNode(node, [base], snapshot.now);
-        const suspended = availableOnNode(node, [{ ...base, state: "SUSPENDED" }], snapshot.now);
+        const suspended = availableOnNode(node, [{ ...base, state: "SUSPENDED", podName: null }], snapshot.now);
         expect(suspended.cpuMillicores).toBeGreaterThanOrEqual(running.cpuMillicores);
         expect(suspended.memoryBytes).toBeGreaterThanOrEqual(running.memoryBytes);
         expect(suspended.storageBytes).toBe(running.storageBytes);
+      }),
+      { numRuns: 300 },
+    );
+  });
+
+  it("a suspended reservation that enters RELEASING keeps storage but not compute", () => {
+    fc.assert(
+      fc.property(snapshotArb(fc.array(nodeArb, { minLength: 1, maxLength: 1 })), (snapshot) => {
+        const node = snapshot.nodes[0]!;
+        const suspended: CapacityReservation = {
+          id: "r1",
+          sessionId: "s1",
+          nodeId: node.id,
+          state: "SUSPENDED",
+          podName: null,
+          baseline: { cpuMillicores: 100, memoryBytes: 64 * MiB, storageBytes: 256 * MiB },
+          peak: { cpuMillicores: 400, memoryBytes: 256 * MiB, storageBytes: 256 * MiB },
+          expiresAt: null,
+        };
+        const fromSuspended = availableOnNode(
+          node,
+          [{ ...suspended, state: "RELEASING" }],
+          snapshot.now,
+        );
+        expect(fromSuspended).toEqual(availableOnNode(node, [suspended], snapshot.now));
+
+        // A release that still names its Pod keeps charging compute.
+        const fromActive = availableOnNode(
+          node,
+          [{ ...suspended, state: "RELEASING", podName: "pod-1" }],
+          snapshot.now,
+        );
+        expect(fromActive).toEqual(
+          availableOnNode(node, [{ ...suspended, state: "ALLOCATED", podName: "pod-1" }], snapshot.now),
+        );
       }),
       { numRuns: 300 },
     );
@@ -297,6 +320,7 @@ describe("pure capacity admission", () => {
       sessionId: null,
       nodeId: "node",
       state: "HELD",
+      podName: null,
       baseline: { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },
       peak: { cpuMillicores: 0, memoryBytes: 0, storageBytes: 1 },
       expiresAt: null,

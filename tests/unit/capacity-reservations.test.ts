@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../../controller/src/store.js";
-import type { CapacitySnapshot, SandboxResourceRequest } from "../../controller/src/capacity/types.js";
+import { availableOnNode } from "../../controller/src/capacity/placement.js";
+import { holdsCompute, type CapacitySnapshot, type SandboxResourceRequest } from "../../controller/src/capacity/types.js";
 
 const MiB = 1024 * 1024;
 const dirs: string[] = [];
@@ -195,6 +196,75 @@ describe("durable capacity reservations", () => {
       });
       expect(store.reservations.pinNode("sbx_move", "node-b")).toBe(true);
       expect(store.reservations.getBySession("sbx_move")?.nodeId).toBe("node-b");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("keeps compute charged when an active session enters RELEASING", () => {
+    const store = freshStore();
+    try {
+      const snap = snapshot();
+      expect(store.reservations.admit(snap, request(), {
+        sessionId: "sbx_active_release",
+        state: "ALLOCATED",
+      }).admitted).toBe(true);
+      expect(store.reservations.beginRelease("sbx_active_release", "pod-1")).toBe(true);
+
+      const reservation = store.reservations.getBySession("sbx_active_release");
+      expect(reservation?.state).toBe("RELEASING");
+      expect(reservation?.podName).toBe("pod-1");
+      expect(holdsCompute(reservation!)).toBe(true);
+
+      const node = snap.nodes[0]!;
+      const releasing = availableOnNode(node, store.reservations.listActive(), snap.now);
+      expect(releasing.cpuMillicores).toBe(0);
+      expect(releasing.memoryBytes).toBe(node.allocatable.memoryBytes - 512 * MiB);
+      expect(releasing.storageBytes).toBe(node.allocatable.storageBytes - 1_024 * MiB);
+
+      expect(store.reservations.confirmRelease("sbx_active_release")).toBe(true);
+      expect(availableOnNode(node, store.reservations.listActive(), snap.now)).toEqual(node.allocatable);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("releases compute but not storage when a suspended session enters RELEASING", () => {
+    const store = freshStore();
+    try {
+      const snap = snapshot();
+      expect(store.reservations.admit(snap, request(), {
+        sessionId: "sbx_suspended_release",
+        state: "ALLOCATED",
+      }).admitted).toBe(true);
+      store.reservations.updatePod("sbx_suspended_release", "pod-1");
+      expect(store.reservations.suspendSession("sbx_suspended_release")).toBe(true);
+
+      // Termination can race the suspend and still hold the session row's
+      // pre-suspend Pod name. The reservation must not adopt it: there is no
+      // live Pod and compute was already returned.
+      expect(store.reservations.beginRelease("sbx_suspended_release", "pod-1")).toBe(true);
+      const reservation = store.reservations.getBySession("sbx_suspended_release");
+      expect(reservation?.state).toBe("RELEASING");
+      expect(reservation?.podName).toBeNull();
+      expect(holdsCompute(reservation!)).toBe(false);
+
+      const node = snap.nodes[0]!;
+      const releasing = availableOnNode(node, store.reservations.listActive(), snap.now);
+      expect(releasing.cpuMillicores).toBe(node.allocatable.cpuMillicores);
+      expect(releasing.memoryBytes).toBe(node.allocatable.memoryBytes);
+      // The workspace is still charged until release is confirmed.
+      expect(releasing.storageBytes).toBe(node.allocatable.storageBytes - 1_024 * MiB);
+
+      // The returned compute is immediately usable while the workspace awaits
+      // confirmation.
+      expect(store.reservations.admit(snap, request(), {
+        sessionId: "sbx_reuser",
+        state: "ALLOCATED",
+      }).admitted).toBe(true);
+
+      expect(store.reservations.confirmRelease("sbx_suspended_release")).toBe(true);
+      expect(store.reservations.getBySession("sbx_suspended_release")?.state).toBe("RELEASED");
     } finally {
       store.close();
     }

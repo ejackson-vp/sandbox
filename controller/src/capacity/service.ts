@@ -15,7 +15,7 @@ import type {
   ReservationState,
   ResourceVector,
 } from "./types.js";
-import { addResources, requestForLimits, requestForSession, ZERO_RESOURCES } from "./types.js";
+import { accountedResources, addResources, requestForLimits, requestForSession, ZERO_RESOURCES } from "./types.js";
 import { CapacitySnapshotBuilder } from "./snapshot.js";
 import type { ReservationAdmission, ReservationRecord, ReservationStore } from "./reservation-store.js";
 
@@ -81,11 +81,7 @@ export class CapacityService {
     let reserved = ZERO_RESOURCES;
     for (const reservation of snapshot.reservations) {
       if (reservation.state === "RELEASED") continue;
-      const commitment = snapshot.accounting === "peak" ? reservation.peak : reservation.baseline;
-      const compute = reservation.state === "SUSPENDED"
-        ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: commitment.storageBytes }
-        : commitment;
-      reserved = addResources(reserved, compute);
+      reserved = addResources(reserved, accountedResources(reservation, snapshot.accounting));
     }
     const eligible = new Set(
       placementCandidates(snapshot, {
@@ -242,13 +238,7 @@ export class CapacityService {
     const count = (state: ReservationState) => reservations.filter((r) => r.state === state).length;
     const reserved = reservations.reduce((sum, reservation) => {
       if (reservation.state === "RELEASED") return sum;
-      const commitment = snapshot.accounting === "peak" ? reservation.peak : reservation.baseline;
-      return addResources(
-        sum,
-        reservation.state === "SUSPENDED"
-          ? { cpuMillicores: 0, memoryBytes: 0, storageBytes: commitment.storageBytes }
-          : commitment,
-      );
+      return addResources(sum, accountedResources(reservation, snapshot.accounting));
     }, ZERO_RESOURCES);
     const eligibleIds = new Set(
       placementCandidates(snapshot, {
@@ -270,17 +260,7 @@ export class CapacityService {
         reserved: reservations
           .filter((r) => r.nodeId === node.id && r.state !== "RELEASED")
           .reduce(
-            (sum, r) =>
-              addResources(
-                sum,
-                r.state === "SUSPENDED"
-                  ? {
-                      cpuMillicores: 0,
-                      memoryBytes: 0,
-                      storageBytes: (snapshot.accounting === "peak" ? r.peak : r.baseline).storageBytes,
-                    }
-                  : snapshot.accounting === "peak" ? r.peak : r.baseline,
-              ),
+            (sum, r) => addResources(sum, accountedResources(r, snapshot.accounting)),
             ZERO_RESOURCES,
           ),
         available: availableOnNode(node, reservations, snapshot.now, snapshot.accounting),
