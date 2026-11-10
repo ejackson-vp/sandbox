@@ -14,7 +14,10 @@ COPY sdk/package.json sdk/package.json
 COPY api/package.json api/package.json
 COPY controller/package.json controller/package.json
 COPY cli/package.json cli/package.json
-RUN npm ci --omit=dev --no-audit --no-fund
+# npm marks TypeScript "devOptional", so --omit=dev still installs its native
+# tsc package. It is a Go binary and must not ship in the runtime.
+RUN npm ci --omit=dev --no-audit --no-fund \
+    && rm -rf node_modules/typescript node_modules/@typescript
 
 FROM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS build
 WORKDIR /app

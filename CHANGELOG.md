@@ -5,7 +5,14 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
-## 0.1.17
+## 0.1.18
+
+### Fixed
+
+- The control runtime no longer ships the dev TypeScript native compiler
+  (`@typescript/typescript-linux-x64`). npm marks TypeScript `devOptional`, so
+  `--omit=dev` still installed its Go-built `tsc` binary, which carried five
+  HIGH Go stdlib CVEs. The 0.1.17 control image failed the CVE gate; use 0.1.18.
 
 ### Added
 
@@ -24,6 +31,11 @@ the container registry.
 
 - Nightly cluster fault matrix and short fuzz jobs for the guest, relay and API
   boundaries (#39, #41).
+
+## 0.1.17 (withdrawn)
+
+The control image failed the CVE gate because the runtime shipped the dev
+TypeScript compiler. No GitHub Release was published; use 0.1.18.
 
 ## 0.1.16
 
