@@ -1,0 +1,305 @@
+/**
+ * Due-time scheduling: one bounded pass dispatches only due sessions, and a
+ * processed session is moved forward so the next pass cannot select it again.
+ *
+ * These use the real Store (on a temp database) so the interaction with the
+ * state-changing statements is exercised, with a fake provisioner/relay and an
+ * injected clock so "two consecutive passes" really are the same instant.
+ */
+import { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { metrics } from "@x402s/shared";
+import { loadControllerConfig } from "../../controller/src/config.js";
+import { Reconciler } from "../../controller/src/reconciler.js";
+import { cadenceFor, DEFAULT_REDUE_INTERVAL_MS } from "../../controller/src/reconcile-cadence.js";
+import type { Provisioner } from "../../controller/src/k8s.js";
+import type { RelayClient } from "../../controller/src/relay-client.js";
+import {
+  Store,
+  type PaymentRecord,
+  type SessionRecord,
+} from "../../controller/src/store.js";
+import type { SessionLimits } from "../../shared/src/index.js";
+
+const ADMIN = "unit-admin-token-0123456789";
+
+const dirs: string[] = [];
+afterEach(() => {
+  vi.restoreAllMocks();
+  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+});
+
+function tempDb(): string {
+  const dir = mkdtempSync(join(tmpdir(), "x402-due-"));
+  dirs.push(dir);
+  return join(dir, "controller.db");
+}
+
+function config(extra: Record<string, string> = {}) {
+  return loadControllerConfig({
+    ADMIN_TOKEN: ADMIN,
+    ROLE: "all",
+    EXECUTION_MODE: "dev",
+    ALLOW_INSECURE_DEV: "true",
+    KUBERNETES_ENABLED: "false",
+    DB_PATH: ":memory:",
+    RELAY_ADMIN_TOKEN: "r".repeat(24),
+    WAKE_TOKEN: "w".repeat(24),
+    PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
+    RECONCILE_CONCURRENCY: "8",
+    ...extra,
+  });
+}
+
+const limits: SessionLimits = {
+  cpuMillis: 1000,
+  memoryMiB: 1024,
+  diskMiB: 1024,
+  maxOutputBytes: 262144,
+  maxFileBytes: 8 * 1024 * 1024,
+  maxCommandSeconds: 300,
+  maxProcesses: 256,
+};
+
+function paymentRecord(key: string): PaymentRecord {
+  return {
+    paymentKey: key,
+    network: "mock:local",
+    scheme: "exact",
+    asset: "mock:usdc",
+    amount: "50000",
+    payTo: "0x0000000000000000000000000000000000000402",
+    payer: "0x0000000000000000000000000000000000000001",
+    transaction: "mock:tx",
+    mode: "mock",
+  };
+}
+
+function sessionRecord(id: string, key: string): SessionRecord {
+  const now = Date.now();
+  return {
+    id,
+    capabilityHash: "a".repeat(64),
+    capabilityExpiresAt: now + 3_600_000,
+    clientPublicKey: "pk",
+    clientNonce: "nonce",
+    tier: "standard",
+    durationSeconds: 300,
+    limits,
+    state: "PAID",
+    createdAt: now,
+    paidAt: now,
+    readyAt: null,
+    leaseExpiresAt: null,
+    terminatingAt: null,
+    destroyedAt: null,
+    terminationReason: null,
+    failureCode: null,
+    failureMessage: null,
+    attestationJson: null,
+    guestPublicKey: null,
+    paymentKey: key,
+    podName: null,
+    runtimeClass: "x402-sandbox",
+    executionMode: "dev",
+    relayTokenHash: null,
+    activeRequestId: null,
+    execEpoch: 1,
+    relayPurgedAt: null,
+    destroyRequested: 0,
+    timingsJson: null,
+    idlePolicyJson: "{}",
+    maxLifetimeSeconds: 28_800,
+    suspendedAt: null,
+    resumeCount: 0,
+    lastActivityAt: null,
+    workspacePvc: null,
+    baselineCpuMillis: null,
+    baselineMemoryMib: null,
+    nodeName: null,
+    updatedAt: now,
+  };
+}
+
+function seedPaid(store: Store, id: string, keyChar: string): void {
+  const key = keyChar.repeat(64);
+  const claim = store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+  if (claim.status !== "claimed") throw new Error("expected claim");
+  store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(id, key));
+}
+
+/** A session parked in SUSPENDING, ready to be finished by a pass. */
+function seedSuspending(store: Store, id: string, keyChar: string): void {
+  seedPaid(store, id, keyChar);
+  if (!store.setProvisioning(id, `pod-${id}`)) throw new Error("expected PROVISIONING");
+  store.setRelayToken(id, "relay-hash");
+  const now = Date.now();
+  if (!store.setReady(id, now, now + 60_000, "{}", "guest-pk")) throw new Error("expected READY");
+  if (!store.markSuspending(id)) throw new Error("expected SUSPENDING");
+}
+
+function readNextDue(path: string, id: string): number | null {
+  const db = new DatabaseSync(path);
+  try {
+    const row = db.prepare("SELECT next_due_ms FROM sessions WHERE id = ?").get(id) as
+      | { next_due_ms: number | null }
+      | undefined;
+    return row ? row.next_due_ms : null;
+  } finally {
+    db.close();
+  }
+}
+
+function harness(cfg: ReturnType<typeof config>, store: Store, clock: { now: number }) {
+  const provisioner = { deletePod: vi.fn(async () => undefined) } as unknown as Provisioner;
+  const relay = { isReady: async () => true } as unknown as RelayClient;
+  const reconciler = new Reconciler({
+    cfg,
+    store,
+    provisioner,
+    relay,
+    now: () => clock.now,
+  });
+  const provisioning = (
+    reconciler as unknown as {
+      provisioning: { provision: (s: SessionRecord) => Promise<void> };
+    }
+  ).provisioning;
+  return { reconciler, provisioning };
+}
+
+describe("due-time reconcile pass", () => {
+  it("dispatches a due session once and strictly advances its due time", async () => {
+    const path = tempDb();
+    const store = new Store(path);
+    try {
+      seedPaid(store, "sbx_rearm", "a");
+      const clock = { now: Date.now() };
+      // Park the schedule in the past: this pass must pick it up.
+      expect(store.bumpDue("sbx_rearm", clock.now)).toBe(true);
+
+      const { reconciler, provisioning } = harness(config(), store, clock);
+      const provision = vi.fn(async () => undefined);
+      provisioning.provision = provision;
+
+      await reconciler.tick();
+      expect(provision).toHaveBeenCalledTimes(1);
+      const firstDue = readNextDue(path, "sbx_rearm");
+      expect(firstDue).not.toBeNull();
+      expect(firstDue!).toBeGreaterThan(clock.now);
+      // Nothing consumes the schedule between two ticks at the same instant.
+      expect(store.listDue(clock.now, 10).map((s) => s.id)).not.toContain("sbx_rearm");
+
+      await reconciler.tick();
+      expect(provision).toHaveBeenCalledTimes(1);
+      expect(readNextDue(path, "sbx_rearm")).toBe(firstDue);
+
+      // At its due time it is dispatched again (not starved) and moves further.
+      clock.now = firstDue!;
+      await reconciler.tick();
+      expect(provision).toHaveBeenCalledTimes(2);
+      expect(readNextDue(path, "sbx_rearm")!).toBeGreaterThan(firstDue!);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("does not overwrite a due time a state transition already armed", async () => {
+    const path = tempDb();
+    const store = new Store(path);
+    try {
+      seedSuspending(store, "sbx_transition", "b");
+      const clock = { now: Date.now() };
+      expect(store.bumpDue("sbx_transition", clock.now)).toBe(true);
+
+      const { reconciler } = harness(config(), store, clock);
+      // The real finishSuspend is stubbed at the seam so the pass performs the
+      // SUSPENDING -> SUSPENDED write (cadence 15s), not a rebuild of it.
+      (
+        reconciler as unknown as {
+          lifecycle: { finishSuspend: (s: SessionRecord) => Promise<void> };
+        }
+      ).lifecycle.finishSuspend = async (s) => {
+        expect(store.markSuspended(s.id, Date.now())).toBe(true);
+      };
+
+      const before = Date.now();
+      await reconciler.tick();
+      expect(store.getSession("sbx_transition")?.state).toBe("SUSPENDED");
+
+      const due = readNextDue(path, "sbx_transition");
+      expect(due).not.toBeNull();
+      // The transition's SUSPENDED cadence survives: a re-arm from the
+      // pre-pass SUSPENDING state (500ms) would have shortened it.
+      expect(due!).toBeGreaterThanOrEqual(before + cadenceFor("SUSPENDED") - 500);
+
+      // A future deadline is never pulled forward by a later re-arm attempt.
+      expect(store.rearmDue("sbx_transition", clock.now + 1, clock.now)).toBe(false);
+      expect(readNextDue(path, "sbx_transition")).toBe(due);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("bounds one pass by the budget and reports the untouched backlog", async () => {
+    const store = new Store(tempDb());
+    try {
+      const ids = ["sbx_b1", "sbx_b2", "sbx_b3"];
+      ids.forEach((id, i) => seedPaid(store, id, String.fromCharCode(99 + i)));
+      const clock = { now: Date.now() };
+      for (const id of ids) expect(store.bumpDue(id, clock.now)).toBe(true);
+
+      const { reconciler, provisioning } = harness(
+        config({ RECONCILE_BUDGET: "2" }),
+        store,
+        clock,
+      );
+      const provision = vi.fn(async () => undefined);
+      provisioning.provision = provision;
+
+      await reconciler.tick();
+      expect(provision).toHaveBeenCalledTimes(2);
+      // The third row is still due for the next pass, not lost.
+      expect(store.listDue(clock.now, 10).map((s) => s.id)).toEqual(["sbx_b3"]);
+
+      // The registry caches rendered text for 500ms; wait it out.
+      await new Promise((resolve) => setTimeout(resolve, 520));
+      const text = metrics.render();
+      expect(text).toContain("sandbox_reconcile_due_backlog 1");
+      expect(text).toContain("sandbox_reconcile_saturated 0");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("makes a destroy request immediately due, even from a long cadence", () => {
+    const store = new Store(tempDb());
+    try {
+      seedPaid(store, "sbx_destroy", "f");
+      const clock = { now: Date.now() };
+      expect(store.bumpDue("sbx_destroy", clock.now + cadenceFor("SUSPENDED"))).toBe(true);
+      expect(store.listDue(clock.now, 10)).toEqual([]);
+
+      store.requestDestroy("sbx_destroy");
+      expect(store.listDue(Date.now(), 10).map((s) => s.id)).toEqual(["sbx_destroy"]);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("reconcile cadence policy", () => {
+  it("enumerates every non-terminal state with an ordered cadence", () => {
+    // Provisioning is latency-critical; steady-state and suspended are not.
+    expect(cadenceFor("PROVISIONING")).toBeLessThanOrEqual(250);
+    expect(cadenceFor("RESUMING")).toBeLessThanOrEqual(250);
+    expect(cadenceFor("READY")).toBeGreaterThan(cadenceFor("PROVISIONING"));
+    expect(cadenceFor("ACTIVE")).toBeGreaterThan(cadenceFor("PROVISIONING"));
+    expect(cadenceFor("SUSPENDED")).toBeGreaterThan(cadenceFor("READY"));
+    // Terminal states are outside the table and fall back, not throw.
+    expect(cadenceFor("EXPIRED")).toBe(DEFAULT_REDUE_INTERVAL_MS);
+  });
+});
