@@ -9,16 +9,20 @@ file-level backlog is in issues; this page keeps the order. The gap analysis is
 The issue tracker is the detailed, file-level backlog. This list keeps the order
 of risk.
 
-1. **Finish the trust baseline.** Operation and payment-intent fencing
+**Current gate: production-ready core (#117).** It closes the store, relay,
+checkpoint, settlement, admission and latency gaps before Stage 2. The runtime
+catalog does not start until that gate is met.
+
+1. **Keep the trust baseline current.** Operation and payment-intent fencing
    (#19/#20), the relay restart window (#17), the Kubernetes digest guard (#4),
-   readiness checks (#50) and the nightly model run (#73) are merged. Ship
-   `0.1.19`, exercise #42's staged release path, and run the cluster fault cases
-   that local tests cannot cover.
-2. **Push readiness instead of polling.** 0.1.16 moved client p50 665 → 395 ms
-   and server p50 179 → 127 ms. The remaining ~268 ms is payment/create
-   (~175 ms) plus polling and network; p95 is 708 / 286 ms. A pushed `READY`
-   event or long-poll removes the tick; folding the post-create `getSession`
-   into the completion response is the smaller first cut. (#26, #27)
+   readiness checks (#50) and the nightly model run (#73) are merged. 0.1.21
+   adds the relay-replacement, recovery-fence and resume-accounting fixes. The
+   kind fault matrix is 8/8 and the cluster security suite runs clean; keep the
+   live lifecycle/fault case and one real alert in each release checklist.
+2. **Push readiness instead of polling.** #27 folded the post-create view into
+   the completion response. #26 removes the remaining readiness poll tick.
+   Measure the 0.1.20 warm p95 regression in #116 first; do not trade
+   correctness checks for latency.
 3. **Move the store behind an adapter tested against a second backend.**
    SQLite is the single writer and therefore the HA ceiling. Postgres or
    DynamoDB with conditional writes, preserving the unique payment key and
@@ -26,11 +30,11 @@ of risk.
 4. **Relay state out of process.** One in-memory relay pod loses pending
    ciphertext on restart. Redis or NATS with per-session queues and TTLs,
    ciphertext only. (#24)
-5. **One-shot run and a runtime catalog.** Stage 1 adds `run()` as a client
-   composition and freezes the public `runtime` noun. Stage 2 adds one common
-   base image plus system-defined runtime profiles, selected at warm claim so
-   the base image and warm pool stay shared. Arbitrary OCI images are not part
-   of this step.
+5. **One-shot run and a runtime catalog.** Stage 1 shipped: `run()` is a client
+   composition and the public `runtime` noun is frozen to `base`. Stage 2 adds
+   one common base image plus system-defined runtime profiles, selected at warm
+   claim so the base image and warm pool stay shared. Arbitrary OCI images are
+   not part of this step; start only after #117.
 
 ## Cross-cutting
 
