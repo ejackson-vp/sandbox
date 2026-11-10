@@ -110,3 +110,19 @@ export function relayCredential(
   const guestToken = guestTokenFor(newOpaqueToken(32), shardClaim(placement, "relay", sessionId));
   return { guestToken, tokenHash: sha256Hex(guestToken) };
 }
+
+/**
+ * A credential the relay has accepted, and the generation that accepted it.
+ *
+ * The guest token is the secret the pod boots with; it is never written to the
+ * session row (only `tokenHash` is). Registration and pod creation are separate
+ * steps because the transition table names them separately, so the token has to
+ * travel from `register_relay` to the `start_pod` that follows it in the same
+ * effect list.
+ */
+export interface RelayRegistration {
+  readonly guestToken: string;
+  readonly tokenHash: string;
+  /** Relay generation that accepted this registration. */
+  readonly generation: string;
+}

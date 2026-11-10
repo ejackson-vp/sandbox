@@ -23,7 +23,7 @@ import { snapshotOf } from "./session-snapshot.js";
 import type { WarmPool } from "./warm-pool.js";
 import { effectContext, executeEffects, isOk } from "./effects.js";
 import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
-import type { EndpointPair } from "./provisioning/endpoints.js";
+import type { EndpointPair, RelayRegistration } from "./provisioning/endpoints.js";
 import { PodCreation } from "./provisioning/pod-creation.js";
 import { ProvisioningAdmission } from "./provisioning/admission.js";
 import { PodStatus } from "./provisioning/pod-status.js";
@@ -163,11 +163,23 @@ export class Provisioning {
     });
   }
 
+  /**
+   * Build the pod spec and create the pod.
+   *
+   * `start_pod` uses it after `register_relay` has staged the credential; a
+   * caller with no transition of its own (a replacement) omits the registration
+   * and the credential is minted here.
+   */
   async createPod(
     session: SessionRecord,
     relayAddr: { host: string; port: number },
     proxyAddr: { host: string; port: number },
-    opts: { workspacePvc?: string; resume?: boolean; nodeName?: string } = {},
+    opts: {
+      workspacePvc?: string;
+      resume?: boolean;
+      nodeName?: string;
+      registration?: RelayRegistration;
+    } = {},
   ): Promise<{ podName: string; createStarted: number; relayGeneration: string }> {
     return this.pods.createPod(session, relayAddr, proxyAddr, opts);
   }

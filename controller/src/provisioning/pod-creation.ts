@@ -1,11 +1,15 @@
 /**
  * Pod creation and replacement for a provisioned session.
  *
- * Extracted from the provisioning use case because the pod spec, the guest
- * credential and the relay registration are one atomic admission: the token
- * registered with the relay is the token the guest boots with, so they cannot
- * be split into separate effect calls. A future `start_pod` execution runs from
- * here, which is why the endpoints are a dependency rather than a local call.
+ * Extracted from the provisioning use case because the pod spec and the guest
+ * credential are one admission: the token registered with the relay is the
+ * token the guest boots with. Registration and creation are two methods so the
+ * transition table can name them (`register_relay`, then `start_pod`), with the
+ * token carried between them; a caller that has no transition of its own
+ * (replacing a pod whose guest can no longer reach the relay) passes no
+ * registration and `createPod` performs both steps. Endpoints are a dependency
+ * rather than a local call for the same reason: the pod spec needs them, and so
+ * does the effect that starts the pod.
  */
 import { log } from "@x402s/shared";
 import { proxyTokenFor } from "../config.js";
@@ -16,7 +20,7 @@ import type { RelayClient } from "../relay-client.js";
 import type { SessionRecord } from "../store/models.js";
 import type { ProvisioningStore } from "../store/ports.js";
 import { relayCredential } from "./endpoints.js";
-import type { DataPlaneEndpoints, Endpoint } from "./endpoints.js";
+import type { DataPlaneEndpoints, Endpoint, RelayRegistration } from "./endpoints.js";
 
 type PodCreationStore = Pick<
   ProvisioningStore,
@@ -130,22 +134,22 @@ export class PodCreation {
     return true;
   }
 
-  async createPod(
-    session: SessionRecord,
-    relayAddr: Endpoint,
-    proxyAddr: Endpoint,
-    opts: { workspacePvc?: string; resume?: boolean; nodeName?: string } = {},
-  ): Promise<{ podName: string; createStarted: number; relayGeneration: string }> {
-    this.ctx.store.mergeTimings(session.id, {
-      provisionStartAt: Date.now(),
-      podRequestedAt: Date.now(),
-    });
+  /**
+   * Give the relay the credential this session's pod will present.
+   *
+   * The registration half of a create, split out because the transition table
+   * names it (`register_relay` before `start_pod`). The token it mints is the
+   * token the pod boots with and is never persisted: only its hash is written
+   * to the row, and the token travels in the effect's staged registration.
+   *
+   * Registered against the generation serving now and proven to have survived
+   * the call: a registration accepted by a terminating relay is discarded and
+   * retried, so the pod never boots against a registry about to disappear. A
+   * stale entry from a resumed session is replaced.
+   */
+  async registerRelay(session: SessionRecord): Promise<RelayRegistration> {
     const { guestToken, tokenHash } = relayCredential(this.ctx.cfg, session.id);
     const ttlMs = this.ctx.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
-    // Register against the relay generation that is serving now and prove it
-    // survived the call. A registration accepted by a terminating relay is
-    // discarded and retried, so the pod never boots against a registry that is
-    // about to disappear. A stale entry from a resumed session is replaced.
     const registration = await this.ctx.relay.registerCurrent(session.id, tokenHash, ttlMs, {
       deadlineMs: this.ctx.cfg.relayRegistrationTimeoutMs,
       replaceConnected: true,
@@ -156,6 +160,31 @@ export class PodCreation {
       }),
     });
     this.ctx.store.setRelayToken(session.id, tokenHash);
+    return { guestToken, tokenHash, generation: registration.generation };
+  }
+
+  async createPod(
+    session: SessionRecord,
+    relayAddr: Endpoint,
+    proxyAddr: Endpoint,
+    opts: {
+      workspacePvc?: string;
+      resume?: boolean;
+      nodeName?: string;
+      /**
+       * Credential an earlier `register_relay` staged. Absent on the paths that
+       * have no transition of their own (a replacement of a stranded pod), so
+       * they mint and register one here.
+       */
+      registration?: RelayRegistration;
+    } = {},
+  ): Promise<{ podName: string; createStarted: number; relayGeneration: string }> {
+    this.ctx.store.mergeTimings(session.id, {
+      provisionStartAt: Date.now(),
+      podRequestedAt: Date.now(),
+    });
+    const registration = opts.registration ?? (await this.registerRelay(session));
+    const { guestToken } = registration;
 
     // Registration may have waited through a relay replacement. Resolve the
     // relay endpoint again after it succeeds so the pod boots against the relay
