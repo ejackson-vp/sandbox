@@ -77,6 +77,12 @@ spec:
               containerPort: 8444
             - name: metrics
               containerPort: 9100
+          # The shared relay config is the same ConfigMap every control role
+          # consumes. Explicit env below overrides the role-specific values.
+          # In particular, the relay still parses GUEST_IMAGE_DIGEST for
+          # config validation even though it never provisions a guest.
+          envFrom:
+            - configMapRef: {name: control-config}
           env:
             - {name: ROLE, value: "relay"}
             - {name: X402_RELAY_PORT, value: "8443"}
