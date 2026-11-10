@@ -21,7 +21,7 @@ import {
   type SessionLimits,
   type SessionSpec,
 } from "../../shared/src/index.js";
-import { Store, PaymentAlreadyRedeemedError, type PaymentRecord, type SessionRecord } from "../../controller/src/store.js";
+import { Store, PaymentClaimLostError, type PaymentRecord, type SessionRecord } from "../../controller/src/store.js";
 import { RefundService } from "../../controller/src/refunds.js";
 import { mintProxyToken, verifyProxyToken, newOpaqueToken } from "../../controller/src/tokens.js";
 import { extractProxyToken, parseAuthority } from "../../controller/src/egress-proxy.js";
@@ -116,6 +116,13 @@ function paymentRecord(key: string): PaymentRecord {
     transaction: "mock:tx",
     mode: "mock",
   };
+}
+
+/** Claim then complete, as the API does. */
+function seedEntitlement(store: Store, key: string, record: SessionRecord): void {
+  const claim = store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+  if (claim.status !== "claimed") throw new Error("expected claim");
+  store.completeEntitlement(key, claim.token, paymentRecord(key), record);
 }
 
 describe("pricing and session specs", () => {
@@ -222,23 +229,66 @@ describe("payment intent outbox and entitlements", () => {
     return { store, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
   }
 
-  it("makes one payment redeemable exactly once", () => {
+  it("makes one payment redeemable exactly once and completes idempotently", () => {
     const { store, cleanup } = openStore();
     try {
       const key = "f".repeat(64);
       const digest = specHash(spec);
-      expect(store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({ status: "claimed", recovered: false });
+      const first = store.claimPaymentIntent(key, digest, 30_000);
+      expect(first).toMatchObject({ status: "claimed", recovered: false });
+      if (first.status !== "claimed") throw new Error("expected claim");
+      expect(first.token).toMatch(/^[0-9a-f]{32}$/);
       expect(store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({ status: "in_progress" });
-      store.completeEntitlement(key, paymentRecord(key), sessionRecord("sbx_000000000000000000000001", key));
+
+      const firstSession = "sbx_000000000000000000000001";
+      expect(store.completeEntitlement(key, first.token, paymentRecord(key), sessionRecord(firstSession, key)))
+        .toEqual({ sessionId: firstSession, created: true });
       expect(store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({
         status: "settled",
-        sessionId: "sbx_000000000000000000000001",
+        sessionId: firstSession,
       });
-      expect(() =>
-        store.completeEntitlement(key, paymentRecord(key), sessionRecord("sbx_000000000000000000000002", key)),
-      ).toThrow(PaymentAlreadyRedeemedError);
+
+      // A duplicate completion hands back the winning session instead of an
+      // error, and never creates a second session.
+      expect(
+        store.completeEntitlement(key, first.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000002", key)),
+      ).toEqual({ sessionId: firstSession, created: false });
       expect(store.countSessions()).toBe(1);
       expect(store.countPayments()).toBe(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("fences a stale owner out of completion after a reclaim", () => {
+    const { store, cleanup } = openStore();
+    try {
+      const key = "e".repeat(64);
+      const digest = specHash(spec);
+      const owner = store.claimPaymentIntent(key, digest, 5);
+      if (owner.status !== "claimed") throw new Error("expected claim");
+
+      const stale = store.claimPaymentIntent(key, digest, -1);
+      expect(stale).toMatchObject({ status: "claimed", recovered: true });
+      if (stale.status !== "claimed") throw new Error("expected reclaim");
+      expect(stale.token).not.toBe(owner.token);
+
+      // The reclaimed owner is the only one that may settle.
+      expect(() =>
+        store.completeEntitlement(key, owner.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000010", key)),
+      ).toThrow(PaymentClaimLostError);
+      expect(store.countSessions()).toBe(0);
+      expect(store.getPaymentIntent(key)?.status).toBe("claimed");
+
+      expect(
+        store.completeEntitlement(key, stale.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000011", key)),
+      ).toEqual({ sessionId: "sbx_000000000000000000000011", created: true });
+
+      // After settlement the old owner learns the outcome rather than an error.
+      expect(
+        store.completeEntitlement(key, owner.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000012", key)),
+      ).toEqual({ sessionId: "sbx_000000000000000000000011", created: false });
+      expect(store.countSessions()).toBe(1);
     } finally {
       cleanup();
     }
@@ -255,6 +305,7 @@ describe("payment intent outbox and entitlements", () => {
       expect(store.claimPaymentIntent(key, "b".repeat(64), -1)).toMatchObject({ status: "mismatch" });
       store.failPaymentIntent(key, "settlement_failed");
       expect(store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({ status: "failed" });
+      expect(store.getPaymentIntent(key)).toMatchObject({ status: "failed", claimToken: null });
     } finally {
       cleanup();
     }
@@ -266,8 +317,9 @@ describe("operation gating", () => {
     const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
     const store = new Store(join(dir, "test.db"));
     const key = "d".repeat(64);
-    store.claimPaymentIntent(key, specHash(spec), 30_000);
-    store.completeEntitlement(key, paymentRecord(key), sessionRecord("sbx_000000000000000000000003", key));
+    const claim = store.claimPaymentIntent(key, specHash(spec), 30_000);
+    if (claim.status !== "claimed") throw new Error("expected claim");
+    store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000003", key));
     store.setProvisioning("sbx_000000000000000000000003", "pod-x");
     store.setRelayToken("sbx_000000000000000000000003", "relay-hash");
     store.setReady("sbx_000000000000000000000003", Date.now(), Date.now() + 60_000, "{}", "guestpk");
@@ -324,8 +376,7 @@ describe("operation gating", () => {
     try {
       const key = "e".repeat(64);
       const id = "sbx_000000000000000000000005";
-      store.claimPaymentIntent(key, specHash(spec), 30_000);
-      store.completeEntitlement(key, paymentRecord(key), sessionRecord(id, key));
+      seedEntitlement(store, key, sessionRecord(id, key));
       store.requestTermination(id, "failure:crash_before_refund");
       expect(store.finalizeTermination(id)).toBe("FAILED");
       expect(store.getLedgerBySession(id)?.status).toBe("SETTLED");
@@ -399,8 +450,7 @@ describe("operation gating", () => {
     try {
       const id = "sbx_000000000000000000000004";
       const key = "c".repeat(64);
-      store.claimPaymentIntent(key, specHash(spec), 30_000);
-      store.completeEntitlement(key, paymentRecord(key), sessionRecord(id, key));
+      seedEntitlement(store, key, sessionRecord(id, key));
       store.setProvisioning(id, "pod-y");
       store.setRelayToken(id, "relay-hash");
       store.setReady(id, Date.now() - 120_000, Date.now() - 60_000, "{}", "guestpk");

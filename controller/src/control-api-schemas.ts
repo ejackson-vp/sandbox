@@ -57,6 +57,7 @@ const timingsSchema = z
   .optional();
 
 export const completeSchema = z.object({
+  claimToken: z.string().regex(/^[0-9a-f]{32,64}$/),
   sessionId: z.string().regex(sessionIdPattern),
   capabilityHash: z.string().regex(/^[0-9a-f]{64}$/),
   capabilityExpiresAt: z.number().int().positive(),

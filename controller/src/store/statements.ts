@@ -49,17 +49,24 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
          WHERE payment_key=? AND status IN ('SETTLED','REFUND_PENDING')`,
       ),
       insertIntent: db.prepare(
-        `INSERT INTO payment_intents (payment_key, status, session_id, spec_hash, reason, created_at, updated_at)
-         VALUES (?, 'claimed', NULL, ?, NULL, ?, ?)`,
+        `INSERT INTO payment_intents
+           (payment_key, status, session_id, spec_hash, reason, claim_token, claim_expires_at, created_at, updated_at)
+         VALUES (?, 'claimed', NULL, ?, NULL, ?, ?, ?, ?)`,
       ),
       reclaimIntent: db.prepare(
-        "UPDATE payment_intents SET status='claimed', reason=NULL, updated_at=? WHERE payment_key=?",
+        `UPDATE payment_intents
+         SET status='claimed', reason=NULL, claim_token=?, claim_expires_at=?, updated_at=?
+         WHERE payment_key=? AND status='claimed'`,
       ),
       settleIntent: db.prepare(
-        "UPDATE payment_intents SET status='settled', session_id=?, updated_at=? WHERE payment_key=?",
+        `UPDATE payment_intents
+         SET status='settled', session_id=?, claim_token=NULL, claim_expires_at=NULL, updated_at=?
+         WHERE payment_key=? AND status='claimed' AND claim_token=?`,
       ),
       failIntent: db.prepare(
-        "UPDATE payment_intents SET status='failed', reason=?, updated_at=? WHERE payment_key=?",
+        `UPDATE payment_intents
+         SET status='failed', reason=?, claim_token=NULL, claim_expires_at=NULL, updated_at=?
+         WHERE payment_key=? AND status != 'settled'`,
       ),
       listNonTerminal: db.prepare(
         `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('PAID','PROVISIONING','READY','ACTIVE','SUSPENDING','SUSPENDED','RESUMING','TERMINATING')`,

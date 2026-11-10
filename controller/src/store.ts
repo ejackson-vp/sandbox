@@ -9,12 +9,14 @@
  * Schema changes are additive and transactional; a database from a newer build
  * is refused rather than downgraded.
  */
+import { randomBytes } from "node:crypto";
 import { DatabaseSync, backup as sqliteBackup, type StatementSync } from "node:sqlite";
 import {
   mapIntent,
   mapLedger,
   mapSession,
   PaymentAlreadyRedeemedError,
+  PaymentClaimLostError,
   type ClaimOperationResult,
   type ExecRequestRecord,
   type IntentClaimResult,
@@ -45,7 +47,7 @@ export type {
   SessionRecord,
   SessionState,
 } from "./store/models.js";
-export { PaymentAlreadyRedeemedError } from "./store/models.js";
+export { PaymentAlreadyRedeemedError, PaymentClaimLostError } from "./store/models.js";
 
 const SCHEMA_LOCK = /database is locked|database table is locked|SQLITE_BUSY/i;
 
@@ -88,8 +90,16 @@ export class Store {
 
   /* ---------------- payment intents (outbox) ---------------- */
 
+  /**
+   * Lease an intent to this caller. The returned token is the ownership fence:
+   * only the holder of the current token may complete. A claim older than its
+   * recorded lease, or older than the caller's `staleMs`, is a crash path and
+   * can be reclaimed; the previous owner then loses the token.
+   */
   claimPaymentIntent(paymentKey: string, specHashValue: string, staleMs: number): IntentClaimResult {
     const now = Date.now();
+    const token = randomBytes(16).toString("hex");
+    const expiresAt = now + staleMs;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const raw = this.stmts.getIntent!.get(paymentKey) as Record<string, unknown> | undefined;
@@ -107,18 +117,23 @@ export class Store {
           this.db.exec("COMMIT");
           return { status: "failed", reason: intent.reason };
         }
-        // claimed: either in flight or stale after a crash
-        if (now - intent.updatedAt < staleMs) {
+        // claimed: either in flight or stale after a crash. The recorded lease
+        // is authoritative; the age check keeps the original `staleMs` recovery
+        // path (and pre-v10 rows, which have no lease) working.
+        const leaseExpired = intent.claimExpiresAt !== null && now >= intent.claimExpiresAt;
+        const agedOut = now - intent.updatedAt >= staleMs;
+        if (!leaseExpired && !agedOut) {
           this.db.exec("COMMIT");
           return { status: "in_progress" };
         }
-        this.stmts.reclaimIntent!.run(now, paymentKey);
+        const reclaimed = this.stmts.reclaimIntent!.run(token, expiresAt, now, paymentKey);
         this.db.exec("COMMIT");
-        return { status: "claimed", recovered: true };
+        if (reclaimed.changes === 0) return { status: "in_progress" };
+        return { status: "claimed", recovered: true, token, expiresAt };
       }
-      this.stmts.insertIntent!.run(paymentKey, specHashValue, now, now);
+      this.stmts.insertIntent!.run(paymentKey, specHashValue, token, expiresAt, now, now);
       this.db.exec("COMMIT");
-      return { status: "claimed", recovered: false };
+      return { status: "claimed", recovered: false, token, expiresAt };
     } catch (err) {
       this.db.exec("ROLLBACK");
       throw err;
@@ -136,12 +151,34 @@ export class Store {
 
   /**
    * Atomically: record the payment, create the session, and mark the intent
-   * settled. A crash before this leaves the intent `claimed`, which the API
-   * resolves by asking the facilitator whether settlement happened.
+   * settled. The caller must present the claim token it was given by
+   * `claimPaymentIntent`; a stale owner is rejected.
+   *
+   * Idempotent: if another worker already settled the intent, this returns that
+   * session with `created: false` instead of throwing. A crash before this
+   * leaves the intent `claimed`, which the API resolves by asking the
+   * facilitator whether settlement happened.
    */
-  completeEntitlement(paymentKey: string, payment: PaymentRecord, session: SessionRecord): void {
+  completeEntitlement(
+    paymentKey: string,
+    claimToken: string,
+    payment: PaymentRecord,
+    session: SessionRecord,
+  ): { sessionId: string; created: boolean } {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const raw = this.stmts.getIntent!.get(paymentKey) as Record<string, unknown> | undefined;
+      if (!raw) throw new PaymentClaimLostError(paymentKey);
+      const intent = mapIntent(raw);
+      // Already settled: the winner's session is the answer, not an error.
+      if (intent.status === "settled" && intent.sessionId) {
+        this.db.exec("COMMIT");
+        return { sessionId: intent.sessionId, created: false };
+      }
+      if (intent.status !== "claimed" || intent.claimToken !== claimToken) {
+        throw new PaymentClaimLostError(paymentKey);
+      }
+
       this.stmts.insertPayment!.run(
         payment.paymentKey,
         payment.network,
@@ -202,8 +239,12 @@ export class Store {
         session.updatedAt,
         session.id,
       );
-      this.stmts.settleIntent!.run(session.id, Date.now(), paymentKey);
+      // Conditional on the token: a concurrent reclaim inside this transaction
+      // has already changed it, so the stale owner cannot settle.
+      const settled = this.stmts.settleIntent!.run(session.id, Date.now(), paymentKey, claimToken);
+      if (settled.changes === 0) throw new PaymentClaimLostError(paymentKey);
       this.db.exec("COMMIT");
+      return { sessionId: session.id, created: true };
     } catch (err) {
       this.db.exec("ROLLBACK");
       const msg = (err as Error).message;
