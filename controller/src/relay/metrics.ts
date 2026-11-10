@@ -47,6 +47,7 @@ export function disconnectReasonLabel(code: number | undefined): RelayDisconnect
 export function registerRelayMetrics(registry: MetricsRegistry = metrics): void {
   registry.gauge("sandbox_relay_sessions", "Registered relay sessions");
   registry.gauge("sandbox_relay_pending_requests", "Requests awaiting a guest response");
+  registry.gauge("sandbox_relay_active_requests", "Operations the guests report as running");
   registry.counter("sandbox_relay_reconnects_total", "Guest reconnections to an existing registration");
   registry.counter("sandbox_relay_disconnects_total", "Guest disconnections by close reason");
   registry.counter(
@@ -60,4 +61,7 @@ export function collectRelayMetrics(registry: MetricsRegistry, relay: RelayRegis
   registry
     .gauge("sandbox_relay_pending_requests", "Requests awaiting a guest response")
     .set({}, relay.pendingTotal());
+  registry
+    .gauge("sandbox_relay_active_requests", "Operations the guests report as running")
+    .set({}, relay.activeTotal());
 }

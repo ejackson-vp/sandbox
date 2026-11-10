@@ -7,6 +7,13 @@ the container registry.
 
 ## Unreleased
 
+### Added
+
+- The relay exports `sandbox_relay_active_requests`, the number of operations
+  the guests themselves report as running. The lifecycle fault harness waits
+  for this gauge before killing the controller, so it tests an observed
+  operation rather than racing the guest's status frame (#108).
+
 ### Fixed
 
 - A relay replacement no longer strands paid creates on the old relay Pod IP.

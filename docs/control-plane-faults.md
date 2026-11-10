@@ -111,10 +111,11 @@ still owns retries, refunds and session convergence for the faults below.
   create must reach READY against the replacement relay, no session may be
   terminal, and no session may end `pod_terminated`.
 - `SCENARIO=lifecycle` (default 50 sessions): split the sessions across READY,
-  ACTIVE and SUSPENDED, start one long operation per ACTIVE session, kill the
-  controller, then require every interrupted request to report
-  `outcome_unknown`, every ACTIVE session to stay busy, and a new operation to
-  be refused without reaching the guest. After cancelling the old commands,
+  ACTIVE and SUSPENDED, start one long operation per ACTIVE session, wait until
+  the relay reports the guests' own active-operation count, kill the controller,
+  then require every interrupted request to report `outcome_unknown`, every
+  ACTIVE session to stay busy, and a new operation to be refused without
+  reaching the guest. After cancelling the old commands,
   every operation gate must clear, non-suspended sessions must execute again,
   suspended sessions must stay suspended, and the suspended group must resume
   successfully. Pod and reservation counts must match each phase.

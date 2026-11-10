@@ -111,6 +111,15 @@ export class RelayRegistry {
     return total;
   }
 
+  /** Operations the guests themselves have reported as running. */
+  activeTotal(): number {
+    let total = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.activeRequestId !== null) total += 1;
+    }
+    return total;
+  }
+
   register(sessionId: string, tokenHash: string, ttlMs?: number): RegisterResult {
     if (this.entries.size >= this.opts.maxSessions && !this.entries.has(sessionId)) {
       return "at_capacity";
