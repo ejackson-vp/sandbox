@@ -54,6 +54,7 @@ export interface ReservationStore {
 
   releasePayment(paymentKey: string): boolean;
   suspendSession(sessionId: string): boolean;
+  reassertAllocated(sessionId: string): boolean;
   beginRelease(sessionId: string, podName: string | null): boolean;
   confirmRelease(sessionId: string): boolean;
   releaseSession(sessionId: string): boolean;

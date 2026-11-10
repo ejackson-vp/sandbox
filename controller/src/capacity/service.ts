@@ -170,6 +170,11 @@ export class CapacityService {
     return this.reservations.suspendSession(sessionId);
   }
 
+  /** Reassert compute allocation after a resume that raced the reaper. */
+  reassertAllocated(sessionId: string): boolean {
+    return this.reservations.reassertAllocated(sessionId);
+  }
+
   beginRelease(sessionId: string, podName: string | null): boolean {
     if (!podName) return this.reservations.releaseSession(sessionId);
     return this.reservations.beginRelease(sessionId, podName);

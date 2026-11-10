@@ -123,6 +123,29 @@ describe("durable capacity reservations", () => {
     }
   });
 
+  it("reasserts an admitted resume after a concurrent re-suspend", () => {
+    const store = freshStore();
+    try {
+      const a = store.reservations.admit(snapshot(), request(), {
+        sessionId: "sbx_a",
+        specHash: "a".repeat(64),
+        state: "ALLOCATED",
+      });
+      expect(a.admitted).toBe(true);
+      expect(store.reservations.suspendSession("sbx_a")).toBe(true);
+      expect(store.reservations.getBySession("sbx_a")?.state).toBe("SUSPENDED");
+
+      // The reaper raced the resume and put the row back to SUSPENDED after
+      // admission. Reassertion must restore the allocation without re-admitting
+      // capacity that was already reserved.
+      expect(store.reservations.reassertAllocated("sbx_a")).toBe(true);
+      expect(store.reservations.getBySession("sbx_a")?.state).toBe("ALLOCATED");
+      expect(store.reservations.reassertAllocated("sbx_a")).toBe(false);
+    } finally {
+      store.close();
+    }
+  });
+
   it("converts a payment hold into a session reservation without releasing capacity", () => {
     const store = freshStore();
     try {
