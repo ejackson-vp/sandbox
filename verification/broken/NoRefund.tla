@@ -14,10 +14,12 @@ EXTENDS SandboxSession
 
 BrokenNext ==
   IntentActions \/ ReservationActions \/ SettlementActions
-  \/ LifecycleActions \/ OperationActions \/ Stutter
+  \/ LifecycleActions \/ ConnectionActions \/ OperationActions \/ RecoveryActions
+  \/ Stutter
 
 BrokenFairness ==
-  ProvisionFairness /\ CleanupFairness /\ ReleaseFairness /\ OperationFairness
+  ProvisionFairness /\ SuspendFairness /\ CleanupFairness /\ ReleaseFairness
+  /\ OperationFairness /\ RecoveryFairness
 
 BrokenSpec == Init /\ [][BrokenNext]_vars /\ BrokenFairness
 

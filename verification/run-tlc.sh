@@ -110,7 +110,7 @@ tlc() {
 }
 
 run_good() {
-  echo "==> good: SandboxSession.cfg (lifecycle, intent, slot, reservation)"
+  echo "==> good: SandboxSession.cfg (lifecycle, intent, slot, fence, reservation)"
   if ! tlc "${ROOT}" -config SandboxSession.cfg SandboxSession.tla; then
     fail "the good specification is violated; no broken variant was run"
   fi
@@ -166,6 +166,8 @@ run_broken() {
   expect_violation DoubleCharge "Invariant NoDoubleCharge is violated"
   expect_violation CapacityRace "Invariant NoCapacityOverReservation is violated"
   expect_violation OrphanPod "Invariant NoOrphanedWorkloadAfterTerminal is violated"
+  expect_violation FenceRelease "Invariant NoPrematureFenceRelease is violated"
+  expect_violation StaleEpoch "Invariant StaleFrameNeverStarts is violated"
   expect_violation NoRefund "" PaidSessionProgress
   expect_violation NoRelease "" TerminalReleasesCapacity
 }

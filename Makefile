@@ -33,7 +33,7 @@ help:
 	@echo "  make demo-ws       WebSocket echo through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make verify         build, typecheck, structure lint, unit + property tests"
-	@echo "  make verify-model   model-check the lifecycle/payment/operation state machines (TLA+)"
+	@echo "  make verify-model   model-check the lifecycle/payment/operation/fence state machines (TLA+)"
 	@echo "  make docs-check     markdownlint + internal link check"
 	@echo "  make assets         re-render docs/assets/social-preview.png"
 	@echo "  make demo-gif       record docs/assets/demo.gif with vhs (needs a cluster)"

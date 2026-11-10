@@ -16,7 +16,9 @@ BrokenFinalize(s) ==
   /\ state' = [state EXCEPT ![s] = final[s]]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
-                 slots, guest, slotEpoch, final, epoch>>
+                 slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 BrokenFinalizeActions == \E s \in Sessions : BrokenFinalize(s)
 
@@ -24,7 +26,9 @@ BrokenLifecycleActions ==
   ProvisionActions \/ PodActions \/ SuspendActions \/ TerminateActions
   \/ CleanupActions \/ BrokenFinalizeActions \/ CrashRestart
 
-BrokenNext == PaymentActions \/ BrokenLifecycleActions \/ OperationActions
+BrokenNext ==
+  PaymentActions \/ BrokenLifecycleActions \/ ConnectionActions \/ OperationActions
+  \/ RecoveryActions
 
 BrokenSpec == Init /\ [][BrokenNext]_vars
 
