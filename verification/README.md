@@ -2,10 +2,11 @@
 
 `shared/src/domain/session.ts` is a pure transition table with property tests,
 and `controller/src/store.ts` generates its SQL guards from `SOURCE_STATES`.
-Those tests sample. Payment intents, the single-operation slot and capacity
-reservations add concurrency, and the invariants that matter there are
-temporal: they must hold after *every* crash, retry and relay loss, not after
-the schedules a generator happened to pick.
+Those tests sample. Payment intents, the single-operation slot, the
+execution-epoch recovery fence and capacity reservations add concurrency, and
+the invariants that matter there are temporal: they must hold after *every*
+crash, retry and relay loss, not after the schedules a generator happened to
+pick.
 
 This directory holds a TLA+ spec of that control plane and a TLC configuration
 that checks it exhaustively over a bounded model. It is additive verification:
@@ -13,11 +14,12 @@ no product code is imported or changed.
 
 ```text
 verification/
-  SandboxSession.tla     the model: lifecycle, intent, slot, reservation
-  SandboxSession.cfg     main bounded run  (2 sessions, 2 payments, 1 request,
-                         1 restart, 2-slot node) - all invariants + liveness
-  SandboxSessionTight.cfg capacity pressure (1-slot node, 2 requests, 2 restarts)
-                         - all invariants, safety only
+  SandboxSession.tla     the model: lifecycle, intent, slot, epoch fence,
+                         guest status, reservation
+  SandboxSession.cfg     main bounded run  (1 session, 1 payment, 1 request,
+                         1 restart, 1-slot node) - all invariants + liveness
+  SandboxSessionTight.cfg capacity pressure (2 sessions, 1-slot node, 2 requests,
+                         2 restarts) - all invariants, safety only
   run-tlc.sh             pinned runner: good spec must pass, broken must fail
   broken/                deliberately broken variants, each with its own cfg
 ```
@@ -41,9 +43,9 @@ The runner needs Java 11+ and either network access or a cached jar:
 - `TLC_WORKERS` (default 4) and `TLA2TOOLS_CACHE` are the other knobs.
 
 If `java` is missing the runner exits with an explicit message; it never claims
-a pass it did not observe. The good runs take about three minutes on a laptop
-(the capacity run takes seconds); TLC's output names the invariant when one
-fails.
+a pass it did not observe. The main liveness run is small (one session, one
+request); the capacity/safety run is the larger one and takes about a minute on
+a laptop. TLC's output names the invariant when one fails.
 
 The model is bounded by the constants in each `.cfg`: `Sessions`, `Payments`,
 `Requests`, `NodeCapacity`, `MaxRestarts`, `PodIds`. Bounds are what make the
@@ -56,12 +58,13 @@ state space finite; they are not claims about production sizing.
 | Session lifecycle | `SOURCE_STATES`, `transition()` | `state` over the 12 states, one action per event, with the same source states and the same `hasPod`/`hasRelay`/`hasPvc` guards |
 | Payment intent | `claimPaymentIntent`, `completeEntitlement`, `recoverInterruptedOperations` | `intent`, `intentEpoch`, `settledTo`, `charges`; a claim is reclaimable only from an older controller epoch |
 | Ledger and refunds | `payment_ledger`, `RefundService` | `charges` (one row per key), `refund` in `none -> pending -> refunded`, set only for a terminal session that was never READY |
-| Operation slot | `claimOperation`, `finishOperation`, `recoverInterruptedOperations` | `slots` (controller gate) and `guest` (the guest's own gate), keyed by request id |
+| Operation slot | `claimOperation`, `finishOperation` | `slots` (controller gate) and `guest` (the guest's own gate), keyed by request id; `slotEpoch` is the epoch the gate was claimed in |
+| Execution-epoch fence | `recoverInterruptedOperations`, `listFencedSessions`, `clearFencedGate`, `OperationFence.reconcile`, `guest/supervisor.go` `admitEpoch`/`publishStatus` | `execEpoch`, `fence`, `fenceReq`, `guestStatus`, `guestEpoch`, `admittedEpoch`, `relayPending`: recovery bumps the epoch and holds the gate; only `FenceRelease` clears it, on an idle/disconnected guest; a frame below the guest high-water is rejected |
 | Capacity reservation | `admit`, `attachToSession`, `resume`, `beginRelease`, `confirmRelease` | `reservations` over `NONE/ATTACHED/ALLOCATED/SUSPENDED/RELEASING/RELEASED`, plus `usedCompute` |
-| Provisioning | `Provisioning.provision`, `deletePod`, PVC lifecycle | `pod` (recorded instance), `creating` (created by Kubernetes, not yet recorded), `pvc`, `relay` |
-| Faults | control-plane fault harness | `CrashRestart` bumps `epoch`; `RelayLost` fails one session closed; `ProvisioningTimeout`; client retries are ordinary re-enabled actions |
+| Provisioning | `Provisioning.provision`, `deletePod`, PVC lifecycle | `pod` (recorded instance), `creating` (created by Kubernetes, not yet recorded), `pvc`, `relay`, `guestConnected` |
+| Faults | control-plane fault harness | `CrashRestart` bumps `epoch` and forces startup recovery; `RelayLost` fails one session closed; `GuestDisconnect` drops the relay link without failing the session; `ProvisioningTimeout`; client retries are ordinary re-enabled actions |
 
-Two modelling choices are worth calling out because they are what make the
+Three modelling choices are worth calling out because they are what make the
 interesting traces reachable:
 
 - A Pod create and the session-row update that names it are separate steps, so
@@ -70,6 +73,11 @@ interesting traces reachable:
 - `BeginRelease` moves `ALLOCATED` (and `SUSPENDED`) rows to `RELEASING`, and
   `usedCompute` counts only `ATTACHED` and `ALLOCATED`. See the note on
   `holdsCompute` under [Findings](#findings).
+- A "stale frame" is a frame whose epoch is below the guest's own high-water
+  mark (`guestEpoch`), which is exactly what `admitEpoch` compares. A frame at
+  or above the high-water is not stale to the guest; it may be the fenced
+  request that was forwarded before the crash. See
+  [Findings](#findings) for the one window this leaves open.
 
 Time is not modeled. Hold expiry, lease expiry and suspended expiry are
 nondeterministic environment steps, which is the strongest schedule (any
@@ -79,11 +87,12 @@ need.
 ## Invariants
 
 Each name below is checked in both good configs unless marked otherwise.
-`I16`-`I18` are temporal and are checked in `SandboxSession.cfg`; the
+`I19`-`I21` are temporal and are checked in `SandboxSession.cfg`; the
 capacity config is safety-only because fairness makes its graph much larger.
-The main config uses a single request id, so the slot invariants (`I4`, `I5`)
-are exercised non-vacuously by `SandboxSessionTight.cfg` (two request ids) and
-by the `SlotRace` variant.
+The main config uses a single request id and one session, so the slot and fence
+invariants are exercised non-vacuously by `SandboxSessionTight.cfg` (two
+sessions, two request ids, two restarts) and by the `SlotRace`, `FenceRelease`
+and `StaleEpoch` variants.
 
 | ID | Name | Meaning | Why it matters |
 |---|---|---|---|
@@ -94,25 +103,30 @@ by the `SlotRace` variant.
 | I3 | `OneSessionPerPayment` | Two sessions cannot share a payment key. | A retry with a different session id cannot mint a second entitlement. |
 | I4 | `SingleActiveOperation` | At most one controller slot per session. | The single-operation contract; `claimOperation` enforces it under `BEGIN IMMEDIATE`. |
 | I5 | `SingleGuestOperation` | At most one command in flight at the guest. | The guest's own gate still holds after a restart abandons a request whose command is running. |
-| I6 | `NoSlotAfterTerminal` | Terminal sessions have no slot or in-flight command. | A dead session cannot hold the gate. |
+| I5b | `GuestRunsGateHeldRequest` | Any command at the guest is a request the controller gate still names. | A stale or rejected frame cannot take the guest slot without a gate; a fenced request remains named until the fence releases. |
+| I5c | `StaleFrameNeverStarts` | An active guest command carries an epoch at least as high as the guest's high-water mark. | `admitEpoch` rejects a frame from an older generation below the guest's high-water; this is what `StaleEpoch` falsifies. |
+| I6 | `NoSlotAfterTerminal` | Terminal sessions have no slot, in-flight command or held fence. | A dead session cannot hold the gate. |
 | I7 | `NoOrphanedWorkloadAfterTerminal` | Terminal sessions have no Pod (recorded or not), no PVC and no relay entry. | No orphaned Pod/PVC after a terminal state. |
 | I8 | `AtMostOnePod` | A session owns at most one Pod instance. | The adopt-don't-recreate window cannot leave a duplicate. |
 | I9 | `NoCapacityOverReservation` | Admitted rows (`ATTACHED` + `ALLOCATED`) never exceed `NodeCapacity`. | No capacity over-reservation, including the crash window before entitlement. |
 | I9b | `ReleasingAfterPodGone` | `RELEASING` implies the session row names no Pod. | Holding capacity during release is conservative, not a live-Pod leak. |
 | I10 | `TerminalDoesNotHoldCompute` | A terminal session's reservation is `RELEASING` or `RELEASED`. | Compute is not still sold to a destroyed session. |
 | I11 | `ReadyImpliesPodAndRelay` | `READY`/`ACTIVE`/`SUSPENDING` imply a recorded Pod and a relay entry. | The `guest_ready` invariant in the transition table. |
-| I12 | `SuspendedImpliesCheckpoint` | `SUSPENDED` implies a PVC, no Pod and no relay. | A suspended session can actually be resumed. |
+| I12 | `SuspendedImpliesCheckpoint` | `SUSPENDED` implies a PVC, no Pod, no relay and no connected guest. | A suspended session can actually be resumed. |
 | I13 | `ReservationBoundToPayment` | A live reservation is bound to a payment key. | Reservations cannot be orphaned from the money that paid for them. |
 | I14 | `RefundOnlyWhenNoService` | A refund exists only for a terminal session that was never READY. | A delivered session is never refunded. |
 | I15 | `NoEntitlementWithoutPayment` | A session row that exists has a payment key. | Settlement and entitlement stay joined. |
-| I16 | `PaidSessionProgress` | Every settled payment eventually reaches a READY session or gets a refund obligation. | No paid session stuck before READY, even across crash/retry. |
-| I17 | `TerminalReleasesCapacity` | A terminal session's reservation eventually reaches `RELEASED`. | Capacity comes back after the Pod is observed gone. |
-| I18 | `InterruptedSlotClears` | A slot claimed in an older epoch is eventually cleared. | The restart recovery that used to leave a paid session `busy` forever. |
+| I16 | `FenceHoldsTheGate` | A held fence names exactly the request that still holds the gate. | Recovery cannot quietly replace the fenced request. |
+| I17 | `NoNewCommandOverlapsFence` | While a fence is held, the only command in flight at the guest is the fenced request. | A new command can never overlap the old one, even across recovery. |
+| I18 | `NoPrematureFenceRelease` | A released fence's request is not active at the guest. | `OperationFence` never clears the gate while the old command still runs; this is what `FenceRelease` falsifies. |
+| I19 | `PaidSessionProgress` | Every settled payment eventually reaches a READY session or gets a refund obligation. | No paid session stuck before READY, even across crash/retry. |
+| I20 | `TerminalReleasesCapacity` | A terminal session's reservation eventually reaches `RELEASED`. | Capacity comes back after the Pod is observed gone. |
+| I21 | `FencedGateClears` | A held fence eventually clears once the guest reports idle or is disconnected. | The gate does not stay closed forever after the guest is done; a connected guest that never reported status is deliberately outside this obligation. |
 
-`I16`-`I18` are checked under weak fairness of the controller actions. Fairness
-is split into `ProvisionFairness`, `CleanupFairness`, `ReleaseFairness`,
-`OperationFairness` and `RefundFairness` so a broken variant can keep the
-obligations of the actions it still has.
+`I19`-`I21` are checked under weak fairness of the controller actions. Fairness
+is split into `ProvisionFairness`, `SuspendFairness`, `CleanupFairness`,
+`ReleaseFairness`, `OperationFairness`, `RecoveryFairness` and `RefundFairness`
+so a broken variant can keep the obligations of the actions it still has.
 
 ## Broken variants
 
@@ -129,6 +143,8 @@ single property.
 | `DoubleCharge` | Payment row and entitlement are written in separate transactions and the payment insert has no unique key. | `NoDoubleCharge` | 5 states |
 | `CapacityRace` | Admission counts only `ALLOCATED` and ignores the `ATTACHED` crash window. | `NoCapacityOverReservation` | 5 states |
 | `OrphanPod` | `Finalize` runs without observing Pod/PVC/relay cleanup. | `NoOrphanedWorkloadAfterTerminal` | 7 states |
+| `FenceRelease` | `OperationFence` clears a recovery fence without the guest's idle status or an empty relay pending set. | `NoPrematureFenceRelease` | 13 states |
+| `StaleEpoch` | `admitEpoch` accepts a frame whose epoch is below the guest's high-water mark. | `StaleFrameNeverStarts` | 17 states |
 | `NoRefund` | The refund path is removed (and its fairness with it). | `PaidSessionProgress` | liveness |
 | `NoRelease` | The reaper never confirms a release (and its fairness with it). | `TerminalReleasesCapacity` | liveness |
 
@@ -158,6 +174,32 @@ longer admits the bug) or if it is rejected by an unexpected invariant.
   `completeEntitlement` relies on the unique payment key). `DoubleCharge`
   removes both because removing either one alone leaves the model correct -
   which is the point: the invariant is doing real work only when both are gone.
+- **"Stale" is relative to the guest's high-water mark, not the session
+  epoch.** `admitEpoch` rejects `frame.epoch < s.epoch`; it does not compare
+  the frame to `sessions.exec_epoch`. After a recovery bumps `exec_epoch` from
+  1 to 2, a frame from the previous generation that the guest has never seen
+  (high-water 0 or 1) is still admitted. The controller gate stays fenced and
+  `OperationFence` waits for that old command to finish, so no new command
+  overlaps it, but the old command can still start after recovery. That is
+  consistent with `outcome_unknown` (the request may have run), and the model
+  encodes the rejection contract the guest actually implements. Closing the
+  window completely would need the recovery epoch to reach the guest before
+  any relay frame; the model would then compare the frame against `execEpoch`
+  instead of `guestEpoch`.
+- **The guest's response must reach the relay before its idle status.** The
+  first version of the fence model let `GuestDone` (idle status) happen before
+  `GuestResponse` (relay pending cleared). TLC found a liveness counterexample:
+  the gate was fenced forever because `relayPending` could no longer be
+  cleared once the guest slot was empty. `guest/supervisor.go` sends the reply
+  before the deferred status publish, so the model now requires
+  `relayPending = 0` in `GuestDone`. The fix is the ordering, not an extra
+  release path.
+- **Suspension is a fair quiescence step.** A fenced session may be
+  `SuspendRequest`ed (the transition table allows it from `ACTIVE`). Without
+  fairness on `GuestStopped`, TLC found a cycle stuck in `SUSPENDING` with a
+  held fence. `SuspendFairness` makes the guest-stopped observation happen; it
+  abandons the fence with the guest (`fence = "none"`) rather than pretending
+  `OperationFence` released it.
 
 No counterexample against the good specification is currently known. If
 `make verify-model` ever reports one, file it as an issue with the TLC trace
@@ -184,7 +226,9 @@ The spec is organised to mirror the code:
 |---|---|
 | `ClaimIntent`, `ReserveCapacity`, `ChargeSession` | `control-api/payments.ts`, `store.ts` |
 | `Provision` .. `GuestStopped`, `ResumeRequest` | `shared/src/domain/session.ts`, `lifecycle.ts` |
-| `StartOp`, `DispatchOp`, `GuestDone`, `FinishOp`, `RecoverInterruptedOp` | `store.ts`, `relay/` |
+| `StartOp`, `DispatchOp`, `GuestResponse`, `GuestDone`, `FinishOp` | `store.ts`, `relay/` |
+| `GuestConnect`, `GuestDisconnect`, `GuestReady` | `relay/registry.ts`, `relay/ws.ts` |
+| `RecoverInterruptedOps`, `FenceRelease`, `RejectStaleFrame` | `store.ts` (`recoverInterruptedOperations`, `clearFencedGate`), `operation-fence.ts`, `guest/supervisor.go` (`admitEpoch`) |
 | `RequestDestroy`, `ExpireLease`, `RelayLost`, `ProvisioningTimeout` | `reconciler.ts`, `termination.ts` |
 | `KillGuest`, `DeleteWorkspace`, `PurgeRelay`, `BeginRelease`, `ConfirmRelease`, `Finalize` | `termination.ts`, `capacity/reservations.ts` |
 

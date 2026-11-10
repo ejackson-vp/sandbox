@@ -1,19 +1,26 @@
 ------------------------------ MODULE SandboxSession ------------------------------
 (*
  * Executable model of the sandbox control plane: session lifecycle, payment
- * intent, the single-operation slot and capacity reservation, under client
- * retries, controller crash/restart and relay loss.
+ * intent, the single-operation slot, capacity reservation and the
+ * execution-epoch fence, under client retries, controller crash/restart and
+ * relay loss.
  *
  * This is not a product specification. It is a bounded, deliberately abstract
  * model whose job is to check temporal invariants that example- and
  * property-based tests can only sample. Correspondence to the implementation:
  *
  *   shared/src/domain/session.ts              SOURCE_STATES, transition()
+ *   shared/src/protocol/relay.ts              RelayRequestMessage.epoch,
+ *                                             GuestStatusMessage
+ *   guest/supervisor.go                       admitEpoch, publishStatus,
+ *                                             the single guest slot
  *   controller/src/store.ts                   claimPaymentIntent,
  *                                             completeEntitlement,
  *                                             claimOperation, finishOperation,
  *                                             recoverInterruptedOperations,
+ *                                             listFencedSessions, clearFencedGate,
  *                                             finalizeTermination
+ *   controller/src/operation-fence.ts         OperationFence.reconcile
  *   controller/src/capacity/reservations.ts   admit, attachToSession, resume,
  *                                             beginRelease, confirmRelease
  *   controller/src/termination.ts             cleanup ordering before finalize
@@ -21,8 +28,20 @@
  *
  * Deliberate abstraction: there is one controller process (the store is the
  * single writer), so a crash is an epoch bump rather than a lost process; the
- * relay is a boolean; time is not modelled, so hold expiry and lease expiry
- * are nondeterministic environment steps.
+ * relay is a boolean plus a pending-frame count; time is not modelled, so hold
+ * expiry and lease expiry are nondeterministic environment steps.
+ *
+ * The fence (#19) is modelled as state, not as a call into OperationFence:
+ *
+ *   execEpoch      sessions.exec_epoch. Bumped by recoverInterruptedOperations
+ *                  for a session whose gate is closed by an interrupted request.
+ *   slotEpoch      the epoch of the request holding the gate. slotEpoch <
+ *                  execEpoch means the gate is fenced by an older generation.
+ *   guestStatus    the guest's last status frame: "unknown" (no report since
+ *                  the guest connected), "idle", or a request id.
+ *   guestEpoch     the guest's execution-epoch high-water mark (admitEpoch).
+ *   fence          "none" -> "held" (recovery) -> "released" (OperationFence).
+ *                  Only FenceRelease moves a held fence to released.
  *)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -59,32 +78,58 @@ ComputingRStates == {"ATTACHED", "ALLOCATED", "RELEASING"}
 
 Finals == {"NONE", "DESTROYED", "EXPIRED", "FAILED"}
 
+\* Session execution epochs. The store's exec_epoch starts at 1 and is bumped
+\* once per restart for sessions that had an interrupted request, so a bounded
+\* run with MaxRestarts crashes never needs more than MaxRestarts + 1 values.
+Epochs == 1 .. MaxRestarts + 1
+
+\* A guest's high-water mark starts at 0 ("no epoch observed") and can reach
+\* the largest session epoch.
+HighWater == 0 .. MaxRestarts + 1
+
+\* The guest's own view of its single execution slot.
+GuestStatuses == {"unknown", "idle"} \cup Requests
+
+\* Only OperationFence clears a held fence. Termination abandons it ("none")
+\* instead, because the guest is killed with the session.
+FenceStates == {"none", "held", "released"}
+
 VARIABLES
-  created,      \* SUBSET Sessions                  session rows that exist
-  state,        \* [Sessions -> States]
-  payOf,        \* [Sessions -> Payments \cup {"none"}]
-  everReady,    \* [Sessions -> BOOLEAN]            has the session ever been READY
-  intent,       \* [Payments -> {"none", "claimed", "settled"}]
-  intentEpoch,  \* [Payments -> 0..MaxRestarts]     epoch of the claim, for stale reclaim
-  settledTo,    \* [Payments -> Sessions \cup {"none"}]
-  charges,      \* [Payments -> 0..1]               payment rows written
-  refund,       \* [Payments -> {"none", "pending", "refunded"}]
-  reservations, \* [Sessions -> RStates]
-  resPayment,   \* [Sessions -> Payments \cup {"none"}]
-  pod,          \* [Sessions -> PodIds \cup {"none"}]  Pod instance recorded on the session row
-  creating,     \* [Sessions -> SUBSET PodIds]         Pod instances created, not yet recorded
-  pvc,          \* [Sessions -> BOOLEAN]
-  relay,        \* [Sessions -> BOOLEAN]
-  slots,        \* [Sessions -> SUBSET Requests]       controller-side operation gate
-  guest,        \* [Sessions -> SUBSET Requests]       guest-side in-flight command
-  slotEpoch,    \* [Sessions -> 0..MaxRestarts]        epoch the slot was claimed in
-  final,        \* [Sessions -> Finals]                terminal state chosen at termination
-  epoch         \* 0..MaxRestarts                      controller generation
+  created,        \* SUBSET Sessions                  session rows that exist
+  state,          \* [Sessions -> States]
+  payOf,          \* [Sessions -> Payments \cup {"none"}]
+  everReady,      \* [Sessions -> BOOLEAN]            has the session ever been READY
+  intent,         \* [Payments -> {"none", "claimed", "settled"}]
+  intentEpoch,    \* [Payments -> 0..MaxRestarts]     epoch of the claim, for stale reclaim
+  settledTo,      \* [Payments -> Sessions \cup {"none"}]
+  charges,        \* [Payments -> 0..1]               payment rows written
+  refund,         \* [Payments -> {"none", "pending", "refunded"}]
+  reservations,   \* [Sessions -> RStates]
+  resPayment,     \* [Sessions -> Payments \cup {"none"}]
+  pod,            \* [Sessions -> PodIds \cup {"none"}]  Pod instance recorded on the session row
+  creating,       \* [Sessions -> SUBSET PodIds]         Pod instances created, not yet recorded
+  pvc,            \* [Sessions -> BOOLEAN]
+  relay,          \* [Sessions -> BOOLEAN]
+  slots,          \* [Sessions -> SUBSET Requests]       controller-side operation gate
+  guest,          \* [Sessions -> SUBSET Requests]       guest-side in-flight command
+  slotEpoch,      \* [Sessions -> Epochs]                epoch the gate was claimed in
+  final,          \* [Sessions -> Finals]                terminal state chosen at termination
+  epoch,          \* 0..MaxRestarts                      controller generation
+  execEpoch,      \* [Sessions -> Epochs]                sessions.exec_epoch
+  guestConnected, \* [Sessions -> BOOLEAN]               relay reports a live guest socket
+  guestStatus,    \* [Sessions -> GuestStatuses]         guest's last status frame
+  guestEpoch,     \* [Sessions -> HighWater]             guest epoch high-water mark
+  admittedEpoch,  \* [Sessions -> HighWater]             epoch of the active guest command
+  relayPending,   \* [Sessions -> 0..1]                  frames awaiting a guest response
+  fence,          \* [Sessions -> FenceStates]
+  fenceReq,       \* [Sessions -> Requests \cup {"none"}] request the fence holds
+  recovered       \* BOOLEAN                             startup recovery completed
 
 vars ==
   <<created, state, payOf, everReady, intent, intentEpoch, settledTo, charges,
     refund, reservations, resPayment, pod, creating, pvc, relay, slots, guest,
-    slotEpoch, final, epoch>>
+    slotEpoch, final, epoch, execEpoch, guestConnected, guestStatus, guestEpoch,
+    admittedEpoch, relayPending, fence, fenceReq, recovered>>
 
 (* ------------------------------------------------------------------ *)
 (* Derived predicates                                                  *)
@@ -111,6 +156,11 @@ admittedCompute ==
 
 usedCompute == Cardinality(admittedCompute)
 
+\* A gate whose request belongs to a controller generation older than the
+\* session's current execution epoch. recoverInterruptedOperations creates it;
+\* only the guest's status (or its disconnect) lets OperationFence clear it.
+fenced(s) == fence[s] = "held"
+
 (* ------------------------------------------------------------------ *)
 (* Initial state                                                       *)
 (* ------------------------------------------------------------------ *)
@@ -133,9 +183,18 @@ Init ==
   /\ relay = [s \in Sessions |-> FALSE]
   /\ slots = [s \in Sessions |-> {}]
   /\ guest = [s \in Sessions |-> {}]
-  /\ slotEpoch = [s \in Sessions |-> 0]
+  /\ slotEpoch = [s \in Sessions |-> 1]
   /\ final = [s \in Sessions |-> "NONE"]
   /\ epoch = 0
+  /\ execEpoch = [s \in Sessions |-> 1]
+  /\ guestConnected = [s \in Sessions |-> FALSE]
+  /\ guestStatus = [s \in Sessions |-> "unknown"]
+  /\ guestEpoch = [s \in Sessions |-> 0]
+  /\ admittedEpoch = [s \in Sessions |-> 0]
+  /\ relayPending = [s \in Sessions |-> 0]
+  /\ fence = [s \in Sessions |-> "none"]
+  /\ fenceReq = [s \in Sessions |-> "none"]
+  /\ recovered = TRUE
 
 (* ------------------------------------------------------------------ *)
 (* Payment intent: claim, stale reclaim, settle, refund                *)
@@ -151,7 +210,9 @@ ClaimIntent(p) ==
   /\ intentEpoch' = [intentEpoch EXCEPT ![p] = epoch]
   /\ UNCHANGED <<created, state, payOf, everReady, settledTo, charges, refund,
                  reservations, resPayment, pod, creating, pvc, relay, slots,
-                 guest, slotEpoch, final, epoch>>
+                 guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 \* capacity.admit for a payment: a provisional hold, taken before settlement.
 \* One reservation per payment key; capacity is checked and written in the
@@ -166,7 +227,9 @@ ReserveCapacity(s, p) ==
   /\ resPayment' = [resPayment EXCEPT ![s] = p]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, pod, creating, pvc, relay, slots, guest,
-                 slotEpoch, final, epoch>>
+                 slotEpoch, final, epoch, execEpoch, guestConnected, guestStatus,
+                 guestEpoch, admittedEpoch, relayPending, fence, fenceReq,
+                 recovered>>
 
 \* reservations.ts attachToSession: a crash between attach and entitlement
 \* leaves a reservation under a session id that was never durable, so the same
@@ -182,7 +245,9 @@ RebindReservation(s, t, p) ==
   /\ resPayment' = [resPayment EXCEPT ![t] = "none", ![s] = p]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, pod, creating, pvc, relay, slots, guest,
-                 slotEpoch, final, epoch>>
+                 slotEpoch, final, epoch, execEpoch, guestConnected, guestStatus,
+                 guestEpoch, admittedEpoch, relayPending, fence, fenceReq,
+                 recovered>>
 
 \* A reservation whose payment was rejected is released without a session.
 AbandonReservation(s) ==
@@ -192,7 +257,9 @@ AbandonReservation(s) ==
   /\ resPayment' = [resPayment EXCEPT ![s] = "none"]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, pod, creating, pvc, relay, slots, guest,
-                 slotEpoch, final, epoch>>
+                 slotEpoch, final, epoch, execEpoch, guestConnected, guestStatus,
+                 guestEpoch, admittedEpoch, relayPending, fence, fenceReq,
+                 recovered>>
 
 \* store.completeEntitlement: payment row, ledger row, session row and intent
 \* settle commit together. The UNIQUE payment key is the `charges[p] = 0`
@@ -212,7 +279,9 @@ ChargeSession(s, p) ==
   /\ intent' = [intent EXCEPT ![p] = "settled"]
   /\ reservations' = [reservations EXCEPT ![s] = "ALLOCATED"]
   /\ UNCHANGED <<everReady, intentEpoch, refund, resPayment, pod, creating, pvc,
-                 relay, slots, guest, slotEpoch, final, epoch>>
+                 relay, slots, guest, slotEpoch, final, epoch, execEpoch,
+                 guestConnected, guestStatus, guestEpoch, admittedEpoch,
+                 relayPending, fence, fenceReq, recovered>>
 
 \* refunds.ts: a settled session that never reached READY gets a refund
 \* obligation; mock mode settles it immediately, real modes wait for an
@@ -227,14 +296,18 @@ MarkRefundPending(p) ==
   /\ refund' = [refund EXCEPT ![p] = "pending"]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, reservations, resPayment, pod, creating, pvc, relay,
-                 slots, guest, slotEpoch, final, epoch>>
+                 slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 MarkRefunded(p) ==
   /\ refund[p] = "pending"
   /\ refund' = [refund EXCEPT ![p] = "refunded"]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, reservations, resPayment, pod, creating, pvc, relay,
-                 slots, guest, slotEpoch, final, epoch>>
+                 slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 (* ------------------------------------------------------------------ *)
 (* Session lifecycle                                                   *)
@@ -250,7 +323,9 @@ Provision(s) ==
   /\ pvc' = [pvc EXCEPT ![s] = TRUE]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, slots, guest,
-                 slotEpoch, final, epoch>>
+                 slotEpoch, final, epoch, execEpoch, guestConnected, guestStatus,
+                 guestEpoch, admittedEpoch, relayPending, fence, fenceReq,
+                 recovered>>
 
 \* The Kubernetes create succeeds. It is a separate step from the session row
 \* update, so a crash here leaves an unrecorded Pod: `creating` is non-empty and
@@ -264,7 +339,9 @@ CreatePod(s) ==
        creating' = [creating EXCEPT ![s] = {n}]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pod, pvc, relay,
-                 slots, guest, slotEpoch, final, epoch>>
+                 slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 \* Persist the Pod name, or adopt the labelled Pod after a restart: either way
 \* the instance moves from `creating` to `pod`.
@@ -276,19 +353,28 @@ RecordPod(s) ==
        /\ creating' = [creating EXCEPT ![s] = creating[s] \ {n}]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pvc, relay, slots,
-                 guest, slotEpoch, final, epoch>>
+                 guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 \* guest_ready requires a Pod and a relay entry; the transition table refuses
-\* READY otherwise.
+\* READY otherwise. The guest publishes its status on hello, so the relay now
+\* has a status even when the slot is empty.
 GuestReady(s) ==
   /\ state[s] \in {"PROVISIONING", "RESUMING"}
   /\ pod[s] # "none"
   /\ relay[s]
   /\ state' = [state EXCEPT ![s] = "READY"]
   /\ everReady' = [everReady EXCEPT ![s] = TRUE]
+  /\ guestConnected' = [guestConnected EXCEPT ![s] = TRUE]
+  /\ guestStatus' = [guestStatus EXCEPT ![s] = "idle"]
+  /\ guestEpoch' = [guestEpoch EXCEPT ![s] = 0]
+  /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
+  /\ relayPending' = [relayPending EXCEPT ![s] = 0]
   /\ UNCHANGED <<created, payOf, intent, intentEpoch, settledTo, charges, refund,
                  reservations, resPayment, pod, creating, pvc, relay, slots,
-                 guest, slotEpoch, final, epoch>>
+                 guest, slotEpoch, final, epoch, execEpoch, fence, fenceReq,
+                 recovered>>
 
 \* suspend_requested: stop the guest; the Pod and relay are cleaned up when the
 \* guest reports stopped, not before.
@@ -298,11 +384,15 @@ SuspendRequest(s) ==
   /\ reservations[s] = "ALLOCATED"
   /\ state' = [state EXCEPT ![s] = "SUSPENDING"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
-                 refund, reservations, resPayment, pod, creating, pvc, relay,
-                 slots, guest, slotEpoch, final, epoch>>
+                 refund, reservations, resPayment, pod, creating, pvc, relay, slots,
+                 guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 \* guest_stopped: delete the Pod, purge the relay, keep the workspace, release
-\* compute but keep storage.
+\* compute but keep storage. The guest process dies, so any command and any
+\* fence die with it: termination/suspension abandons the fence ("none") rather
+\* than claiming OperationFence released it.
 GuestStopped(s) ==
   /\ state[s] = "SUSPENDING"
   /\ state' = [state EXCEPT ![s] = "SUSPENDED"]
@@ -312,8 +402,16 @@ GuestStopped(s) ==
   /\ reservations' = [reservations EXCEPT ![s] = "SUSPENDED"]
   /\ slots' = [slots EXCEPT ![s] = {}]
   /\ guest' = [guest EXCEPT ![s] = {}]
+  /\ guestConnected' = [guestConnected EXCEPT ![s] = FALSE]
+  /\ guestStatus' = [guestStatus EXCEPT ![s] = "unknown"]
+  /\ guestEpoch' = [guestEpoch EXCEPT ![s] = 0]
+  /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
+  /\ relayPending' = [relayPending EXCEPT ![s] = 0]
+  /\ fence' = [fence EXCEPT ![s] = "none"]
+  /\ fenceReq' = [fenceReq EXCEPT ![s] = "none"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
-                 refund, resPayment, pvc, slotEpoch, final, epoch>>
+                 refund, resPayment, pvc, slotEpoch, final, epoch, execEpoch,
+                 recovered>>
 
 \* resume_requested: admission happens before the Pod is created; the session
 \* stays SUSPENDED (and holds no compute) until it is admitted.
@@ -327,7 +425,45 @@ ResumeRequest(s) ==
   /\ relay' = [relay EXCEPT ![s] = TRUE]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, resPayment, pod, creating, pvc, slots, guest, slotEpoch,
-                 final, epoch>>
+                 final, epoch, execEpoch, guestConnected, guestStatus, guestEpoch,
+                 admittedEpoch, relayPending, fence, fenceReq, recovered>>
+
+(* ------------------------------------------------------------------ *)
+(* Guest connection and status                                         *)
+(* ------------------------------------------------------------------ *)
+
+\* A guest (re)connects to an existing relay registration. A fresh supervisor
+\* starts with no execution epoch and publishes an idle status on hello.
+GuestConnect(s) ==
+  /\ state[s] \in ReadyStates
+  /\ relay[s]
+  /\ ~guestConnected[s]
+  /\ guest[s] = {}
+  /\ guestConnected' = [guestConnected EXCEPT ![s] = TRUE]
+  /\ guestStatus' = [guestStatus EXCEPT ![s] = "idle"]
+  /\ guestEpoch' = [guestEpoch EXCEPT ![s] = 0]
+  /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
+  /\ relayPending' = [relayPending EXCEPT ![s] = 0]
+  /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
+                 charges, refund, reservations, resPayment, pod, creating, pvc,
+                 relay, slots, guest, slotEpoch, final, epoch, execEpoch, fence,
+                 fenceReq, recovered>>
+
+\* The relay link drops. The supervisor exits when its link is gone, so the
+\* command cannot still be running; the relay's detach clears its pending set.
+\* This is the "no guest is connected" branch of OperationFence.
+GuestDisconnect(s) ==
+  /\ guestConnected[s]
+  /\ guestConnected' = [guestConnected EXCEPT ![s] = FALSE]
+  /\ guest' = [guest EXCEPT ![s] = {}]
+  /\ guestStatus' = [guestStatus EXCEPT ![s] = "unknown"]
+  /\ guestEpoch' = [guestEpoch EXCEPT ![s] = 0]
+  /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
+  /\ relayPending' = [relayPending EXCEPT ![s] = 0]
+  /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
+                 charges, refund, reservations, resPayment, pod, creating, pvc,
+                 relay, slots, slotEpoch, final, epoch, execEpoch, fence, fenceReq,
+                 recovered>>
 
 (* ------------------------------------------------------------------ *)
 (* Termination, cleanup, release                                       *)
@@ -341,7 +477,9 @@ RequestDestroy(s) ==
   /\ final' = [final EXCEPT ![s] = "DESTROYED"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
-                 slots, guest, slotEpoch, epoch>>
+                 slots, guest, slotEpoch, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 \* lease_expired, max lifetime or suspended expiry.
 ExpireLease(s) ==
@@ -350,7 +488,9 @@ ExpireLease(s) ==
   /\ final' = [final EXCEPT ![s] = "EXPIRED"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
-                 slots, guest, slotEpoch, epoch>>
+                 slots, guest, slotEpoch, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 \* Relay loss fails the session closed: in-flight operations are abandoned, the
 \* payment is kept (service was delivered), and the workload is torn down.
@@ -361,10 +501,17 @@ RelayLost(s) ==
   /\ relay' = [relay EXCEPT ![s] = FALSE]
   /\ slots' = [slots EXCEPT ![s] = {}]
   /\ guest' = [guest EXCEPT ![s] = {}]
+  /\ guestConnected' = [guestConnected EXCEPT ![s] = FALSE]
+  /\ guestStatus' = [guestStatus EXCEPT ![s] = "unknown"]
+  /\ guestEpoch' = [guestEpoch EXCEPT ![s] = 0]
+  /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
+  /\ relayPending' = [relayPending EXCEPT ![s] = 0]
+  /\ fence' = [fence EXCEPT ![s] = "none"]
+  /\ fenceReq' = [fenceReq EXCEPT ![s] = "none"]
   /\ final' = [final EXCEPT ![s] = "FAILED"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, slotEpoch,
-                 epoch>>
+                 epoch, execEpoch, recovered>>
 
 \* Provisioning never completes (image pull, unschedulable, admission).
 ProvisioningTimeout(s) ==
@@ -373,7 +520,9 @@ ProvisioningTimeout(s) ==
   /\ final' = [final EXCEPT ![s] = "FAILED"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
-                 slots, guest, slotEpoch, epoch>>
+                 slots, guest, slotEpoch, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 \* Delete the session's Pods. Deletion is by name for the recorded Pod and by
 \* label for the crash-window instances, so both sets are cleared.
@@ -384,9 +533,16 @@ KillGuest(s) ==
   /\ creating' = [creating EXCEPT ![s] = {}]
   /\ slots' = [slots EXCEPT ![s] = {}]
   /\ guest' = [guest EXCEPT ![s] = {}]
+  /\ guestConnected' = [guestConnected EXCEPT ![s] = FALSE]
+  /\ guestStatus' = [guestStatus EXCEPT ![s] = "unknown"]
+  /\ guestEpoch' = [guestEpoch EXCEPT ![s] = 0]
+  /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
+  /\ relayPending' = [relayPending EXCEPT ![s] = 0]
+  /\ fence' = [fence EXCEPT ![s] = "none"]
+  /\ fenceReq' = [fenceReq EXCEPT ![s] = "none"]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pvc, relay, slotEpoch,
-                 final, epoch>>
+                 final, epoch, execEpoch, recovered>>
 
 DeleteWorkspace(s) ==
   /\ state[s] = "TERMINATING"
@@ -394,7 +550,9 @@ DeleteWorkspace(s) ==
   /\ pvc' = [pvc EXCEPT ![s] = FALSE]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pod, creating, relay,
-                 slots, guest, slotEpoch, final, epoch>>
+                 slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 PurgeRelay(s) ==
   /\ state[s] = "TERMINATING"
@@ -402,7 +560,9 @@ PurgeRelay(s) ==
   /\ relay' = [relay EXCEPT ![s] = FALSE]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pod, creating, pvc,
-                 slots, guest, slotEpoch, final, epoch>>
+                 slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 \* capacity.beginRelease: capacity moves to RELEASING, not to free, as soon as
 \* Pod deletion is requested. It is not returned until the Pod is gone.
@@ -413,7 +573,9 @@ BeginRelease(s) ==
   /\ reservations' = [reservations EXCEPT ![s] = "RELEASING"]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, resPayment, pod, creating, pvc, relay, slots,
-                 guest, slotEpoch, final, epoch>>
+                 guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 \* capacity.confirmRelease: the Pod is observed gone, so the capacity is free.
 \* Driven by the reservation row, not the session state: the reaper confirms a
@@ -424,90 +586,186 @@ ConfirmRelease(s) ==
   /\ resPayment' = [resPayment EXCEPT ![s] = "none"]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, pod, creating, pvc, relay, slots, guest,
-                 slotEpoch, final, epoch>>
+                 slotEpoch, final, epoch, execEpoch, guestConnected, guestStatus,
+                 guestEpoch, admittedEpoch, relayPending, fence, fenceReq,
+                 recovered>>
 
 \* The termination use case runs cleanup before finalizeTermination. Gating the
-\* write on the observed effects is the invariant this model is checking.
+\* write on the observed effects is the invariant this model is checking. A
+\* held fence is abandoned with the guest, so it must already be "none".
 Finalize(s) ==
   /\ state[s] = "TERMINATING"
   /\ podsAlive(s) = {}
   /\ ~pvc[s]
   /\ ~relay[s]
+  /\ ~guestConnected[s]
   /\ reservations[s] \in {"RELEASING", "RELEASED"}
   /\ slots[s] = {}
   /\ guest[s] = {}
+  /\ fence[s] = "none"
   /\ state' = [state EXCEPT ![s] = final[s]]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
-                 slots, guest, slotEpoch, final, epoch>>
+                 slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 (* ------------------------------------------------------------------ *)
-(* Operation slot                                                      *)
+(* Operation slot and the execution-epoch fence                        *)
 (* ------------------------------------------------------------------ *)
 
 \* store.claimOperation: the gate is checked and written atomically under
-\* BEGIN IMMEDIATE, keyed by request id for idempotency.
+\* BEGIN IMMEDIATE, keyed by request id for idempotency. A claim records the
+\* session's current execution epoch on the request and on the frame.
 StartOp(s, r) ==
+  /\ recovered
   /\ state[s] \in ReadyStates
   /\ reservations[s] = "ALLOCATED"
   /\ slots[s] = {}
+  /\ ~fenced(s)
   /\ r \notin slots[s]
   /\ slots' = [slots EXCEPT ![s] = {r}]
-  /\ slotEpoch' = [slotEpoch EXCEPT ![s] = epoch]
+  /\ slotEpoch' = [slotEpoch EXCEPT ![s] = execEpoch[s]]
   /\ state' = [state EXCEPT ![s] = "ACTIVE"]
+  /\ fence' = [fence EXCEPT ![s] = "none"]
+  /\ fenceReq' = [fenceReq EXCEPT ![s] = "none"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
-                 guest, final, epoch>>
+                 guest, final, epoch, execEpoch, guestConnected, guestStatus,
+                 guestEpoch, admittedEpoch, relayPending, recovered>>
 
 \* The relay forwards the command to the guest, which has its own single-slot
-\* gate. That gate is what stops overlapping work after a controller restart
-\* abandons a request whose command is still running.
+\* gate. A fenced request is never forwarded by the current controller: the
+\* old command, if it is still running, was forwarded before the crash. The
+\* frame carries the claim's epoch; the guest accepts it only when it is not
+\* below its own high-water mark (admitEpoch).
 DispatchOp(s, r) ==
+  /\ recovered
   /\ r \in slots[s]
   /\ guest[s] = {}
   /\ relay[s]
+  /\ guestConnected[s]
+  /\ relayPending[s] = 0
+  /\ ~fenced(s)
+  /\ slotEpoch[s] >= guestEpoch[s]
   /\ guest' = [guest EXCEPT ![s] = {r}]
+  /\ guestStatus' = [guestStatus EXCEPT ![s] = r]
+  /\ guestEpoch' = [guestEpoch EXCEPT ![s] = slotEpoch[s]]
+  /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = slotEpoch[s]]
+  /\ relayPending' = [relayPending EXCEPT ![s] = 1]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pod, creating, pvc,
-                 relay, slots, slotEpoch, final, epoch>>
+                 relay, slots, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 fence, fenceReq, recovered>>
 
+\* The guest replies; the relay records the response and drops the frame from
+\* its pending set. The guest's slot is released in GuestDone, and the fence
+\* requires both observations before it clears.
+GuestResponse(s, r) ==
+  /\ r \in guest[s]
+  /\ relayPending[s] = 1
+  /\ relayPending' = [relayPending EXCEPT ![s] = 0]
+  /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
+                 charges, refund, reservations, resPayment, pod, creating, pvc,
+                 relay, slots, guest, slotEpoch, final, epoch, execEpoch,
+                 guestConnected, guestStatus, guestEpoch, admittedEpoch, fence,
+                 fenceReq, recovered>>
+
+\* The guest releases its single slot and publishes an idle status. The response
+\* is sent before the idle status (the supervisor replies, then releases the
+\* slot in its defer), so the relay's pending frame is already gone here. That
+\* status is what lets OperationFence clear a held gate.
 GuestDone(s, r) ==
   /\ r \in guest[s]
+  /\ relayPending[s] = 0
   /\ guest' = [guest EXCEPT ![s] = {}]
+  /\ guestStatus' = [guestStatus EXCEPT ![s] = "idle"]
+  /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pod, creating, pvc,
-                 relay, slots, slotEpoch, final, epoch>>
+                 relay, slots, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestEpoch, relayPending, fence, fenceReq, recovered>>
 
-\* store.finishOperation: clears the gate and returns the session to READY. A
-\* finish cannot overtake the guest's own completion, so the command is never
-\* still in flight on the wire.
+\* store.finishOperation: clears the gate and returns the session to READY. It
+\* is the current controller's completion path, so it must not touch a gate
+\* held by a recovery fence: only FenceRelease may clear that one.
 FinishOp(s, r) ==
+  /\ recovered
   /\ r \in slots[s]
   /\ r \notin guest[s]
+  /\ ~fenced(s)
   /\ slots' = [slots EXCEPT ![s] = {}]
   /\ state' = [state EXCEPT ![s] = IF state[s] = "ACTIVE" THEN "READY" ELSE state[s]]
+  /\ fence' = [fence EXCEPT ![s] = "none"]
+  /\ fenceReq' = [fenceReq EXCEPT ![s] = "none"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
-                 guest, slotEpoch, final, epoch>>
+                 guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, recovered>>
 
-\* store.recoverInterruptedOperations at startup: a request claimed before the
-\* restart is abandoned and the gate is cleared, otherwise the paid session
-\* stays `busy` forever.
-RecoverInterruptedOp(s) ==
-  /\ slotEpoch[s] < epoch
-  /\ slots[s] # {}
+\* OperationFence.reconcile, the only action that releases a recovery fence.
+\* It requires the gate it is holding, no relay frame still awaiting a guest
+\* response, and either the guest's own idle status or no connected guest.
+\* A connected guest that has never reported status ("unknown") keeps the gate
+\* closed: failing closed is the contract.
+FenceRelease(s) ==
+  /\ recovered
+  /\ fenced(s)
+  /\ slots[s] = {fenceReq[s]}
+  /\ relayPending[s] = 0
+  /\ \/ ~guestConnected[s]
+     \/ /\ guestConnected[s]
+        /\ guestStatus[s] = "idle"
   /\ slots' = [slots EXCEPT ![s] = {}]
   /\ state' = [state EXCEPT ![s] = IF state[s] = "ACTIVE" THEN "READY" ELSE state[s]]
+  /\ fence' = [fence EXCEPT ![s] = "released"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
-                 guest, slotEpoch, final, epoch>>
+                 guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fenceReq,
+                 recovered>>
 
-CrashRestart ==
-  /\ epoch < MaxRestarts
-  /\ epoch' = epoch + 1
+\* store.recoverInterruptedOperations at startup: mark the pending request
+\* `outcome_unknown`, bump the session execution epoch, and leave the gate
+\* closed. The request holding the gate is now a fence, not a lost operation.
+\* Recovery is one transaction over all sessions, so it is a single step here.
+RecoverInterruptedOps ==
+  /\ ~recovered
+  /\ recovered' = TRUE
+  /\ execEpoch' = [s \in Sessions |->
+        IF slots[s] # {} THEN execEpoch[s] + 1 ELSE execEpoch[s]]
+  /\ fence' = [s \in Sessions |->
+        IF slots[s] # {} THEN "held" ELSE fence[s]]
+  /\ fenceReq' = [s \in Sessions |->
+        IF slots[s] # {} /\ fence[s] # "held"
+        THEN CHOOSE r \in slots[s] : TRUE
+        ELSE fenceReq[s]]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pod, creating, pvc,
-                 relay, slots, guest, slotEpoch, final>>
+                 relay, slots, guest, slotEpoch, final, epoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending>>
+
+\* A relay frame from an older controller generation, carrying an epoch below
+\* the guest's high-water mark. `admitEpoch` rejects it with `stale_epoch`
+\* before it can take the slot, so this action records no transition. The
+\* StaleEpoch variant removes the reject check; TLC then falsifies
+\* StaleFrameNeverStarts.
+RejectStaleFrame(s) ==
+  /\ guestConnected[s]
+  /\ guest[s] = {}
+  /\ \E e \in Epochs : e < guestEpoch[s] /\ e < execEpoch[s]
+  /\ UNCHANGED vars
+
+CrashRestart ==
+  /\ recovered
+  /\ epoch < MaxRestarts
+  /\ epoch' = epoch + 1
+  /\ recovered' = FALSE
+  /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
+                 charges, refund, reservations, resPayment, pod, creating, pvc,
+                 relay, slots, guest, slotEpoch, final, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq>>
 
 \* An idle tick. It exists so that quiescent states have a successor: TLC only
 \* reports a liveness violation along a cycle, so a sink state with no self-loop
@@ -539,6 +797,8 @@ ProvisionActions == \E s \in Sessions : Provision(s)
 
 PodActions == \E s \in Sessions : CreatePod(s) \/ RecordPod(s) \/ GuestReady(s)
 
+ConnectionActions == \E s \in Sessions : GuestConnect(s) \/ GuestDisconnect(s)
+
 SuspendActions ==
   \E s \in Sessions : SuspendRequest(s) \/ GuestStopped(s) \/ ResumeRequest(s)
 
@@ -557,11 +817,16 @@ LifecycleActions ==
   \/ CleanupActions \/ FinalizeActions \/ CrashRestart
 
 OperationActions ==
-  \/ \E s \in Sessions, r \in Requests : StartOp(s, r) \/ DispatchOp(s, r)
-                                          \/ GuestDone(s, r) \/ FinishOp(s, r)
-  \/ \E s \in Sessions : RecoverInterruptedOp(s)
+  \/ \E s \in Sessions, r \in Requests :
+       StartOp(s, r) \/ DispatchOp(s, r) \/ GuestResponse(s, r)
+       \/ GuestDone(s, r) \/ FinishOp(s, r)
+  \/ \E s \in Sessions : FenceRelease(s) \/ RejectStaleFrame(s)
 
-Next == PaymentActions \/ LifecycleActions \/ OperationActions \/ Stutter
+RecoveryActions == RecoverInterruptedOps
+
+Next ==
+  PaymentActions \/ LifecycleActions \/ ConnectionActions \/ OperationActions
+  \/ RecoveryActions \/ Stutter
 
 (* ------------------------------------------------------------------ *)
 (* Invariants                                                          *)
@@ -587,9 +852,18 @@ TypeOK ==
   /\ relay \in [Sessions -> BOOLEAN]
   /\ slots \in [Sessions -> SUBSET Requests]
   /\ guest \in [Sessions -> SUBSET Requests]
-  /\ slotEpoch \in [Sessions -> 0 .. MaxRestarts]
+  /\ slotEpoch \in [Sessions -> Epochs]
   /\ final \in [Sessions -> Finals]
   /\ epoch \in 0 .. MaxRestarts
+  /\ execEpoch \in [Sessions -> Epochs]
+  /\ guestConnected \in [Sessions -> BOOLEAN]
+  /\ guestStatus \in [Sessions -> GuestStatuses]
+  /\ guestEpoch \in [Sessions -> HighWater]
+  /\ admittedEpoch \in [Sessions -> HighWater]
+  /\ relayPending \in [Sessions -> 0 .. 1]
+  /\ fence \in [Sessions -> FenceStates]
+  /\ fenceReq \in [Sessions -> Requests \cup {"none"}]
+  /\ recovered \in BOOLEAN
 
 \* A session row exists for every session the model talks about.
 ExistingSessions == \A s \in Sessions : s \in created \/ state[s] = "CREATED"
@@ -624,9 +898,23 @@ SingleActiveOperation ==
 SingleGuestOperation ==
   \A s \in Sessions : Cardinality(guest[s]) <= 1
 
-\* I6. No operation slot survives a terminal state.
+\* I5b. The guest only ever runs a request the controller gate still names. A
+\* fenced request remains named until the fence releases, and a stale frame
+\* (below the guest's epoch high-water) is rejected without taking the slot.
+GuestRunsGateHeldRequest ==
+  \A s \in Sessions : guest[s] \subseteq slots[s]
+
+\* I5c. A stale frame never starts: any command active at the guest carries an
+\* epoch at least as high as the guest's high-water mark. The guest's
+\* admitEpoch is what enforces this; the StaleEpoch variant removes it.
+StaleFrameNeverStarts ==
+  \A s \in Sessions : guest[s] # {} => admittedEpoch[s] >= guestEpoch[s]
+
+\* I6. No operation slot, guest command or fence survives a terminal state.
 NoSlotAfterTerminal ==
-  \A s \in Sessions : state[s] \in TerminalStates => slots[s] = {} /\ guest[s] = {}
+  \A s \in Sessions :
+    state[s] \in TerminalStates =>
+      slots[s] = {} /\ guest[s] = {} /\ fence[s] = "none"
 
 \* I7. No orphaned Pod/PVC/relay after a terminal state.
 NoOrphanedWorkloadAfterTerminal ==
@@ -660,10 +948,11 @@ ReadyImpliesPodAndRelay ==
   \A s \in Sessions :
     state[s] \in {"READY", "ACTIVE", "SUSPENDING"} => pod[s] # "none" /\ relay[s]
 
-\* I12. SUSPENDED implies a checkpoint and no compute.
+\* I12. SUSPENDED implies a checkpoint, no compute, and no live guest.
 SuspendedImpliesCheckpoint ==
   \A s \in Sessions :
-    state[s] = "SUSPENDED" => pvc[s] /\ pod[s] = "none" /\ ~relay[s]
+    state[s] = "SUSPENDED" =>
+      pvc[s] /\ pod[s] = "none" /\ ~relay[s] /\ ~guestConnected[s]
 
 \* I13. Every reservation is bound to a payment key.
 ReservationBoundToPayment ==
@@ -682,11 +971,27 @@ NoEntitlementWithoutPayment ==
   \A s \in Sessions :
     state[s] # "CREATED" /\ s \in created => payOf[s] # "none"
 
+\* I16. A held fence names exactly the request that still holds the gate.
+FenceHoldsTheGate ==
+  \A s \in Sessions : fenced(s) => slots[s] = {fenceReq[s]}
+
+\* I17. While a fence is held, the only command allowed to be in flight at the
+\* guest is the fenced request itself: no new command overlaps the old one.
+NoNewCommandOverlapsFence ==
+  \A s \in Sessions : fenced(s) => guest[s] \subseteq {fenceReq[s]}
+
+\* I18. A fence is never released while the guest reports the fenced request
+\* active. OperationFence releases only on an idle status or a lost guest; the
+\* FenceRelease variant removes that check and TLC falsifies this invariant.
+NoPrematureFenceRelease ==
+  \A s \in Sessions :
+    fence[s] = "released" => fenceReq[s] \notin guest[s]
+
 (* ------------------------------------------------------------------ *)
 (* Liveness (checked under the fairness below)                         *)
 (* ------------------------------------------------------------------ *)
 
-\* I16. No paid session is stuck before READY: every settled payment either
+\* I19. No paid session is stuck before READY: every settled payment either
 \* reaches a READY session or gets an explicit refund obligation.
 PaidSessionProgress ==
   \A p \in Payments :
@@ -694,18 +999,18 @@ PaidSessionProgress ==
       ~> (refund[p] # "none"
           \/ \E s \in Sessions : settledTo[p] = s /\ everReady[s])
 
-\* I17. A terminal session eventually returns its capacity.
+\* I20. A terminal session eventually returns its capacity.
 TerminalReleasesCapacity ==
   \A s \in Sessions :
     (state[s] \in TerminalStates) ~> (reservations[s] = "RELEASED")
 
-\* I18. A slot claimed before a restart is eventually released. The gate stays
-\* busy while a client has an operation in flight, so the property is scoped to
-\* claims that the restart orphaned: without startup recovery the paid session
-\* stays `busy` forever.
-InterruptedSlotClears ==
+\* I21. A fenced gate eventually clears once the guest reports its slot idle or
+\* the guest is gone. A connected guest that has never reported status is
+\* deliberately outside the antecedent: the fence fails closed there.
+FencedGateClears ==
   \A s \in Sessions :
-    (slotEpoch[s] < epoch) ~> (slots[s] = {})
+    (fenced(s) /\ (guestStatus[s] = "idle" \/ ~guestConnected[s]))
+      ~> ~fenced(s)
 
 \* Fairness is split by subsystem so a deliberately broken variant can keep the
 \* obligations of the actions it still has. Weak fairness is what turns "the
@@ -715,6 +1020,9 @@ ProvisionFairness ==
   /\ \A s \in Sessions : WF_vars(CreatePod(s))
   /\ \A s \in Sessions : WF_vars(RecordPod(s))
   /\ \A s \in Sessions : WF_vars(GuestReady(s))
+
+SuspendFairness ==
+  \A s \in Sessions : WF_vars(GuestStopped(s))
 
 CleanupFairness ==
   /\ \A s \in Sessions : WF_vars(KillGuest(s))
@@ -728,17 +1036,20 @@ ReleaseFairness ==
 
 OperationFairness ==
   /\ \A s \in Sessions, r \in Requests : WF_vars(DispatchOp(s, r))
+  /\ \A s \in Sessions, r \in Requests : WF_vars(GuestResponse(s, r))
   /\ \A s \in Sessions, r \in Requests : WF_vars(GuestDone(s, r))
   /\ \A s \in Sessions, r \in Requests : WF_vars(FinishOp(s, r))
-  /\ \A s \in Sessions : WF_vars(RecoverInterruptedOp(s))
+  /\ \A s \in Sessions : WF_vars(FenceRelease(s))
+
+RecoveryFairness == WF_vars(RecoverInterruptedOps)
 
 RefundFairness ==
   /\ \A p \in Payments : WF_vars(MarkRefundPending(p))
   /\ \A p \in Payments : WF_vars(MarkRefunded(p))
 
 Fairness ==
-  ProvisionFairness /\ CleanupFairness /\ ReleaseFairness /\ OperationFairness
-  /\ RefundFairness
+  ProvisionFairness /\ SuspendFairness /\ CleanupFairness /\ ReleaseFairness
+  /\ OperationFairness /\ RecoveryFairness /\ RefundFairness
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 

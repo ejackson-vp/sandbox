@@ -19,7 +19,9 @@ BrokenInsertPayment(s, p) ==
   /\ charges' = [charges EXCEPT ![p] = charges[p] + 1]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
-                 slots, guest, slotEpoch, final, epoch>>
+                 slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered>>
 
 BrokenCreateEntitlement(s, p) ==
   /\ intent[p] = "claimed"
@@ -35,7 +37,9 @@ BrokenCreateEntitlement(s, p) ==
   /\ intent' = [intent EXCEPT ![p] = "settled"]
   /\ reservations' = [reservations EXCEPT ![s] = "ALLOCATED"]
   /\ UNCHANGED <<everReady, intentEpoch, charges, refund, resPayment, pod, creating,
-                 pvc, relay, slots, guest, slotEpoch, final, epoch>>
+                 pvc, relay, slots, guest, slotEpoch, final, epoch, execEpoch,
+                 guestConnected, guestStatus, guestEpoch, admittedEpoch,
+                 relayPending, fence, fenceReq, recovered>>
 
 BrokenSettlementActions ==
   \E s \in Sessions, p \in Payments :
@@ -43,7 +47,8 @@ BrokenSettlementActions ==
 
 BrokenNext ==
   IntentActions \/ ReservationActions \/ BrokenSettlementActions \/ RefundActions
-  \/ LifecycleActions \/ OperationActions \/ Stutter
+  \/ LifecycleActions \/ ConnectionActions \/ OperationActions \/ RecoveryActions
+  \/ Stutter
 
 BrokenSpec == Init /\ [][BrokenNext]_vars
 

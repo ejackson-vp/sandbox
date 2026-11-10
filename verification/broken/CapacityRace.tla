@@ -22,7 +22,9 @@ BrokenReserveCapacity(s, p) ==
   /\ resPayment' = [resPayment EXCEPT ![s] = p]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, pod, creating, pvc, relay, slots, guest,
-                 slotEpoch, final, epoch>>
+                 slotEpoch, final, epoch, execEpoch, guestConnected, guestStatus,
+                 guestEpoch, admittedEpoch, relayPending, fence, fenceReq,
+                 recovered>>
 
 BrokenReservationActions ==
   \/ \E s \in Sessions, p \in Payments : BrokenReserveCapacity(s, p)
@@ -31,7 +33,8 @@ BrokenReservationActions ==
 
 BrokenNext ==
   IntentActions \/ BrokenReservationActions \/ SettlementActions \/ RefundActions
-  \/ LifecycleActions \/ OperationActions \/ Stutter
+  \/ LifecycleActions \/ ConnectionActions \/ OperationActions \/ RecoveryActions
+  \/ Stutter
 
 BrokenSpec == Init /\ [][BrokenNext]_vars
 

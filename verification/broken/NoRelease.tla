@@ -19,10 +19,13 @@ BrokenLifecycleActions ==
   ProvisionActions \/ PodActions \/ SuspendActions \/ TerminateActions
   \/ BrokenCleanupActions \/ FinalizeActions \/ CrashRestart
 
-BrokenNext == PaymentActions \/ BrokenLifecycleActions \/ OperationActions \/ Stutter
+BrokenNext ==
+  PaymentActions \/ BrokenLifecycleActions \/ ConnectionActions
+  \/ OperationActions \/ RecoveryActions \/ Stutter
 
 BrokenFairness ==
-  ProvisionFairness /\ CleanupFairness /\ OperationFairness /\ RefundFairness
+  ProvisionFairness /\ SuspendFairness /\ CleanupFairness /\ OperationFairness
+  /\ RecoveryFairness /\ RefundFairness
 
 BrokenSpec == Init /\ [][BrokenNext]_vars /\ BrokenFairness
 
