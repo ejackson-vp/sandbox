@@ -16,7 +16,8 @@ const host = process.env.HOST ?? "127.0.0.1";
 
 const aliases = new Map([["/latency.json", resolve(root, "../docs/perf/latency.json")]]);
 
-const types = new Map([  [".html", "text/html; charset=utf-8"],
+const types = new Map([
+  [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
   [".mjs", "text/javascript; charset=utf-8"],
@@ -61,7 +62,7 @@ const server = createServer(async (req, res) => {
   const aliased = aliases.get(requested);
   const file = aliased ?? resolve(root, `.${requested}`);
 
-  if (file !== root && !file.startsWith(root + sep)) {
+  if (!aliased && file !== root && !file.startsWith(root + sep)) {
     send(res, 403, "Forbidden\n");
     return;
   }
