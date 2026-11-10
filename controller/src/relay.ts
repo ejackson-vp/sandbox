@@ -79,6 +79,12 @@ export interface RelayOptions {
   controlTls?: RelayTlsOptions;
   /** Expected client certificate CN on the control listener. */
   controlClientCn?: string;
+  /**
+   * Ordinal of this relay replica. When set, guest tokens must claim it, so a
+   * guest routed to the wrong replica fails at the upgrade instead of
+   * registering in an in-memory registry the controller will never query.
+   */
+  shardIndex?: number;
   /** Injectable for tests; defaults to the process-wide registry. */
   metricsRegistry?: MetricsRegistry;
   /** Injectable for tests; production uses the bounded internal bucket. */
@@ -110,6 +116,7 @@ export function createRelay(opts: RelayOptions): RelayServer {
     maxSessions: opts.maxSessions ?? 2000,
     responseTtlMs: opts.responseTtlMs ?? 5 * 60_000,
     onHello: () => wakeController(opts),
+    ...(opts.shardIndex !== undefined ? { shardIndex: opts.shardIndex } : {}),
     metricsRegistry,
   });
 

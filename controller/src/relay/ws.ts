@@ -2,7 +2,7 @@ import type { Server } from "node:http";
 import type { Socket } from "node:net";
 import type { WebSocketServer, WebSocket } from "ws";
 import type { AttestationEnvelope, GuestToRelay } from "@x402s/shared";
-import { log } from "@x402s/shared";
+import { log, metrics } from "@x402s/shared";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
 import { disconnectReasonLabel } from "./metrics.js";
 
@@ -36,6 +36,18 @@ export function attachGuestUpgrade(
     if (check === "bad_token") {
       log.warn("relay_bad_guest_token", { sessionId });
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    if (check === "wrong_shard") {
+      // The guest reached a relay that does not own its session. The registry
+      // is in memory, so serving it here would register the session somewhere
+      // the controller never looks. 421 Misdirected Request names the fault.
+      metrics
+        .counter("sandbox_relay_cross_shard_total", "Guest upgrades refused for landing on the wrong shard")
+        .inc({ service: "relay" });
+      log.warn("relay_cross_shard_rejected", { sessionId });
+      socket.write("HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
     }

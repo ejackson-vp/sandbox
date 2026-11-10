@@ -19,27 +19,59 @@ spec:
       port: 9100
       targetPort: 9100
 ---
+# Headless Service for deterministic pod identity.
+#
+# The relay registry is in process memory, so a session must always reach the
+# same replica. Each StatefulSet pod gets a stable ordinal name (`relay-0`), and
+# this Service publishes `<pod>.<service>` DNS names. PROXY/RELAY_HOST_TEMPLATE
+# on the controller uses those names, and RELAY_REPLICAS/PROXY_REPLICAS must be
+# raised in the same change as the StatefulSet's replicas: a count of 1 keeps
+# the ClusterIP Service above, a count above 1 switches provisioning to pod
+# names. Ship this object and the StatefulSet together; either alone leaves the
+# template unresolvable.
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-headless
+  namespace: sandbox-system
+  labels: {app: relay}
+spec:
+  clusterIP: None
+  # The controller must be able to dial a shard's pod before it reports ready
+  # (registration happens before the guest dials).
+  publishNotReadyAddresses: true
+  selector: {app: relay}
+  ports:
+    - name: guest
+      port: 8443
+      targetPort: 8443
+    - name: control
+      port: 8444
+      targetPort: 8444
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: relay
   namespace: sandbox-system
   labels: {app: relay}
 spec:
   replicas: 1
-  # The relay's session registry is in memory, so register/claim/attach must
-  # all reach the same pod. maxSurge 0 terminates the old relay before the new
-  # one starts; two registries never coexist.
-  strategy:
+  # Pod ordinal -> pod name -> SHARD_INDEX (parsed from metadata.name below).
+  # The controller computes the same ordinal from the session id.
+  serviceName: relay-headless
+  # Rolling updates replace one ordinal at a time and each ordinal has exactly
+  # one pod, so two registries for the same shard never coexist. That is the
+  # same property the Deployment got from maxSurge: 0.
+  podManagementPolicy: OrderedReady
+  updateStrategy:
     type: RollingUpdate
-    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
   # A terminating relay drops every registry entry anyway; a shorter grace
   # period shrinks the window in which a stale keep-alive connection can still
   # be answered by the old pod while the replacement is starting. The
   # controller also gates creates on /healthz and on the relay generation, but
   # this keeps the infrastructure window small.
   minReadySeconds: 2
-  progressDeadlineSeconds: 120
   selector:
     matchLabels: {app: relay}
   template:
@@ -88,6 +120,14 @@ spec:
             - {name: X402_RELAY_PORT, value: "8443"}
             - {name: RELAY_CONTROL_PORT, value: "8444"}
             - {name: SERVICE_NAME, value: "relay"}
+            # This pod's ordinal, taken from its stable StatefulSet name
+            # (`relay-0` -> 0). The config parser accepts the name directly.
+            # A guest token whose shard does not match is refused with 421, so
+            # a misroute is visible instead of registering in the wrong
+            # in-memory registry.
+            - name: SHARD_INDEX
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
             # mTLS control listener: server identity plus the CA that must have
             # signed the controller's client certificate.
             - {name: RELAY_TLS_CERT_FILE, value: "/tls/tls.crt"}

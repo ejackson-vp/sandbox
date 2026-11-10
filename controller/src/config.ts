@@ -11,6 +11,7 @@ import { LocalProvisioner } from "./local-provisioner.js";
 import { RelayClient, type RelayClientTlsOptions } from "./relay-client.js";
 import type { RelayTlsOptions } from "./relay.js";
 import { mintProxyToken } from "./tokens.js";
+import { shardClaim } from "./data-plane-shard.js";
 import { parseBackupKey } from "./backup-key.js";
 
 export type Role = "controller" | "relay" | "proxy" | "all";
@@ -121,6 +122,22 @@ export interface ControllerConfig {
    * before this option existed.
    */
   guestMeasurementAllowlist: string[];
+  /**
+   * Relay and proxy replica counts. Above 1, provisioning pins each session to
+   * a shard-specific pod address and the credential carries the shard, so a
+   * misrouted connection can be rejected instead of served.
+   */
+  relayReplicas: number;
+  proxyReplicas: number;
+  /** Pod host template for a shard; must contain `{shard}` when replicas > 1. */
+  relayHostTemplate: string;
+  proxyHostTemplate: string;
+  /**
+   * Pod ordinal of this relay/proxy process. Unset (the default) accepts any
+   * shard, which is the single-replica behaviour and keeps existing tokens
+   * valid.
+   */
+  shardIndex?: number;
 }
 
 /**
@@ -386,6 +403,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
       }
       return values;
     })(),
+    ...parseDataPlanePlacement(env, role),
   };
 }
 
@@ -411,9 +429,68 @@ export function makeRelayClient(cfg: ControllerConfig): RelayClient {
     baseUrl: cfg.relayBaseUrl,
     adminToken: cfg.relayAdminToken,
     ...(cfg.relayClientTls ? { tls: cfg.relayClientTls } : {}),
+    // Per-session control calls follow the guest to the same shard. With one
+    // replica both values are inert and baseUrl is used unchanged.
+    relayReplicas: cfg.relayReplicas,
+    relayHostTemplate: cfg.relayHostTemplate,
+    relayControlPort: cfg.relayControlPort,
   });
 }
 
 export function proxyTokenFor(cfg: ControllerConfig, sessionId: string): string {
-  return mintProxyToken(cfg.proxyTokenSecret, sessionId, 60 * 60_000);
+  const shard = shardClaim(cfg, "proxy", sessionId);
+  return mintProxyToken(cfg.proxyTokenSecret, sessionId, 60 * 60_000, shard);
+}
+
+/**
+ * Relay/proxy placement, appended (never interleaved) so concurrent config
+ * changes do not conflict.
+ *
+ * A replica count above 1 without a `{shard}` template would silently send
+ * every session to the same hostname, so it fails at startup instead.
+ */
+function parseDataPlanePlacement(
+  env: NodeJS.ProcessEnv,
+  role: Role,
+): Pick<
+  ControllerConfig,
+  "relayReplicas" | "proxyReplicas" | "relayHostTemplate" | "proxyHostTemplate" | "shardIndex"
+> {
+  const relayReplicas = int(env.RELAY_REPLICAS, 1, 1, 64);
+  const proxyReplicas = int(env.PROXY_REPLICAS, 1, 1, 64);
+  const relayHostTemplate = env.RELAY_HOST_TEMPLATE ?? "relay-{shard}.relay-headless";
+  const proxyHostTemplate = env.PROXY_HOST_TEMPLATE ?? "egress-proxy-{shard}.egress-proxy-headless";
+
+  if (relayReplicas > 1 && !relayHostTemplate.includes("{shard}")) {
+    throw new Error("RELAY_HOST_TEMPLATE must contain {shard} when RELAY_REPLICAS > 1");
+  }
+  if (proxyReplicas > 1 && !proxyHostTemplate.includes("{shard}")) {
+    throw new Error("PROXY_HOST_TEMPLATE must contain {shard} when PROXY_REPLICAS > 1");
+  }
+
+  // In Kubernetes the pod ordinal arrives as the pod name (`relay-0`), so
+  // accept both "0" and a trailing "-<ordinal>".
+  const rawShard = env.SHARD_INDEX?.trim();
+  let shardIndex: number | undefined;
+  if (rawShard) {
+    const ordinal = /(?:^|-)(\d+)$/.exec(rawShard);
+    if (!ordinal) throw new Error(`invalid SHARD_INDEX ${rawShard}`);
+    shardIndex = Number(ordinal[1]);
+  }
+  if (shardIndex !== undefined) {
+    const replicas = role === "proxy" ? proxyReplicas : role === "relay" ? relayReplicas : 0;
+    if (replicas > 0 && shardIndex >= replicas) {
+      throw new Error(
+        `SHARD_INDEX ${shardIndex} is outside the ${replicas}-replica range for this role`,
+      );
+    }
+  }
+
+  return {
+    relayReplicas,
+    proxyReplicas,
+    relayHostTemplate,
+    proxyHostTemplate,
+    ...(shardIndex !== undefined ? { shardIndex } : {}),
+  };
 }

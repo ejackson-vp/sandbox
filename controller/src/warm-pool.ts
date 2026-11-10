@@ -7,7 +7,8 @@ import { metrics, type SessionLimits, type WarmClaim } from "@x402s/shared";
 import { GUEST_TOOLS, type WarmPodInfo } from "./k8s.js";
 import { proxyTokenFor } from "./config.js";
 import { warmPoolIdentity } from "./warm-pool-identity.js";
-import { newOpaqueToken, sha256Hex } from "./tokens.js";
+import { newOpaqueToken, sha256Hex, guestTokenFor } from "./tokens.js";
+import { pinnedAddress, shardClaim } from "./data-plane-shard.js";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { WarmPoolStore } from "./store/ports.js";
@@ -100,7 +101,7 @@ export class WarmPool {
     }
 
     const registerStarted = this.ctx.now();
-    const guestToken = newOpaqueToken(32);
+    const guestToken = guestTokenFor(newOpaqueToken(32), shardClaim(cfg, "relay", session.id));
     const tokenHash = sha256Hex(guestToken);
     const ttlMs = cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
     try {
@@ -120,9 +121,13 @@ export class WarmPool {
     const warmRegisterMs = this.ctx.now() - registerStarted;
 
     // As in the cold path, registration may have waited through a relay
-    // replacement. The claim must point at the endpoint that accepted it.
-    const currentRelay = await this.ctx.serviceAddress(cfg.relayServiceName);
+    // replacement. The claim must point at the endpoint that accepted it;
+    // above one replica that endpoint is the session's shard, recomputed from
+    // the session id rather than inherited from the warm pod's own shard.
+    const currentRelay = pinnedAddress(cfg, "relay", session.id) ??
+      (await this.ctx.serviceAddress(cfg.relayServiceName));
     const relay = currentRelay ?? relayAddr;
+    const proxy = pinnedAddress(cfg, "proxy", session.id) ?? proxyAddr;
     const claim: WarmClaim = {
       sessionId: session.id,
       relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(session.id)}`,
@@ -133,7 +138,7 @@ export class WarmPool {
       executionMode: cfg.executionMode,
       runtimeClass: cfg.runtimeClass,
       imageDigest: cfg.guestImageDigest,
-      proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
+      proxyUrl: `http://${proxy.host}:${proxy.port}`,
       proxyToken: proxyTokenFor(cfg, session.id),
       maxOutputBytes: session.limits.maxOutputBytes,
       maxFileBytes: session.limits.maxFileBytes,
@@ -334,9 +339,14 @@ export class WarmPool {
     const cfg = this.ctx.cfg;
     const warmId = randomBytes(6).toString("hex");
     const poolId = `warm_${warmId}`;
-    const guestToken = newOpaqueToken(32);
+    const guestToken = guestTokenFor(newOpaqueToken(32), shardClaim(cfg, "relay", poolId));
     const tokenHash = sha256Hex(guestToken);
     const ttlMs = cfg.warmPoolTtlMs + 120_000;
+    // The pooled id owns its own shard, independent of whichever session later
+    // claims this pod. The claim message rewrites both endpoints for the real
+    // session, so the guest follows the session's shard when it reconnects.
+    const relay = pinnedAddress(cfg, "relay", poolId) ?? relayAddr;
+    const proxy = pinnedAddress(cfg, "proxy", poolId) ?? proxyAddr;
     try {
       // One bounded attempt per housekeeping pass. If the relay is mid-restart
       // the next pass creates the pod against the replacement instead of
@@ -353,8 +363,8 @@ export class WarmPool {
         ttlMs,
         limits: this.limits(),
         guestToken,
-        relayUrl: `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(poolId)}`,
-        proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
+        relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(poolId)}`,
+        proxyUrl: `http://${proxy.host}:${proxy.port}`,
         proxyToken: proxyTokenFor(cfg, poolId),
         image: cfg.guestImageRef,
         imageDigest: cfg.guestImageDigest,

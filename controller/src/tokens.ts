@@ -27,10 +27,20 @@ export function newOpaqueToken(bytes = 32): string {
   return randomBytes(bytes).toString("base64url");
 }
 
-/** Stateless proxy token: v1.<expMs>.<sessionId>.<hmacBase64url> */
-export function mintProxyToken(secret: string, sessionId: string, ttlMs: number): string {
+/**
+ * Stateless proxy token: v1.<expMs>.<sessionId>.<hmacBase64url>, or
+ * v2.<expMs>.<shard>.<sessionId>.<hmacBase64url> when the proxy runs with more
+ * than one replica.
+ *
+ * v2 is the same token, with one claim added, not a second credential format.
+ * A single-replica deployment mints v1 unchanged so existing tokens and
+ * deployments keep working. The MAC covers the shard, so a claim cannot be
+ * stripped or rewritten in flight.
+ */
+export function mintProxyToken(secret: string, sessionId: string, ttlMs: number, shard?: number): string {
   const exp = Date.now() + ttlMs;
-  const payload = `v1.${exp}.${sessionId}`;
+  const payload =
+    shard === undefined ? `v1.${exp}.${sessionId}` : `v2.${exp}.${shard}.${sessionId}`;
   const mac = createHmac("sha256", secret).update(payload).digest("base64url");
   return `${payload}.${mac}`;
 }
@@ -38,14 +48,47 @@ export function mintProxyToken(secret: string, sessionId: string, ttlMs: number)
 export function verifyProxyToken(
   secret: string,
   token: string,
-): { ok: true; sessionId: string; expiresAt: number } | { ok: false; reason: string } {
+): { ok: true; sessionId: string; expiresAt: number; shard?: number } | { ok: false; reason: string } {
   const parts = token.split(".");
-  if (parts.length !== 4 || parts[0] !== "v1") return { ok: false, reason: "malformed_token" };
-  const [, expRaw, sessionId, mac] = parts as [string, string, string, string];
+  let expRaw: string;
+  let sessionId: string;
+  let mac: string;
+  let payload: string;
+  let shard: number | undefined;
+  if (parts.length === 4 && parts[0] === "v1") {
+    [, expRaw, sessionId, mac] = parts as [string, string, string, string];
+    payload = `v1.${expRaw}.${sessionId}`;
+  } else if (parts.length === 5 && parts[0] === "v2") {
+    let shardRaw: string;
+    [, expRaw, shardRaw, sessionId, mac] = parts as [string, string, string, string, string];
+    if (!/^\d{1,3}$/.test(shardRaw)) return { ok: false, reason: "malformed_token" };
+    shard = Number(shardRaw);
+    payload = `v2.${expRaw}.${shardRaw}.${sessionId}`;
+  } else {
+    return { ok: false, reason: "malformed_token" };
+  }
   const exp = Number(expRaw);
   if (!Number.isSafeInteger(exp)) return { ok: false, reason: "malformed_token" };
-  const expected = createHmac("sha256", secret).update(`v1.${expRaw}.${sessionId}`).digest("base64url");
+  const expected = createHmac("sha256", secret).update(payload).digest("base64url");
   if (!constantTimeEqual(mac, expected)) return { ok: false, reason: "bad_token_signature" };
   if (Date.now() > exp) return { ok: false, reason: "token_expired" };
-  return { ok: true, sessionId, expiresAt: exp };
+  return { ok: true, sessionId, expiresAt: exp, ...(shard !== undefined ? { shard } : {}) };
+}
+
+/**
+ * Per-session relay guest token, optionally carrying the owning relay shard.
+ *
+ * The token stays opaque and is still verified by comparing its hash with the
+ * one the controller registered, so the shard is a routing claim covered by
+ * that hash rather than a separately trusted value. The opaque part is
+ * base64url and therefore never contains a dot, so the suffix is unambiguous.
+ */
+export function guestTokenFor(token: string, shard?: number): string {
+  return shard === undefined ? token : `${token}.${shard}`;
+}
+
+/** The shard claim on a relay guest token, or null when it carries none. */
+export function guestTokenShard(token: string): number | null {
+  const match = /\.(\d{1,3})$/.exec(token);
+  return match ? Number(match[1]) : null;
 }

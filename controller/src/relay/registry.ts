@@ -1,7 +1,7 @@
 import type { WebSocket } from "ws";
 import type { AttestationEnvelope, RelaySessionState } from "@x402s/shared";
 import { metrics, type MetricsRegistry } from "@x402s/shared";
-import { constantTimeEqual, sha256Hex } from "../tokens.js";
+import { constantTimeEqual, guestTokenShard, sha256Hex } from "../tokens.js";
 import { registerRelayMetrics, type RelayDisconnectReason } from "./metrics.js";
 
 export const MAX_FRAME_BYTES = 24 * 1024 * 1024;
@@ -63,6 +63,13 @@ interface Entry {
 export interface RelayRegistryOptions {
   maxSessions: number;
   responseTtlMs: number;
+  /**
+   * Ordinal of this relay replica. When set, a guest token whose shard claim is
+   * missing or different is refused: the registry is in memory, so a guest that
+   * dials the wrong replica registers where the controller will never look for
+   * it. Unset (the single-replica default) accepts any shard.
+   */
+  shardIndex?: number;
   /** Called for a non-pool guest hello; the composition root wakes the controller. */
   onHello?: (sessionId: string) => void;
   /** Injectable for tests; defaults to the process-wide registry. */
@@ -88,7 +95,7 @@ export interface RaiseEpochResult {
   reset: boolean;
 }
 export type SendResult = "sent" | "not_registered" | "not_connected";
-export type AttachResult = "ok" | "not_found" | "expired" | "bad_token" | "connected";
+export type AttachResult = "ok" | "not_found" | "expired" | "bad_token" | "wrong_shard" | "connected";
 
 export type WaitResult =
   | { kind: "envelope"; envelope: string }
@@ -358,6 +365,11 @@ export class RelayRegistry {
     if (!entry) return "not_found";
     if (Date.now() > entry.expiresAt) return "expired";
     if (!token || !constantTimeEqual(sha256Hex(token), entry.tokenHash)) return "bad_token";
+    // The shard suffix is covered by the hash above, so a value that survives
+    // that check is the one the controller minted, not one the guest chose.
+    if (this.opts.shardIndex !== undefined && guestTokenShard(token) !== this.opts.shardIndex) {
+      return "wrong_shard";
+    }
     if (entry.ws) return "connected";
     return "ok";
   }
