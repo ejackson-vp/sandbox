@@ -16,12 +16,20 @@ HELD ──attach──► ALLOCATED ──suspend──► SUSPENDED ──resu
 | `HELD` | reserved | reserved | paid-intent provisional hold |
 | `ALLOCATED` | reserved | reserved | owned by a paid session |
 | `SUSPENDED` | released | retained | checkpointed, no Pod |
-| `RELEASING` | reserved | reserved | Pod deletion requested; wait for confirmation |
+| `RELEASING` (from `ALLOCATED`) | reserved | reserved | Pod deletion requested; wait for confirmation |
+| `RELEASING` (from `SUSPENDED`) | released | retained | no Pod to wait for; wait for release confirmation |
 | `RELEASED` | none | none | terminal |
 
-`RELEASING` is deliberately conservative: Kubernetes `deletePod` returns before
-the Pod and its cgroup are gone. Capacity is not returned until the next
-reconcile observes the Pod absent (or terminal).
+`RELEASING` is deliberately conservative for a reservation that came from an
+active session: Kubernetes `deletePod` returns before the Pod and its cgroup are
+gone, so compute and storage are not returned until the next reconcile observes
+the Pod absent (or terminal). A reservation released from `SUSPENDED` has no
+Pod to wait for: it gave compute back when it checkpointed, so it stays
+storage-only while `RELEASING` and never re-charges CPU/memory. The reservation
+records its source implicitly through `pod_name`: suspend clears it, and
+`beginRelease` refuses to adopt a stale session Pod name for a `SUSPENDED` row,
+so `RELEASING` with no `pod_name` is a release that already returned compute
+(issue #72).
 
 ## Table
 
@@ -73,7 +81,7 @@ from a single source.
 | after `ALLOCATED`, before Pod | the reconciler provisions from the durable reservation |
 | while `SUSPENDING` | reconcile finishes the checkpoint; reservation moves to `SUSPENDED` |
 | while `RESUMING` | reservation is `ALLOCATED`; readiness handshake continues |
-| while `RELEASING` | reaper releases when the Pod is gone |
+| while `RELEASING` | reaper releases when the Pod is gone, or immediately when the row names no Pod |
 | controller restart | all state is reloaded from SQLite; no in-memory counters |
 
 `reap()` runs in housekeeping:
@@ -116,7 +124,8 @@ can reject, not over-admit).
 - `HELD` has an expiry.
 - `ALLOCATED` is released only on termination; a session without a Pod is
   failed by the existing provisioning timeout.
-- `RELEASING` is constrained by Pod observation.
+- `RELEASING` is constrained by Pod observation; a release from `SUSPENDED`
+  names no Pod and is confirmed on the next housekeeping tick.
 - The capacity demo asserts `reservations.total === 0` after destroying both
   sessions.
 

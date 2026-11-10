@@ -41,9 +41,27 @@ export function fitsWithin(need: ResourceVector, available: ResourceVector): boo
 
 export type ReservationState = "HELD" | "ALLOCATED" | "SUSPENDED" | "RELEASING" | "RELEASED";
 
-/** Compute is held for every state except SUSPENDED and RELEASED. */
-export function holdsCompute(state: ReservationState): boolean {
-  return state === "HELD" || state === "ALLOCATED" || state === "RELEASING";
+/**
+ * Compute is held by `HELD` and `ALLOCATED`, and by `RELEASING` while it still
+ * names a Pod. A release that came from an active session waits for the Pod's
+ * cgroup; a release that came from `SUSPENDED` has no Pod and gave compute back
+ * when it checkpointed. The reservation's `podName` records which case it is,
+ * so the distinction survives a controller restart without a new column
+ * (issue #72).
+ */
+export function holdsCompute(
+  reservation: Pick<CapacityReservation, "state" | "podName">,
+): boolean {
+  switch (reservation.state) {
+    case "HELD":
+    case "ALLOCATED":
+      return true;
+    case "RELEASING":
+      return reservation.podName !== null;
+    case "SUSPENDED":
+    case "RELEASED":
+      return false;
+  }
 }
 
 export interface CapacityReservation {
@@ -51,11 +69,31 @@ export interface CapacityReservation {
   sessionId: string | null;
   nodeId: string;
   state: ReservationState;
+  /**
+   * Pod whose deletion this reservation waits for, if any. A `SUSPENDED` row
+   * and a `RELEASING` row that came from `SUSPENDED` have none.
+   */
+  podName: string | null;
   /** Guaranteed scheduling reservation. */
   baseline: ResourceVector;
   /** Burst ceiling. Tracked for reporting, not separately admitted today. */
   peak: ResourceVector;
   expiresAt: number | null;
+}
+
+/**
+ * The part of a reservation's committed vector the node still accounts for:
+ * everything it holds, or storage only once compute has been given back.
+ */
+export function accountedResources(
+  reservation: Pick<CapacityReservation, "state" | "podName" | "baseline" | "peak">,
+  accounting: AccountingMode,
+): ResourceVector {
+  if (reservation.state === "RELEASED") return ZERO_RESOURCES;
+  const committed = accounting === "peak" ? reservation.peak : reservation.baseline;
+  return holdsCompute(reservation)
+    ? committed
+    : { cpuMillicores: 0, memoryBytes: 0, storageBytes: committed.storageBytes };
 }
 
 export interface NodeTaint {

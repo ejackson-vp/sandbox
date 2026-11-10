@@ -16,7 +16,6 @@ import type {
 export interface ReservationRecord extends CapacityReservation {
   paymentKey: string | null;
   specHash: string | null;
-  podName: string | null;
   createdAt: number;
   updatedAt: number;
 }

@@ -124,7 +124,16 @@ export class ReservationRepository implements ReservationStore {
            expires_at=NULL, updated_at=? WHERE id=? AND state='SUSPENDED'`,
       ),
       beginRelease: this.db.prepare(
-        "UPDATE reservations SET state='RELEASING', pod_name=?, updated_at=? WHERE session_id=? AND state != 'RELEASED'",
+        // A SUSPENDED row has no Pod: suspend clears pod_name. A caller can
+        // still hold a stale session row naming the pre-suspend Pod, so do not
+        // adopt that name. "RELEASING with no pod_name" is the durable marker
+        // that compute was already returned; the reaper then confirms the
+        // release without waiting on a Pod (issue #72).
+        `UPDATE reservations
+            SET state='RELEASING',
+                pod_name = CASE WHEN state='SUSPENDED' THEN NULL ELSE ? END,
+                updated_at=?
+          WHERE session_id=? AND state != 'RELEASED'`,
       ),
       confirmRelease: this.db.prepare(
         "UPDATE reservations SET state='RELEASED', pod_name=NULL, updated_at=? WHERE session_id=? AND state='RELEASING'",

@@ -3,7 +3,7 @@
  * the controller's capacity-planning decision, not a guarantee.
  */
 import {
-  holdsCompute,
+  accountedResources,
   subtractResources,
   type CapacityReservation,
   type CapacitySnapshot,
@@ -50,12 +50,13 @@ function reservedOnNode(
     // to always charge baseline here, which let a peak-mode request that fit
     // the request peak be admitted against existing reservations charged at
     // baseline storage, over-allocating by the difference (issue #68).
-    const committed = accounting === "peak" ? reservation.peak : reservation.baseline;
-    if (holdsCompute(reservation.state)) {
-      cpu += committed.cpuMillicores;
-      memory += committed.memoryBytes;
-    }
-    // Suspended sessions release compute but keep their workspace.
+    //
+    // Compute follows holdsCompute(): SUSPENDED, and a RELEASING row that came
+    // from SUSPENDED, charge storage only. A release that still names its Pod
+    // keeps charging compute until the Pod is gone (issue #72).
+    const committed = accountedResources(reservation, accounting);
+    cpu += committed.cpuMillicores;
+    memory += committed.memoryBytes;
     storage += committed.storageBytes;
   }
   return { cpuMillicores: cpu, memoryBytes: memory, storageBytes: storage };
