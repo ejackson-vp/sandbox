@@ -8,10 +8,14 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { SandboxClient } from "./client.js";
-import type { ExecOptions, HttpOptions, HttpResponse, SessionHandle } from "./types.js";
-import type { SessionStatus } from "@x402s/shared";
-import type { FilePutResult, OperationError } from "@x402s/shared";
+import type {
+  ExecOptions,
+  FilePutOptions,
+  HttpOptions,
+  HttpResponse,
+  SessionHandle,
+} from "./types.js";
+import type { ExecResult, FilePutResult, OperationError, SessionStatus } from "@x402s/shared";
 import type { TransferOptions, TransferOutcome } from "./transfers.js";
 
 const exec = promisify(execFile);
@@ -36,9 +40,37 @@ async function extractArchive(archive: string, destination: string): Promise<voi
   await exec("tar", ["-xzf", archive, "-C", destination, "--no-same-owner"]);
 }
 
+/**
+ * What the facade needs from the client, declared here in the consumer rather
+ * than imported from client.ts. client.ts constructs `Sandbox`, so importing
+ * its type from here closed a module cycle. `SandboxClient` satisfies this
+ * structurally, which the `new Sandbox(client, handle)` call site checks.
+ */
+interface SandboxOperations {
+  destroy(handle: SessionHandle, waitMs?: number): Promise<SessionStatus | null>;
+  downloadFile(
+    handle: SessionHandle,
+    remotePath: string,
+    localPath: string,
+    opts?: TransferOptions,
+  ): Promise<TransferOutcome>;
+  exec(handle: SessionHandle, opts: ExecOptions): Promise<ExecResult | OperationError>;
+  http(handle: SessionHandle, opts: HttpOptions): Promise<HttpResponse>;
+  putFile(handle: SessionHandle, opts: FilePutOptions): Promise<FilePutResult | OperationError>;
+  resume(handle: SessionHandle, timeoutMs?: number): Promise<SessionStatus>;
+  status(handle: SessionHandle): Promise<SessionStatus>;
+  suspend(handle: SessionHandle): Promise<SessionStatus>;
+  uploadFile(
+    handle: SessionHandle,
+    localPath: string,
+    remotePath: string,
+    opts?: TransferOptions,
+  ): Promise<TransferOutcome>;
+}
+
 export class Sandbox {
   constructor(
-    private readonly client: SandboxClient,
+    private readonly client: SandboxOperations,
     readonly handle: SessionHandle,
   ) {}
 
