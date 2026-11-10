@@ -196,11 +196,11 @@ All session endpoints require `X-Sandbox-Capability`. Reference:
 capacity round trip; warm client ready fell from 665 ms to 395 ms (p50, steady
 client with the challenge cached) and the server side from 179 ms to 127 ms.
 
-These numbers were taken on **0.1.16**. A 0.1.20 spot check measured warm
-server ready at 287 ms p50 and warm client ready at 522 ms (n = 50, and 70 of
-71 creates were warm-pool hits), so treat this table as the baseline, not a
-current promise. [Issue #116](https://github.com/ejackson-vp/sandbox/issues/116)
-tracks the regression.
+These numbers were taken on **0.1.16**. On 0.1.22 the same 50-sample harness
+measured 292-354 ms server and 548-595 ms client across two runs, so treat this
+table as the baseline, not a current promise.
+[Issue #116](https://github.com/ejackson-vp/sandbox/issues/116) tracks the
+regression.
 
 60 concurrent held sessions and 25/25 burst creates completed with zero failures;
 the bottleneck is the create queue at ~1.3/s, not VM boot. Sources:

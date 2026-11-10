@@ -21,11 +21,14 @@ That gap is the product target. A user does not care that the pod was ready in
 127 ms if they waited nearly 400 ms to run a command.
 
 A 0.1.20 spot check landed at 287 ms server and 522 ms client (n = 50), with 70
-of 71 creates hitting the warm pool. The leading hypothesis is the two extra
-relay control round trips added in 0.1.19 for relay-restart safety, each of
-which opened a fresh mTLS connection before the READY timestamp was written.
-That is a hypothesis from reading the code, not a profile; #116 tracks the
-measurement.
+of 71 creates hitting the warm pool. 0.1.22 removed the two relay probes that
+looked like the cause, and the number barely moved: across two 50-sample runs,
+292-354 ms server and 548-595 ms client. Per-session timings point elsewhere. On
+a warm claim, the pick costs 13-169 ms (a Kubernetes list), registration 26-92 ms
+(three fresh mTLS calls), the claim 9-68 ms, relabelling 17-65 ms (a Kubernetes
+patch), and the guest takes 50-360 ms to reconnect and re-attest as the claimed
+session. READY detection after the hello is 10-44 ms. The probes were not the
+cost.
 
 ## Burst traffic queues; it does not thrash
 
