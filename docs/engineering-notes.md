@@ -51,7 +51,7 @@ RSS). A pool of 20 costs roughly 3.6 GiB across two nodes — the price of the
 1. **Cut the paid create path.** Payment verify/settle is ~20 ms; the rest of the
    ~175 ms create is the paid request and the controller entitlement round trips.
    The post-create `getSession` is now folded into the completion response
-   (unreleased): the API no longer makes a separate `GET /internal/sessions/:id`
+   (0.1.20): the API no longer makes a separate `GET /internal/sessions/:id`
    after a successful completion, and the SDK builds its handle from the
    embedded view instead of issuing an immediate status request. The wire change
    is additive, so older clients and older controllers still work. This has not

@@ -2,15 +2,15 @@
   <title id="t">sandbox</title>
   <style>
     :root {
-      --text: #1f2328;
-      --bracket: #0969da;
-      --dot: #1a7f37;
+      --text: #0b1f2e;
+      --bracket: #14395c;
+      --dot: #0f8f72;
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --text: #e6edf3;
-        --bracket: #4493f8;
-        --dot: #3fb950;
+        --text: #e6f0f3;
+        --bracket: #b9d4e2;
+        --dot: #4fe0b8;
       }
     }
     .t { fill: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; font-size: 44px; font-weight: 640; letter-spacing: -1.1px; }
