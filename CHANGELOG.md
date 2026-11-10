@@ -5,6 +5,16 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
+## Unreleased
+
+### Fixed
+
+- A stale operation response can no longer clear the recovery fence. After a
+  controller restart, `finishOperation` only clears `active_request_id` when the
+  request still transitions from `pending`; a request already marked
+  `outcome_unknown` remains owned by `OperationFence` until the guest reports
+  it idle at the new epoch (#111).
+
 ## 0.1.20
 
 ### Added

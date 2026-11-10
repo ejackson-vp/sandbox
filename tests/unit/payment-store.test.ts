@@ -416,6 +416,12 @@ describe("operation gating", () => {
         requestId: "request-crash",
       });
 
+      // A stale caller that read the request as pending before recovery must
+      // not finish it afterwards: the fence still owns the gate.
+      store.finishOperation(id, "request-crash", "error");
+      expect(store.getExecRequest(id, "request-crash")?.state).toBe("outcome_unknown");
+      expect(store.getSession(id)).toMatchObject({ activeRequestId: "request-crash" });
+
       // Only the generation that owns the fence can release it.
       expect(store.clearFencedGate(id, "request-crash", 1)).toBe(false);
       expect(store.clearFencedGate(id, "request-crash", 2)).toBe(true);
