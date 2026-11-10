@@ -107,19 +107,23 @@ concrete next step.
   and a Grafana dashboard, and `allow-metrics-scrape` admits only the
   monitoring namespace. HTTP route labels are templates, never session ids.
   Process/event-loop/GC families are included so application latency can be
-  separated from runtime pauses. The homelab stack is VictoriaMetrics
-  single-node + Grafana + vmalert under `deploy/monitoring/`: 14-day retention,
-  version-pinned images, provisioned dashboards and rules. The manifests render
-  and the rule/scrape syntax is checked, but a live scrape, NetworkPolicy
-  enforcement and steady-state memory measurement remain cluster-only.
-- Alerts: `deploy/monitoring/rules/sandbox-slo.yaml` implements the issue #38
+  separated from runtime pauses. What ships here is the portable contract
+  (`deploy/monitoring/contract/`): scrape list, SLO rules and dashboard. The
+  runnable homelab stack — VictoriaMetrics single-node + Grafana + vmalert,
+  14-day retention, version-pinned images, provisioned dashboards and rules —
+  lives in the private homelab repo (`apps/sandbox-monitoring/`), so a cluster
+  that already runs Prometheus can take the contract without inheriting
+  VictoriaMetrics.
+- Alerts: `deploy/monitoring/contract/rules/sandbox-slo.yaml` implements the
+  issue #38
   set — create p95, provisioning timeout rate, queue wait, relay pending,
   reconcile p95, SQLite busy retries, create-route 409s (the current proxy for
   `reconciliation_pending`), warm pool empty — plus target-down and
   blast-radius. `reconciliation_pending` is not yet a per-code counter, and the
   warm-pool rule is inactive while `WARM_POOL_SIZE=0`. Settlement-failure,
-  PVC-full and orphan-pod alerts are still not implemented. No Alertmanager or
-  pager is shipped; vmalert evaluates and stores alert state only.
+  PVC-full and orphan-pod alerts are still not implemented. The rule file
+  carries no receiver and the homelab stack evaluates with
+  `-notifier.blackhole`: alert state is visible, nothing is paged.
 - Load test: 100+ concurrent sessions; measure reconcile p95, relay fan-out, API
   latency for 8 MiB uploads.
 - Backup/restore of the SQLite metadata (sessions are disposable; payment records
