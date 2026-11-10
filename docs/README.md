@@ -33,6 +33,7 @@ jump to the full index below.
 ### "I want to change the code"
 
 - [architecture-principles.md](architecture-principles.md) — the working rulebook
+- [release-process.md](release-process.md) — staged image release, scan gate and promotion
 - [adr/](adr/) — why the load-bearing choices were made
 - [workload-compatibility.md](workload-compatibility.md) — what runs in the guest
 - [benchmark-methodology.md](benchmark-methodology.md) — how numbers are taken

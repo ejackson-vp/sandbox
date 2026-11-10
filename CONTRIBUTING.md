@@ -131,9 +131,12 @@ say so explicitly — those get a slower review. The PR template asks for this.
 
 ## Releases
 
-Tags are the release mechanism. Pushing `vX.Y.Z` runs the test gate, publishes
-multi-arch `control` and `guest` images to GHCR with SBOM and provenance,
-scans both images with Trivy, and only then creates the GitHub Release. A failed
-scan blocks the Release entry even though the tag exists.
+Tags are the release mechanism. Pushing `vX.Y.Z` runs the test gate, builds
+multi-arch `control` and `guest` images, and pushes only a run-scoped
+`staging-<run-id>-<sha>` tag. Both images are then scanned by Trivy by digest;
+only if they pass does a promotion job add the version, `major.minor` and
+`latest` tags, and the GitHub Release is created last. A failed scan leaves no
+deployable tag in the registry. See [docs/release-process.md](docs/release-process.md)
+for the job graph, inspection commands and staging cleanup.
 
 Add the user-visible change to [CHANGELOG.md](CHANGELOG.md) before tagging.

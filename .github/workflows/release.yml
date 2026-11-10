@@ -6,6 +6,12 @@ name: release
 #
 # Both are multi-arch. The guest image is what actually runs inside the microVM,
 # so it must match the cluster's architecture.
+#
+# Releases are staged. `images` pushes only a run-scoped `staging-*` tag,
+# `digests` resolves the immutable index digest, `scan` gates that exact digest,
+# and `promote` is the only job allowed to create the version, major.minor and
+# `latest` tags. A failed scan therefore leaves no pullable release tag; the
+# staging tag is clearly not a release name. See docs/release-process.md.
 
 on:
   push:
@@ -14,6 +20,15 @@ on:
 
 permissions:
   contents: read
+
+env:
+  # Run-scoped so a re-run refreshes the same staging image and concurrent runs
+  # never overwrite each other. This is intentionally not a release name:
+  # nothing should deploy from `staging-*`, and `latest` never points at it.
+  STAGING_TAG: staging-${{ github.run_id }}-${{ github.sha }}
+  # Registry/repository prefix for both images. Overridable so the promotion
+  # script can be rehearsed against a local registry (docs/release-process.md).
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
 
 jobs:
   # Inlined instead of `uses: ./.github/workflows/ci.yml`: the reusable-workflow
@@ -33,6 +48,9 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:property
 
+  # Build and push the staging tag only. The semver/major.minor/latest tags are
+  # created later by `promote`, after both scans pass, so a red scan cannot
+  # leave a deployable tag in the registry.
   images:
     needs: test
     runs-on: ubuntu-latest
@@ -64,12 +82,10 @@ jobs:
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
-          images: ghcr.io/${{ github.repository }}-${{ matrix.name }}
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}
+          # One tag, and it is not a release name. Promotion adds the rest.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-,format=short
-            type=raw,value=latest
+            type=raw,value=${{ env.STAGING_TAG }}
 
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -84,19 +100,54 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
           # Publish an SBOM and build provenance alongside each image. Both are
           # attached as OCI attestations, so `docker buildx imagetools inspect`
-          # can show what went in without trusting the build log.
+          # can show what went in without trusting the build log. `imagetools
+          # create` copies the whole index, attestations included.
           sbom: true
           provenance: true
 
-      - name: digest
+      - name: staging digest
         run: |
-          echo "${{ matrix.name }}: ${{ steps.build.outputs.digest }}"
+          echo "${{ matrix.name }}:"
+          echo "  ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:${{ env.STAGING_TAG }}"
+          echo "  digest ${{ steps.build.outputs.digest }}"
 
-  # Scan the published images. Separate job so a CVE blocks the release signal
-  # without preventing the build; the tag is already pushed when this runs.
-  # Fixable CRITICAL/HIGH fail the run; results also land in the Security tab.
-  scan:
+  # Resolve the pushed multi-arch index digest once and hand it to `scan` and
+  # `promote`. Every later step addresses the image by digest, so a tag move
+  # cannot redirect the scan away from the image that gets promoted.
+  digests:
     needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      control: ${{ steps.resolve.outputs.control }}
+      guest: ${{ steps.resolve.outputs.guest }}
+    steps:
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: resolve
+        run: |
+          set -euo pipefail
+          for name in control guest; do
+            ref="${IMAGE_PREFIX}-${name}:${STAGING_TAG}"
+            digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')
+            case "$digest" in
+              sha256:*) ;;
+              *) echo "unexpected digest for $ref: $digest" >&2; exit 1 ;;
+            esac
+            echo "${name}=${digest}" >> "$GITHUB_OUTPUT"
+          done
+
+  # Scan the exact staging digest. Policy is unchanged from the previous gate:
+  # fixable CRITICAL/HIGH fails, results land in the Security tab. The release
+  # tags do not exist yet, so a failure here cannot leave a deployable image.
+  scan:
+    needs: digests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -115,13 +166,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: ver
-        run: echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - id: digest
+        env:
+          DIGESTS: ${{ toJSON(needs.digests.outputs) }}
+        run: |
+          set -euo pipefail
+          digest=$(jq -r --arg name "${{ matrix.name }}" '.[$name]' <<<"$DIGESTS")
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "no digest for ${{ matrix.name }}: $digest" >&2; exit 1 ;;
+          esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Scan ${{ matrix.name }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}-${{ matrix.name }}:${{ steps.ver.outputs.tag }}
+          image-ref: ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}@${{ steps.digest.outputs.digest }}
           format: sarif
           output: trivy-${{ matrix.name }}.sarif
           scanners: vuln
@@ -137,12 +197,66 @@ jobs:
           sarif_file: trivy-${{ matrix.name }}.sarif
           category: trivy-${{ matrix.name }}
 
-  # The tag exists as soon as `images` pushes, so a failed scan never blocks the
-  # image build — but it does block the Release entry, which is the signal a
-  # consumer sees.
+  # The only job allowed to create release tags. Runs after both matrix scans
+  # have passed; `imagetools create` retags the scanned index digest in place,
+  # so the multi-arch index and its SBOM/provenance attestations are preserved.
+  promote:
+    name: promote release tags
+    needs: [digests, scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply version, major.minor and latest
+        env:
+          CONTROL_DIGEST: ${{ needs.digests.outputs.control }}
+          GUEST_DIGEST: ${{ needs.digests.outputs.guest }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          core="${version%%[-+]*}"
+          if ! [[ "$core" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "refusing to promote non-semver ref: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          IFS=. read -r major minor _patch <<<"$core"
+          major_minor="${major}.${minor}"
+
+          for pair in "control:${CONTROL_DIGEST}" "guest:${GUEST_DIGEST}"; do
+            name="${pair%%:*}"
+            digest="${pair#*:}"
+            image="${IMAGE_PREFIX}-${name}"
+
+            echo "promoting ${image}@${digest}"
+            docker buildx imagetools create \
+              --tag "${image}:${version}" \
+              --tag "${image}:${major_minor}" \
+              --tag "${image}:latest" \
+              "${image}@${digest}"
+
+            # Promotion must not change what was scanned: every release tag has
+            # to resolve to the same index digest the scan gated.
+            for tag in "${version}" "${major_minor}" "latest"; do
+              got=$(docker buildx imagetools inspect "${image}:${tag}" --format '{{.Manifest.Digest}}')
+              if [ "$got" != "$digest" ]; then
+                echo "promotion mismatch for ${image}:${tag}: ${got} != ${digest}" >&2
+                exit 1
+              fi
+            done
+          done
+
+  # The Release entry is the signal a consumer sees, so it waits for the tags to
+  # be promoted rather than for the raw build.
   release:
     name: github release
-    needs: [images, scan]
+    needs: promote
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -161,7 +275,8 @@ jobs:
             - `ghcr.io/${{ github.repository }}-control:${{ github.ref_name }}`
             - `ghcr.io/${{ github.repository }}-guest:${{ github.ref_name }}`
 
-            Each image carries an SBOM and SLSA build provenance as OCI
+            These tags were created only after both images passed the Trivy
+            gate. Each image carries an SBOM and SLSA build provenance as OCI
             attestations:
 
             ```bash
@@ -171,3 +286,6 @@ jobs:
             The guest image is what runs inside the microVM and must match the
             cluster architecture. CVE results for this tag are in the Security
             tab (`trivy-control`, `trivy-guest`).
+
+            Staging images from the build (`staging-<run-id>-<sha>`) are not
+            release artifacts; see `docs/release-process.md` for cleanup.
