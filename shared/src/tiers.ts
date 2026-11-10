@@ -7,6 +7,7 @@
  */
 import { canonicalJson, sha256Hex } from "./crypto.js";
 import { formatUsd, parseUsdPrice } from "./payment.js";
+import { resolveRuntime } from "./runtimes.js";
 import {
   MAX_LEASE_SECONDS,
   MAX_SESSION_LIFETIME_SECONDS,
@@ -105,6 +106,12 @@ export function resolveSessionSpec(
   tiers: TierTable,
   limits: PlatformLimits,
 ): SpecResolution {
+  // Reject an unknown runtime before pricing, capacity or payment. The guest
+  // cannot load a profile that is not shipped, and a paid session must never
+  // be created for one.
+  const runtime = resolveRuntime(req.runtime);
+  if (!runtime.ok) return { ok: false, code: runtime.code, message: runtime.message };
+
   const tier = (req.tier ?? "standard") as SessionTier;
 
   let durationSeconds: number;
@@ -247,6 +254,7 @@ export function resolveSessionSpec(
       tier,
       durationSeconds,
       limits: sessionLimits,
+      runtime: runtime.runtime,
       baseline: { cpuMillis: baselineCpuMillis, memoryMiB: baselineMemoryMiB },
       ...(idlePolicy ? { idlePolicy } : {}),
       ...(maxLifetimeSeconds !== undefined ? { maxLifetimeSeconds } : {}),

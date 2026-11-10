@@ -18,6 +18,8 @@ export interface SandboxPodSpec {
   proxyToken: string;
   image: string;
   imageDigest: string;
+  /** Runtime profile name; empty/absent means the base guest image. */
+  runtimeProfile?: string;
   runtimeClass: string;
   executionMode: "dev" | "kata";
   workspaceDir: string;
@@ -43,6 +45,13 @@ export interface WarmPodSpec {
   proxyToken: string;
   image: string;
   imageDigest: string;
+  /** Runtime profile this pod booted; a claim from another profile is a miss. */
+  runtime: string;
+  /**
+   * Value for the guest's `RUNTIME_PROFILE`: the profile name, or empty for
+   * `base`, whose image carries no manifest.
+   */
+  runtimeProfile: string;
   /** Hash of the boot identity; a claim requires an exact match. */
   identity: string;
   runtimeClass: string;
@@ -57,6 +66,8 @@ export interface WarmPodInfo {
   poolId: string;
   createdAt: number;
   phase: string;
+  /** Runtime profile the pod booted; empty on pods from before profiles. */
+  runtime: string;
   /** Empty on pods created before identity annotations existed. */
   identity: string;
   imageDigest: string;

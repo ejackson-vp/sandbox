@@ -8,7 +8,7 @@ import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
-import type { WarmPool } from "../../controller/src/warm-pool.js";
+import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 
 function session(id: string, state: SessionRecord["state"] = "PAID"): SessionRecord {
   return {
@@ -68,7 +68,7 @@ function harness(limit: number, persisted: SessionRecord[] = []) {
       now: () => Date.now(),
       serviceAddress: async () => null,
     },
-    {} as WarmPool,
+    {} as WarmPoolManager,
   );
   return { provisioning, mergeTimings, gate, admissions: () => admissions };
 }

@@ -109,6 +109,7 @@ function readBack(path: string): {
   sessions: number;
   intents: number;
   signer: string | null;
+  runtime: string | null;
   columns: string[];
   requestColumns: string[];
   intentColumns: string[];
@@ -131,6 +132,11 @@ function readBack(path: string): {
           | { client_signer: string | null }
           | undefined)?.client_signer ?? null)
       : null;
+    const runtime = columns.includes("runtime")
+      ? ((db.prepare("SELECT runtime FROM sessions WHERE id='sbx_old'").get() as
+          | { runtime: string | null }
+          | undefined)?.runtime ?? null)
+      : null;
     return {
       version: (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
       payments: count("payments"),
@@ -138,6 +144,7 @@ function readBack(path: string): {
       sessions: count("sessions"),
       intents: count("payment_intents"),
       signer,
+      runtime,
       columns,
       requestColumns,
       intentColumns,

@@ -27,6 +27,7 @@ interface LocalPod {
   warmId?: string;
   identity?: string;
   imageDigest?: string;
+  runtime?: string;
 }
 
 export interface LocalProvisionerOptions {
@@ -73,6 +74,7 @@ export class LocalProvisioner implements Provisioner {
       LEASE_SECONDS: String(spec.leaseSeconds),
       EXECUTION_MODE: spec.executionMode,
       RUNTIME_CLASS: spec.runtimeClass,
+      ...(spec.runtimeProfile ? { RUNTIME_PROFILE: spec.runtimeProfile } : {}),
       GUEST_IMAGE_DIGEST: spec.imageDigest,
       WORKSPACE_DIR: workspace,
       X402_SANDBOX_DIR: workDir,
@@ -128,6 +130,7 @@ export class LocalProvisioner implements Provisioner {
       GUEST_TOKEN: spec.guestToken,
       EXECUTION_MODE: spec.executionMode,
       RUNTIME_CLASS: spec.runtimeClass,
+      ...(spec.runtimeProfile ? { RUNTIME_PROFILE: spec.runtimeProfile } : {}),
       GUEST_IMAGE_DIGEST: spec.imageDigest,
       WORKSPACE_DIR: workspace,
       X402_SANDBOX_DIR: workDir,
@@ -157,6 +160,7 @@ export class LocalProvisioner implements Provisioner {
       warmId: spec.warmId,
       identity: spec.identity,
       imageDigest: spec.imageDigest,
+      runtime: spec.runtime,
     };
     proc.stderr?.on("data", (chunk: Buffer) => {
       pod.stderr = (pod.stderr + chunk.toString()).slice(-4096);
@@ -284,6 +288,7 @@ export class LocalProvisioner implements Provisioner {
         poolId: `warm_${p.warmId}`,
         createdAt: p.createdAt,
         phase: p.phase,
+        runtime: p.runtime ?? "",
         identity: p.identity ?? "",
         imageDigest: p.imageDigest ?? "",
         nodeName: "local",

@@ -4,7 +4,7 @@ import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
-import type { WarmPool } from "../../controller/src/warm-pool.js";
+import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 
 function session(): SessionRecord {
   return {
@@ -70,7 +70,7 @@ describe("provisioning relay endpoint", () => {
         now: () => Date.now(),
         serviceAddress,
       },
-      {} as WarmPool,
+      {} as WarmPoolManager,
     );
 
     await provisioning.createPod(

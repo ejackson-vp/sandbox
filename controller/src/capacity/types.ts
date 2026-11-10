@@ -140,7 +140,8 @@ export type AdmissionRejectionReason =
   | "node_affinity_unavailable"
   | "insufficient_cpu"
   | "insufficient_memory"
-  | "insufficient_storage";
+  | "insufficient_storage"
+  | "runtime_profile_unavailable";
 
 export interface ReservationPlan {
   nodeId: string;

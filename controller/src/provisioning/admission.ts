@@ -11,7 +11,12 @@
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared";
 import type { CapacityService } from "../capacity/service.js";
 import type { ReservationRecord } from "../capacity/reservation-store.js";
-import type { ControllerConfig } from "../config.js";
+import {
+  resolveRuntimeProfile,
+  sessionRuntime,
+  type ControllerConfig,
+  type RuntimeProfile,
+} from "../config.js";
 import type { Provisioner } from "../k8s.js";
 import type { RelayClient } from "../relay-client.js";
 import type { SessionRecord } from "../store/models.js";
@@ -31,6 +36,37 @@ export interface AdmissionRuntime {
 
 export class ProvisioningAdmission {
   constructor(private readonly ctx: AdmissionRuntime) {}
+
+  /**
+   * The runtime profile this session asked for, or null after terminating it.
+   *
+   * Fails closed: an unknown profile terminates the session instead of running
+   * it on `base`. The customer asked for a runtime this controller does not
+   * run, and silently substituting another image would break the only promise
+   * the profile makes. Terminating before READY leaves the payment refundable.
+   *
+   * This runs before the relay gate and the compute reservation, because a
+   * session that can never be provisioned must not hold capacity or a slot.
+   */
+  runtimeProfile(session: SessionRecord): RuntimeProfile | null {
+    const requested = sessionRuntime(session);
+    const profile = resolveRuntimeProfile(this.ctx.cfg.runtimeProfiles, requested);
+    if (profile) return profile;
+    metrics
+      .counter("sandbox_runtime_profile_total", "Runtime profile selection outcomes")
+      .inc({ result: "unknown" });
+    // Bounded: the value comes from a client request.
+    log.error("sandbox_runtime_profile_unknown", {
+      sessionId: session.id,
+      runtime: requested.slice(0, 64),
+      configured: Object.keys(this.ctx.cfg.runtimeProfiles).join(","),
+    });
+    this.ctx.store.requestTermination(session.id, "failure:runtime_profile_unavailable", {
+      code: "runtime_profile_unavailable",
+      message: `runtime profile ${requested.slice(0, 64)} is not available on this controller`,
+    });
+    return null;
+  }
 
   /**
    * Admission gate: a paid create must not start while the relay is being

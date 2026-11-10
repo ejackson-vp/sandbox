@@ -14,7 +14,12 @@
 import * as k8s from "@kubernetes/client-node";
 import { log } from "@x402s/shared";
 import { annotationsFor, baselineOf, bootstrapEnvFor, buildPod, guestEnvFor } from "./k8s-pod.js";
-import { WARM_IDENTITY_ANNOTATION, WARM_IMAGE_DIGEST_ANNOTATION } from "./warm-pool-identity.js";
+import {
+  WARM_IDENTITY_ANNOTATION,
+  WARM_IMAGE_DIGEST_ANNOTATION,
+  WARM_RUNTIME_ANNOTATION,
+  WARM_RUNTIME_LABEL,
+} from "./warm-pool-identity.js";
 import { listNodes } from "./k8s-nodes.js";
 import type { WorkspacePvcInfo } from "./checkpoint-retention.js";
 import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
@@ -100,6 +105,7 @@ export class KubeProvisioner implements Provisioner {
       podName,
       sessionId: spec.sessionId,
       runtimeClass: spec.runtimeClass,
+      runtime: spec.runtimeProfile || "base",
       cpuMillis: spec.limits.cpuMillis,
       memoryMiB: spec.limits.memoryMiB,
     }, "sandbox_pod_exists");
@@ -117,6 +123,8 @@ export class KubeProvisioner implements Provisioner {
         [LABEL_APP]: "x402-sandbox",
         [LABEL_POOL]: "warm",
         [LABEL_WARM_ID]: spec.warmId,
+        // Profile names are `[a-z][a-z0-9-]{0,31}`, so they are label-safe.
+        [WARM_RUNTIME_LABEL]: spec.runtime,
       },
       annotations: annotationsFor(
         spec.executionMode,
@@ -124,6 +132,7 @@ export class KubeProvisioner implements Provisioner {
           "x402.io/warm-pool": "true",
           [WARM_IDENTITY_ANNOTATION]: spec.identity,
           [WARM_IMAGE_DIGEST_ANNOTATION]: spec.imageDigest,
+          [WARM_RUNTIME_ANNOTATION]: spec.runtime,
           "x402.io/cpu-millis": String(spec.limits.cpuMillis),
           "x402.io/memory-mib": String(spec.limits.memoryMiB),
           "x402.io/disk-mib": String(spec.limits.diskMiB),
@@ -151,6 +160,7 @@ export class KubeProvisioner implements Provisioner {
     await this.applyPod(pod, "warm_pod_created", {
       podName,
       poolId: spec.poolId,
+      runtime: spec.runtime,
       cpuMillis: spec.limits.cpuMillis,
       memoryMiB: spec.limits.memoryMiB,
     }, "warm_pod_exists");
@@ -328,6 +338,12 @@ export class KubeProvisioner implements Provisioner {
         poolId: `warm_${warmId}`,
         createdAt: pod.metadata?.creationTimestamp ? new Date(pod.metadata.creationTimestamp).getTime() : 0,
         phase: pod.status?.phase ?? "Unknown",
+        // Annotation first: it is written by this controller generation, while
+        // the label fallback covers pods that only ever carried a label.
+        runtime:
+          pod.metadata?.annotations?.[WARM_RUNTIME_ANNOTATION] ??
+          pod.metadata?.labels?.[WARM_RUNTIME_LABEL] ??
+          "",
         identity: pod.metadata?.annotations?.[WARM_IDENTITY_ANNOTATION] ?? "",
         imageDigest: pod.metadata?.annotations?.[WARM_IMAGE_DIGEST_ANNOTATION] ?? "",
         ...(pod.spec?.nodeName ? { nodeName: pod.spec.nodeName } : {}),

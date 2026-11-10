@@ -1,0 +1,12 @@
+{
+  "name": "python",
+  "version": "3.12",
+  "env": {
+    "PATH": "/runtimes/python/bin:/usr/local/bin:/usr/bin:/bin",
+    "PYTHONHOME": "/runtimes/python",
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PIP_CACHE_DIR": "/workspace/.cache/pip"
+  },
+  "commands": ["python3", "pip3"]
+}

@@ -18,6 +18,8 @@ type sessionConfig struct {
 	LeaseSeconds      int64
 	ExecutionMode     string
 	RuntimeClass      string
+	RuntimeProfile    string
+	RuntimesDir       string
 	ImageDigest       string
 	DevKey            string
 	DevKeyID          string
@@ -50,6 +52,8 @@ func configFromEnv() sessionConfig {
 		LeaseSeconds:      int64(parseIntEnv("LEASE_SECONDS", 300)),
 		ExecutionMode:     getEnv("EXECUTION_MODE", "dev"),
 		RuntimeClass:      os.Getenv("RUNTIME_CLASS"),
+		RuntimeProfile:    os.Getenv("RUNTIME_PROFILE"),
+		RuntimesDir:       getEnv("RUNTIMES_DIR", "/runtimes"),
 		ImageDigest:       os.Getenv("GUEST_IMAGE_DIGEST"),
 		DevKey:            devKey,
 		DevKeyID:          devKeyID,

@@ -3,6 +3,7 @@
  * and always destroy. Kept separate from the facade so the ordering and cleanup
  * contract can be tested with a small stub client.
  */
+import { DEFAULT_RUNTIME, isSupportedRuntime, SUPPORTED_RUNTIMES } from "@x402s/shared";
 import type { ExecResult, FileGetResult, FilePutResult, OperationError } from "@x402s/shared";
 import { SandboxError } from "./types.js";
 import type {
@@ -14,8 +15,7 @@ import type {
   SessionHandle,
 } from "./types.js";
 
-export const DEFAULT_RUNTIME = "base";
-const SUPPORTED_RUNTIMES = new Set<string>([DEFAULT_RUNTIME]);
+export { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES };
 
 /** The slice of {@link SandboxClient} a one-shot run needs. */
 export interface RunClient {
@@ -33,27 +33,28 @@ export interface RunClient {
 }
 
 /**
- * Freeze the public runtime noun until the runtime catalog lands. Reject
- * unknown runtimes before any session is created.
+ * Reject a runtime the product does not ship before any session is created.
+ * The list is the shared contract, not a client-side freeze; the server also
+ * returns a 400 for an unknown name, so an older SDK still fails safely.
  */
 export function assertSupportedRuntime(runtime: string | undefined): string {
   const name = runtime ?? DEFAULT_RUNTIME;
-  if (!SUPPORTED_RUNTIMES.has(name)) {
+  if (!isSupportedRuntime(name)) {
     throw new SandboxError(
       "unsupported_runtime",
-      `runtime "${name}" is not available; supported runtimes: ${[...SUPPORTED_RUNTIMES].join(", ")}`,
+      `runtime "${name}" is not available; supported runtimes: ${SUPPORTED_RUNTIMES.join(", ")}`,
     );
   }
   return name;
 }
 
 export async function runOnce(client: RunClient, opts: RunOptions): Promise<RunResult> {
-  assertSupportedRuntime(opts.runtime);
+  const runtime = assertSupportedRuntime(opts.runtime);
   if (!opts.command || opts.command.length === 0) {
     throw new SandboxError("invalid_command", "run requires a command");
   }
   const {
-    runtime: _runtime,
+    runtime: _requestedRuntime,
     command,
     files,
     returnFiles,
@@ -63,7 +64,7 @@ export async function runOnce(client: RunClient, opts: RunOptions): Promise<RunR
     ...createOptions
   } = opts;
 
-  const handle = await client.createSession(createOptions);
+  const handle = await client.createSession({ ...createOptions, runtime });
   let primaryError: unknown;
   try {
     await client.waitForReady(handle);

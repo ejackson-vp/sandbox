@@ -5,7 +5,7 @@ import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
-import type { WarmPool } from "../../controller/src/warm-pool.js";
+import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 
 const TOKENS = {
   ADMIN_TOKEN: "a".repeat(24),
@@ -89,7 +89,7 @@ function harness(
       now: () => Date.now(),
       serviceAddress,
     },
-    { tryClaim: async () => false } as unknown as WarmPool,
+    { tryClaim: async () => false } as unknown as WarmPoolManager,
   );
   return { provisioning, createPod, serviceAddress, requestTermination };
 }

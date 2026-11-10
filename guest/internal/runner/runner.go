@@ -23,9 +23,20 @@ type Options struct {
 	ProxyToken string
 	MaxOutput  int
 	MaxCommand time.Duration
+	// ProfileEnv is the trusted environment from the selected runtime profile.
+	// It is applied before request overrides so a customer can still set their
+	// own values for a command.
+	ProfileEnv map[string]string
 }
 
 var envKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+
+var blockedEnv = map[string]struct{}{
+	"LD_PRELOAD":   {},
+	"LD_AUDIT":     {},
+	"GCONV_PATH":   {},
+	"MALLOC_TRACE": {},
+}
 
 // LimitedBuffer keeps the first N bytes and records truncation.
 type LimitedBuffer struct {
@@ -225,12 +236,23 @@ func buildEnv(opts Options, overrides map[string]string) []string {
 			"no_proxy=",
 		)
 	}
+	base = applyEnv(base, opts.ProfileEnv)
+	return applyEnv(base, overrides)
+}
+
+func applyEnv(base []string, values map[string]string) []string {
+	if len(values) == 0 {
+		return base
+	}
 	index := map[string]int{}
 	for i, kv := range base {
 		index[strings.SplitN(kv, "=", 2)[0]] = i
 	}
-	for k, v := range overrides {
+	for k, v := range values {
 		if !envKey.MatchString(k) {
+			continue
+		}
+		if _, blocked := blockedEnv[k]; blocked {
 			continue
 		}
 		if strings.ContainsRune(v, 0) || len(v) > 8192 {

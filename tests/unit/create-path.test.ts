@@ -29,7 +29,7 @@ import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Lifecycle } from "../../controller/src/lifecycle.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
-import { WarmPool } from "../../controller/src/warm-pool.js";
+import { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 import { warmPoolIdentity } from "../../controller/src/warm-pool-identity.js";
 import type { ReconcilerContext } from "../../controller/src/reconciler-context.js";
 import type { Snapshotter } from "../../controller/src/snapshotter.js";
@@ -224,6 +224,7 @@ function harness(
               createdAt: NOW,
               phase: "Running",
               identity: warmPoolIdentity({
+                runtime: "base",
                 imageDigest: cfg.guestImageDigest,
                 runtimeClass: cfg.runtimeClass,
                 executionMode: cfg.executionMode,
@@ -231,6 +232,7 @@ function harness(
                 limits: { cpuMillis: 500, memoryMiB: 512, diskMiB: 256 },
               }),
               imageDigest: cfg.guestImageDigest,
+              runtime: "base",
             },
           ]
         : [],
@@ -304,7 +306,7 @@ function harness(
       (async () => ({ host: "10.0.0.1", port: 8443 })),
   } as unknown as ReconcilerContext;
 
-  const warm = new WarmPool(ctx);
+  const warm = new WarmPoolManager(ctx);
   const provisioning = new Provisioning(ctx, warm);
   const lifecycle = new Lifecycle(ctx, provisioning);
   return { store, provisioning, lifecycle, calls, provisioner, relay };

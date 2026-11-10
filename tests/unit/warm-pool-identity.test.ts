@@ -1,181 +1,124 @@
 import { describe, expect, it } from "vitest";
-import type { WarmClaim } from "@x402s/shared";
-import { loadControllerConfig } from "../../controller/src/config.js";
-import type { CapacityService } from "../../controller/src/capacity/service.js";
-import type { Provisioner, WarmPodInfo } from "../../controller/src/k8s.js";
-import type { RelayClient } from "../../controller/src/relay-client.js";
-import type { Snapshotter } from "../../controller/src/snapshotter.js";
-import type { SessionRecord } from "../../controller/src/store.js";
-import type { WarmPoolStore } from "../../controller/src/store/ports.js";
-import { WarmPool } from "../../controller/src/warm-pool.js";
 import { warmPoolIdentity } from "../../controller/src/warm-pool-identity.js";
+import { digestBase, digestNode, digestPython, harness, warmPod } from "./helpers/warm-pool-fixtures.js";
 
-const digestA = `sha256:${"a".repeat(64)}`;
-const digestB = `sha256:${"b".repeat(64)}`;
+const limits = { cpuMillis: 500, memoryMiB: 512, diskMiB: 256 };
 
-function config(digest: string) {
-  return loadControllerConfig({
-    ADMIN_TOKEN: "a".repeat(24),
-    RELAY_ADMIN_TOKEN: "r".repeat(24),
-    WAKE_TOKEN: "w".repeat(24),
-    PROXY_TOKEN_SECRET: "p".repeat(24),
-    EXECUTION_MODE: "dev",
-    ALLOW_INSECURE_DEV: "true",
-    GUEST_IMAGE_DIGEST: digest,
-    WARM_POOL_SIZE: "1",
-  });
-}
-
-type Config = ReturnType<typeof config>;
-
-function identityFor(cfg: Config, pool: WarmPool): string {
-  return warmPoolIdentity({
-    imageDigest: cfg.guestImageDigest,
-    runtimeClass: cfg.runtimeClass,
-    executionMode: cfg.executionMode,
-    workspaceDir: cfg.workspaceDir,
-    limits: pool.limits(),
-  });
-}
-
-function warmPod(identity: string, imageDigest: string): WarmPodInfo {
-  return {
-    name: "warm-aaaaaaaaaaaa",
-    warmId: "aaaaaaaaaaaa",
-    poolId: "warm_aaaaaaaaaaaa",
-    createdAt: Date.now(),
-    phase: "Running",
-    identity,
-    imageDigest,
-  };
-}
-
-interface Harness {
-  pool: WarmPool;
-  cfg: Config;
-  pods: WarmPodInfo[];
-  deletes: string[];
-  claims: Array<{ poolId: string; claim: WarmClaim }>;
-}
-
-function harness(initialPods: WarmPodInfo[], digest = digestA): Harness {
-  const cfg = config(digest);
-  const pods = [...initialPods];
-  const deletes: string[] = [];
-  const claims: Array<{ poolId: string; claim: WarmClaim }> = [];
-  const store = {
-    mergeTimings: () => {},
-    setProvisioning: () => true,
-    setRelayToken: () => {},
-  } as unknown as WarmPoolStore;
-  const provisioner = {
-    listWarmPods: async () => pods,
-    deletePod: async (name: string) => {
-      deletes.push(name);
-    },
-    patchPodLabels: async () => {},
-    createWarmPod: async () => ({ podName: "created" }),
-  } as unknown as Provisioner;
-  const relay = {
-    state: async () => ({
-      registered: true,
-      connected: true,
-      attestation: { sessionId: "warm_aaaaaaaaaaaa" },
-      pending: 0,
-    }),
-    register: async () => ({ generation: "test" }),
-    registerCurrent: async () => ({ generation: "test", attempts: 1 }),
-    claim: async (poolId: string, claim: WarmClaim) => {
-      claims.push({ poolId, claim });
-    },
-    purge: async () => {},
-  } as unknown as RelayClient;
-  const capacity = {
-    preflight: async () => ({ admitted: false, reason: "test" }),
-    pinSessionNode: () => {},
-  } as unknown as CapacityService;
-  const pool = new WarmPool({
-    cfg,
-    store,
-    provisioner,
-    relay,
-    capacity,
-    snapshotter: {} as Snapshotter,
-    now: () => Date.now(),
-    serviceAddress: async () => null,
-  });
-  return { pool, cfg, pods, deletes, claims };
-}
-
-function session(pool: WarmPool, id = "sbx_warm_identity"): SessionRecord {
-  return {
-    id,
-    limits: pool.limits(),
-    durationSeconds: 60,
-    clientPublicKey: "client-public-key",
-    clientNonce: "client-nonce",
-    baselineCpuMillis: 0,
-    baselineMemoryMib: 0,
-  } as unknown as SessionRecord;
-}
-
-async function tryClaim(h: Harness, id?: string): Promise<boolean> {
-  return h.pool.tryClaim(
-    session(h.pool, id),
-    { host: "relay", port: 8443 },
-    { host: "proxy", port: 3128 },
-    Date.now(),
-  );
+function identityFor(
+  h: ReturnType<typeof harness>,
+  profile: string,
+): string {
+  const pool = h.manager.poolFor(profile);
+  if (!pool) throw new Error(`missing pool ${profile}`);
+  return pool.identity();
 }
 
 describe("warm pool identity", () => {
   it("does not claim a pod from an older image/config", async () => {
-    const h = harness([warmPod("stale-identity", digestA)], digestB);
-    expect(await tryClaim(h)).toBe(false);
+    const h = harness();
+    h.pods.push(warmPod("base", "stale-identity", digestNode));
+    expect(await h.claim()).toBe(false);
     expect(h.claims).toHaveLength(0);
   });
 
   it("drains a pod whose identity differs from the current config", async () => {
-    const h = harness([warmPod("stale-identity", digestA)], digestB);
-    await h.pool.reconcile();
+    const h = harness();
+    h.pods.push(warmPod("base", "stale-identity", digestBase));
+    await h.reconcile();
     expect(h.deletes).toEqual(["warm-aaaaaaaaaaaa"]);
   });
 
   it("claims a pod carrying the current identity", async () => {
-    const h = harness([], digestB);
-    h.pods.push(warmPod(identityFor(h.cfg, h.pool), digestB));
-    expect(await tryClaim(h)).toBe(true);
+    const h = harness();
+    h.pods.push(warmPod("base", identityFor(h, "base"), digestBase));
+    expect(await h.claim()).toBe(true);
     expect(h.claims).toHaveLength(1);
-    expect(h.claims[0]?.claim.imageDigest).toBe(digestB);
+    expect(h.claims[0]?.claim.imageDigest).toBe(digestBase);
   });
 
   it("never gives one warm pod to two concurrent claims", async () => {
-    const h = harness([], digestB);
-    h.pods.push(warmPod(identityFor(h.cfg, h.pool), digestB));
-    const results = await Promise.all([tryClaim(h, "sbx_first"), tryClaim(h, "sbx_second")]);
+    const h = harness();
+    h.pods.push(warmPod("base", identityFor(h, "base"), digestBase));
+    const results = await Promise.all([
+      h.claim(undefined, { id: "sbx_first" }),
+      h.claim(undefined, { id: "sbx_second" }),
+    ]);
     expect(results.filter(Boolean)).toHaveLength(1);
     expect(h.claims).toHaveLength(1);
   });
 
   it("keeps a matching pod during reconcile", async () => {
-    const h = harness([], digestB);
-    h.pods.push(warmPod(identityFor(h.cfg, h.pool), digestB));
-    await h.pool.reconcile();
+    const h = harness({ env: { WARM_POOL_SIZE: "1", WARM_POOL_BASE_MIN: "1" } });
+    h.pods.push(warmPod("base", identityFor(h, "base"), digestBase));
+    await h.reconcile();
     expect(h.deletes).toEqual([]);
+  });
+});
+
+describe("profile-aware identity", () => {
+  it("treats a pool pod from another profile as a miss, not a claim", async () => {
+    const h = harness();
+    // A perfectly valid python pod, sitting where a base session is asking.
+    h.pods.push(warmPod("python", identityFor(h, "python"), digestPython));
+    expect(await h.claim()).toBe(false);
+    expect(h.claims).toHaveLength(0);
+    // The pod is not touched either: python claims can still use it.
+    expect(h.deletes).toEqual([]);
+  });
+
+  it("refuses to claim across profiles at the pool level", async () => {
+    const h = harness();
+    const pythonPool = h.manager.poolFor("python");
+    const basePool = h.manager.poolFor("base");
+    expect(pythonPool?.profile.name).toBe("python");
+    const outcome = await pythonPool!.tryClaim(
+      h.session("base"),
+      { host: "relay", port: 8443 },
+      { host: "proxy", port: 3128 },
+      h.clock.now,
+    );
+    expect(outcome).toBe("miss_profile");
+    // And the base pool refuses a python session even though it is the default.
+    expect(
+      await basePool!.tryClaim(
+        h.session("python"),
+        { host: "relay", port: 8443 },
+        { host: "proxy", port: 3128 },
+        h.clock.now,
+      ),
+    ).toBe("miss_profile");
+  });
+
+  it("carries the profile on the claim and empties it for base", async () => {
+    const h = harness();
+    h.pods.push(warmPod("python", identityFor(h, "python"), digestPython));
+    h.pods.push(warmPod("base", identityFor(h, "base"), digestBase, { warmId: "bbbbbbbbbbbb" }));
+    expect(await h.claim("python", { id: "sbx_python" })).toBe(true);
+    expect(await h.claim(undefined, { id: "sbx_base" })).toBe(true);
+    expect(h.claims[0]?.claim.runtime).toBe("python");
+    // Base has no manifest to load, so the claim must not name one.
+    expect(h.claims[1]?.claim.runtime).toBe("");
   });
 });
 
 describe("warmPoolIdentity", () => {
   const base = {
-    imageDigest: digestA,
+    runtime: "python",
+    imageDigest: digestPython,
     runtimeClass: "x402-sandbox",
     executionMode: "dev",
     workspaceDir: "/workspace",
-    limits: { cpuMillis: 500, memoryMiB: 512, diskMiB: 256 },
+    limits,
   };
 
   it("changes when the image digest changes", () => {
-    expect(warmPoolIdentity({ ...base, imageDigest: digestB })).not.toBe(warmPoolIdentity(base));
+    expect(warmPoolIdentity({ ...base, imageDigest: digestNode })).not.toBe(
+      warmPoolIdentity(base),
+    );
+  });
+
+  it("changes when the runtime profile changes", () => {
+    expect(warmPoolIdentity({ ...base, runtime: "node" })).not.toBe(warmPoolIdentity(base));
   });
 
   it("changes when the runtime class changes", () => {
@@ -184,7 +127,7 @@ describe("warmPoolIdentity", () => {
 
   it("changes when the pod-shaped limits change", () => {
     expect(
-      warmPoolIdentity({ ...base, limits: { ...base.limits, memoryMiB: base.limits.memoryMiB + 1 } }),
+      warmPoolIdentity({ ...base, limits: { ...limits, memoryMiB: limits.memoryMiB + 1 } }),
     ).not.toBe(warmPoolIdentity(base));
   });
 });
