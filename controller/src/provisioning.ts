@@ -2,6 +2,7 @@
  * Provisioning use case: cold pod or warm claim, then the readiness handshake.
  */
 import { LATENCY_BUCKETS, lifetimeExpired, metrics } from "@x402s/shared";
+import type { RelayStateSnapshot } from "@x402s/shared";
 import { proxyTokenFor } from "./config.js";
 import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
@@ -321,6 +322,25 @@ export class Provisioning {
   }
 
 
+  /**
+   * Read a relay snapshot, reusing the pooled connection.
+   *
+   * A pooled socket can stay pinned to a relay pod that is being replaced. When
+   * the snapshot comes from a generation this session did not register on, it
+   * cannot be used for decisions, so ask once more on a fresh connection
+   * instead of recreating a pod or waiting out a tick.
+   */
+  private async relaySnapshot(
+    sessionId: string,
+    expectedGeneration: string | null,
+  ): Promise<RelayStateSnapshot> {
+    const state = await this.ctx.relay.state(sessionId, { reuse: true });
+    if (expectedGeneration && state.generation !== expectedGeneration) {
+      return this.ctx.relay.state(sessionId);
+    }
+    return state;
+  }
+
   async awaitReady(session: SessionRecord): Promise<void> {
     const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
     if (
@@ -358,8 +378,8 @@ export class Provisioning {
         // probes before and after the read could: both could hit a relay that is
         // already being replaced, and they cost two extra control round trips on
         // every readiness pass.
-        let state = await this.ctx.relay.state(session.id, { reuse: true });
         let expectedGeneration = this.relayGeneration.get(session.id) ?? null;
+        let state = await this.relaySnapshot(session.id, expectedGeneration);
         const relayChanged = Boolean(
           expectedGeneration && state.generation !== expectedGeneration,
         );
@@ -395,7 +415,7 @@ export class Provisioning {
             expectedGeneration = registered.generation;
             this.relayGeneration.set(session.id, registered.generation);
           }
-          state = await this.ctx.relay.state(session.id, { reuse: true });
+          state = await this.relaySnapshot(session.id, expectedGeneration);
         }
         if (state.connected && state.attestation) {
           if (!expectedGeneration) {

@@ -117,4 +117,39 @@ describe("provisioning readiness generation", () => {
     expect(registerCurrent).toHaveBeenCalledTimes(1);
     expect(store.setReady).not.toHaveBeenCalled();
   });
+
+  it("retries on a fresh connection when the pooled snapshot is stale", async () => {
+    const state = vi
+      .fn()
+      .mockResolvedValueOnce({
+        registered: false,
+        connected: false,
+        pending: 0,
+        generation: "relay-a",
+      })
+      // The pooled socket is still pinned to the relay being replaced.
+      .mockResolvedValueOnce({
+        registered: true,
+        connected: true,
+        attestation,
+        pending: 0,
+        generation: "relay-b",
+      })
+      .mockResolvedValue({
+        registered: true,
+        connected: true,
+        attestation,
+        pending: 0,
+        generation: "relay-a",
+      });
+    const registerCurrent = vi.fn(async () => ({ generation: "relay-a", attempts: 1 }));
+    const { provisioning, store } = harness(state, registerCurrent);
+
+    await provisioning.awaitReady(session());
+
+    expect(state).toHaveBeenCalledTimes(3);
+    expect(state.mock.calls[1]![1]).toEqual({ reuse: true });
+    expect(state.mock.calls[2]![1]).toBeUndefined();
+    expect(store.setReady).toHaveBeenCalledTimes(1);
+  });
 });
