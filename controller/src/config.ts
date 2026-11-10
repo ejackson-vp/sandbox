@@ -10,6 +10,7 @@ import { KubeProvisioner, NullProvisioner, type Provisioner } from "./k8s.js";
 import { LocalProvisioner } from "./local-provisioner.js";
 import { RelayClient } from "./relay-client.js";
 import { mintProxyToken } from "./tokens.js";
+import { parseBackupKey } from "./backup-key.js";
 
 export type Role = "controller" | "relay" | "proxy" | "all";
 
@@ -30,6 +31,12 @@ export interface ControllerConfig {
   controllerUrl: string;
   proxyTokenSecret: string;
   dbPath: string;
+  /** Empty disables scheduled backups. */
+  backupDir: string;
+  backupIntervalMs: number;
+  backupRetention: number;
+  /** Required when backupDir is set; null when backups are disabled. */
+  backupKey: Buffer | null;
   sandboxNamespace: string;
   controlNamespace: string;
   guestImageDigest: string;
@@ -192,6 +199,15 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   }
   const tls = parseTls(env);
   const tokens = parseTokens(env, role, adminToken);
+  const backupEnabled = role === "controller" || role === "all";
+  const backupDir = backupEnabled ? (env.BACKUP_DIR ?? "") : "";
+  const backupKey =
+    backupEnabled && backupDir && env.BACKUP_ENCRYPTION_KEY
+      ? parseBackupKey(env.BACKUP_ENCRYPTION_KEY)
+      : null;
+  if (backupDir && !backupKey) {
+    throw new Error("BACKUP_ENCRYPTION_KEY is required when BACKUP_DIR is set");
+  }
 
   return {
     role,
@@ -203,6 +219,10 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     ...tokens,
     controllerUrl: env.CONTROLLER_URL ?? "http://127.0.0.1:3001",
     dbPath: env.DB_PATH ?? "/data/controller.db",
+    backupDir,
+    backupIntervalMs: int(env.BACKUP_INTERVAL_MS, 21_600_000, 60_000, 604_800_000),
+    backupRetention: int(env.BACKUP_RETENTION, 14, 1, 365),
+    backupKey,
     sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",
     controlNamespace: env.CONTROL_NAMESPACE ?? "sandbox-system",
     ...execution,

@@ -25,6 +25,7 @@ jump to the full index below.
 
 - [deploy/talos/README.md](../deploy/talos/README.md) — real cluster, Kata, Flux
 - [control-plane-faults.md](control-plane-faults.md) — failure injection
+- [backup-restore.md](backup-restore.md) — encrypted ledger backups and restore
 - [capacity-model.md](capacity-model.md) — baseline vs peak accounting
 - [warm-pool.md](warm-pool.md) — pre-booted guests and the claim path
 - [production-readiness.md](production-readiness.md) — known gaps, ordered

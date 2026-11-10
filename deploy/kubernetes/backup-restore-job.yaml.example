@@ -1,0 +1,57 @@
+# Example restore job. Not part of the kustomization.
+#
+# 1. Scale deploy/controller to zero.
+# 2. Replace the image tag and the backup filename.
+# 3. kubectl apply -f deploy/kubernetes/backup-restore-job.yaml.example
+# 4. kubectl -n sandbox-system logs -f job/controller-restore
+# 5. Delete the job and scale the controller back to one.
+#
+# The CLI decrypts and verifies before touching /data/controller.db. It keeps
+# the previous database as controller.db.pre-restore-<timestamp>.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: controller-restore
+  namespace: sandbox-system
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: restore
+          image: ghcr.io/ejackson-vp/sandbox/control:REPLACE
+          command: ["node", "controller/dist/backup-restore.js"]
+          args:
+            - "--backup=/backups/REPLACE.db.enc"
+            - "--db=/data/controller.db"
+            - "--force"
+            # Add --payment-key=<key> to assert a known payment survived.
+          env:
+            - name: BACKUP_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: backup-encryption-key}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: backups, mountPath: /backups, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: controller-data
+        - name: backups
+          persistentVolumeClaim:
+            claimName: controller-backups
+        - name: tmp
+          emptyDir: {sizeLimit: "64Mi"}

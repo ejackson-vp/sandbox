@@ -7,6 +7,12 @@ the container registry.
 
 ## Unreleased
 
+### Added
+
+- Scheduled, encrypted SQLite backups: a native online copy, integrity/row
+  checks, streaming AES-256-GCM, retention, `sandbox_backup_age_seconds`, and a
+  restore CLI/job (#18).
+
 ### Security
 
 - Warm-pool claims are bound to the guest image and boot identity. A pod from an

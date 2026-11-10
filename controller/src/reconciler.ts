@@ -26,6 +26,7 @@ import { Termination } from "./termination.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import { NoopSnapshotter, type Snapshotter } from "./snapshotter.js";
 import { CapacityService } from "./capacity/service.js";
+import { BackupService } from "./backup.js";
 import { log } from "@x402s/shared";
 
 export { LifecycleError } from "./lifecycle.js";
@@ -61,6 +62,7 @@ export class Reconciler {
   private readonly provisioning: Provisioning;
   private readonly lifecycle: Lifecycle;
   private readonly termination: Termination;
+  private readonly backup: BackupService;
   private readonly now: () => number;
 
   constructor(private readonly deps: ReconcilerDeps) {
@@ -84,6 +86,14 @@ export class Reconciler {
     this.provisioning = new Provisioning(this.ctx, this.warm);
     this.lifecycle = new Lifecycle(this.ctx, this.provisioning);
     this.termination = new Termination(this.ctx);
+    this.backup = new BackupService({
+      store: deps.store,
+      dir: deps.cfg.backupDir,
+      key: deps.cfg.backupKey,
+      intervalMs: deps.cfg.backupIntervalMs,
+      retention: deps.cfg.backupRetention,
+      now: () => this.now(),
+    });
   }
 
   start(): void {
@@ -176,6 +186,7 @@ export class Reconciler {
       await this.lifecycle.cleanup();
       this.termination.reconcileRefunds();
       await this.ctx.capacity.reap();
+      await this.backup.maybeRun();
     } catch (err) {
       log.warn("housekeeping_failed", { error: (err as Error).message });
     } finally {
