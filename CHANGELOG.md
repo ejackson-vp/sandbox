@@ -5,6 +5,15 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
+## Unreleased
+
+### Fixed
+
+- A resumed session can no longer reach `READY` with its compute reservation
+  still counted as `SUSPENDED`. The reaper could re-suspend the reservation
+  between admission and `markResuming`; the controller now reasserts the
+  allocation once the session is `RESUMING` (#114).
+
 ## 0.1.20
 
 ### Added

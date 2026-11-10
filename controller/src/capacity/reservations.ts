@@ -117,6 +117,9 @@ export class ReservationRepository implements ReservationStore {
       suspend: this.db.prepare(
         "UPDATE reservations SET state='SUSPENDED', pod_name=NULL, expires_at=NULL, updated_at=? WHERE session_id=? AND state != 'RELEASED'",
       ),
+      reassertAllocated: this.db.prepare(
+        "UPDATE reservations SET state='ALLOCATED', updated_at=? WHERE session_id=? AND state='SUSPENDED'",
+      ),
       resume: this.db.prepare(
         `UPDATE reservations SET state='ALLOCATED', node_id=?, pod_name=NULL,
            baseline_cpu_millis=?, baseline_memory_bytes=?, baseline_storage_bytes=?,
@@ -412,6 +415,11 @@ export class ReservationRepository implements ReservationStore {
 
   suspendSession(sessionId: string): boolean {
     return this.stmts.suspend!.run(Date.now(), sessionId).changes > 0;
+  }
+
+  /** Resume was already admitted; undo a concurrent re-suspend of the row. */
+  reassertAllocated(sessionId: string): boolean {
+    return this.stmts.reassertAllocated!.run(Date.now(), sessionId).changes > 0;
   }
 
   beginRelease(sessionId: string, podName: string | null): boolean {
