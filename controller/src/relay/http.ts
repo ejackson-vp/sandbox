@@ -1,18 +1,22 @@
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, Request, Response } from "express";
 import {
   INTERNAL_RATE_LIMIT,
   metrics,
   rateLimit,
-  recordAuthFailure,
   TokenBucket,
   type MetricsRegistry,
 } from "@x402s/shared";
 import { log } from "@x402s/shared";
-import { constantTimeEqual } from "../tokens.js";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
 
-export interface RelayHttpOptions {
-  adminToken: string;
+export interface RelayProbeOptions {
+  /** Identity of this relay process; changes on every restart. */
+  generation: string;
+  /** Optional registry size, reported on /healthz for dashboards. */
+  registry?: RelayRegistry;
+}
+
+export interface RelayControlOptions {
   /** Identity of this relay process; changes on every restart. */
   generation: string;
   /**
@@ -24,25 +28,20 @@ export interface RelayHttpOptions {
   metricsRegistry?: MetricsRegistry;
 }
 
-export function registerRelayRoutes(
-  app: Express,
-  registry: RelayRegistry,
-  opts: RelayHttpOptions,
-): void {
-  const requireAdmin = (req: Request, res: Response, next: NextFunction): void => {
-    const token = req.header("x-internal-token") ?? "";
-    if (!opts.adminToken || !constantTimeEqual(token, opts.adminToken)) {
-      recordAuthFailure("relay_admin_token");
-      res.status(401).json({ error: "unauthorized" });
-      return;
-    }
-    next();
-  };
-
+/**
+ * Liveness and readiness stay on the guest listener: kubelet probes cannot
+ * present a client certificate. Both bodies are bounded and carry no secrets
+ * (the generation is a random per-process id).
+ */
+export function registerRelayProbeRoutes(app: Express, opts: RelayProbeOptions): void {
   // Liveness plus the controller's generation probe. Deliberately cheap and
   // unauthenticated: the generation is a random per-process id, not a secret.
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, generation: opts.generation, sessions: registry.size() });
+    res.json({
+      ok: true,
+      generation: opts.generation,
+      ...(opts.registry ? { sessions: opts.registry.size() } : {}),
+    });
   });
 
   // Readiness. The relay's only dependency is its own in-memory registry, so a
@@ -52,10 +51,20 @@ export function registerRelayRoutes(
   app.get("/readyz", (_req, res) => {
     res.json({ ok: true });
   });
+}
 
-  // Bound every authenticated internal route before it touches the registry.
-  // Health probes above stay unthrottled. Keyed on the socket peer: the
-  // controller pod on the in-cluster listener, never a forwarded header.
+/**
+ * The controller-facing surface. Mount this only on the control listener; it
+ * is never reachable from the guest WebSocket listener.
+ */
+export function registerRelayControlRoutes(
+  app: Express,
+  registry: RelayRegistry,
+  opts: RelayControlOptions,
+): void {
+  // Bound every control route before it touches the registry. Keyed on the
+  // socket peer: the controller pod on the control listener, never a forwarded
+  // header.
   const internalLimiter =
     opts.internalRateLimiter ??
     new TokenBucket(
@@ -66,10 +75,9 @@ export function registerRelayRoutes(
   app.use("/internal", rateLimit(internalLimiter, "relay", opts.metricsRegistry ?? metrics));
 
   // Guest-facing relay metrics are published on the private METRICS_PORT
-  // listener in the composition root, not on this mTLS-reachable listener.
+  // listener in the composition root, not on this control listener.
 
-  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
-  app.post("/internal/register", requireAdmin, (req, res) => {
+  app.post("/internal/register", (req, res) => {
     const { sessionId, tokenHash, ttlMs, generation } = req.body ?? {};
     if (typeof sessionId !== "string" || typeof tokenHash !== "string") {
       res.status(400).json({ error: "invalid_request" });
@@ -96,13 +104,11 @@ export function registerRelayRoutes(
     res.status(201).json({ ok: true, generation: opts.generation });
   });
 
-  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
-  app.get("/internal/:sessionId/state", requireAdmin, (req, res) => {
+  app.get("/internal/:sessionId/state", (req, res) => {
     res.json(registry.state(String(req.params.sessionId ?? "")));
   });
 
-  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
-  app.post("/internal/:sessionId/request", requireAdmin, (req: Request, res: Response) => {
+  app.post("/internal/:sessionId/request", (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const { id, envelope, deadlineMs, epoch } = req.body ?? {};
     if (typeof id !== "string" || id.length < 8 || id.length > 128) {
@@ -142,8 +148,7 @@ export function registerRelayRoutes(
     res.status(202).json({ ok: true });
   });
 
-  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
-  app.post("/internal/:sessionId/cancel", requireAdmin, (req: Request, res: Response) => {
+  app.post("/internal/:sessionId/cancel", (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const { id } = req.body ?? {};
     if (typeof id !== "string") {
@@ -163,8 +168,7 @@ export function registerRelayRoutes(
     res.status(202).json({ ok: true });
   });
 
-  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
-  app.post("/internal/:sessionId/shutdown", requireAdmin, (req: Request, res: Response) => {
+  app.post("/internal/:sessionId/shutdown", (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const reason = String(req.body?.reason ?? "lease ended");
     if (registry.shutdown(sessionId, reason) === "not_registered") {
@@ -175,8 +179,7 @@ export function registerRelayRoutes(
     res.status(202).json({ ok: true });
   });
 
-  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
-  app.post("/internal/:sessionId/claim", requireAdmin, (req: Request, res: Response) => {
+  app.post("/internal/:sessionId/claim", (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const claim = req.body?.claim;
     if (!claim || typeof claim !== "object" || typeof (claim as { sessionId?: unknown }).sessionId !== "string") {
@@ -195,8 +198,7 @@ export function registerRelayRoutes(
     res.status(202).json({ ok: true });
   });
 
-  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
-  app.get("/internal/:sessionId/response/:requestId", requireAdmin, async (req: Request, res: Response) => {
+  app.get("/internal/:sessionId/response/:requestId", async (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const requestId = String(req.params.requestId ?? "");
     const requestedWait = Number(req.query.waitMs);
@@ -219,8 +221,7 @@ export function registerRelayRoutes(
     res.status(202).json({ pending: result.stillPending });
   });
 
-  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
-  app.delete("/internal/:sessionId", requireAdmin, (req, res) => {
+  app.delete("/internal/:sessionId", (req, res) => {
     const sessionId = String(req.params.sessionId ?? "");
     if (!registry.remove(sessionId)) {
       res.status(404).json({ error: "session_not_registered" });

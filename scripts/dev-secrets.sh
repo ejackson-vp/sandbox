@@ -14,8 +14,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${ROOT}/deploy/kubernetes/02-secrets-dev.yaml"
 
 if [ -f "${OUT}" ] && [ "${1:-}" != "--force" ]; then
-  echo "==> dev credentials already exist: deploy/kubernetes/02-secrets-dev.yaml"
-  exit 0
+  if grep -q "name: relay-tls" "${OUT}"; then
+    echo "==> dev credentials already exist: deploy/kubernetes/02-secrets-dev.yaml"
+    exit 0
+  fi
+  echo "==> existing dev credentials predate relay mTLS; regenerating"
 fi
 
 rand() { openssl rand -hex 24; }
@@ -52,5 +55,91 @@ stringData:
   dev-attestation-key: "${ATTESTATION_KEY}"
   dev-attestation-key-id: "x402-dev-attestation-key-INSECURE-DEV-ONLY"
 EOF
+
+# ---------------------------------------------------------------------------
+# Controller -> relay mTLS.
+#
+# A CA, a relay server certificate (the relay Service names and localhost), and
+# a controller client certificate with CN=controller. All three are short-lived
+# local-cluster material and never leave this git-ignored file. A deployed
+# environment uses its own Secret from the private repo.
+# ---------------------------------------------------------------------------
+CERT_DIR="$(mktemp -d)"
+trap 'rm -rf "${CERT_DIR}"' EXIT
+
+cat > "${CERT_DIR}/ca.cnf" <<'EOF'
+[req]
+distinguished_name = dn
+prompt = no
+x509_extensions = v3_ca
+[dn]
+CN = x402-local-control-ca
+[v3_ca]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign
+EOF
+
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout "${CERT_DIR}/ca.key" -out "${CERT_DIR}/ca.crt" \
+  -days 825 -sha256 -config "${CERT_DIR}/ca.cnf" >/dev/null 2>&1
+
+# issue <cn> <eku> <basename> [extensions]
+issue() {
+  local cn="$1" eku="$2" base="$3" extra="${4:-}"
+  openssl req -new -newkey rsa:2048 -nodes \
+    -keyout "${CERT_DIR}/${base}.key" -out "${CERT_DIR}/${base}.csr" \
+    -subj "/CN=${cn}" >/dev/null 2>&1
+  {
+    echo "basicConstraints=critical,CA:FALSE"
+    echo "keyUsage=critical,digitalSignature,keyEncipherment"
+    echo "extendedKeyUsage=${eku}"
+    if [ -n "${extra}" ]; then echo "${extra}"; fi
+  } > "${CERT_DIR}/${base}.ext"
+  openssl x509 -req -in "${CERT_DIR}/${base}.csr" \
+    -CA "${CERT_DIR}/ca.crt" -CAkey "${CERT_DIR}/ca.key" -CAcreateserial \
+    -out "${CERT_DIR}/${base}.crt" -days 825 -sha256 \
+    -extfile "${CERT_DIR}/${base}.ext" >/dev/null 2>&1
+}
+
+issue relay serverAuth relay \
+  "subjectAltName=DNS:relay,DNS:relay.sandbox-system,DNS:relay.sandbox-system.svc,DNS:relay.sandbox-system.svc.cluster.local,DNS:localhost,IP:127.0.0.1"
+issue controller clientAuth controller
+
+indent() { sed 's/^/    /'; }
+
+{
+  cat <<EOF
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: relay-tls
+  namespace: sandbox-system
+type: kubernetes.io/tls
+stringData:
+  tls.crt: |
+$(indent < "${CERT_DIR}/relay.crt")
+  tls.key: |
+$(indent < "${CERT_DIR}/relay.key")
+  ca.crt: |
+$(indent < "${CERT_DIR}/ca.crt")
+---
+# Client identity mounted into the controller.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: relay-client-tls
+  namespace: sandbox-system
+type: Opaque
+stringData:
+  tls.crt: |
+$(indent < "${CERT_DIR}/controller.crt")
+  tls.key: |
+$(indent < "${CERT_DIR}/controller.key")
+  ca.crt: |
+$(indent < "${CERT_DIR}/ca.crt")
+EOF
+} >> "${OUT}"
+
 chmod 600 "${OUT}"
-echo "==> generated deploy/kubernetes/02-secrets-dev.yaml (git-ignored)"
+echo "==> generated deploy/kubernetes/02-secrets-dev.yaml (git-ignored, incl. relay mTLS certs)"

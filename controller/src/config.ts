@@ -8,7 +8,8 @@ import {
 } from "@x402s/shared";
 import { KubeProvisioner, NullProvisioner, type Provisioner } from "./k8s.js";
 import { LocalProvisioner } from "./local-provisioner.js";
-import { RelayClient } from "./relay-client.js";
+import { RelayClient, type RelayClientTlsOptions } from "./relay-client.js";
+import type { RelayTlsOptions } from "./relay.js";
 import { mintProxyToken } from "./tokens.js";
 import { parseBackupKey } from "./backup-key.js";
 
@@ -26,6 +27,12 @@ export interface ControllerConfig {
   tlsKeyFile?: string;
   tlsCaFile?: string;
   relayPort: number;
+  /** mTLS listener for the controller-facing relay control routes. */
+  relayControlPort: number;
+  /** Server certificate/key/client CA for the relay control listener. */
+  relayTls?: RelayTlsOptions;
+  /** Controller client certificate/key/CA for the relay control listener. */
+  relayClientTls?: RelayClientTlsOptions;
   proxyPort: number;
   adminToken: string;
   relayAdminToken: string;
@@ -156,6 +163,25 @@ function parseExecution(
   return { executionMode, runtimeClass, allowInsecureDev, guestImageDigest, guestImageRef };
 }
 
+/**
+ * All three files must be set together or none of them. Returns undefined when
+ * the feature is disabled, so callers can fail closed only where it matters.
+ */
+function parseTlsFiles(
+  env: NodeJS.ProcessEnv,
+  prefix: string,
+): { certFile: string; keyFile: string; caFile: string } | undefined {
+  const certFile = env[`${prefix}_CERT_FILE`];
+  const keyFile = env[`${prefix}_KEY_FILE`];
+  const caFile = env[`${prefix}_CA_FILE`];
+  const set = [certFile, keyFile, caFile];
+  if (set.every((value) => !value)) return undefined;
+  if (set.some((value) => !value)) {
+    throw new Error(`${prefix}_CERT_FILE, ${prefix}_KEY_FILE and ${prefix}_CA_FILE must be set together`);
+  }
+  return { certFile: certFile!, keyFile: keyFile!, caFile: caFile! };
+}
+
 function parseTls(env: NodeJS.ProcessEnv): Pick<ControllerConfig, "tlsPort" | "tlsCertFile" | "tlsKeyFile" | "tlsCaFile"> | Record<string, never> {
   const tlsPortRaw = env.CONTROLLER_TLS_PORT ?? "0";
   const tlsPortNum = Number(tlsPortRaw);
@@ -224,6 +250,19 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     throw new Error(`invalid WARM_POOL_TIER ${String(warmPoolTier)}`);
   }
   const tls = parseTls(env);
+  const relayTls = parseTlsFiles(env, "RELAY_TLS");
+  const relayClientTls = parseTlsFiles(env, "RELAY_CLIENT_TLS");
+  // A cluster relay must never expose the control routes over plaintext. The
+  // local process and unit tests may run without certificates.
+  if (kubeEnabled && (role === "relay" || role === "all") && !relayTls) {
+    throw new Error("RELAY_TLS_CERT_FILE/RELAY_TLS_KEY_FILE/RELAY_TLS_CA_FILE are required for a relay when KUBERNETES_ENABLED is true");
+  }
+  if (relayClientTls && !/^https:/i.test(env.RELAY_URL ?? "")) {
+    throw new Error("RELAY_CLIENT_TLS_* requires an https:// RELAY_URL");
+  }
+  if (!relayClientTls && /^https:/i.test(env.RELAY_URL ?? "")) {
+    throw new Error("RELAY_CLIENT_TLS_CERT_FILE/RELAY_CLIENT_TLS_KEY_FILE/RELAY_CLIENT_TLS_CA_FILE are required for an https:// RELAY_URL");
+  }
   const tokens = parseTokens(env, role, adminToken);
   const backupEnabled = role === "controller" || role === "all";
   const backupDir = backupEnabled ? (env.BACKUP_DIR ?? "") : "";
@@ -242,6 +281,9 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     metricsHost: env.METRICS_HOST ?? "0.0.0.0",
     ...tls,
     relayPort: int(env.X402_RELAY_PORT ?? env.RELAY_PORT, 8443, 1, 65535),
+    relayControlPort: int(env.RELAY_CONTROL_PORT, 8444, 1, 65535),
+    ...(relayTls ? { relayTls } : {}),
+    ...(relayClientTls ? { relayClientTls } : {}),
     proxyPort: int(env.X402_PROXY_PORT ?? env.PROXY_PORT, 3128, 1, 65535),
     adminToken,
     ...tokens,
@@ -325,7 +367,11 @@ export function makeProvisioner(cfg: ControllerConfig): Provisioner {
 }
 
 export function makeRelayClient(cfg: ControllerConfig): RelayClient {
-  return new RelayClient({ baseUrl: cfg.relayBaseUrl, adminToken: cfg.relayAdminToken });
+  return new RelayClient({
+    baseUrl: cfg.relayBaseUrl,
+    adminToken: cfg.relayAdminToken,
+    ...(cfg.relayClientTls ? { tls: cfg.relayClientTls } : {}),
+  });
 }
 
 export function proxyTokenFor(cfg: ControllerConfig, sessionId: string): string {

@@ -128,6 +128,8 @@ spec:
             - {name: data, mountPath: /data}
             - {name: backups, mountPath: /backups}
             - {name: tls, mountPath: /tls, readOnly: true}
+            # Client identity for the relay's mTLS control listener.
+            - {name: relay-tls, mountPath: /relay-tls, readOnly: true}
           readinessProbe:
             # Store writable and migrated, relay reachable, provisioner
             # reachable. Results are cached for ~2s inside the process.
@@ -157,4 +159,10 @@ spec:
           secret:
             secretName: controller-tls
             optional: true
+            defaultMode: 0444
+        # Client certificate (CN=controller) for the relay control listener.
+        # Required: RELAY_URL is https in the cluster config map.
+        - name: relay-tls
+          secret:
+            secretName: relay-client-tls
             defaultMode: 0444

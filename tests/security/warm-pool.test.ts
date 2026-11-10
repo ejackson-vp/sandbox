@@ -126,9 +126,10 @@ describe.skipIf(!available || pool.length === 0)("warm pool (real cluster)", () 
       timeoutMs: 15_000,
     });
     expect(res.ok).toBe(true);
-    // 401 is the admin-token check. The guest can reach the relay (it must,
-    // for its own WebSocket), but it cannot call the claim route.
-    expect(res.stdout.trim()).toBe("401");
+    // The legacy admin-token route is not mounted on the guest listener: control
+    // routes live only on the mTLS listener (8444), which the sandbox cannot
+    // reach. 404 proves the guest path has no control surface at all.
+    expect(res.stdout.trim()).toBe("404");
   }, 240_000);
 
   it("gives each session fresh evidence bound to its own id", async () => {
