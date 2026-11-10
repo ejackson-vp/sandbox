@@ -11,7 +11,7 @@
  *   - Pod Security Admission rejects privileged workloads
  *   - payment replay cannot provision a second session
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,6 +77,19 @@ afterAll(() => {
 });
 
 describe.skipIf(!available)("workload hardening (real cluster)", () => {
+  beforeAll(async () => {
+    // The suite is often started immediately after a deploy or after another
+    // test that deliberately killed the controller. Wait for the API to report
+    // the controller ready instead of racing the retryable 503 window.
+    await waitFor(async () => {
+      try {
+        return (await fetch(`${API}/readyz`)).ok ? true : null;
+      } catch {
+        return null;
+      }
+    }, 120_000, 500);
+  }, 130_000);
+
   it("runs with a hardened pod spec, correct limits, and removes the pod", async () => {
     const client = makeClient();
     const handle = await client.createSession({ tier: "standard" });
@@ -104,7 +117,9 @@ describe.skipIf(!available)("workload hardening (real cluster)", () => {
     for (const volume of spec.volumes ?? []) expect(volume.hostPath).toBeUndefined();
 
     const container = spec.containers[0];
-    expect(container.image).toBe("x402-sandbox/guest:dev");
+    // The cluster must run the digest the controller verified, never a floating
+    // tag. #4/#49 close the moved-tag window; this assertion enforces it.
+    expect(container.image).toMatch(/^x402-sandbox\/guest@sha256:[0-9a-f]{64}$/);
     expect(container.securityContext.privileged).toBe(false);
     expect(container.securityContext.allowPrivilegeEscalation).toBe(false);
     expect(container.securityContext.readOnlyRootFilesystem).toBe(true);
