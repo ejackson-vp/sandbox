@@ -4,6 +4,7 @@ import type { ControlApiStore } from "../store/ports.js";
 import type { RelayClient } from "../relay-client.js";
 import type { CapacityService } from "../capacity/service.js";
 import type { Provisioner } from "../k8s.js";
+import type { Leadership } from "../leadership.js";
 
 export interface ControlApiDeps {
   cfg: ControllerConfig;
@@ -14,6 +15,11 @@ export interface ControlApiDeps {
    * schedule a pod; the controller always passes its real provisioner.
    */
   provisioner?: Provisioner;
+  /**
+   * Writer role, checked by readiness. Omitted by unit tests and local runs
+   * that have no election to take part in.
+   */
+  leadership?: Pick<Leadership, "isLeader" | "onChange">;
   /** Optional event-driven nudge (the reconciler is not started in unit tests). */
   wake?: () => void;
   /** Optional lifecycle actions (the reconciler owns them). */

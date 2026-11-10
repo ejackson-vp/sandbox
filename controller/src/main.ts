@@ -19,6 +19,8 @@ import { Reconciler } from "./reconciler.js";
 import { OperationFence } from "./operation-fence.js";
 import { CapacityService } from "./capacity/service.js";
 import { collectSqliteMetrics, registerSqliteMetrics } from "./store-metrics.js";
+import { bindLeadership, SoloLeadership, type Leadership } from "./leadership.js";
+import { makeLeaseLeadership } from "./leadership-lease.js";
 import {
   LATENCY_BUCKETS,
   metrics,
@@ -123,10 +125,19 @@ async function main(): Promise<void> {
   mkdirSync(dirname(cfg.dbPath), { recursive: true });
   const store = new Store(cfg.dbPath);
   collectors.push(() => collectSqliteMetrics(store));
-  const recovered = store.recoverInterruptedOperations();
-  if (recovered.requests > 0 || recovered.sessions > 0) {
-    log.warn("sandbox_operations_recovered", recovered);
-  }
+  // One writer, still: a second replica is a standby, not a second scheduler.
+  // Block this connection's writes until the process actually holds the role,
+  // so a follower can neither recover a crashed leader's work nor reconcile on
+  // its own (docs/adr/0009).
+  const leadership: Leadership = cfg.leaderElection
+    ? makeLeaseLeadership(cfg)
+    : new SoloLeadership(cfg.leaderIdentity);
+  store.setWritesBlocked(!leadership.isLeader());
+  log.info("leadership_mode", {
+    mode: leadership.mode,
+    identity: leadership.identity,
+    reason: cfg.leaderElection ? "kubernetes_lease" : cfg.kubeEnabled ? "leader_election_off" : "kubernetes_disabled",
+  });
 
   const shutdown: Array<() => Promise<void>> = [];
 
@@ -167,11 +178,6 @@ async function main(): Promise<void> {
   const provisioner = makeProvisioner(cfg);
   const relay = makeRelayClient(cfg);
   const fence = new OperationFence(store, relay);
-  // Unblock any startup fence as soon as the relay is reachable. The control
-  // API fails closed until this succeeds, and the reconciler retries it.
-  void fence.reconcile().catch((err) => {
-    log.warn("operation_fence_startup_failed", { error: (err as Error).message });
-  });
   const capacity = new CapacityService({ cfg, store, provisioner });
 
   let wake: (() => void) | undefined;
@@ -183,6 +189,7 @@ async function main(): Promise<void> {
     relay,
     provisioner,
     capacity,
+    leadership,
     wake: () => wake?.(),
     suspend: (id) => {
       if (!suspend) return Promise.reject(new Error("reconciler not started"));
@@ -223,19 +230,57 @@ async function main(): Promise<void> {
   });
 
   const reconciler = new Reconciler({ cfg, store, provisioner, relay, capacity, fence });
-  wake = () => reconciler.wake();
+  wake = () => {
+    // A nudge can land on a standby: the relay pings whatever CONTROLLER_URL
+    // resolves to. Readiness keeps traffic off a follower; this keeps the loop
+    // off it too.
+    if (leadership.isLeader()) reconciler.wake();
+  };
   suspend = (id) => reconciler.suspendSession(id);
   resume = (id) => reconciler.resumeSession(id);
-  reconciler.start();
+
+  bindLeadership(leadership, {
+    acquire: () => {
+      // The lease is ours: writes first, because recovery is itself a write.
+      store.setWritesBlocked(false);
+      const recovered = store.recoverInterruptedOperations();
+      if (recovered.requests > 0 || recovered.sessions > 0) {
+        log.warn("sandbox_operations_recovered", recovered);
+      }
+      // Unblock any startup fence as soon as the relay is reachable. The control
+      // API fails closed until this succeeds, and the reconciler retries it.
+      void fence.reconcile().catch((err) => {
+        log.warn("operation_fence_startup_failed", { error: (err as Error).message });
+      });
+      log.info("leadership_acquired", { mode: leadership.mode, identity: leadership.identity });
+    },
+    start: () => reconciler.start(),
+    stop: () => reconciler.stop(),
+    release: () => {
+      // The guard closes after the scheduler stopped, so a pass still in flight
+      // fails on the store instead of writing after the lease moved.
+      store.setWritesBlocked(true);
+      log.warn("leadership_released", { mode: leadership.mode, identity: leadership.identity });
+    },
+  });
 
   installShutdown(async () => {
+    // Order: stop scheduling, refuse writes, then hand the lease over.
     reconciler.stop();
+    store.setWritesBlocked(true);
+    await leadership.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     if (tlsServer) await new Promise<void>((resolve) => tlsServer!.close(() => resolve()));
     for (const fn of shutdown) await fn();
     closeMetrics();
     store.close();
   });
+
+  await leadership.start();
+  if (!leadership.isLeader()) {
+    // A standby: readyz answers 503 until the lease moves.
+    log.info("leadership_standby", { mode: leadership.mode, identity: leadership.identity });
+  }
 }
 
 async function listenRelay(relay: RelayServer, cfg: ControllerConfig): Promise<void> {

@@ -69,7 +69,17 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
       }
     };
   }
+  // The Service must route to the writer, not to any replica that is up. A
+  // follower reports 503 here, so the API never sends a create to a process that
+  // will refuse the write.
+  if (deps.leadership) {
+    const leadership = deps.leadership;
+    readinessChecks.leadership = () =>
+      leadership.isLeader() ? { ok: true } : { ok: false, reason: "not_leader" };
+  }
   const readiness = new ReadinessCache(readinessChecks);
+  // A leadership change must be visible on the next probe, not after the TTL.
+  deps.leadership?.onChange(() => readiness.invalidate());
 
   // Readiness: can this controller serve creates right now? Unauthenticated for
   // the same reason as liveness (kubelet has no admin token); the body contains
