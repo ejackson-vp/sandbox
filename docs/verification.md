@@ -37,6 +37,25 @@ cache, Kubernetes scheduling and the warm pool. Those are either covered by
 tests in `tests/` or documented as non-goals in
 [control-plane-faults.md](control-plane-faults.md).
 
+## Nightly run
+
+The `model` job in
+[`.github/workflows/nightly-faults.yml`](../.github/workflows/nightly-faults.yml)
+runs `make verify-model` every night at 04:17 UTC on `ubuntu-latest`. It does
+not depend on the cluster fault runner, so a missing or unhealthy self-hosted
+runner cannot hide a model regression. The pinned TLC jar is restored from the
+Actions cache and still verified by `verification/run-tlc.sh`; on failure the
+TLC output is uploaded as `nightly-model-<run id>`.
+
+Run the same check locally with:
+
+```bash
+make verify-model
+```
+
+A red nightly run means the bounded model found a counterexample or a broken
+variant started passing. Treat it as a protocol regression, not a flaky test.
+
 ## Related
 
 - [Lifecycle](lifecycle.md) and [sessions](sessions.md): the user-visible states.
