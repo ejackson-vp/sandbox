@@ -378,6 +378,11 @@ export class Store {
     return this.stmts.setProvisioning!.run(podName, Date.now(), id).changes > 0;
   }
 
+  /** Replace the pod of a session that is already PROVISIONING (relay restart). */
+  setProvisioningPod(id: string, podName: string): boolean {
+    return this.stmts.setProvisioningPod!.run(podName, Date.now(), id).changes > 0;
+  }
+
   setRelayToken(id: string, tokenHash: string): void {
     this.stmts.setRelayToken!.run(tokenHash, Date.now(), id);
   }

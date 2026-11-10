@@ -135,6 +135,7 @@ scenario); a run that exceeds its budget exits nonzero.
 | Controller killed during provisioning | 50 | 33.4 s–37.8 s across runs (17.8 s before the deterministic pre-kill wait) | 50/50 READY, 50 Pods, 50 allocated reservations, 0 failures |
 | API killed during provisioning | 20 | 6.6 s / 6.8 s | 20/20 READY, 20 Pods, 20 allocated reservations, 0 harness failures |
 | Relay killed with one in-flight operation per session | 3–5 | 6.7 s–27.2 s (dominated by relay rollout readiness) | all sessions `FAILED`, all operations failed or reported indeterminate, payment preserved, 0 Pods, 0 reservations |
+| Relay restarted while paid creates are provisioning | 5 | 4.5 s–9.5 s across three runs | 5/5 READY, 5 Pods, 5 allocated reservations, no terminal sessions |
 | Controller killed with 50 live sessions: 30 READY, 10 ACTIVE, 10 SUSPENDED | 50 | 7.6 s restart; 2.2 s resume | all operation gates cleared, 40 non-suspended sessions executed after restart, 10 stayed `SUSPENDED` and then resumed; 40 Pods → 50 Pods, 40 allocated + 10 suspended → 50 allocated, 0 failures |
 | Controller paused during provisioning | 5 | 3.21–3.23 s across 3 runs | 5/5 READY, 5 Pods, 5 allocated, 0 failures |
 | API paused during provisioning | 5 | 3.25 s | 5/5 READY, 5 Pods, 5 allocated, 0 failures |
@@ -191,6 +192,13 @@ never becomes ready, the create must fail before READY with a refundable reason
   retries with backoff if the generation changed. A registration that landed
   on a terminating relay is therefore discarded instead of being treated as
   success.
+- **Endpoint re-resolution and Pod reprovision.** The relay endpoint is a ready
+  Pod IP, not a stable ClusterIP (a Kata guest cannot use the ClusterIP). The
+  controller does not cache it, re-resolves it after registration, and, if the
+  relay generation changes after the Pod was created but before the guest
+  connects, deletes that Pod and creates it again against the current endpoint.
+  A create that would otherwise sit on a dead IP now converges in a few
+  seconds instead of timing out.
 - **Fresh admin connections.** Relay admin calls send `Connection: close`.
   A Kubernetes Service DNATs an existing keep-alive socket to the old Pod even
   after its endpoint is removed, so without this the controller can keep
@@ -306,8 +314,8 @@ that can only reach the sandbox namespaces, not an admin kubeconfig.
 | `relay-pause` | relay | `SIGSTOP`/`SIGCONT` with operations in flight | 5 | 60 s |
 
 `full` is all eight; `smoke` is `api-kill`, `controller-pause` and
-`relay-pause`. The `relay-create-restart` case requires a real cluster and was
-added without a local run (see below).
+`relay-pause`. All eight cases, including `relay-create-restart`, have run on
+the kind rig.
 
 ### Artifacts and reading a red run
 

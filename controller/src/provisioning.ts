@@ -26,6 +26,8 @@ export class Provisioning {
    * in-flight one.
    */
   private readonly inFlight = new Set<string>();
+  /** Relay generation that accepted each provisioning pod. */
+  private readonly relayGeneration = new Map<string, string>();
 
   constructor(
     private readonly ctx: ProvisioningContext,
@@ -189,13 +191,14 @@ export class Provisioning {
       return;
     }
 
-    const { podName, createStarted } = await this.createPod(session, relayAddr, proxyAddr, {
+    const { podName, createStarted, relayGeneration } = await this.createPod(session, relayAddr, proxyAddr, {
       ...(workspacePvc ? { workspacePvc } : {}),
       ...(reservation && reservation.nodeId !== "disabled" ? { nodeName: reservation.nodeId } : {}),
     });
     this.ctx.store.setProvisioning(session.id, podName);
     this.ctx.capacity.updatePod(session.id, podName);
     this.ctx.store.mergeTimings(session.id, { podCreateCallMs: Date.now() - createStarted });
+    this.relayGeneration.set(session.id, relayGeneration);
     metrics
       .histogram("sandbox_provision_duration_seconds", "Entitlement to pod create", LATENCY_BUCKETS)
       .observe((Date.now() - (session.paidAt ?? session.createdAt)) / 1000);
@@ -210,12 +213,58 @@ export class Provisioning {
   }
 
 
+  /**
+   * Replace a provisioning pod whose guest cannot reach the current relay.
+   *
+   * The old pod is deleted first so the deterministic pod name can be reused;
+   * if it is still terminating we leave the session in PROVISIONING and retry
+   * on the next reconcile pass rather than racing Kubernetes with a 409.
+   */
+  private async recreatePod(session: SessionRecord): Promise<boolean> {
+    const oldPod = session.podName;
+    if (!oldPod) return false;
+    await this.ctx.provisioner.deletePod(oldPod, 0).catch(() => undefined);
+    for (let i = 0; i < 50; i += 1) {
+      const pod = await this.ctx.provisioner.getPod(oldPod).catch(() => null);
+      if (!pod) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (await this.ctx.provisioner.getPod(oldPod).catch(() => null)) {
+      log.warn("sandbox_pod_reprovision_pending", { sessionId: session.id, podName: oldPod });
+      return false;
+    }
+
+    const relayAddr = await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName);
+    const proxyAddr = await this.ctx.serviceAddress(this.ctx.cfg.proxyServiceName);
+    if (!relayAddr || !proxyAddr) return false;
+    const timings = session.timingsJson
+      ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
+      : {};
+    const created = await this.createPod(session, relayAddr, proxyAddr, {
+      ...(session.workspacePvc ? { workspacePvc: session.workspacePvc } : {}),
+      ...(session.state === "RESUMING" ? { resume: true } : {}),
+    });
+    if (!this.ctx.store.setProvisioningPod(session.id, created.podName)) return false;
+    this.ctx.capacity.updatePod(session.id, created.podName);
+    this.relayGeneration.set(session.id, created.relayGeneration);
+    this.ctx.store.mergeTimings(session.id, {
+      reprovisionCount: Number(timings.reprovisionCount ?? 0) + 1,
+    });
+    log.warn("sandbox_pod_reprovisioned", {
+      sessionId: session.id,
+      oldPod,
+      podName: created.podName,
+      relayGeneration: created.relayGeneration,
+    });
+    return true;
+  }
+
   async createPod(
     session: SessionRecord,
     relayAddr: { host: string; port: number },
     proxyAddr: { host: string; port: number },
     opts: { workspacePvc?: string; resume?: boolean; nodeName?: string } = {},
-  ): Promise<{ podName: string; createStarted: number }> {
+  ): Promise<{ podName: string; createStarted: number; relayGeneration: string }> {
     this.ctx.store.mergeTimings(session.id, {
       provisionStartAt: Date.now(),
       podRequestedAt: Date.now(),
@@ -227,7 +276,7 @@ export class Provisioning {
     // survived the call. A registration accepted by a terminating relay is
     // discarded and retried, so the pod never boots against a registry that is
     // about to disappear. A stale entry from a resumed session is replaced.
-    await this.ctx.relay.registerCurrent(session.id, tokenHash, ttlMs, {
+    const registration = await this.ctx.relay.registerCurrent(session.id, tokenHash, ttlMs, {
       deadlineMs: this.ctx.cfg.relayRegistrationTimeoutMs,
       replaceConnected: true,
       onRetry: (attempt, err) => log.warn("sandbox_relay_register_retry", {
@@ -238,6 +287,12 @@ export class Provisioning {
     });
     this.ctx.store.setRelayToken(session.id, tokenHash);
 
+    // Registration may have waited through a relay replacement. Resolve the
+    // endpoint again after it succeeds so the pod boots against the relay that
+    // accepted the registration, not the one that was cached before it.
+    const currentRelay = await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName);
+    const relay = currentRelay ?? relayAddr;
+
     const createStarted = Date.now();
     const { podName } = await this.ctx.provisioner.createPod({
       sessionId: session.id,
@@ -246,9 +301,9 @@ export class Provisioning {
       clientPublicKey: session.clientPublicKey,
       clientNonce: session.clientNonce,
       guestToken,
-      relayUrl: `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(session.id)}`,
-      relayHost: relayAddr.host,
-      relayPort: relayAddr.port,
+      relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(session.id)}`,
+      relayHost: relay.host,
+      relayPort: relay.port,
       proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
       proxyToken: proxyTokenFor(this.ctx.cfg, session.id),
       image: this.ctx.cfg.guestImageRef,
@@ -262,7 +317,7 @@ export class Provisioning {
       ...(session.baselineMemoryMib ? { baselineMemoryMiB: session.baselineMemoryMib } : {}),
       ...(opts.nodeName ? { nodeName: opts.nodeName } : {}),
     });
-    return { podName, createStarted };
+    return { podName, createStarted, relayGeneration: registration.generation };
   }
 
 
@@ -304,6 +359,22 @@ export class Provisioning {
         // that is about to exit. Re-register on the next pass instead.
         const before = await this.ctx.relay.health().catch(() => null);
         let state = await this.ctx.relay.state(session.id);
+        const generationAtCreate = this.relayGeneration.get(session.id) ?? null;
+        const relayChanged = Boolean(
+          before && generationAtCreate && before.generation !== generationAtCreate,
+        );
+        // A relay replacement can land after the pod was created but before
+        // the guest dials. The guest holds the old endpoint IP, so it can never
+        // reach the replacement. Recreate the pod against the current endpoint
+        // instead of waiting out the provisioning timeout. Warm pods are
+        // already running and are handled by their own reconnection path.
+        if (
+          session.podName &&
+          timings.warmPoolHit !== 1 &&
+          (!state.registered || (relayChanged && !state.connected))
+        ) {
+          if (await this.recreatePod(session)) return;
+        }
         if (!state.registered) {
           // The replacement relay does not know this session yet. Re-register
           // inside this pass (bounded, so one slow relay cannot stall the
@@ -360,6 +431,7 @@ export class Provisioning {
             metrics
               .histogram("sandbox_ready_duration_seconds", "Entitlement to READY", LATENCY_BUCKETS)
               .observe((readyAt - startedAt) / 1000);
+            this.relayGeneration.delete(session.id);
             log.info("sandbox_ready", {
               sessionId: session.id,
               evidenceType: state.attestation.evidenceType,
