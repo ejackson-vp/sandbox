@@ -13,6 +13,8 @@ import type {
 export interface CreateSessionRequest {
   /** Preset tier. If omitted, `durationSeconds` + limits are required. */
   tier?: SessionTier;
+  /** Guest runtime profile (`base`, `python`, `node`). Defaults to `base`. */
+  runtime?: string;
   durationSeconds?: number;
   cpuMillis?: number;
   memoryMiB?: number;
@@ -51,6 +53,12 @@ export interface PaymentSummary {
 
 export interface CreateSessionResponse {
   sessionId: string;
+  /**
+   * Guest runtime profile for this session. Always `base` or one of the
+   * supported profiles; echoed here so an old client can read it without
+   * parsing the embedded status view.
+   */
+  runtime?: string;
   /**
    * Possession capability. Derived deterministically from the settled payment
    * (HMAC) so that a retried request can recover it; only its SHA-256 hash is
@@ -121,6 +129,8 @@ export interface SessionStatus {
   tier: SessionTier;
   durationSeconds: number;
   limits: SessionLimits;
+  /** Guest runtime profile (`base`, `python`, `node`). */
+  runtime?: string;
   createdAt: string;
   paidAt?: string;
   readyAt?: string;

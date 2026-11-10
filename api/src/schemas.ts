@@ -8,6 +8,12 @@ import { MAX_LEASE_SECONDS } from "@x402s/shared";
 
 export const createSchema = z.object({
   tier: z.enum(["short", "standard", "extended", "long", "custom"]).optional(),
+  /**
+   * Guest runtime profile. Kept as a plain string so an unknown name reaches
+   * `resolveSessionSpec` and returns a specific 400 code rather than a generic
+   * schema error.
+   */
+  runtime: z.string().min(1).max(64).optional(),
   durationSeconds: z.number().int().min(1).max(MAX_LEASE_SECONDS).optional(),
   cpuMillis: z.number().int().positive().optional(),
   memoryMiB: z.number().int().positive().optional(),

@@ -106,7 +106,17 @@ data:
   PROVISION_QUEUE_TIMEOUT_MS: "120000"
   # Pre-booted, unleased sandboxes. 0 = off. The pool is sized by cgroup/disk
   # limits, so only sessions at or below the pool tier can claim a pod.
+  #
+  # One pool per runtime profile shares that budget. `base` is the guest image
+  # above and keeps WARM_POOL_BASE_MIN pods; any other profile starts at zero
+  # and grows after a claim misses it.
   WARM_POOL_SIZE: "0"
+  # WARM_POOL_BASE_MIN: "0"   # defaults to WARM_POOL_SIZE
+  # WARM_POOL_COOLDOWN_MS: "15000"
+  # WARM_POOL_IDLE_DRAIN_MS: "60000"
+  # Optional extra runtime profiles. Each image is pulled by its own pinned
+  # digest and must not list `base`.
+  # RUNTIME_PROFILES: '{"python":{"image":"ghcr.io/example/guest:0.1.23-python","digest":"sha256:<64 hex>"}}'
   WARM_POOL_TIER: "short"
   WARM_POOL_TTL_MS: "300000"
   WARM_CLAIM_TIMEOUT_MS: "8000"

@@ -35,6 +35,7 @@ export function describeSession(store: SessionViewStore, id: string): Controller
     failureCode: session.failureCode ?? undefined,
     failureMessage: session.failureMessage ?? undefined,
     runtimeClass: session.runtimeClass ?? undefined,
+    runtime: session.runtime ?? undefined,
     executionMode:
       session.executionMode === "dev" || session.executionMode === "kata"
         ? session.executionMode

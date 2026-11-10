@@ -54,6 +54,8 @@ export interface SessionHandle {
 
 export interface CreateOptions {
   tier?: SessionTier;
+  /** Guest runtime profile (`base`, `python`, `node`). Defaults to `base`. */
+  runtime?: string;
   durationSeconds?: number;
   cpuMillis?: number;
   memoryMiB?: number;
@@ -148,7 +150,11 @@ export interface ExecOptions {
  * `/workspace`). Absolute paths are accepted only inside `/workspace`.
  */
 export interface RunOptions extends CreateOptions {
-  /** Runtime profile. Only `"base"` is available today; defaults to `"base"`. */
+  /**
+   * Runtime profile, inherited from {@link CreateOptions}. Defaults to `base`
+   * and is passed to the create request so the server can reject an unknown
+   * name before payment.
+   */
   runtime?: string;
   command: string[];
   /** Files to write before the command, keyed by workspace-relative path. */

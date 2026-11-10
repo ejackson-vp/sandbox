@@ -168,7 +168,7 @@ identity and keys enter the sandbox, not the isolation boundary.
 | Claim a pod as another customer | Only the controller may call the relay's admin claim endpoint; sandbox pods cannot reach it. |
 | Sniff the claim on the relay | The relay is a trusted control-plane component and already handles ciphertext; it cannot decrypt payloads. The claim carries the session guest token (not the customer capability). Future hardening: seal the claim to a guest key announced in the pool hello. |
 | Controller/relay compromise during claim | Can redirect or deny a session (availability/impersonation) exactly as it can for a cold pod. The controller already holds the simulated evidence key, so it can already impersonate a guest; the pool does not widen that. |
-| Pool exhausts node capacity | `WARM_POOL_SIZE` is operator-controlled and bounded (0–50). Idle pods have small real usage (~3.4 MiB) but reserve scheduler requests. |
+| Pool exhausts node capacity | `WARM_POOL_SIZE` is operator-controlled and bounded (0–50), and it is a total across every runtime profile: `WarmPoolManager` never allocates more than that budget to all profiles together. Idle pods have small real usage (~3.4 MiB) but reserve scheduler requests. |
 
 ### O. Checkpoint workspaces
 

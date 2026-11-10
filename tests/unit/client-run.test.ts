@@ -76,7 +76,7 @@ describe("SandboxClient.run", () => {
       "get:out.txt",
       "destroy",
     ]);
-    expect(mocks.createSession).toHaveBeenCalledWith({});
+    expect(mocks.createSession).toHaveBeenCalledWith({ runtime: "base" });
     expect(mocks.putFile).toHaveBeenNthCalledWith(1, handle, {
       path: "in.txt",
       data: Buffer.from("hello"),
@@ -139,14 +139,27 @@ describe("SandboxClient.run", () => {
     await expect(runOnce(client, { command: ["true"] })).rejects.toThrow("destroy failed");
   });
 
+  it("passes the selected runtime to session creation", async () => {
+    const { client, calls, mocks } = stubClient();
+
+    const result = await runOnce(client, {
+      runtime: "python",
+      command: ["python3", "--version"],
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(mocks.createSession).toHaveBeenCalledWith({ runtime: "python" });
+    expect(calls).toEqual(["create", "ready", "exec", "destroy"]);
+  });
+
   it("rejects an unsupported runtime before creating a session", async () => {
     const { client, calls, mocks } = stubClient();
 
     await expect(
-      runOnce(client, { runtime: "python", command: ["python3", "--version"] }),
+      runOnce(client, { runtime: "cobol", command: ["true"] }),
     ).rejects.toMatchObject({
       code: "unsupported_runtime",
-      message: expect.stringContaining("base"),
+      message: expect.stringContaining("base, python, node"),
     });
     expect(mocks.createSession).not.toHaveBeenCalled();
     expect(calls).toEqual([]);

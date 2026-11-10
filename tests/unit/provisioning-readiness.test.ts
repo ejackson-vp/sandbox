@@ -4,7 +4,7 @@ import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
-import type { WarmPool } from "../../controller/src/warm-pool.js";
+import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 
 function config() {
   return loadControllerConfig({
@@ -69,7 +69,7 @@ function harness(state: ReturnType<typeof vi.fn>, registerCurrent = vi.fn()) {
       now: () => Date.now(),
       serviceAddress: vi.fn(async () => ({ host: "10.0.0.1", port: 8443 })),
     },
-    {} as WarmPool,
+    {} as WarmPoolManager,
   );
   return { provisioning, store, relay };
 }

@@ -13,6 +13,26 @@ import type { RelayTlsOptions } from "./relay.js";
 import { mintProxyToken } from "./tokens.js";
 import { shardClaim } from "./data-plane-shard.js";
 import { parseBackupKey } from "./backup-key.js";
+import {
+  assertDigestAllowed,
+  DEFAULT_GUEST_IMAGE,
+  imageRefFor,
+  parseRuntimeProfiles,
+  type RuntimeProfileCatalog,
+} from "./runtime-profiles.js";
+
+// The runtime-profile vocabulary lives with the catalog so the controller has
+// one definition of "which profiles exist"; re-exported here because callers
+// already read their controller configuration from this module.
+export {
+  DEFAULT_RUNTIME_PROFILE,
+  resolveRuntimeProfile,
+  runtimeProfileEnv,
+  sessionRuntime,
+  type RuntimeProfile,
+  type RuntimeProfileCatalog,
+  type SessionRuntimeSource,
+} from "./runtime-profiles.js";
 
 export type Role = "controller" | "relay" | "proxy" | "all";
 
@@ -53,6 +73,12 @@ export interface ControllerConfig {
   guestImageDigest: string;
   /** Image reference actually used in the pod spec: `repo@sha256:…` when pinned. */
   guestImageRef: string;
+  /**
+   * Selectable runtime profiles, always including `base` built from
+   * `GUEST_IMAGE`/`GUEST_IMAGE_DIGEST`. A session may only name a profile that
+   * is listed here.
+   */
+  runtimeProfiles: RuntimeProfileCatalog;
   runtimeClass: string;
   executionMode: "dev" | "kata";
   allowInsecureDev: boolean;
@@ -97,6 +123,19 @@ export interface ControllerConfig {
   platformLimits: PlatformLimits;
   /** Pre-booted, unleased sandboxes kept ready for fast claims (0 = off). */
   warmPoolSize: number;
+  /**
+   * Share of `warmPoolSize` reserved for `base`. Language profiles start at
+   * zero and grow from demand, but may never push the total over the budget.
+   */
+  warmPoolBaseMin: number;
+  /** Pods added to a profile when a claim misses. */
+  warmPoolGrowthStep: number;
+  /** Minimum gap between two growths of one profile. */
+  warmPoolCooldownMs: number;
+  /** How long a profile must go unused before its extra pods may be drained. */
+  warmPoolIdleDrainMs: number;
+  /** Window over which a miss counts as demand for a profile. */
+  warmPoolDemandWindowMs: number;
   warmPoolTier: keyof TierTable;
   warmPoolTtlMs: number;
   warmClaimTimeoutMs: number;
@@ -173,39 +212,11 @@ function parseExecution(
   // hardware-backed, so there is nothing else to acknowledge.
   const allowInsecureDev = bool(env.ALLOW_INSECURE_DEV, true);
 
-  const PINNED_DIGEST = /^sha256:[0-9a-f]{64}$/;
-  const guestImage = env.GUEST_IMAGE ?? "x402-sandbox/guest:dev";
+  const guestImage = env.GUEST_IMAGE ?? DEFAULT_GUEST_IMAGE;
   const guestImageDigest = env.GUEST_IMAGE_DIGEST ?? "sha256:unpinned-dev-image";
-  const devPlaceholder = /^sha256:(dev-)?unpinned/.test(guestImageDigest);
-  if (!devPlaceholder && !PINNED_DIGEST.test(guestImageDigest)) {
-    throw new Error("GUEST_IMAGE_DIGEST must be sha256:<64 hex> or the dev placeholder");
-  }
-  if (!allowInsecureDev && !PINNED_DIGEST.test(guestImageDigest)) {
-    throw new Error(
-      "GUEST_IMAGE_DIGEST must be a pinned sha256 digest when ALLOW_INSECURE_DEV is false",
-    );
-  }
-  // A cluster deployment must pull an immutable image, regardless of the
-  // payment/attestation dev switch. The placeholder is only meaningful for the
-  // local process provisioner, where no pod spec references the tag.
-  // Only the controller provisions a guest Pod. The relay, proxy and
-  // facilitator share this config loader but never reference the guest image,
-  // so requiring a digest there only creates a startup failure with no
-  // security benefit.
-  if (kubeEnabled && (role === "controller" || role === "all") && !PINNED_DIGEST.test(guestImageDigest)) {
-    throw new Error(
-      "GUEST_IMAGE_DIGEST must be a pinned sha256:<64 hex> digest when KUBERNETES_ENABLED is true; " +
-        "the dev placeholder is only valid for the local process provisioner (KUBERNETES_ENABLED=false)",
-    );
-  }
+  assertDigestAllowed("GUEST_IMAGE_DIGEST", guestImageDigest, { kubeEnabled, role, allowInsecureDev });
 
-  // Pull by digest whenever one is configured, dev mode or not. ALLOW_INSECURE_DEV
-  // decides whether a digest is *required*; it must not decide whether a
-  // configured digest is honoured. Honouring it is what stops a moved tag — or a
-  // compromised controller — from changing the image running inside the VM.
-  const guestImageRef = PINNED_DIGEST.test(guestImageDigest)
-    ? `${guestImage.replace(/:[^/:]+$/, "")}@${guestImageDigest}`
-    : guestImage;
+  const guestImageRef = imageRefFor(guestImage, guestImageDigest);
   return { executionMode, runtimeClass, allowInsecureDev, guestImageDigest, guestImageRef };
 }
 
@@ -291,10 +302,23 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
 
   const tiers = loadTiers(env);
   const warmPoolSize = int(env.WARM_POOL_SIZE, 0, 0, 50);
+  const warmPoolBaseMin = int(env.WARM_POOL_BASE_MIN, warmPoolSize, 0, 50);
+  if (warmPoolBaseMin > warmPoolSize) {
+    throw new Error(`WARM_POOL_BASE_MIN (${warmPoolBaseMin}) must not exceed WARM_POOL_SIZE (${warmPoolSize})`);
+  }
   const warmPoolTier = (env.WARM_POOL_TIER ?? "short") as keyof TierTable;
   if (!(warmPoolTier in tiers)) {
     throw new Error(`invalid WARM_POOL_TIER ${String(warmPoolTier)}`);
   }
+  const runtimeProfiles = parseRuntimeProfiles(
+    env,
+    {
+      image: env.GUEST_IMAGE ?? DEFAULT_GUEST_IMAGE,
+      digest: execution.guestImageDigest,
+      imageRef: execution.guestImageRef,
+    },
+    { kubeEnabled, role, allowInsecureDev: execution.allowInsecureDev },
+  );
   const tls = parseTls(env);
   const relayTls = parseTlsFiles(env, "RELAY_TLS");
   const relayClientTls = parseTlsFiles(env, "RELAY_CLIENT_TLS");
@@ -342,6 +366,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",
     controlNamespace: env.CONTROL_NAMESPACE ?? "sandbox-system",
     ...execution,
+    runtimeProfiles,
     kubeEnabled,
     relayEnabled: bool(env.RELAY_ENABLED, role === "all" || role === "relay"),
     proxyEnabled: bool(env.PROXY_ENABLED, role === "all" || role === "proxy"),
@@ -377,6 +402,11 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     tiers,
     platformLimits: loadPlatformLimits(env),
     warmPoolSize,
+    warmPoolBaseMin,
+    warmPoolGrowthStep: int(env.WARM_POOL_GROWTH_STEP, 1, 1, 10),
+    warmPoolCooldownMs: int(env.WARM_POOL_COOLDOWN_MS, 15_000, 0, 600_000),
+    warmPoolIdleDrainMs: int(env.WARM_POOL_IDLE_DRAIN_MS, 60_000, 0, 3_600_000),
+    warmPoolDemandWindowMs: int(env.WARM_POOL_DEMAND_WINDOW_MS, 120_000, 1_000, 3_600_000),
     warmPoolTier,
     warmPoolTtlMs: int(env.WARM_POOL_TTL_MS, 300_000, 30_000, 3_600_000),
     warmClaimTimeoutMs: int(env.WARM_CLAIM_TIMEOUT_MS, 8_000, 1_000, 60_000),

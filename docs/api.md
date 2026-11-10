@@ -35,6 +35,7 @@ PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
 
 {
   "tier": "standard",                       // short | standard | extended | long | custom
+  "runtime": "base",                        // base | python | node; defaults to base
   "durationSeconds": 300,                   // required only for custom tiers
   "clientPublicKey": "<base64 X25519 pub>", // 32 bytes
   "clientNonce": "<base64 32 bytes>",       // freshness nonce bound into attestation
@@ -58,6 +59,7 @@ PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
   "state": "PAID",
   "tier": "standard",
   "durationSeconds": 300,
+  "runtime": "base",
   "limits": {
     "cpuMillis": 1000, "memoryMiB": 1024, "diskMiB": 1024,
     "maxOutputBytes": 262144, "maxFileBytes": 8388608,
@@ -75,6 +77,7 @@ PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
     "state": "PAID",
     "tier": "standard",
     "durationSeconds": 300,
+    "runtime": "base",
     "limits": { "...": 0 },
     "createdAt": "2026-11-06T01:33:56.000Z",
     "remainingSeconds": 0,           // PAID has no lease yet
@@ -94,7 +97,8 @@ still tolerate its absence.
 
 Errors: `400` invalid spec/tier mismatch, `402` payment required/rejected,
 `409` `payment_in_progress` or `spec_mismatch`, `429` rate limited (see
-below), `503` provisioning unavailable (no payment was taken).
+below), `503` provisioning unavailable (no payment was taken). An unknown
+`runtime` is a `400 unsupported_runtime` before any capacity check or payment.
 
 A `429` is returned before the payment is claimed or settled, so a throttled
 payer is not charged. The body carries `{"error":"rate_limited","scope":"payer"|"ip"}`
@@ -335,7 +339,7 @@ session ids or exception text are returned.
 
 | HTTP | code | meaning |
 | --- | --- | --- |
-| 400 | `invalid_request`, `tier_duration_mismatch`, `invalid_duration`, `plaintext_not_accepted` | bad input |
+| 400 | `invalid_request`, `tier_duration_mismatch`, `invalid_duration`, `unsupported_runtime`, `plaintext_not_accepted` | bad input |
 | 401 | `capability_required` | missing capability |
 | 402 | `payment_required`, `payment_invalid:*`, `payment_settlement_rejected:*` | payment problem |
 | 404 | `session_not_found` | wrong capability or unknown session |

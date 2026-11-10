@@ -18,6 +18,8 @@ export interface ControllerSessionView {
   tier: SessionTier;
   durationSeconds: number;
   limits: SessionLimits;
+  /** Guest runtime profile (`base`, `python`, `node`). */
+  runtime?: string;
   createdAt: number;
   paidAt?: number;
   readyAt?: number;

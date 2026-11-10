@@ -16,6 +16,7 @@ import {
   type PaymentRecord,
   type SessionRecord,
 } from "./models.js";
+import { DEFAULT_RUNTIME } from "@x402s/shared";
 
 export class PaymentRepository {
   constructor(
@@ -157,6 +158,7 @@ export class PaymentRepository {
         session.paymentKey,
         session.runtimeClass,
         session.executionMode,
+        session.runtime ?? DEFAULT_RUNTIME,
         session.relayTokenHash,
         session.updatedAt,
       );

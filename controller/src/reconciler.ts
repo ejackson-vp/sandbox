@@ -20,7 +20,7 @@ import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
 import type { SessionRecord } from "./store/models.js";
 import type { ReconcilerStore } from "./store/ports.js";
-import { WarmPool } from "./warm-pool.js";
+import { WarmPoolManager } from "./warm-pool-manager.js";
 import { Provisioning } from "./provisioning.js";
 import { Lifecycle } from "./lifecycle.js";
 import { Termination } from "./termination.js";
@@ -75,7 +75,7 @@ export class Reconciler {
   /** Proxy addresses are stable; the relay endpoint is not (see serviceAddress). */
   private readonly serviceAddresses: ServiceAddressResolver;
   private readonly ctx: ReconcilerContext;
-  private readonly warm: WarmPool;
+  private readonly warm: WarmPoolManager;
   private readonly provisioning: Provisioning;
   private readonly lifecycle: Lifecycle;
   private readonly termination: Termination;
@@ -103,7 +103,7 @@ export class Reconciler {
       // drops arguments, which is how the shard pod prefix was lost.
       serviceAddress: this.serviceAddress.bind(this),
     };
-    this.warm = new WarmPool(this.ctx);
+    this.warm = new WarmPoolManager(this.ctx);
     this.provisioning = new Provisioning(this.ctx, this.warm);
     this.lifecycle = new Lifecycle(this.ctx, this.provisioning);
     this.termination = new Termination(this.ctx);

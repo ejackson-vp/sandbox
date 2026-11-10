@@ -25,6 +25,7 @@ import (
 	"github.com/x402s/sandbox/guest/internal/envelope"
 	"github.com/x402s/sandbox/guest/internal/files"
 	"github.com/x402s/sandbox/guest/internal/hardening"
+	"github.com/x402s/sandbox/guest/internal/profile"
 	"github.com/x402s/sandbox/guest/internal/relay"
 	"github.com/x402s/sandbox/guest/internal/runner"
 )
@@ -101,6 +102,14 @@ func runSession(cfg sessionConfig) error {
 		return fmt.Errorf("ephemeral key: %w", err)
 	}
 
+	var runtimeProfile profile.Manifest
+	if cfg.RuntimeProfile != "" {
+		runtimeProfile, err = profile.Load(cfg.RuntimesDir, cfg.RuntimeProfile)
+		if err != nil {
+			return fmt.Errorf("runtime profile: %w", err)
+		}
+	}
+
 	evidence, err := attest.BuildEvidence(attest.Config{
 		SessionID:       cfg.SessionID,
 		ClientPublicKey: cfg.ClientPublicKey,
@@ -108,6 +117,8 @@ func runSession(cfg sessionConfig) error {
 		GuestPublicKey:  keyPair.PublicBase64(),
 		ExecutionMode:   cfg.ExecutionMode,
 		RuntimeClass:    cfg.RuntimeClass,
+		RuntimeProfile:  runtimeProfile.Name,
+		RuntimeVersion:  runtimeProfile.Version,
 		ImageDigest:     cfg.ImageDigest,
 		DevKeyID:        cfg.DevKeyID,
 		DevKeySeedB64:   cfg.DevKey,
@@ -126,6 +137,7 @@ func runSession(cfg sessionConfig) error {
 		"executionMode": cfg.ExecutionMode,
 		"leaseSeconds":  cfg.LeaseSeconds,
 		"kernelRelease": attest.KernelRelease(),
+		"runtime":       runtimeProfile.Name,
 		"resumed":       getEnv("RESUME", "") == "1",
 	})
 	if getEnv("RESUME", "") == "1" {
@@ -160,6 +172,7 @@ func runSession(cfg sessionConfig) error {
 			ProxyToken: cfg.ProxyToken,
 			MaxOutput:  cfg.MaxOutput,
 			MaxCommand: time.Duration(cfg.MaxCommandSeconds) * time.Second,
+			ProfileEnv: runtimeProfile.Env,
 		},
 		// The guest's own lease view starts at hello; the controller enforces the
 		// authoritative deadline independently and shuts the supervisor down.
@@ -271,6 +284,10 @@ func runWarm() error {
 			}
 			logEvent("guest_warm_claimed", map[string]any{"poolId": poolID, "sessionId": claim.SessionID})
 			client.Close()
+			runtimeProfile := claim.Runtime
+			if runtimeProfile == "" {
+				runtimeProfile = getEnv("RUNTIME_PROFILE", "")
+			}
 			return runSession(sessionConfig{
 				SessionID:         claim.SessionID,
 				RelayURL:          withToken(claim.RelayURL, claim.GuestToken),
@@ -280,6 +297,8 @@ func runWarm() error {
 				LeaseSeconds:      claim.LeaseSeconds,
 				ExecutionMode:     claim.ExecutionMode,
 				RuntimeClass:      claim.RuntimeClass,
+				RuntimeProfile:    runtimeProfile,
+				RuntimesDir:       getEnv("RUNTIMES_DIR", "/runtimes"),
 				ImageDigest:       imageDigest,
 				DevKey:            devKey,
 				DevKeyID:          devKeyID,

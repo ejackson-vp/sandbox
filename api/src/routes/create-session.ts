@@ -335,6 +335,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
           tier: spec.tier,
           durationSeconds: spec.durationSeconds,
           limits: spec.limits,
+          runtime: spec.runtime,
           capabilityExpiresAt: new Date(capabilityExpiresAt).toISOString(),
           clientNonce: body.clientNonce,
           payment: {

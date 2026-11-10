@@ -7,6 +7,32 @@ the container registry.
 
 ## Unreleased
 
+### Added
+
+- `runtime` is part of the create request, the immutable session spec and its
+  hash, the session row (schema v12, `base` for existing rows), the controller
+  view and the status/create responses. Profiles are `base`, `python` and
+  `node`; `base` is the default and keeps the previous behaviour. An unknown
+  name is a 400 `unsupported_runtime` before pricing, payment or any capacity
+  hold, and a profile this controller has no image for is rejected by capacity
+  admission before settlement.
+- The warm pool is per runtime profile. `RUNTIME_PROFILES` declares a JSON
+  catalog of `{image, digest}` entries, `base` stays the guest image, and each
+  profile gets its own pre-booted pods. Warm claims carry the profile and are
+  filtered on it, so a pod can never be claimed by a session that asked for
+  another runtime. Cold pods pull the profile image and pass `RUNTIME_PROFILE`
+  to the guest, and a session whose profile this controller does not run is
+  terminated with `runtime_profile_unavailable` rather than booted on `base`.
+- One `WarmPoolManager` owns every profile pool and a single shared budget.
+  `base` holds `WARM_POOL_BASE_MIN`; other profiles start at zero and grow after
+  a miss, with a cooldown and idle-drain grace so pools do not thrash. An idle
+  profile is drained before a growing one is refused. `WARM_POOL_SIZE=0` still
+  disables the pool entirely.
+- The guest loads `/runtimes/<name>/profile.json` when `RUNTIME_PROFILE` names
+  it, applies the manifest environment to exec and long-running services, and
+  reports the profile name and version in attestation. `guest/Dockerfile.profile`
+  and `guest/profiles/{python,node}.json` build the two language images.
+
 ### Changed
 
 - Provisioning is table-driven end to end. `PAID -> PROVISIONING` and

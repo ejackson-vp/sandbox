@@ -31,6 +31,7 @@ export class SessionService {
       ...(opts.baselineMemoryMiB === undefined ? {} : { baselineMemoryMiB: opts.baselineMemoryMiB }),
       ...(opts.idlePolicy ? { idlePolicy: opts.idlePolicy } : {}),
       ...(opts.maxLifetimeSeconds === undefined ? {} : { maxLifetimeSeconds: opts.maxLifetimeSeconds }),
+      ...(opts.runtime === undefined ? {} : { runtime: opts.runtime }),
       clientPublicKey: toBase64(keys.publicKey),
       clientNonce,
     };
@@ -67,6 +68,7 @@ export class SessionService {
           tier: created.tier,
           durationSeconds: created.durationSeconds,
           limits: created.limits,
+          ...(created.runtime ? { runtime: created.runtime } : {}),
           ...(created.baseline ? { baseline: created.baseline } : {}),
           createdAt: new Date().toISOString(),
           remainingSeconds: created.durationSeconds,

@@ -47,6 +47,8 @@ export interface WarmClaim {
   leaseSeconds: number;
   executionMode: ExecutionMode;
   runtimeClass: string;
+  /** System-defined runtime profile selected for this claim. */
+  runtime?: string;
   imageDigest: string;
   proxyUrl: string;
   proxyToken: string;

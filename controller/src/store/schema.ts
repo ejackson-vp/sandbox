@@ -9,7 +9,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { NON_TERMINAL_STATE_SQL } from "./models.js";
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /**
  * Due-time index. The due query filters on exactly the states in
@@ -96,6 +96,7 @@ const BASE_SCHEMA = `
     pod_name TEXT,
     runtime_class TEXT,
     execution_mode TEXT,
+    runtime TEXT NOT NULL DEFAULT 'base',
     relay_token_hash TEXT,
     active_request_id TEXT,
     exec_epoch INTEGER NOT NULL DEFAULT 1,
@@ -189,6 +190,15 @@ function migrateV10toV11(db: DatabaseSync): void {
   db.exec(DUE_INDEX);
 }
 
+/**
+ * v11 -> v12: record the guest runtime profile on the session. Existing rows
+ * were all base sessions, so the column defaults to `base`; no backfill is
+ * needed and no money table is touched.
+ */
+function migrateV11toV12(db: DatabaseSync): void {
+  db.exec("ALTER TABLE sessions ADD COLUMN runtime TEXT NOT NULL DEFAULT 'base';");
+}
+
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = FULL;");
@@ -213,6 +223,7 @@ export function migrate(db: DatabaseSync): void {
       if (version < 9) migrateV8toV9(db);
       if (version < 10) migrateV9toV10(db);
       if (version < 11) migrateV10toV11(db);
+      if (version < 12) migrateV11toV12(db);
       // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

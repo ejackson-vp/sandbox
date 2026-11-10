@@ -33,6 +33,7 @@ const view: ControllerSessionView = {
   state: "PAID",
   tier: "short",
   durationSeconds: 60,
+  runtime: "python",
   limits: {
     cpuMillis: 1000,
     memoryMiB: 1024,
@@ -141,8 +142,12 @@ describe("create response session view", () => {
       capabilityExpiresAt: new Date(view.capabilityExpiresAt).toISOString(),
       clientNonce: view.clientNonce,
     });
-    // The new field is additive: everything except `session` is unchanged.
-    expect(Object.keys(body).filter((key) => key !== "session")).toEqual(Object.keys(legacy));
+    // The new fields are additive: everything except `session` and `runtime`
+    // is unchanged, and an old client ignores the extra keys.
+    expect(Object.keys(body).filter((key) => key !== "session" && key !== "runtime")).toEqual(
+      Object.keys(legacy),
+    );
+    expect(body.runtime).toBe("python");
   });
 
   it("builds the SDK handle from the embedded view without a status request", async () => {
@@ -155,6 +160,7 @@ describe("create response session view", () => {
     expect(fetches.calls()).toBe(2);
     expect(handle.status?.createdAt).toBe(publicView.createdAt);
     expect(handle.status?.remainingSeconds).toBe(60);
+    expect(handle.status?.runtime).toBe("python");
     expect(handle.status?.payment.priceUsd).toBe("$0.01");
     // The view is bound to this client's nonce, not the server's echo.
     expect(handle.status?.clientNonce).toBe(handle.clientNonce);
