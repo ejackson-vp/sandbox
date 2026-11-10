@@ -50,8 +50,13 @@ RSS). A pool of 20 costs roughly 3.6 GiB across two nodes — the price of the
 
 1. **Cut the paid create path.** Payment verify/settle is ~20 ms; the rest of the
    ~175 ms create is the paid request and the controller entitlement round trips.
-   Folding the post-create `getSession` into the completion response is the next
-   contained win.
+   The post-create `getSession` is now folded into the completion response
+   (unreleased): the API no longer makes a separate `GET /internal/sessions/:id`
+   after a successful completion, and the SDK builds its handle from the
+   embedded view instead of issuing an immediate status request. The wire change
+   is additive, so older clients and older controllers still work. This has not
+   been re-run on the cluster; it is a described round-trip removal, not a
+   p95 claim backed by measurement.
 2. **Push readiness instead of polling.** Polling and network are ~90 ms of the
    remaining gap. A pushed `READY` event or long-poll removes the tick, but it is
    smaller than the create path now.

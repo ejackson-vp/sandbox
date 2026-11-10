@@ -65,6 +65,14 @@ export interface CreateSessionResponse {
   capabilityExpiresAt: string;
   clientNonce: string;
   payment: PaymentSummary;
+  /**
+   * Session view at completion time, in the same shape as
+   * `GET /v1/sessions/{id}`. Additive and optional: older SDKs ignore it and
+   * newer SDKs build the local handle from it, so a create needs no immediate
+   * status request. It never contains capability material (only the hash is
+   * stored server-side, and it is not echoed here).
+   */
+  session?: SessionStatus;
 }
 
 /**

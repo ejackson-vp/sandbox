@@ -7,6 +7,13 @@ the container registry.
 
 ## Unreleased
 
+### Added
+
+- `POST /v1/sessions` returns the session view as `session`, in the same shape
+  as `GET /v1/sessions/{id}`. The SDK builds its handle from it, so a create no
+  longer needs a status request before the client can start polling. The field
+  is additive and older clients ignore it (#27).
+
 ### Security
 
 - Recovery now closes the stale-frame window in the execution-epoch fence. The
@@ -22,6 +29,9 @@ the container registry.
 
 ### Changed
 
+- The controller folds the session view into the payment-intent completion, so
+  the API no longer makes a separate `GET /internal/sessions/:id` on the
+  successful create path. Older controllers fall back to that lookup (#27).
 - Monitoring is split by ownership: this repository keeps the portable contract
   under `deploy/monitoring/contract/` (scrape list, SLO rules, Grafana
   dashboard, metric/SLO docs), and the cluster-specific VictoriaMetrics +

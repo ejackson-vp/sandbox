@@ -59,6 +59,18 @@ export interface CompleteIntentBody extends EntitlementRequest {
   };
 }
 
+export interface IntentCompletion {
+  sessionId: string;
+  state: SessionState;
+  created?: boolean;
+  /**
+   * Controller session view folded into the completion. Present on newer
+   * controllers; absent on older ones, which keeps the API's fallback
+   * `getSession` working.
+   */
+  session?: ControllerSessionView;
+}
+
 export class ControllerClient {
   private readonly dispatcher?: Agent;
   private readonly sendToken: boolean;
@@ -149,10 +161,7 @@ export class ControllerClient {
     throw new ControllerError(res.status, "intent_claim_failed", `intent claim failed (${res.status})`, body);
   }
 
-  async completeIntent(
-    paymentKey: string,
-    body: CompleteIntentBody,
-  ): Promise<{ sessionId: string; state: SessionState; created?: boolean }> {
+  async completeIntent(paymentKey: string, body: CompleteIntentBody): Promise<IntentCompletion> {
     return this.call(`/internal/payment-intents/${encodeURIComponent(paymentKey)}/complete`, {
       method: "POST",
       body: JSON.stringify(body),
