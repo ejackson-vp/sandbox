@@ -19,9 +19,10 @@ deployable behind.
 test
  └── images (matrix: control, guest; push staging-<run-id>-<sha>)
       └── digests (resolve each multi-arch index digest)
+           ├── attest (matrix: control, guest; keyless provenance, push to OCI)
            └── scan (matrix: control, guest; scan image@sha256:…)
                 └── promote (imagetools create: version, major.minor, latest)
-                     └── release (GitHub Release entry)
+                     └── release (GitHub Release entry + provenance assets)
 ```
 
 - `images` pushes exactly one tag per image, `staging-<run-id>-<sha>`. It is
@@ -33,11 +34,17 @@ test
 - `scan` runs the same policy as before: `CRITICAL,HIGH`, `ignore-unfixed`,
   SARIF to the Security tab (`trivy-control`, `trivy-guest`), exit code 1 on a
   finding.
+- `attest` generates keyless SLSA build provenance for each index digest with
+  `actions/attest-build-provenance` (`id-token: write`, no stored key) and
+  pushes it to GHCR. The bundle is attached to the GitHub Release as
+  `sandbox-<name>.sigstore.json`, alongside the in-toto statement it contains
+  (`sandbox-<name>.intoto.jsonl`).
 - `promote` runs only after both matrix scans pass. It uses
   `docker buildx imagetools create` to add the release tags to the scanned
   index digest, then re-inspects every tag and fails if it does not resolve to
   that same digest.
-- `release` depends on `promote`, so the GitHub Release entry is created last.
+- `release` depends on `promote` and `attest`, so the GitHub Release entry and
+  its provenance assets are created last.
 
 `imagetools create` copies the source index and its child manifests, so the
 multi-arch (`linux/amd64`, `linux/arm64`) index and the SBOM/provenance OCI
@@ -72,6 +79,36 @@ docker buildx imagetools inspect ghcr.io/<owner>/<repo>-control:0.1.19 \
 To reproduce a red gate for an already-published tag without cutting a new
 release, run the manual `scan` workflow (`.github/workflows/scan.yml`) with the
 version tag.
+
+## Verifying provenance
+
+Every release carries keyless SLSA build provenance for both images. The
+signing identity is this repository's release workflow, so there is no key to
+distribute:
+
+```bash
+gh attestation verify oci://ghcr.io/<owner>/<repo>-control:0.1.21 \
+  --repo <owner>/<repo>
+
+# Same check against the copy stored in the registry rather than GitHub's.
+gh attestation verify oci://ghcr.io/<owner>/<repo>-control:0.1.21 \
+  --repo <owner>/<repo> --bundle-from-oci
+```
+
+The release assets `sandbox-control.sigstore.json` and
+`sandbox-guest.sigstore.json` are those same bundles, and
+`sandbox-<name>.intoto.jsonl` is the in-toto statement each bundle contains. The
+statement is what SLSA tooling consumes and what OpenSSF Scorecard's
+Signed-Releases check looks for; the bundle is what verifies.
+
+Pinning the signer makes the check stricter:
+
+```bash
+gh attestation verify oci://ghcr.io/<owner>/<repo>-guest:0.1.21 \
+  --repo <owner>/<repo> \
+  --signer-workflow <owner>/<repo>/.github/workflows/release.yml \
+  --source-digest "$(git rev-parse v0.1.21)"
+```
 
 ## Rehearsing promotion locally
 
