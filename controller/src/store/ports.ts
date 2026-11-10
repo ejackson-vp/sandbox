@@ -12,6 +12,7 @@ export type ProvisioningStore = Pick<
   | "requestTermination"
   | "setNodeName"
   | "setProvisioning"
+  | "setProvisioningPod"
   | "setReady"
   | "setRelayToken"
   | "setWorkspacePvc"
