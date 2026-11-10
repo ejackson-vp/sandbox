@@ -148,6 +148,7 @@ function harness(opts: {
   const relay = {
     isReady: vi.fn(async () => true),
     health: vi.fn(async () => ({ ok: true, generation: "g" })),
+    healthFor: vi.fn(async () => ({ ok: true, generation: "g" })),
     state: vi.fn(async () => state),
   };
   const provisioning = new Provisioning(

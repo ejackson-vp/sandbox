@@ -57,6 +57,16 @@ data:
   RELAY_CLIENT_TLS_CA_FILE: "/relay-tls/ca.crt"
   RELAY_SERVICE_NAME: "relay"
   PROXY_SERVICE_NAME: "egress-proxy"
+  # Data-plane placement. Both default to 1, which keeps the ClusterIP Service
+  # path (byte-identical pod endpoints). Raising either to match its
+  # StatefulSet's replicas switches provisioning to shard-pinned pod names and
+  # makes the relay/proxy reject a connection routed to the wrong shard.
+  # Update these and the StatefulSet replicas in 12-relay.yaml / 13-egress-proxy.yaml
+  # in the same change; a mismatch silently reintroduces per-replica state.
+  RELAY_REPLICAS: "1"
+  PROXY_REPLICAS: "1"
+  RELAY_HOST_TEMPLATE: "relay-{shard}.relay-headless"
+  PROXY_HOST_TEMPLATE: "egress-proxy-{shard}.egress-proxy-headless"
   # Automated SQLite backups. Empty BACKUP_DIR disables them. To enable, set
   # BACKUP_DIR=/backups and add backup-encryption-key to x402-secrets.
   # See docs/backup-restore.md.

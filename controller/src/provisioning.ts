@@ -16,7 +16,8 @@ import type { ReconcilerContext } from "./reconciler-context.js";
 import type { ProvisioningStore } from "./store/ports.js";
 
 type ProvisioningContext = Omit<ReconcilerContext, "store"> & { store: ProvisioningStore };
-import { newOpaqueToken, sha256Hex } from "./tokens.js";
+import { newOpaqueToken, sha256Hex, guestTokenFor } from "./tokens.js";
+import { pinnedAddress, shardClaim } from "./data-plane-shard.js";
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { WarmPool } from "./warm-pool.js";
@@ -41,6 +42,29 @@ export class Provisioning {
     private readonly ctx: ProvisioningContext,
     private readonly warm: WarmPool,
   ) {}
+
+  /**
+   * Relay endpoint for this session.
+   *
+   * With one replica this is the existing ClusterIP/endpoint lookup, unchanged.
+   * Above one it is the shard-specific pod address computed from the session
+   * id, and the Service lookup is skipped on purpose: a ClusterIP load-balances
+   * across replicas, which is the misrouting the shard exists to prevent.
+   */
+  private async relayAddress(sessionId: string) {
+    return (
+      pinnedAddress(this.ctx.cfg, "relay", sessionId) ??
+      (await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName))
+    );
+  }
+
+  /** Proxy endpoint for this session; same single/multi-replica split. */
+  private async proxyAddress(sessionId: string) {
+    return (
+      pinnedAddress(this.ctx.cfg, "proxy", sessionId) ??
+      (await this.ctx.serviceAddress(this.ctx.cfg.proxyServiceName))
+    );
+  }
 
   async provision(session: SessionRecord): Promise<void> {
     const limit = this.ctx.cfg.maxConcurrentProvisioning;
@@ -146,8 +170,8 @@ export class Provisioning {
       this.ctx.store.mergeTimings(session.id, { provisionQueueWaitMs: waitMs });
     }
     const provisionBeginAt = this.ctx.now();
-    const relayAddr = await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName);
-    const proxyAddr = await this.ctx.serviceAddress(this.ctx.cfg.proxyServiceName);
+    const relayAddr = await this.relayAddress(session.id);
+    const proxyAddr = await this.proxyAddress(session.id);
     if (!relayAddr || !proxyAddr) {
       log.warn("sandbox_services_unavailable", {
         sessionId: session.id,
@@ -242,8 +266,8 @@ export class Provisioning {
       return false;
     }
 
-    const relayAddr = await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName);
-    const proxyAddr = await this.ctx.serviceAddress(this.ctx.cfg.proxyServiceName);
+    const relayAddr = await this.relayAddress(session.id);
+    const proxyAddr = await this.proxyAddress(session.id);
     if (!relayAddr || !proxyAddr) return false;
     const timings = session.timingsJson
       ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
@@ -277,7 +301,7 @@ export class Provisioning {
       provisionStartAt: Date.now(),
       podRequestedAt: Date.now(),
     });
-    const guestToken = newOpaqueToken(32);
+    const guestToken = guestTokenFor(newOpaqueToken(32), shardClaim(this.ctx.cfg, "relay", session.id));
     const tokenHash = sha256Hex(guestToken);
     const ttlMs = this.ctx.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 5 * 60_000;
     // Register against the relay generation that is serving now and prove it
@@ -298,8 +322,12 @@ export class Provisioning {
     // Registration may have waited through a relay replacement. Resolve the
     // endpoint again after it succeeds so the pod boots against the relay that
     // accepted the registration, not the one that was cached before it.
-    const currentRelay = await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName);
+    // Above one replica the endpoint is a pure function of the session id, so
+    // the re-resolution is a no-op and the pod always lands on its shard.
+    const currentRelay = pinnedAddress(this.ctx.cfg, "relay", session.id) ??
+      (await this.ctx.serviceAddress(this.ctx.cfg.relayServiceName));
     const relay = currentRelay ?? relayAddr;
+    const proxy = pinnedAddress(this.ctx.cfg, "proxy", session.id) ?? proxyAddr;
 
     const createStarted = Date.now();
     const { podName } = await this.ctx.provisioner.createPod({
@@ -312,7 +340,7 @@ export class Provisioning {
       relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(session.id)}`,
       relayHost: relay.host,
       relayPort: relay.port,
-      proxyUrl: `http://${proxyAddr.host}:${proxyAddr.port}`,
+      proxyUrl: `http://${proxy.host}:${proxy.port}`,
       proxyToken: proxyTokenFor(this.ctx.cfg, session.id),
       image: this.ctx.cfg.guestImageRef,
       imageDigest: this.ctx.cfg.guestImageDigest,
@@ -365,7 +393,7 @@ export class Provisioning {
         // these two reads means the hello came from a relay that is being
         // replaced; marking READY here would charge the customer for a guest
         // that is about to exit. Re-register on the next pass instead.
-        const before = await this.ctx.relay.health().catch(() => null);
+        const before = await this.ctx.relay.healthFor(session.id).catch(() => null);
         let state = await this.ctx.relay.state(session.id);
         const generationAtCreate = this.relayGeneration.get(session.id) ?? null;
         const relayChanged = Boolean(
@@ -401,7 +429,7 @@ export class Provisioning {
           state = await this.ctx.relay.state(session.id);
         }
         if (state.connected && state.attestation) {
-          const after = await this.ctx.relay.health().catch(() => null);
+          const after = await this.ctx.relay.healthFor(session.id).catch(() => null);
           if (!before || !after || before.generation !== after.generation) {
             log.warn("sandbox_relay_generation_changed", {
               sessionId: session.id,

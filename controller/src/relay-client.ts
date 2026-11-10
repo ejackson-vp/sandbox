@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Agent, fetch as undiciFetch } from "undici";
 import type { RelaySessionState, WarmClaim } from "@x402s/shared";
+import { dataPlaneShard, shardHost } from "./data-plane-shard.js";
 
 export interface RelayClientTlsOptions {
   certFile: string;
@@ -25,6 +26,15 @@ export interface RelayClientOptions {
    * second.
    */
   readinessCacheMs?: number;
+  /**
+   * Relay replica count and the per-shard pod host template. Above 1, every
+   * session-scoped call is sent to the shard that owns the session so the
+   * controller reaches the same registry the guest dialled. `baseUrl` is used
+   * unchanged when this is 1 or absent.
+   */
+  relayReplicas?: number;
+  relayHostTemplate?: string;
+  relayControlPort?: number;
 }
 
 export type RelayResponse =
@@ -70,6 +80,10 @@ export class RelayClient {
   private readonly readinessCacheMs: number;
   private readonly headers: Record<string, string>;
   private readonly dispatcher?: Agent;
+  private readonly replicas: number;
+  private readonly hostTemplate: string | undefined;
+  private readonly controlPort: number | undefined;
+  private readonly scheme: string;
   private readiness: { generation: string; at: number } | null = null;
   private readinessProbe: Promise<RelayHealth> | null = null;
 
@@ -77,6 +91,10 @@ export class RelayClient {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.timeoutMs = opts.timeoutMs ?? 5000;
     this.readinessCacheMs = opts.readinessCacheMs ?? 1000;
+    this.replicas = opts.relayReplicas ?? 1;
+    this.hostTemplate = opts.relayHostTemplate;
+    this.controlPort = opts.relayControlPort;
+    this.scheme = new URL(this.baseUrl).protocol;
     if (opts.tls) {
       this.dispatcher = new Agent({
         connect: {
@@ -99,7 +117,27 @@ export class RelayClient {
     };
   }
 
-  private async raw(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<Response> {
+  /**
+   * Control base URL for one session. With a single replica this is `baseUrl`
+   * exactly, so the local/kind paths are unchanged.
+   */
+  private baseFor(sessionId?: string): string {
+    if (!sessionId || this.replicas <= 1 || !this.hostTemplate) return this.baseUrl;
+    const shard = dataPlaneShard(sessionId, this.replicas);
+    const host = shardHost(this.hostTemplate, shard);
+    // The per-shard control listener is the same port as the Service's; fall
+    // back to the scheme default only if neither is configured.
+    const defaultPort = this.scheme === "https:" ? 443 : 80;
+    const port = this.controlPort ?? Number(new URL(this.baseUrl).port || defaultPort);
+    return `${this.scheme}//${host}:${port}`;
+  }
+
+  private async raw(
+    path: string,
+    init: RequestInit = {},
+    timeoutMs?: number,
+    baseUrl: string = this.baseUrl,
+  ): Promise<Response> {
     // undici's fetch, not the global one: the global fetch uses Node's bundled
     // undici, and a dispatcher created by the npm package is a different
     // instance, which fails with UND_ERR_INVALID_ARG.
@@ -112,11 +150,16 @@ export class RelayClient {
       },
       signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
     } as Parameters<typeof undiciFetch>[1];
-    return undiciFetch(`${this.baseUrl}${path}`, request) as unknown as Promise<Response>;
+    return undiciFetch(`${baseUrl}${path}`, request) as unknown as Promise<Response>;
   }
 
-  private async call<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
-    const res = await this.raw(path, init, timeoutMs);
+  private async call<T>(
+    path: string,
+    init: RequestInit = {},
+    timeoutMs?: number,
+    baseUrl: string = this.baseUrl,
+  ): Promise<T> {
+    const res = await this.raw(path, init, timeoutMs, baseUrl);
     const text = await res.text();
     let body: unknown;
     try {
@@ -133,7 +176,21 @@ export class RelayClient {
 
   /** Probe readiness and read the current relay generation. */
   async health(timeoutMs = 2000): Promise<RelayHealth> {
-    const body = await this.call<Partial<RelayHealth>>("/healthz", {}, timeoutMs);
+    return this.healthFrom(this.baseUrl, timeoutMs);
+  }
+
+  /**
+   * Probe the relay that owns this session. Readiness gating uses the Service
+   * (any replica answers), but the generation fence around a register/state
+   * read must observe the same replica, or two healthy replicas look like a
+   * relay replacement.
+   */
+  async healthFor(sessionId: string, timeoutMs = 2000): Promise<RelayHealth> {
+    return this.healthFrom(this.baseFor(sessionId), timeoutMs);
+  }
+
+  private async healthFrom(baseUrl: string, timeoutMs: number): Promise<RelayHealth> {
+    const body = await this.call<Partial<RelayHealth>>("/healthz", {}, timeoutMs, baseUrl);
     if (body?.ok !== true || typeof body.generation !== "string" || body.generation.length === 0) {
       throw new RelayUnavailableError(503, "relay_not_ready");
     }
@@ -158,7 +215,10 @@ export class RelayClient {
     return this.readiness?.generation ?? null;
   }
 
-  private probeHealth(): Promise<RelayHealth> {
+  private probeHealth(sessionId?: string): Promise<RelayHealth> {
+    // A shard-specific probe is not shared: the in-flight cache is keyed to one
+    // process, and mixing shards would return the wrong generation.
+    if (sessionId) return this.healthFor(sessionId);
     if (!this.readinessProbe) {
       this.readinessProbe = this.health().finally(() => {
         this.readinessProbe = null;
@@ -181,7 +241,7 @@ export class RelayClient {
         ttlMs,
         ...(generation ? { generation } : {}),
       }),
-    });
+    }, undefined, this.baseFor(sessionId));
     return { generation: typeof body?.generation === "string" ? body.generation : (generation ?? "") };
   }
 
@@ -251,7 +311,12 @@ export class RelayClient {
   }
 
   async state(sessionId: string): Promise<RelaySessionState> {
-    return this.call<RelaySessionState>(`/internal/${encodeURIComponent(sessionId)}/state`);
+    return this.call<RelaySessionState>(
+      `/internal/${encodeURIComponent(sessionId)}/state`,
+      {},
+      undefined,
+      this.baseFor(sessionId),
+    );
   }
 
   /**
@@ -274,6 +339,8 @@ export class RelayClient {
           method: "POST",
           body: JSON.stringify({ epoch }),
         },
+        undefined,
+        this.baseFor(sessionId),
       );
       return {
         result: "ok",
@@ -292,7 +359,7 @@ export class RelayClient {
     await this.call(`/internal/${encodeURIComponent(sessionId)}/request`, {
       method: "POST",
       body: JSON.stringify({ id, envelope, deadlineMs, epoch }),
-    }, 60_000);
+    }, 60_000, this.baseFor(sessionId));
   }
 
   async response(sessionId: string, id: string, waitMs: number): Promise<RelayResponse> {
@@ -300,6 +367,7 @@ export class RelayClient {
       `/internal/${encodeURIComponent(sessionId)}/response/${encodeURIComponent(id)}?waitMs=${Math.max(0, waitMs)}`,
       {},
       waitMs + 15_000,
+      this.baseFor(sessionId),
     );
     const body = (await res.json().catch(() => ({}))) as {
       envelope?: string;
@@ -319,14 +387,14 @@ export class RelayClient {
     await this.call(`/internal/${encodeURIComponent(sessionId)}/cancel`, {
       method: "POST",
       body: JSON.stringify({ id }),
-    });
+    }, undefined, this.baseFor(sessionId));
   }
 
   async shutdown(sessionId: string, reason: string): Promise<void> {
     await this.call(`/internal/${encodeURIComponent(sessionId)}/shutdown`, {
       method: "POST",
       body: JSON.stringify({ reason }),
-    });
+    }, undefined, this.baseFor(sessionId));
   }
 
   /** Send a claim to a warm (unleased) guest over its pooled relay entry. */
@@ -334,12 +402,17 @@ export class RelayClient {
     await this.call(`/internal/${encodeURIComponent(poolSessionId)}/claim`, {
       method: "POST",
       body: JSON.stringify({ claim }),
-    });
+    }, undefined, this.baseFor(poolSessionId));
   }
 
   async purge(sessionId: string): Promise<void> {
     try {
-      await this.call(`/internal/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+      await this.call(
+        `/internal/${encodeURIComponent(sessionId)}`,
+        { method: "DELETE" },
+        undefined,
+        this.baseFor(sessionId),
+      );
     } catch (err) {
       if (err instanceof RelayUnavailableError && err.status === 404) return;
       throw err;

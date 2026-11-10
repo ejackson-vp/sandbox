@@ -19,11 +19,19 @@ import net from "node:net";
 import dns from "node:dns/promises";
 import type { Duplex } from "node:stream";
 import { classifyAddress, type AddressClass } from "@x402s/shared";
-import { log } from "@x402s/shared";
+import { log, metrics } from "@x402s/shared";
 import { verifyProxyToken } from "./tokens.js";
 
 export interface EgressProxyOptions {
   tokenSecret: string;
+  /**
+   * Ordinal of this proxy replica. When set, a CONNECT whose token claims a
+   * different shard is refused: the per-session connection counter and the
+   * fairness it enforces are process-local, so serving a misrouted session
+   * would silently multiply its limit by the replica count. Unset (the
+   * single-replica default) accepts any shard.
+   */
+  shardIndex?: number;
   allowedPorts?: number[];
   /** Optional hostname allowlist (suffix match). Empty = any public host. */
   allowedHostSuffixes?: string[];
@@ -183,6 +191,22 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
     const verified = verifyProxyToken(opts.tokenSecret, token);
     if (!verified.ok) {
       deny(407, "proxy_authentication_failed");
+      return;
+    }
+    // Fail closed on a cross-shard landing. The counter this proxy enforces is
+    // in memory, so a session split across replicas gets N times the limit
+    // regardless of what this check says; rejecting makes the misrouting
+    // visible instead of silently over-serving it.
+    if (opts.shardIndex !== undefined && verified.shard !== opts.shardIndex) {
+      metrics
+        .counter("sandbox_egress_cross_shard_total", "CONNECTs refused for landing on the wrong shard")
+        .inc({ service: "proxy", reason: verified.shard === undefined ? "missing_shard" : "wrong_shard" });
+      log.warn("egress_cross_shard_rejected", {
+        reason: verified.shard === undefined ? "missing_shard" : "wrong_shard",
+        expected: opts.shardIndex,
+        claimed: verified.shard ?? null,
+      });
+      deny(421, "wrong_shard");
       return;
     }
 

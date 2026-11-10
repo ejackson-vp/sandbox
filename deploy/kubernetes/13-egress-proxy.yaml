@@ -11,14 +11,43 @@ spec:
       port: 3128
       targetPort: 3128
 ---
+# Headless Service for deterministic pod identity.
+#
+# The per-session connection counter lives in process memory, so a session must
+# always reach the same proxy replica. Each StatefulSet pod gets a stable
+# ordinal name (`egress-proxy-0`) and this Service publishes
+# `<pod>.<service>` DNS names; PROXY_HOST_TEMPLATE points at them. Raise
+# PROXY_REPLICAS in the same change as the StatefulSet's replicas: a count of 1
+# keeps the ClusterIP Service above, a count above 1 switches provisioning to
+# pod names. This object and the StatefulSet must ship together.
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-proxy-headless
+  namespace: sandbox-system
+  labels: {app: egress-proxy}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app: egress-proxy}
+  ports:
+    - name: proxy
+      port: 3128
+      targetPort: 3128
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: egress-proxy
   namespace: sandbox-system
   labels: {app: egress-proxy}
 spec:
   replicas: 1
+  # Pod ordinal -> pod name -> SHARD_INDEX (parsed from metadata.name below).
+  serviceName: egress-proxy-headless
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels: {app: egress-proxy}
   template:
@@ -53,6 +82,12 @@ spec:
             - {name: ROLE, value: "proxy"}
             - {name: X402_PROXY_PORT, value: "3128"}
             - {name: SERVICE_NAME, value: "egress-proxy"}
+            # This pod's ordinal, taken from its stable StatefulSet name
+            # (`egress-proxy-0` -> 0). A CONNECT whose token claims another
+            # shard is refused with 421 rather than counted by this process.
+            - name: SHARD_INDEX
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
             - name: PROXY_TOKEN_SECRET
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: proxy-token-secret}
