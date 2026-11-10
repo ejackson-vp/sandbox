@@ -17,7 +17,7 @@ import type { ProvisioningStore } from "./store/ports.js";
 
 type ProvisioningContext = Omit<ReconcilerContext, "store"> & { store: ProvisioningStore };
 import { newOpaqueToken, sha256Hex } from "./tokens.js";
-import type { SessionRecord } from "./store.js";
+import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { WarmPool } from "./warm-pool.js";
 
