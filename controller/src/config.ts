@@ -120,6 +120,7 @@ function parseRole(env: NodeJS.ProcessEnv): Role {
 function parseExecution(
   env: NodeJS.ProcessEnv,
   kubeEnabled: boolean,
+  role: Role,
 ): Pick<ControllerConfig, "executionMode" | "runtimeClass" | "allowInsecureDev" | "guestImageDigest" | "guestImageRef"> {
   const executionMode = (env.EXECUTION_MODE ?? "dev") as "dev" | "kata";
   if (!["dev", "kata"].includes(executionMode)) {
@@ -146,7 +147,11 @@ function parseExecution(
   // A cluster deployment must pull an immutable image, regardless of the
   // payment/attestation dev switch. The placeholder is only meaningful for the
   // local process provisioner, where no pod spec references the tag.
-  if (kubeEnabled && !PINNED_DIGEST.test(guestImageDigest)) {
+  // Only the controller provisions a guest Pod. The relay, proxy and
+  // facilitator share this config loader but never reference the guest image,
+  // so requiring a digest there only creates a startup failure with no
+  // security benefit.
+  if (kubeEnabled && (role === "controller" || role === "all") && !PINNED_DIGEST.test(guestImageDigest)) {
     throw new Error(
       "GUEST_IMAGE_DIGEST must be a pinned sha256:<64 hex> digest when KUBERNETES_ENABLED is true; " +
         "the dev placeholder is only valid for the local process provisioner (KUBERNETES_ENABLED=false)",
@@ -237,7 +242,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   // Parsed before parseExecution because a real cluster deployment must pin the
   // guest image by digest independently of the payment/attestation dev switch.
   const kubeEnabled = bool(env.KUBERNETES_ENABLED, true);
-  const execution = parseExecution(env, kubeEnabled);
+  const execution = parseExecution(env, kubeEnabled, role);
   const adminToken = env.ADMIN_TOKEN ?? "";
   if (["controller", "all"].includes(role) && adminToken.length < 16) {
     throw new Error("ADMIN_TOKEN must be set (>=16 chars) for controller roles");
