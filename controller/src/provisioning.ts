@@ -15,12 +15,17 @@ import type { WarmPool } from "./warm-pool.js";
 
 export class Provisioning {
   /**
-   * Provisions in flight in this process. The persisted PROVISIONING count is
-   * authoritative across restarts, but it only changes after the pod create
-   * starts; concurrent passes need this counter to enforce the configured cap
-   * in the window between admission and the state write.
+   * Session ids holding an in-process provisioning slot. The persisted
+   * PROVISIONING set is authoritative across restarts, but it only changes
+   * after the pod create starts; concurrent passes need this set to enforce
+   * the configured cap in the window between admission and the state write.
+   *
+   * Both sets can overlap: a session stays in this set after it is persisted
+   * as PROVISIONING. Admission deduplicates by id rather than taking a max of
+   * two counts, which would undercount one persisted session plus a different
+   * in-flight one.
    */
-  private inFlight = 0;
+  private readonly inFlight = new Set<string>();
 
   constructor(
     private readonly ctx: ProvisioningContext,
@@ -31,21 +36,30 @@ export class Provisioning {
     const limit = this.ctx.cfg.maxConcurrentProvisioning;
     const holdsSlot = limit > 0;
     if (holdsSlot) {
-      const persisted = this.ctx.store
-        .listNonTerminal()
-        .filter((s) => s.state === "PROVISIONING").length;
-      if (Math.max(persisted, this.inFlight) >= limit) {
+      const persisted = new Set(
+        this.ctx.store
+          .listNonTerminal()
+          .filter((s) => s.state === "PROVISIONING")
+          .map((s) => s.id),
+      );
+      let occupied = persisted.size;
+      for (const id of this.inFlight) {
+        if (!persisted.has(id)) occupied += 1;
+      }
+      if (occupied >= limit) {
         this.deferForSlot(session);
         return;
       }
       // No await between the check and the claim: a concurrent worker cannot
       // slip into the same slot.
-      this.inFlight += 1;
+      this.inFlight.add(session.id);
     }
     try {
       await this.provisionWithSlot(session);
     } finally {
-      if (holdsSlot) this.inFlight -= 1;
+      // Covers every path: warm claim, relay-not-ready, early returns and
+      // errors. Leaving a slot behind would shrink capacity permanently.
+      if (holdsSlot) this.inFlight.delete(session.id);
     }
   }
 
