@@ -173,7 +173,10 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       res.status(400).json({ error: "invalid_request_id" });
       return;
     }
-    const waitMs = Math.min(120_000, Number(req.query.waitMs) || 20_000);
+    const requestedWait = Number(req.query.waitMs);
+    const waitMs = Number.isFinite(requestedWait)
+      ? Math.min(120_000, Math.max(0, requestedWait))
+      : 20_000;
     try {
       const out = await deps.controller.getOperation(session.sessionId, requestId, waitMs);
       if (out.pending) {

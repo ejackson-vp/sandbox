@@ -102,12 +102,16 @@ function readBack(path: string): {
   intents: number;
   signer: string | null;
   columns: string[];
+  requestColumns: string[];
 } {
   const db = new DatabaseSync(path);
   try {
     const count = (table: string) =>
       (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
     const columns = (db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
+    const requestColumns = (db.prepare("PRAGMA table_info(exec_requests)").all() as Array<{ name: string }>).map(
       (c) => c.name,
     );
     const signer = columns.includes("client_signer")
@@ -123,6 +127,7 @@ function readBack(path: string): {
       intents: count("payment_intents"),
       signer,
       columns,
+      requestColumns,
     };
   } finally {
     db.close();
@@ -145,6 +150,8 @@ describe("schema migration", () => {
     expect(after.intents).toBe(1);
     expect(after.signer).toBeNull();
     expect(after.columns).toContain("client_signer");
+    expect(after.columns).toContain("exec_epoch");
+    expect(after.requestColumns).toContain("epoch");
 
     // Replay prevention survives the upgrade: the payment key is still unique.
     const again = new DatabaseSync(path);
@@ -218,5 +225,7 @@ describe("schema migration", () => {
     const after = readBack(path);
     expect(after.version).toBe(SCHEMA_VERSION);
     expect(after.columns).toContain("client_signer");
+    expect(after.columns).toContain("exec_epoch");
+    expect(after.requestColumns).toContain("epoch");
   });
 });

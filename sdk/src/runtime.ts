@@ -192,6 +192,18 @@ export class ClientRuntime {
       waitMs + 30_000,
     );
     if (res.status === 202) return null;
+    if (res.status === 409) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string; requestId?: string };
+      if (body.error === "outcome_unknown") {
+        throw new SandboxError(
+          "outcome_unknown",
+          body.message ?? "the controller restarted while this operation was in flight; its outcome is unknown",
+          409,
+          requestId,
+        );
+      }
+      throw new SandboxError(body.error ?? "operation_lookup_failed", body.message ?? "operation lookup failed", 409, requestId);
+    }
     if (res.status === 410) throw new SandboxError("result_expired", "the result is no longer available", 410, requestId);
     if (!res.ok) throw await this.errorFrom(res, "operation_lookup_failed");
     const body = (await res.json()) as { envelope?: string };

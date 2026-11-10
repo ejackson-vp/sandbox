@@ -92,9 +92,19 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     if (!claim.ok) {
       if (claim.code === "duplicate") {
         // Idempotent retry: return the (possibly still pending) response.
+        const record = store.getExecRequest(id, requestId);
         const existing = await relay.response(id, requestId, parsed.data.waitMs ?? 1000).catch(() => ({ kind: "pending" as const }));
         if (existing.kind === "envelope") {
+          if (record?.state === "outcome_unknown") store.finishOperation(id, requestId, "done");
           res.json({ state: store.getSession(id)?.state ?? session.state, requestId, envelope: existing.envelope });
+          return;
+        }
+        if (record?.state === "outcome_unknown") {
+          res.status(409).json({
+            error: "outcome_unknown",
+            requestId,
+            message: "the controller restarted while this operation was in flight; its outcome is unknown",
+          });
           return;
         }
         res.status(202).json({ state: store.getSession(id)?.state ?? session.state, requestId, pending: true });
@@ -129,7 +139,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     const leaseDeadline = session.leaseExpiresAt ?? Date.now();
     const deadline = Math.min(leaseDeadline + 1000, Date.now() + 10 * 60_000);
     try {
-      await relay.request(id, requestId, envelope, deadline);
+      await relay.request(id, requestId, envelope, deadline, claim.epoch);
     } catch (err) {
       store.finishOperation(id, requestId, "abandoned");
       const status = (err as { status?: number }).status;
@@ -174,23 +184,44 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
       res.status(404).json({ error: "request_not_found" });
       return;
     }
-    const waitMs = Math.min(120_000, Number(req.query.waitMs) || 20_000);
+    const requestedWait = Number(req.query.waitMs);
+    const waitMs = Number.isFinite(requestedWait)
+      ? Math.min(120_000, Math.max(0, requestedWait))
+      : 20_000;
     try {
       const outcome = await relay.response(id, requestId, waitMs);
       if (outcome.kind === "envelope") {
-        if (record.state === "pending") store.finishOperation(id, requestId, "done");
+        if (record.state === "pending" || record.state === "outcome_unknown") {
+          store.finishOperation(id, requestId, "done");
+        }
         res.json({ state: store.getSession(id)?.state, requestId, envelope: outcome.envelope });
         return;
       }
       if (outcome.kind === "guest_error") {
-        res.status(502).json({ error: "guest_error", message: outcome.message, requestId });
-        return;
+        if (record.state === "pending") {
+          store.finishOperation(id, requestId, "error");
+          res.status(502).json({ error: "guest_error", message: outcome.message, requestId });
+          return;
+        }
+        // A fenced request can receive `stale_epoch` from the guest; that is a
+        // fence rejection, not the outcome of the interrupted operation.
       }
     } catch {
       /* fall through to pending/expired */
     }
     if (record.state === "pending") {
       res.status(202).json({ state: store.getSession(id)?.state, requestId, pending: true });
+      return;
+    }
+    if (record.state === "outcome_unknown") {
+      // The controller restarted with this request in flight. It may still be
+      // executing in the guest; the result was never observed. Never report
+      // success/failure or a plain cache expiry for it.
+      res.status(409).json({
+        error: "outcome_unknown",
+        requestId,
+        message: "the controller restarted while this operation was in flight; its outcome is unknown",
+      });
       return;
     }
     res.status(410).json({ error: "result_expired", requestId });

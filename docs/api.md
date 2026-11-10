@@ -239,9 +239,15 @@ GET    /v1/sessions/{id}/requests/{requestId}?waitMs=20000
 DELETE /v1/sessions/{id}/requests/{requestId}      # cancel the in-flight command
 ```
 
-`GET` returns the sealed result when available, `202` while pending, `410
-result_expired` once the relay cache (5 minutes) has dropped it. Retrying an
-`exec` with the same `requestId` returns the same result without executing twice.
+`GET` returns the sealed result when available, `202` while pending, `409
+outcome_unknown` when the controller restarted with this request in flight and
+the guest has not produced a result, and `410 result_expired` once a known
+result has aged out of the relay cache (5 minutes). `outcome_unknown` is
+terminal and distinct from an id the controller never saw (`404
+request_not_found`): the command may still have run. Retrying an `exec` with the
+same `requestId` returns the same result without executing twice. While the old
+request is fenced, a new operation returns `409 busy` with the old `requestId`;
+it is not forwarded to the guest.
 
 ## Suspend and resume
 
@@ -302,7 +308,7 @@ GET /healthz
 | 401 | `capability_required` | missing capability |
 | 402 | `payment_required`, `payment_invalid:*`, `payment_settlement_rejected:*` | payment problem |
 | 404 | `session_not_found` | wrong capability or unknown session |
-| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `session_not_usable`, `session_suspended`, `resume_unavailable` | conflict; resume first / checkpoint node unavailable |
+| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `outcome_unknown`, `session_not_usable`, `session_suspended`, `resume_unavailable` | conflict; resume first / checkpoint node unavailable / old operation fenced |
 | 410 | `lease_expired`, `capability_expired`, `result_expired` | gone |
 | 413 | `payload_too_large` | envelope too big |
 | 429 | `rate_limited` (`scope: payer` or `ip`) | slow down; honour `Retry-After` |

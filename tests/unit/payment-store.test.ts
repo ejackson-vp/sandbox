@@ -97,6 +97,7 @@ function sessionRecord(id: string, key: string): SessionRecord {
     executionMode: "dev",
     relayTokenHash: null,
     activeRequestId: null,
+    execEpoch: 1,
     relayPurgedAt: null,
     destroyRequested: 0,
     updatedAt: now,
@@ -340,17 +341,53 @@ describe("operation gating", () => {
     }
   });
 
-  it("recovers an operation interrupted by a controller crash", () => {
+  it("fences an operation interrupted by a controller crash", () => {
     const { store, cleanup } = openStore();
     try {
       const id = "sbx_000000000000000000000003";
-      expect(store.claimOperation(id, "request-crash", "exec")).toMatchObject({ ok: true });
+      expect(store.claimOperation(id, "request-crash", "exec")).toMatchObject({ ok: true, epoch: 1 });
       expect(store.getSession(id)?.activeRequestId).toBe("request-crash");
 
       expect(store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
-      expect(store.getExecRequest(id, "request-crash")?.state).toBe("abandoned");
+      expect(store.getExecRequest(id, "request-crash")).toMatchObject({
+        state: "outcome_unknown",
+        epoch: 1,
+      });
+      // The gate stays closed: the old command may still run in the guest.
+      expect(store.getSession(id)).toMatchObject({
+        activeRequestId: "request-crash",
+        execEpoch: 2,
+      });
+      expect(store.listFencedSessions().map((session) => session.id)).toEqual([id]);
+      expect(store.claimOperation(id, "request-after-restart", "exec")).toMatchObject({
+        ok: false,
+        code: "busy",
+        requestId: "request-crash",
+      });
+
+      // Only the generation that owns the fence can release it.
+      expect(store.clearFencedGate(id, "request-crash", 1)).toBe(false);
+      expect(store.clearFencedGate(id, "request-crash", 2)).toBe(true);
       expect(store.getSession(id)?.activeRequestId).toBeNull();
-      expect(store.claimOperation(id, "request-after-restart", "exec")).toMatchObject({ ok: true });
+      expect(store.claimOperation(id, "request-after-restart", "exec")).toMatchObject({
+        ok: true,
+        epoch: 2,
+      });
+      // The old request keeps its terminal, non-committal state.
+      expect(store.getExecRequest(id, "request-crash")?.state).toBe("outcome_unknown");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("does not fence sessions that had no operation in flight", () => {
+    const { store, cleanup } = openStore();
+    try {
+      const id = "sbx_000000000000000000000003";
+      expect(store.recoverInterruptedOperations()).toEqual({ requests: 0, sessions: 0 });
+      expect(store.getSession(id)).toMatchObject({ activeRequestId: null, execEpoch: 1 });
+      expect(store.listFencedSessions()).toEqual([]);
+      expect(store.getExecRequest(id, "never-seen")).toBeNull();
     } finally {
       cleanup();
     }

@@ -114,6 +114,24 @@ function handleGuestConnection(registry: RelayRegistry, sessionId: string, ws: W
         });
         return;
       }
+      case "status": {
+        if (
+          typeof msg.activeRequestId !== "string" ||
+          msg.activeRequestId.length > 128 ||
+          typeof msg.epoch !== "number" ||
+          !Number.isFinite(msg.epoch) ||
+          msg.epoch < 0
+        ) {
+          ws.close(1008, "bad status");
+          return;
+        }
+        const result = registry.status(sessionId, msg.activeRequestId, msg.epoch);
+        if (result === "unknown") {
+          ws.close(1008, "unknown session");
+          return;
+        }
+        return;
+      }
       case "error": {
         const id = typeof msg.id === "string" ? msg.id : "";
         const result = registry.error(

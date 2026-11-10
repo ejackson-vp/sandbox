@@ -386,16 +386,21 @@ export class Store {
 
   /**
    * Startup recovery: the previous controller process may have died with an
-   * operation in flight. Its outcome is unknown, so mark the request
-   * abandoned and clear the single-operation gate. A later lookup still
-   * returns the cached relay envelope if one exists, otherwise result_expired.
+   * operation in flight. Its outcome is unknown, so the request becomes
+   * `outcome_unknown` and its session keeps the single-operation gate closed.
+   *
+   * The session's execution epoch is bumped in the same transaction. The gate
+   * is released only by `clearFencedGate` after the relay reports that the
+   * guest no longer has that request active (see OperationFence). A frame
+   * forwarded by the previous generation carries the old epoch and is rejected
+   * by the guest, so it cannot run after recovery.
    */
   recoverInterruptedOperations(): { requests: number; sessions: number } {
     const now = Date.now();
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const requests = this.stmts.abandonPendingRequests!.run(now).changes;
-      const sessions = this.stmts.clearAllActiveRequests!.run(now).changes;
+      const requests = this.stmts.markPendingOutcomeUnknown!.run(now).changes;
+      const sessions = this.stmts.fenceActiveSessions!.run(now).changes;
       this.db.exec("COMMIT");
       return { requests: Number(requests), sessions: Number(sessions) };
     } catch (err) {
@@ -404,9 +409,24 @@ export class Store {
     }
   }
 
+  /** Sessions whose operation gate is held by an unreconciled recovery fence. */
+  listFencedSessions(): SessionRecord[] {
+    return (this.stmts.listFencedSessions!.all() as unknown as RawSession[]).map(mapSession);
+  }
+
+  /**
+   * Release a recovery fence only if it still describes this session and
+   * generation. Idempotent: a second caller (or a newer operation) changes
+   * nothing.
+   */
+  clearFencedGate(sessionId: string, requestId: string, epoch: number): boolean {
+    return this.stmts.clearFencedGate!.run(Date.now(), sessionId, requestId, epoch).changes > 0;
+  }
+
   /**
    * Atomically claim the single operation slot for a session.
-   * Request id doubles as the idempotency key.
+   * Request id doubles as the idempotency key. The returned epoch must travel
+   * with the relay frame so the guest can reject stale generations.
    */
   claimOperation(sessionId: string, requestId: string, op: string): ClaimOperationResult {
     const now = Date.now();
@@ -436,12 +456,12 @@ export class Store {
         this.db.exec("COMMIT");
         return { ok: false, code: "busy", state: session.state, requestId: session.activeRequestId };
       }
-      this.stmts.insertRequest!.run(requestId, sessionId, op, now, now);
+      this.stmts.insertRequest!.run(requestId, sessionId, op, session.execEpoch, now, now);
       this.db
         .prepare("UPDATE sessions SET active_request_id = ?, state = CASE WHEN state='READY' THEN 'ACTIVE' ELSE state END, updated_at = ? WHERE id = ?")
         .run(requestId, now, sessionId);
       this.db.exec("COMMIT");
-      return { ok: true, requestId };
+      return { ok: true, requestId, epoch: session.execEpoch };
     } catch (err) {
       this.db.exec("ROLLBACK");
       throw err;
@@ -469,6 +489,7 @@ export class Store {
       sessionId: row.session_id as string,
       op: row.op as string,
       state: row.state as ExecRequestRecord["state"],
+      epoch: row.epoch as number,
       createdAt: row.created_at as number,
       updatedAt: row.updated_at as number,
     };

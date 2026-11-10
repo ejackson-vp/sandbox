@@ -27,6 +27,7 @@ import type { ReconcilerContext } from "./reconciler-context.js";
 import { NoopSnapshotter, type Snapshotter } from "./snapshotter.js";
 import { CapacityService } from "./capacity/service.js";
 import { BackupService } from "./backup.js";
+import { OperationFence } from "./operation-fence.js";
 import { log } from "@x402s/shared";
 
 export { LifecycleError } from "./lifecycle.js";
@@ -43,6 +44,8 @@ export interface ReconcilerDeps {
   capacity?: CapacityService;
   /** Override for tests: resolves service addresses without Kubernetes. */
   serviceAddress?: (name: string) => Promise<{ host: string; port: number } | null>;
+  /** Restart-recovery fence; defaults to one bound to the store and relay. */
+  fence?: OperationFence;
 }
 
 export class Reconciler {
@@ -63,6 +66,7 @@ export class Reconciler {
   private readonly lifecycle: Lifecycle;
   private readonly termination: Termination;
   private readonly backup: BackupService;
+  private readonly fence: OperationFence;
   private readonly now: () => number;
 
   constructor(private readonly deps: ReconcilerDeps) {
@@ -94,6 +98,7 @@ export class Reconciler {
       retention: deps.cfg.backupRetention,
       now: () => this.now(),
     });
+    this.fence = deps.fence ?? new OperationFence(deps.store, deps.relay);
   }
 
   start(): void {
@@ -181,6 +186,7 @@ export class Reconciler {
     this.housekeepingRunning = true;
     try {
       await this.termination.sweep();
+      await this.fence.reconcile();
       await this.warm.reconcile();
       await this.lifecycle.enforce();
       await this.lifecycle.cleanup();

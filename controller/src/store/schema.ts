@@ -8,7 +8,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /** Tables created for a brand-new database (always the current shape). */
 const BASE_SCHEMA = `
@@ -83,6 +83,7 @@ const BASE_SCHEMA = `
     execution_mode TEXT,
     relay_token_hash TEXT,
     active_request_id TEXT,
+    exec_epoch INTEGER NOT NULL DEFAULT 1,
     relay_purged_at INTEGER,
     destroy_requested INTEGER NOT NULL DEFAULT 0,
     timings_json TEXT,
@@ -123,6 +124,7 @@ const BASE_SCHEMA = `
     session_id TEXT NOT NULL,
     op TEXT NOT NULL,
     state TEXT NOT NULL,
+    epoch INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, id)
@@ -137,6 +139,16 @@ const BASE_SCHEMA = `
  */
 function migrateV7toV8(db: DatabaseSync): void {
   db.exec("ALTER TABLE sessions ADD COLUMN client_signer TEXT;");
+}
+
+/**
+ * v8 -> v9: execution epochs fence restart recovery. Existing sessions start at
+ * epoch 1 and existing requests are tagged with epoch 1; a controller restart
+ * bumps the session epoch so frames from the previous generation are rejected.
+ */
+function migrateV8toV9(db: DatabaseSync): void {
+  db.exec("ALTER TABLE sessions ADD COLUMN exec_epoch INTEGER NOT NULL DEFAULT 1;");
+  db.exec("ALTER TABLE exec_requests ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1;");
 }
 
 export function migrate(db: DatabaseSync): void {
@@ -160,6 +172,7 @@ export function migrate(db: DatabaseSync): void {
       db.exec(BASE_SCHEMA);
     } else {
       if (version < 8) migrateV7toV8(db);
+      if (version < 9) migrateV8toV9(db);
       // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

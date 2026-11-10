@@ -35,6 +35,10 @@ interface Entry {
   responses: Map<string, CachedResponse>;
   errors: Map<string, CachedError>;
   lastError: { code: string; message: string } | null;
+  /** Guest-reported operation state; null until the guest sends a status frame. */
+  activeRequestId: string | null;
+  execEpoch: number | null;
+  statusAt: number | null;
 }
 
 export interface RelayRegistryOptions {
@@ -88,6 +92,11 @@ export class RelayRegistry {
       responses: existing?.responses ?? new Map(),
       errors: existing?.errors ?? new Map(),
       lastError: null,
+      // A fresh registration is a fresh guest process. Do not inherit an
+      // execution state: fail closed until the guest reports one.
+      activeRequestId: null,
+      execEpoch: null,
+      statusAt: null,
     });
     return "ok";
   }
@@ -101,11 +110,18 @@ export class RelayRegistry {
       pending: entry.pending.size,
       ...(entry.hello ? { attestation: entry.hello } : {}),
       ...(entry.helloAt ? { helloAt: entry.helloAt } : {}),
+      ...(entry.statusAt !== null
+        ? {
+            activeRequestId: entry.activeRequestId ?? "",
+            execEpoch: entry.execEpoch ?? 0,
+            statusAt: entry.statusAt,
+          }
+        : {}),
       ...(entry.lastError ? { error: entry.lastError.message } : {}),
     };
   }
 
-  request(sessionId: string, id: string, envelope: string, deadlineMs?: number): RequestResult {
+  request(sessionId: string, id: string, envelope: string, deadlineMs?: number, epoch = 0): RequestResult {
     const entry = this.entries.get(sessionId);
     if (!entry) return "not_registered";
     if (entry.responses.has(id) || entry.errors.has(id)) return "cached";
@@ -119,9 +135,20 @@ export class RelayRegistry {
         id,
         envelope,
         deadlineMs: Number(deadlineMs) || Date.now() + 60_000,
+        epoch: Number(epoch) || 0,
       }),
     );
     return "sent";
+  }
+
+  /** Record the guest's own view of its single execution slot. */
+  status(sessionId: string, activeRequestId: string, epoch: number): "ok" | "unknown" {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return "unknown";
+    entry.activeRequestId = activeRequestId || null;
+    entry.execEpoch = Number.isFinite(epoch) ? epoch : 0;
+    entry.statusAt = Date.now();
+    return "ok";
   }
 
   cancel(sessionId: string, id: string): SendResult {

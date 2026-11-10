@@ -11,6 +11,13 @@ export interface RelayRequestMessage {
   envelope: string;
   /** Absolute epoch ms by which the operation must be abandoned. */
   deadlineMs: number;
+  /**
+   * Execution-epoch fence. The controller bumps a session's epoch when it
+   * recovers an interrupted operation; the guest refuses requests from an
+   * older epoch so a frame forwarded by a previous controller generation can
+   * never start after recovery.
+   */
+  epoch: number;
 }
 
 export interface RelayCancelMessage {
@@ -70,7 +77,25 @@ export interface GuestErrorMessage {
   message: string;
 }
 
-export type GuestToRelay = GuestHelloMessage | GuestResponseMessage | GuestErrorMessage;
+/**
+ * Guest -> relay execution state. Sent on hello, when an operation takes the
+ * single slot, and when it releases it. The relay exposes this to the
+ * controller so restart recovery can tell whether the fenced operation is
+ * still running without relying on timing.
+ */
+export interface GuestStatusMessage {
+  type: "status";
+  /** Empty while the guest has no operation in flight. */
+  activeRequestId: string;
+  /** Highest execution epoch the guest has observed. */
+  epoch: number;
+}
+
+export type GuestToRelay =
+  | GuestHelloMessage
+  | GuestResponseMessage
+  | GuestErrorMessage
+  | GuestStatusMessage;
 
 export interface RelaySessionState {
   registered: boolean;
@@ -80,5 +105,11 @@ export interface RelaySessionState {
   pending: number;
   /** When the hello frame was received (epoch ms). */
   helloAt?: number;
+  /** Guest-reported operation in flight; absent until the guest reports status. */
+  activeRequestId?: string;
+  /** Highest execution epoch the guest has observed. */
+  execEpoch?: number;
+  /** When the guest last reported its execution state (epoch ms). */
+  statusAt?: number;
   error?: string;
 }

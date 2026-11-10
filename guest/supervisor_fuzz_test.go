@@ -102,6 +102,7 @@ func FuzzSupervisorDecrypt(f *testing.F) {
 // a panic.
 func FuzzFrameDecode(f *testing.F) {
 	f.Add([]byte(`{"type":"request","id":"req-1","envelope":"AAAA","deadlineMs":1}`))
+	f.Add([]byte(`{"type":"status","activeRequestId":"","epoch":2}`))
 	f.Add([]byte(`{"type":"claim","claim":{"sessionId":"sbx_1"}}`))
 	f.Add([]byte(`{"type":"shutdown","reason":"lease ended"}`))
 	f.Add([]byte(`{}`))
