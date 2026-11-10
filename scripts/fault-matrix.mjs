@@ -35,6 +35,7 @@ const CASES = [
   { name: "controller-kill", target: "controller", action: "kill", scenario: "provisioning", sessions: 50, budgetMs: 60_000 },
   { name: "api-kill", target: "api", action: "kill", scenario: "provisioning", sessions: 20, budgetMs: 30_000 },
   { name: "relay-kill", target: "relay", action: "kill", scenario: "provisioning", sessions: 5, budgetMs: 60_000 },
+  { name: "relay-create-restart", target: "relay", action: "kill", scenario: "create-restart", sessions: 5, budgetMs: 120_000 },
   { name: "lifecycle-restart", target: "controller", action: "kill", scenario: "lifecycle", sessions: 50, budgetMs: 120_000 },
   { name: "controller-pause", target: "controller", action: "pause", scenario: "provisioning", sessions: 5, budgetMs: 60_000 },
   { name: "api-pause", target: "api", action: "pause", scenario: "provisioning", sessions: 5, budgetMs: 30_000 },

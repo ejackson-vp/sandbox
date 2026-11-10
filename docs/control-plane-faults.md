@@ -4,7 +4,10 @@ Status: control-plane fault slice implemented. In-process fault tests cover
 settlement, Pod adoption, deletion failure and lifecycle races; the real
 harness kills the API, controller or relay on a kind cluster and measures
 time-to-convergence. Relay request/response idempotency has dedicated unit
-tests. Full suite: 180 passed, 3 skipped.
+tests. Full suite: 180 passed, 3 skipped. The relay-restart create window (#17)
+has an in-process integration case against the real guest plus a cluster case
+that was added without a local cluster run; see
+[Relay restart during a create](#relay-restart-during-a-create-17).
 
 ## Invariants
 
@@ -29,6 +32,10 @@ tests. Full suite: 180 passed, 3 skipped.
   all operations in flight, then kill the relay. The correct outcome is
   fail-closed: every operation fails or becomes indeterminate, every session
   ends `FAILED`, payment records remain, and Pods/reservations drain to zero.
+- `TARGET=relay SCENARIO=create-restart` (5 sessions): restart the relay as
+  soon as the paid creates return, so the rollout overlaps provisioning. Every
+  create must reach READY against the replacement relay, no session may be
+  terminal, and no session may end `pod_terminated`.
 - `SCENARIO=lifecycle` (default 50 sessions): split the sessions across READY,
   ACTIVE and SUSPENDED, start one long operation per ACTIVE session, kill the
   controller, then require every interrupted request to report
@@ -79,6 +86,96 @@ until the finalizer is removed`) holds a real sandbox Pod in `Terminating`
 after destroy and expects the reservation to stay `RELEASING`; removing the
 finalizer lets Kubernetes finish deletion and the Pod disappear.
 
+## Relay restart during a create (#17)
+
+The relay registry is in memory and the Deployment replaces the pod with
+`maxSurge: 0`, so a registration accepted by the old pod is gone with it. The
+window that failed during the 0.1.16 rollout was:
+
+1. the controller registers a paid session on the old relay;
+2. the old relay is replaced before the guest dials, so the replacement never
+   learns the registration;
+3. the guest exhausts its dial window before the controller re-registers.
+
+A paid create that overlaps a restart must reach READY. If the replacement
+never becomes ready, the create must fail before READY with a refundable reason
+(`provisioning_timeout`), never a charged `pod_terminated`.
+
+### Enforced behaviour
+
+- **Admission gate.** A `PAID` session is not provisioned until
+  `GET /healthz` on the relay succeeds. It stays `PAID` with no Pod and no
+  capacity claim, and the next reconcile pass retries. After
+  `PROVISIONING_TIMEOUT_MS` without a ready relay it is terminated with
+  `provisioning_timeout` and refunded. This is what makes the previous
+  operational mitigation ("wait for the relay") an enforced one.
+- **Generation-checked registration.** Each relay process generates a random
+  `generation` at start, exposes it on `/healthz`, and returns it from
+  `POST /internal/register`. `register` also accepts the generation the
+  controller probed; a mismatch is `409 relay_generation_changed`. The
+  controller probes, registers with that precondition, probes again, and
+  retries with backoff if the generation changed. A registration that landed
+  on a terminating relay is therefore discarded instead of being treated as
+  success.
+- **Fresh admin connections.** Relay admin calls send `Connection: close`.
+  A Kubernetes Service DNATs an existing keep-alive socket to the old Pod even
+  after its endpoint is removed, so without this the controller can keep
+  reading `state` and re-registering on the relay that is being replaced while
+  the guest's new dial reaches the replacement. Fresh connections always reach
+  the current endpoint set.
+- **Deterministic handshake.** `awaitReady` brackets the guest hello with two
+  generation probes. If they differ, the hello came from a relay that is being
+  replaced and the session is not marked READY (which would charge for a guest
+  that is about to exit); the next pass re-registers on the replacement.
+- **Startup wake.** A relay that starts serving calls the controller's
+  `/internal/wake`, so `PROVISIONING` sessions re-register in the next pass
+  instead of waiting for the poll interval.
+- **Guest dial window.** The session guest retries the relay for 150s
+  (`RELAY_DIAL_TIMEOUT_SECONDS`), comfortably longer than the 90s
+  `PROVISIONING_TIMEOUT_MS`. If the relay never returns, the controller gives
+  up and refunds first; the guest cannot turn a control-plane outage into a
+  terminal Pod observed as `pod_terminated`.
+- **Rollout hygiene.** The relay Deployment sets
+  `terminationGracePeriodSeconds: 10` (instead of the 30s default) and
+  `minReadySeconds: 2`. Guest links are dropped by the relay shutdown path
+  anyway; a shorter grace shrinks the interval in which a stale admin
+  connection can still be answered by the old Pod.
+
+A pre-READY Pod exit (for example a guest that latched onto the old relay and
+exited when the link dropped) is still `pod_terminated`/`FAILED`, but the
+refund backstop applies because `readyAt` is null. The invariant is "no charged
+session ends with `pod_terminated`", not "the string never appears".
+
+### Local verification
+
+`tests/integration/relay-restart.test.ts` uses the real guest and two real
+relays behind a TCP router that pins established connections to the old
+upstream (the kube-proxy behaviour). It covers:
+
+- restart during provisioning: the replacement relay takes over, the session
+  reaches READY, and a real exec succeeds through the replacement;
+- a relay that never returns: the session ends `FAILED` with
+  `provisioning_timeout`, `readyAt` is null, and the settled mock ledger is
+  `REFUNDED`;
+- both cases assert the ledger is not `SETTLED` when `failure_code` is
+  `pod_terminated`.
+
+`tests/unit/relay-registration.test.ts` covers the generation precondition,
+retry on a generation change, replacement of a stale connected entry, the
+registration deadline, and the readiness gate. `tests/unit/relay.test.ts`
+covers the relay's `/healthz` generation and the `409 relay_generation_changed`
+response.
+
+### Cluster case
+
+`make test-control-faults TARGET=relay SCENARIO=create-restart` (matrix case
+`relay-create-restart`) restarts the relay immediately after the paid creates
+return and requires every session to reach READY with no terminal session and
+no `pod_terminated`. It uses the real Deployment and Service, so it exercises
+the rollout and the stale-connection path that the local router only
+simulates. **This case was added but not run while implementing #17**; it needs
+the self-hosted cluster runner described below.
+
 ## Scheduled runs (nightly)
 
 `.github/workflows/nightly-faults.yml` runs this matrix plus the cluster
@@ -128,14 +225,15 @@ that can only reach the sandbox namespaces, not an admin kubeconfig.
 | `controller-kill` | controller | kill during provisioning | 50 | 60 s |
 | `api-kill` | api | kill during provisioning | 20 | 30 s |
 | `relay-kill` | relay | kill with operations in flight | 5 | 60 s |
+| `relay-create-restart` | relay | restart while paid creates are provisioning | 5 | 120 s |
 | `lifecycle-restart` | controller | kill with READY/ACTIVE/SUSPENDED sessions | 50 | 120 s |
 | `controller-pause` | controller | `SIGSTOP`/`SIGCONT` during provisioning | 5 | 60 s |
 | `api-pause` | api | `SIGSTOP`/`SIGCONT` during provisioning | 5 | 30 s |
 | `relay-pause` | relay | `SIGSTOP`/`SIGCONT` with operations in flight | 5 | 60 s |
 
-`full` is all seven; `smoke` is `api-kill`, `controller-pause` and
-`relay-pause`. The relay-restart-mid-create case joins the matrix once #17
-lands.
+`full` is all eight; `smoke` is `api-kill`, `controller-pause` and
+`relay-pause`. The `relay-create-restart` case requires a real cluster and was
+added without a local run (see below).
 
 ### Artifacts and reading a red run
 

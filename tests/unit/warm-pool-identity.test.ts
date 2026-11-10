@@ -83,7 +83,8 @@ function harness(initialPods: WarmPodInfo[], digest = digestA): Harness {
       attestation: { sessionId: "warm_aaaaaaaaaaaa" },
       pending: 0,
     }),
-    register: async () => {},
+    register: async () => ({ generation: "test" }),
+    registerCurrent: async () => ({ generation: "test", attempts: 1 }),
     claim: async (poolId: string, claim: WarmClaim) => {
       claims.push({ poolId, claim });
     },
