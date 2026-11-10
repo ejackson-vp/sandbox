@@ -172,3 +172,13 @@ export interface RelaySessionState {
   statusAt?: number;
   error?: string;
 }
+
+/**
+ * A registry snapshot stamped with the identity of the relay process that
+ * produced it. The generation and the session fields come from the same process
+ * and the same event-loop turn, so a snapshot cannot be half old and half new
+ * the way a separate health probe before and after a read can be.
+ */
+export interface RelayStateSnapshot extends RelaySessionState {
+  generation: string;
+}

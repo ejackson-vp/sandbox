@@ -249,5 +249,12 @@ export class Lifecycle {
       // the effect: the caller retries from SUSPENDED.
       throw new LifecycleError("not_suspended", "session changed state while resuming", 409);
     }
+    // The post-create bookkeeping for a resume lives with the `start_pod` that
+    // performs it (`Provisioning.startResumePod`), immediately after the guarded
+    // write that makes the session RESUMING and before it can be observed as
+    // READY: `capacity.reassertAllocated` returns the compute the reaper may
+    // have re-suspended while the pod was being created, plus the
+    // `sandbox_sessions_resumed_total` counter and the `sandbox_resuming` log.
+    // `isOk` above means that write committed, so it has already run.
   }
 }

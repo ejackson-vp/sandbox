@@ -20,6 +20,16 @@ repeat creates and one redundant capacity call; the VM is not the problem.
 That gap is the product target. A user does not care that the pod was ready in
 127 ms if they waited nearly 400 ms to run a command.
 
+A 0.1.20 spot check landed at 287 ms server and 522 ms client (n = 50), with 70
+of 71 creates hitting the warm pool. 0.1.22 removed the two relay probes that
+looked like the cause, and the number barely moved: across two 50-sample runs,
+292-354 ms server and 548-595 ms client. Per-session timings point elsewhere. On
+a warm claim, the pick costs 13-169 ms (a Kubernetes list), registration 26-92 ms
+(three fresh mTLS calls), the claim 9-68 ms, relabelling 17-65 ms (a Kubernetes
+patch), and the guest takes 50-360 ms to reconnect and re-attest as the claimed
+session. READY detection after the hello is 10-44 ms. The probes were not the
+cost.
+
 ## Burst traffic queues; it does not thrash
 
 25 simultaneous creates completed 25/25 with zero failures in 19.0 s. Server-side
@@ -51,7 +61,7 @@ RSS). A pool of 20 costs roughly 3.6 GiB across two nodes — the price of the
 1. **Cut the paid create path.** Payment verify/settle is ~20 ms; the rest of the
    ~175 ms create is the paid request and the controller entitlement round trips.
    The post-create `getSession` is now folded into the completion response
-   (unreleased): the API no longer makes a separate `GET /internal/sessions/:id`
+   (0.1.20): the API no longer makes a separate `GET /internal/sessions/:id`
    after a successful completion, and the SDK builds its handle from the
    embedded view instead of issuing an immediate status request. The wire change
    is additive, so older clients and older controllers still work. This has not

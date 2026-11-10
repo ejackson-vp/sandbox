@@ -7,13 +7,6 @@ the container registry.
 
 ## Unreleased
 
-### Added
-
-- The relay exports `sandbox_relay_active_requests`, the number of operations
-  the guests themselves report as running. The lifecycle fault harness waits
-  for this gauge before killing the controller, so it tests an observed
-  operation rather than racing the guest's status frame (#108).
-
 ### Changed
 
 - Provisioning is table-driven end to end. `PAID -> PROVISIONING` and
@@ -25,6 +18,41 @@ the container registry.
   that is not ready leaves the session in its current state and the next pass
   retries. The SUSPENDING crash-repair replay is a new `suspend_retry` event
   rather than a hand-built effect list.
+
+## 0.1.22
+
+### Added
+
+- Keyless SLSA build provenance for both release images. The Sigstore bundle and
+  its in-toto statement are attached as `sandbox-<name>.sigstore.json` and
+  `sandbox-<name>.intoto.jsonl`, and the attestation is pushed to GHCR (#121).
+- TypeScript coverage is measured in CI and published as a README badge (#121).
+
+### Changed
+
+- Readiness reads one relay snapshot stamped with the relay process generation
+  and reuses the connection for read-only snapshots. Writes still open a fresh
+  connection. This removes two mTLS probes from every readiness pass (#127).
+- The docs gate runs on every pull request instead of only when a Markdown path
+  changes, so non-Markdown PRs no longer wait on checks that never report (#125).
+- README leads with the demo, and the logo, architecture diagram and social
+  preview use the navy and mint palette (#126).
+
+### Fixed
+
+- Coverage options moved under `test.coverage`, where Vitest 5 reads them, so
+  the badge job finds `coverage-summary.json` (#124).
+- The performance claim is corrected: the 0.1.16 numbers are a baseline, and a
+  0.1.20 spot check measured 287 ms server-side readiness (#116, #127).
+
+## 0.1.21
+
+### Added
+
+- The relay exports `sandbox_relay_active_requests`, the number of operations
+  the guests themselves report as running. The lifecycle fault harness waits
+  for this gauge before killing the controller, so it tests an observed
+  operation rather than racing the guest's status frame (#108).
 
 ### Fixed
 

@@ -148,6 +148,72 @@ jobs:
             echo "${name}=${digest}" >> "$GITHUB_OUTPUT"
           done
 
+  # Provenance attestations for the exact digests that get scanned and promoted.
+  # Keyless (workflow OIDC), so there is no long-lived key to leak: the
+  # attestation binds the image digest to this repository, commit and workflow.
+  # `push-to-registry` also attaches it to the GHCR image, and the bundle is
+  # attached to the GitHub Release so it can be archived and inspected.
+  attest:
+    needs: digests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [control, guest]
+    steps:
+      - id: digest
+        env:
+          DIGESTS: ${{ toJSON(needs.digests.outputs) }}
+        run: |
+          set -euo pipefail
+          digest=$(jq -r --arg name "${{ matrix.name }}" '.[$name]' <<<"$DIGESTS")
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "no digest for ${{ matrix.name }}: $digest" >&2; exit 1 ;;
+          esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # `push-to-registry` reads the registry credentials from the Docker
+      # config; it does not use the GitHub token on its own. Without this step
+      # it fails with "No credentials found for registry ghcr.io".
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+
+      - name: Stage release assets
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          # The signed bundle is the artifact consumers verify. It is also the
+          # filename Scorecard recognises (8/10 without an intoto statement).
+          cp "$BUNDLE" "assets/sandbox-${{ matrix.name }}.sigstore.json"
+          # The in-toto statement the bundle carries, one object per line, for
+          # SLSA tooling and for Scorecard's Signed-Releases check (10/10).
+          jq -c '.dsseEnvelope.payload | @base64d | fromjson' "$BUNDLE" \
+            > "assets/sandbox-${{ matrix.name }}.intoto.jsonl"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: attestations-${{ matrix.name }}
+          path: assets/
+          retention-days: 14
+
   # Scan the exact staging digest. Policy is unchanged from the previous gate:
   # fixable CRITICAL/HIGH fails, results land in the Security tab. The release
   # tags do not exist yet, so a failure here cannot leave a deployable image.
@@ -261,17 +327,26 @@ jobs:
   # be promoted rather than for the raw build.
   release:
     name: github release
-    needs: promote
+    needs: [promote, attest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: attestations-*
+          merge-multiple: true
+          path: release-assets
+
       - name: Publish release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           generate_release_notes: true
+          # Signed provenance for both images. `*.sigstore.json` is the bundle
+          # to verify; `*.intoto.jsonl` is the statement it carries.
+          files: release-assets/*
           append_body: |
             ## Images
 
@@ -287,6 +362,24 @@ jobs:
             ```bash
             docker buildx imagetools inspect ghcr.io/${{ github.repository }}-control:${{ github.ref_name }}
             ```
+
+            ## Verifying provenance
+
+            The `*.sigstore.json` assets are keyless Sigstore bundles produced by
+            this workflow, covering exactly the digests above. Verify the image
+            itself:
+
+            ```bash
+            gh attestation verify \
+              oci://ghcr.io/${{ github.repository }}-control:${{ github.ref_name }} \
+              --repo ${{ github.repository }}
+            ```
+
+            Add `--bundle-from-oci` to check the attestation stored in the
+            registry instead of the one on GitHub.
+
+            `*.intoto.jsonl` is the in-toto statement carried inside the bundle,
+            for SLSA tooling that consumes statements rather than bundles.
 
             The guest image is what runs inside the microVM and must match the
             cluster architecture. CVE results for this tag are in the Security

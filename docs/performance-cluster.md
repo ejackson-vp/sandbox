@@ -17,6 +17,13 @@ quote for this deployment.
 | Warm pool | 20 pre-booted guests |
 | Client | macOS, SDK over Tailscale |
 | Payments | mock x402 |
+| Measured | 2026-11-09 |
+
+> These results are from control `0.1.16`. On `0.1.22` the same 50-sample
+> harness measured 292-354 ms server and 548-595 ms client across two runs, so
+> treat this table as the baseline, not a current promise.
+> [Issue #116](https://github.com/ejackson-vp/sandbox/issues/116) tracks the
+> regression.
 
 ## Method
 

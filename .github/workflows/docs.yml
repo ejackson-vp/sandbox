@@ -2,18 +2,14 @@ name: docs
 
 # Documentation is part of the product surface: broken internal links and
 # malformed Markdown are review failures, not cosmetics.
+#
+# Runs on every push and pull request, without path filters. `main` requires
+# both jobs as status checks, so filtering by changed paths left non-Markdown
+# PRs permanently blocked by checks that would never report.
 
 on:
   push:
-    paths:
-      - "**/*.md"
-      - ".markdownlint-cli2.jsonc"
-      - ".github/workflows/docs.yml"
   pull_request:
-    paths:
-      - "**/*.md"
-      - ".markdownlint-cli2.jsonc"
-      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:

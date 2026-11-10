@@ -105,7 +105,10 @@ export function registerRelayControlRoutes(
   });
 
   app.get("/internal/:sessionId/state", (req, res) => {
-    res.json(registry.state(String(req.params.sessionId ?? "")));
+    // Stamp the snapshot with this process's generation. The controller can
+    // then decide whether the relay that answered is the one the session
+    // registered on, without separate health probes around the read.
+    res.json({ ...registry.state(String(req.params.sessionId ?? "")), generation: opts.generation });
   });
 
   // Recovery publishes the bumped session execution epoch here before the

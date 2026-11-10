@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Agent, fetch as undiciFetch } from "undici";
-import type { RelaySessionState, WarmClaim } from "@x402s/shared";
+import type { RelayStateSnapshot, WarmClaim } from "@x402s/shared";
 import { dataPlaneShard, shardHost } from "./data-plane-shard.js";
 
 export interface RelayClientTlsOptions {
@@ -107,10 +107,11 @@ export class RelayClient {
     this.headers = {
       "content-type": "application/json",
       // The relay's registry is in memory and the Deployment replaces the pod
-      // (maxSurge: 0). A keep-alive socket can stay pinned to the old pod
-      // through a Service after its endpoints are gone, so control calls must
-      // open a fresh connection and be routed to the current pod.
-      connection: "close",
+      // (maxSurge: 0), so a keep-alive socket can stay pinned to a serving but
+      // terminating pod. Mutating calls therefore open a fresh connection,
+      // routed to the current pod. Read-only snapshots may reuse the pool
+      // because they carry the generation that answered, and callers that care
+      // compare it (see `state` and the readiness path).
       // The client certificate is the credential on the mTLS path; do not also
       // send the shared token over the wire.
       ...(opts.tls ? {} : { "x-internal-token": opts.adminToken }),
@@ -136,6 +137,7 @@ export class RelayClient {
     path: string,
     init: RequestInit = {},
     timeoutMs?: number,
+    opts: { reuse?: boolean } = {},
     baseUrl: string = this.baseUrl,
   ): Promise<Response> {
     // undici's fetch, not the global one: the global fetch uses Node's bundled
@@ -146,6 +148,7 @@ export class RelayClient {
       ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}),
       headers: {
         ...this.headers,
+        ...(opts.reuse ? {} : { connection: "close" }),
         ...(init.headers ?? {}),
       },
       signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
@@ -157,9 +160,10 @@ export class RelayClient {
     path: string,
     init: RequestInit = {},
     timeoutMs?: number,
+    opts: { reuse?: boolean } = {},
     baseUrl: string = this.baseUrl,
   ): Promise<T> {
-    const res = await this.raw(path, init, timeoutMs, baseUrl);
+    const res = await this.raw(path, init, timeoutMs, opts, baseUrl);
     const text = await res.text();
     let body: unknown;
     try {
@@ -190,7 +194,7 @@ export class RelayClient {
   }
 
   private async healthFrom(baseUrl: string, timeoutMs: number): Promise<RelayHealth> {
-    const body = await this.call<Partial<RelayHealth>>("/healthz", {}, timeoutMs, baseUrl);
+    const body = await this.call<Partial<RelayHealth>>("/healthz", {}, timeoutMs, {}, baseUrl);
     if (body?.ok !== true || typeof body.generation !== "string" || body.generation.length === 0) {
       throw new RelayUnavailableError(503, "relay_not_ready");
     }
@@ -241,7 +245,7 @@ export class RelayClient {
         ttlMs,
         ...(generation ? { generation } : {}),
       }),
-    }, undefined, this.baseFor(sessionId));
+    }, undefined, {}, this.baseFor(sessionId));
     return { generation: typeof body?.generation === "string" ? body.generation : (generation ?? "") };
   }
 
@@ -310,11 +314,12 @@ export class RelayClient {
     );
   }
 
-  async state(sessionId: string): Promise<RelaySessionState> {
-    return this.call<RelaySessionState>(
+  async state(sessionId: string, opts: { reuse?: boolean } = {}): Promise<RelayStateSnapshot> {
+    return this.call<RelayStateSnapshot>(
       `/internal/${encodeURIComponent(sessionId)}/state`,
       {},
       undefined,
+      opts,
       this.baseFor(sessionId),
     );
   }
@@ -340,6 +345,7 @@ export class RelayClient {
           body: JSON.stringify({ epoch }),
         },
         undefined,
+        {},
         this.baseFor(sessionId),
       );
       return {
@@ -359,7 +365,7 @@ export class RelayClient {
     await this.call(`/internal/${encodeURIComponent(sessionId)}/request`, {
       method: "POST",
       body: JSON.stringify({ id, envelope, deadlineMs, epoch }),
-    }, 60_000, this.baseFor(sessionId));
+    }, 60_000, {}, this.baseFor(sessionId));
   }
 
   async response(sessionId: string, id: string, waitMs: number): Promise<RelayResponse> {
@@ -367,6 +373,7 @@ export class RelayClient {
       `/internal/${encodeURIComponent(sessionId)}/response/${encodeURIComponent(id)}?waitMs=${Math.max(0, waitMs)}`,
       {},
       waitMs + 15_000,
+      {},
       this.baseFor(sessionId),
     );
     const body = (await res.json().catch(() => ({}))) as {
@@ -387,14 +394,14 @@ export class RelayClient {
     await this.call(`/internal/${encodeURIComponent(sessionId)}/cancel`, {
       method: "POST",
       body: JSON.stringify({ id }),
-    }, undefined, this.baseFor(sessionId));
+    }, undefined, {}, this.baseFor(sessionId));
   }
 
   async shutdown(sessionId: string, reason: string): Promise<void> {
     await this.call(`/internal/${encodeURIComponent(sessionId)}/shutdown`, {
       method: "POST",
       body: JSON.stringify({ reason }),
-    }, undefined, this.baseFor(sessionId));
+    }, undefined, {}, this.baseFor(sessionId));
   }
 
   /** Send a claim to a warm (unleased) guest over its pooled relay entry. */
@@ -402,7 +409,7 @@ export class RelayClient {
     await this.call(`/internal/${encodeURIComponent(poolSessionId)}/claim`, {
       method: "POST",
       body: JSON.stringify({ claim }),
-    }, undefined, this.baseFor(poolSessionId));
+    }, undefined, {}, this.baseFor(poolSessionId));
   }
 
   async purge(sessionId: string): Promise<void> {
@@ -411,6 +418,7 @@ export class RelayClient {
         `/internal/${encodeURIComponent(sessionId)}`,
         { method: "DELETE" },
         undefined,
+        {},
         this.baseFor(sessionId),
       );
     } catch (err) {

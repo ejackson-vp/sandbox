@@ -24,6 +24,7 @@
     "test:fuzz": "vitest run tests/fuzz",
     "clean": "rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist",
     "test:property": "vitest run tests/property",
+    "test:coverage": "vitest run tests/unit tests/property tests/integration --coverage",
     "lint:structure": "node scripts/check-structure.mjs",
     "bench:ceiling": "tsx scripts/bench-reconcile-ceiling.ts"
   },
@@ -31,6 +32,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^26.6.6",
     "@types/ws": "^8.18.0",
+    "@vitest/coverage-v8": "^5.1.0",
     "fast-check": "^4.10.2",
     "tsx": "^4.20.0",
     "typescript": "^7.0.2",

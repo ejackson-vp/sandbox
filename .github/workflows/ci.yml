@@ -81,6 +81,71 @@ jobs:
           GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
         run: npm run test:integration
 
+  # The README coverage badge is measured, not hand-maintained. This job runs
+  # the portable suites (unit, property, integration) under instrumentation and
+  # publishes the json-summary; the separate job below turns it into a badge.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: guest/go.mod
+          cache-dependency-path: guest/go.sum
+      - run: npm ci
+      - run: npm run build
+      - run: make guest
+      - name: coverage (unit + property + integration)
+        env:
+          GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
+        run: npm run test:coverage
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+  # Writes exactly one JSON file to the `badges` branch, which the README badge
+  # reads. Main pushes only, and it never checks out or runs PR code: the
+  # artifact is produced by the trusted run, this job only publishes it.
+  coverage-badge:
+    name: coverage badge
+    needs: coverage
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: coverage-report
+          path: coverage
+      - name: Render badge JSON
+        run: node scripts/coverage-badge.mjs coverage/coverage-summary.json badge/coverage.json
+      - name: Publish to badges branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          git -C "$tmp" init -q
+          git -C "$tmp" checkout -q -b badges
+          cp badge/coverage.json "$tmp/coverage.json"
+          git -C "$tmp" add coverage.json
+          git -C "$tmp" -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "chore: update coverage badge [skip ci]"
+          # The branch is a single-file publish target, not history: overwrite
+          # it so it cannot grow one commit per main push.
+          git -C "$tmp" push -q --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
+
   # Cluster-backed tests (network isolation, warm pool, checkpoint portability)
   # need kind + Cilium and are intentionally run locally:
   #   make up && make security-test
