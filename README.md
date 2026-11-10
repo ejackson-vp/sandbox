@@ -173,6 +173,11 @@ testnet, and there is no hardware attestation. What is missing, in order:
 [docs/production-readiness.md](docs/production-readiness.md). What comes next:
 [ROADMAP.md](ROADMAP.md).
 
-Non-goals: no coding agent, no GitHub integration, no persistent dev
-environments, no memory snapshots (filesystem checkpoints only), no GPUs, no
-accounts, no managed wallets, no mainnet payments.
+Current limitations: no memory snapshots (filesystem checkpoints only), no GPUs,
+no arbitrary OCI images, and mock or testnet payments only.
+
+Non-goals: a hosted commercial service, accounts, managed wallets, mainnet
+payments, hardware-attestation claims, feature parity with general-purpose
+sandbox platforms, and application-specific integrations. It does not ship a
+coding agent; callers may run one. Prepared runtimes and stateful sessions are
+in scope; a full IDE or dev-platform is not.
