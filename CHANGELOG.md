@@ -5,7 +5,7 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
-## Unreleased
+## 0.1.21
 
 ### Added
 
