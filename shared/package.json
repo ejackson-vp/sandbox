@@ -9,6 +9,34 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/entries/protocol.d.ts",
+      "default": "./dist/entries/protocol.js"
+    },
+    "./domain": {
+      "types": "./dist/entries/domain.d.ts",
+      "default": "./dist/entries/domain.js"
+    },
+    "./crypto": {
+      "types": "./dist/entries/crypto.d.ts",
+      "default": "./dist/entries/crypto.js"
+    },
+    "./payment": {
+      "types": "./dist/entries/payment.d.ts",
+      "default": "./dist/entries/payment.js"
+    },
+    "./runtime": {
+      "types": "./dist/entries/runtime.d.ts",
+      "default": "./dist/entries/runtime.js"
+    },
+    "./env": {
+      "types": "./dist/entries/env.d.ts",
+      "default": "./dist/entries/env.js"
+    },
+    "./ip": {
+      "types": "./dist/entries/ip.d.ts",
+      "default": "./dist/entries/ip.js"
     }
   },
   "scripts": {
