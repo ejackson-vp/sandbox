@@ -88,6 +88,29 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       ),
       /** Move one session's next pass; cadence policy lives in the caller. */
       bumpDue: db.prepare("UPDATE sessions SET next_due_ms = ? WHERE id = ?"),
+      /**
+       * Re-arm a session after a pass, but only while it is still due.
+       *
+       * A state change in the same pass already armed the row for its new
+       * state; that deadline is in the future, so this UPDATE matches nothing
+       * and the transition's cadence wins. An unchanged session that is still
+       * due is moved forward exactly once, which is what stops `listDue` from
+       * returning it again on the very next pass. NULL is treated as due
+       * (never left in place).
+       */
+      rearmDue: db.prepare(
+        "UPDATE sessions SET next_due_ms = ? WHERE id = ? AND (next_due_ms IS NULL OR next_due_ms <= ?)",
+      ),
+      /** Due count for the per-pass backlog gauge (index-only, no row mapping). */
+      countDue: db.prepare(
+        `SELECT COUNT(*) AS n FROM sessions INDEXED BY sessions_due
+         WHERE state IN (${NON_TERMINAL_STATE_SQL})
+           AND (next_due_ms IS NULL OR next_due_ms <= ?)`,
+      ),
+      /** Live sessions grouped by state, for capacity gauges without listing rows. */
+      countLiveByState: db.prepare(
+        `SELECT state, COUNT(*) AS n FROM sessions WHERE state IN (${NON_TERMINAL_STATE_SQL}) GROUP BY state`,
+      ),
       listTerminalWithPod: db.prepare(
         `SELECT ${SESSION_COLUMNS} FROM sessions WHERE state IN ('EXPIRED','FAILED','DESTROYED') AND pod_name IS NOT NULL`,
       ),
@@ -143,7 +166,10 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
          WHERE id=? AND state IN (${statesIn("terminated")})`,
       ),
       requestDestroy: db.prepare(
-        "UPDATE sessions SET destroy_requested = 1, updated_at = ? WHERE id = ? AND state NOT IN ('EXPIRED','FAILED','DESTROYED')",
+        // A destroy is an event: make the row due now so an immediate wake
+        // pass (or the next tick) terminates it instead of waiting out the
+        // state's cadence. The pass re-arms it after processing.
+        "UPDATE sessions SET destroy_requested = 1, next_due_ms = ?, updated_at = ? WHERE id = ? AND state NOT IN ('EXPIRED','FAILED','DESTROYED')",
       ),
       markRelayPurged: db.prepare("UPDATE sessions SET relay_purged_at = ?, updated_at = ? WHERE id = ?"),
       clearPod: db.prepare("UPDATE sessions SET pod_name = NULL, updated_at = ? WHERE id = ?"),

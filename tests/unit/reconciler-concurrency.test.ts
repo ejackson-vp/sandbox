@@ -47,10 +47,22 @@ function session(id: string, state: SessionRecord["state"] = "PAID"): SessionRec
 
 function harness(sessions: SessionRecord[], terminal: SessionRecord[] = [], concurrency = 8) {
   const clearPod = vi.fn();
+  // The tick selects by due time; this fake treats every listed session as
+  // due and re-arms through the same store surface as the real Store. The
+  // assertions below are unchanged: they exercise dispatch/concurrency, not
+  // the SQL schedule.
   const store = {
+    listDue: (_now: number, limit: number) => sessions.slice(0, limit),
     listNonTerminal: () => sessions,
     listTerminalWithPod: () => terminal,
     getSession: (id: string) => [...sessions, ...terminal].find((s) => s.id === id) ?? null,
+    rearmDue: vi.fn(() => true),
+    countDue: () => sessions.length,
+    countLiveByState: () =>
+      sessions.reduce<Record<string, number>>((counts, s) => {
+        counts[s.state] = (counts[s.state] ?? 0) + 1;
+        return counts;
+      }, {}),
     clearPod,
     requestTermination: vi.fn(() => true),
   } as unknown as Store;

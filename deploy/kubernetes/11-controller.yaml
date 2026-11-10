@@ -93,6 +93,7 @@ spec:
             - {name: KUBERNETES_ENABLED, value: "true"}
             - {name: RECONCILE_INTERVAL_MS, value: "250"}
             - {name: RECONCILE_CONCURRENCY, value: "8"}
+            - {name: RECONCILE_BUDGET, value: "1000"}
             - {name: WORKSPACE_DIR, value: "/workspace"}
             - name: ADMIN_TOKEN
               valueFrom:

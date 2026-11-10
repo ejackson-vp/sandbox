@@ -117,11 +117,26 @@ Each phase now runs through a bounded worker pool:
 | Env | Default | Meaning |
 |---|---:|---|
 | `RECONCILE_CONCURRENCY` | `8` | sessions reconciled in parallel per phase (1 = sequential) |
+| `RECONCILE_BUDGET` | `1000` | max sessions selected for dispatch in one readiness pass |
 
 A session already in flight is skipped by a later pass and retried on the next
 tick, so lease expiry and termination never run twice for one id. Terminal-pod
 cleanup is a separate phase that runs after readiness; it never shares the
 readiness queue or its ordering assumptions.
+
+## Due-time scheduling
+
+A pass no longer sweeps every live session. Each session carries a
+`next_due_ms`; the tick reads at most `RECONCILE_BUDGET` due rows in due order
+from the `sessions_due` partial index, and re-arms a processed session before
+the next pass can select it again. The re-due cadence per state lives in
+`controller/src/reconcile-cadence.ts` (PROVISIONING/RESUMING 250 ms, READY and
+ACTIVE 1 s, SUSPENDING 500 ms, SUSPENDED 15 s, TERMINATING 250 ms). Lease
+expiry is still decided by the controller clock; the READY cadence only bounds
+how long before the next pass notices it, with pod deletion as the backstop.
+`RECONCILE_INTERVAL_MS` remains the timer cadence, and a pass that overruns it
+sets `sandbox_reconcile_saturated`; due sessions left over are exported as
+`sandbox_reconcile_due_backlog` rather than triggering an immediate re-entry.
 
 Two bounded-label metrics make bursts visible before they become tail latency:
 

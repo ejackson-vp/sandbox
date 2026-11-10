@@ -30,6 +30,7 @@ import { BackupService } from "./backup.js";
 import { OperationFence } from "./operation-fence.js";
 import { runBounded } from "./bounded-queue.js";
 import { ServiceAddressResolver } from "./service-address.js";
+import { cadenceFor } from "./reconcile-cadence.js";
 import { log } from "@x402s/shared";
 
 export { LifecycleError } from "./lifecycle.js";
@@ -135,7 +136,11 @@ export class Reconciler {
   /**
    * Event-driven nudge: reconcile now instead of waiting for the next tick.
    * Used after entitlement creation and destroy requests so provisioning and
-   * cleanup do not pay a full poll interval.
+   * cleanup do not pay a full poll interval. The pass is still due-time
+   * bounded, so a nudge is immediate only for a row that is due: entitlement
+   * creation inserts a NULL (due) schedule, and a destroy request arms
+   * `next_due_ms = now`. Other transitions are picked up within their state's
+   * cadence.
    */
   wake(): void {
     if (this.running) {
@@ -149,44 +154,109 @@ export class Reconciler {
     if (this.running) return;
     this.running = true;
     const started = Date.now();
+    const budget = this.deps.cfg.reconcileBudget;
     try {
+      const now = this.now();
+      // One bounded, index-ordered read replaces two full live-session sweeps
+      // (readiness + gauges). `listDue` returns rows whose next pass is due,
+      // earliest first, capped by the budget; a truncated remainder stays due
+      // and is served by a later pass. Nothing here re-enters tick(), so a
+      // backlog grows latency, never a busy loop.
+      const due = this.deps.store.listDue(now, budget);
+      const truncated = due.length >= budget;
+
       // Readiness first, terminal cleanup second: cleanup may delete a pod
       // that a terminating session is still shutting down gracefully, so the
       // two phases stay ordered even though each is internally concurrent.
-      await this.reconcilePhase("readiness", this.deps.store.listNonTerminal(), (session) =>
-        this.reconcileSession(session).catch((err: unknown) => {
+      const dispatched = await this.reconcilePhase("readiness", due, async (session) => {
+        try {
+          await this.reconcileSession(session);
+        } catch (err) {
           log.error("reconcile_session_failed", {
             sessionId: session.id,
             state: session.state,
             error: (err as Error).message,
           });
-        }),
-      );
+        } finally {
+          this.rearm(session);
+        }
+      });
+
       const terminal = this.deps.store.listTerminalWithPod().filter((session) => session.podName);
       await this.reconcilePhase("cleanup", terminal, async (session) => {
         await this.deps.provisioner.deletePod(session.podName!, 0).catch(() => undefined);
         this.deps.store.clearPod(session.id);
       });
-      const nonTerminal = this.deps.store.listNonTerminal();
-      const active = nonTerminal.filter((s) => s.state === "READY" || s.state === "ACTIVE").length;
-      const provisioning = nonTerminal.filter(
-        (s) => s.state === "PROVISIONING" || s.state === "RESUMING",
-      ).length;
-      const queued = nonTerminal.filter((s) => s.state === "PAID").length;
-      metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE").set({}, active);
-      metrics.gauge("sandbox_provisioning_active", "Sessions in PROVISIONING or RESUMING").set({}, provisioning);
-      metrics.gauge("sandbox_provisioning_queued", "PAID sessions waiting for a provisioning slot").set({}, queued);
+
+      // Same capacity numbers as the old full listing, from one grouped COUNT
+      // instead of materialising every live row.
+      const counts = this.deps.store.countLiveByState();
+      metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE").set(
+        {},
+        (counts.READY ?? 0) + (counts.ACTIVE ?? 0),
+      );
+      metrics.gauge("sandbox_provisioning_active", "Sessions in PROVISIONING or RESUMING").set(
+        {},
+        (counts.PROVISIONING ?? 0) + (counts.RESUMING ?? 0),
+      );
+      metrics.gauge("sandbox_provisioning_queued", "PAID sessions waiting for a provisioning slot").set(
+        {},
+        counts.PAID ?? 0,
+      );
+
+      // Sessions still due after the pass: the budget truncated the read, or
+      // a due row was skipped because it is already in flight. When the pass
+      // exhausted the due set there is nothing to count.
+      const backlog =
+        truncated || due.length > dispatched ? this.deps.store.countDue(now) : 0;
+      metrics
+        .gauge("sandbox_reconcile_due_backlog", "Sessions due but not dispatched this pass")
+        .set({}, backlog);
     } catch (err) {
       log.error("reconcile_pass_failed", { error: (err as Error).message });
     } finally {
+      const durationMs = Date.now() - started;
       metrics
         .histogram("sandbox_reconcile_duration_seconds", "Reconcile pass duration", LATENCY_BUCKETS)
-        .observe((Date.now() - started) / 1000);
+        .observe(durationMs / 1000);
+      // 1 means the pass did not fit in the timer interval. The timer keeps its
+      // own cadence and tick() is guarded by `running`, so this is a signal to
+      // raise capacity or lower the budget, not a trigger for another pass.
+      metrics
+        .gauge("sandbox_reconcile_saturated", "1 when a reconcile pass overran RECONCILE_INTERVAL_MS")
+        .set({}, durationMs >= this.deps.cfg.reconcileIntervalMs ? 1 : 0);
       this.running = false;
       if (this.wakeRequested) {
         this.wakeRequested = false;
         void this.tick();
       }
+    }
+  }
+
+  /**
+   * Move a processed session past this pass.
+   *
+   * `listDue` selects `next_due_ms <= now`, so a row left untouched is
+   * selected again on the very next pass: the scheduler would spin at the tick
+   * rate no matter what cadence the policy asks for. An unchanged session is
+   * therefore re-armed to `now + cadenceFor(state)`. A session whose state
+   * changed already had its due time armed by the state-changing statement with
+   * the cadence of the state it entered, so re-writing it would be a pointless
+   * second write and could shorten a longer cadence. `rearmDue` additionally
+   * only applies while the row is still due, so a concurrent transition that
+   * armed a future deadline always wins.
+   */
+  private rearm(processed: SessionRecord): void {
+    try {
+      const current = this.deps.store.getSession(processed.id);
+      if (!current || current.state !== processed.state) return;
+      const now = this.now();
+      this.deps.store.rearmDue(current.id, now + cadenceFor(current.state), now);
+    } catch (err) {
+      log.warn("reconcile_rearm_failed", {
+        sessionId: processed.id,
+        error: (err as Error).message,
+      });
     }
   }
 
@@ -202,7 +272,7 @@ export class Reconciler {
     phase: "readiness" | "cleanup",
     sessions: readonly SessionRecord[],
     run: (session: SessionRecord) => Promise<void>,
-  ): Promise<void> {
+  ): Promise<number> {
     const labels = { phase };
     const depth = metrics.gauge(
       "sandbox_reconcile_queue_depth",
@@ -219,12 +289,14 @@ export class Reconciler {
     );
     const eligible = sessions.filter((session) => !this.inFlight.has(session.id));
     depth.set(labels, eligible.length);
+    let dispatched = 0;
     try {
       await runBounded(
         eligible,
         async (session) => {
           if (this.inFlight.has(session.id)) return;
           this.inFlight.add(session.id);
+          dispatched += 1;
           active.inc(labels);
           try {
             await run(session);
@@ -245,6 +317,7 @@ export class Reconciler {
     } finally {
       depth.set(labels, 0);
     }
+    return dispatched;
   }
 
   /** Slow path: pool replenishment and orphan reaping, off the readiness tick. */

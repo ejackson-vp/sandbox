@@ -73,6 +73,11 @@ export interface ControllerConfig {
   reconcileIntervalMs: number;
   /** Max sessions reconciled in parallel per phase; 1 restores sequential passes. */
   reconcileConcurrency: number;
+  /**
+   * Max sessions selected for dispatch in one readiness pass. Bounds both the
+   * SQL read and the work a tick can enqueue when many sessions are due.
+   */
+  reconcileBudget: number;
   maxPodAgeMs: number;
   relayResponseWaitMs: number;
   allowedPorts: number[];
@@ -319,6 +324,9 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     leaseGraceMs: int(env.LEASE_GRACE_MS, 2_000, 0, 60_000),
     reconcileIntervalMs: int(env.RECONCILE_INTERVAL_MS, 250, 50, 10_000),
     reconcileConcurrency: int(env.RECONCILE_CONCURRENCY, 8, 1, 256),
+    // Upper bound keeps one pass from enqueuing an unbounded batch; lower
+    // bound keeps the loop making progress (a budget of 0 would starve).
+    reconcileBudget: int(env.RECONCILE_BUDGET, 1_000, 1, 10_000),
     maxPodAgeMs: int(env.MAX_POD_AGE_MS, 3_600_000, 120_000, 7_200_000),
     relayResponseWaitMs: int(env.RELAY_RESPONSE_WAIT_MS, 25_000, 0, 120_000),
     allowedPorts: (env.EGRESS_ALLOWED_PORTS ?? "443").split(",").map((p) => Number(p.trim())).filter((n) => Number.isInteger(n)),
