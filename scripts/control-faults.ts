@@ -19,7 +19,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SandboxClient, SandboxError, type SessionHandle } from "@x402s/sdk";
 import { relayCreateRestart } from "./fault-scenarios/relay-create-restart.js";
-import { relayPending } from "./relay-state.js";
+import { relayActive, relayPending } from "./relay-state.js";
 
 const API = process.env.API_URL ?? "http://localhost:8080";
 const NS = process.env.NAMESPACE ?? "sandbox-system";
@@ -133,7 +133,12 @@ async function waitForStatuses(
     if (statuses.every((status, index) => status !== null && predicate(status, index))) {
       return statuses as Status[];
     }
-    if (Date.now() >= deadline) throw new Error(`timeout waiting for ${label}`);
+    if (Date.now() >= deadline) {
+      const observed = statuses.map((status) => status
+        ? `${status.state}${status.busy ? "/busy" : ""}${status.failure?.code ? `/${status.failure.code}` : ""}`
+        : "no-status");
+      throw new Error(`timeout waiting for ${label}; observed ${observed.join(", ")}`);
+    }
     await sleep(100);
   }
 }
@@ -444,6 +449,17 @@ async function lifecycleRestart(): Promise<number> {
     });
     await waitForStatuses(activeEntries, (status) => status.state === "ACTIVE", 15_000, "ACTIVE sessions");
     await waitForStatuses(activeEntries, (status) => status.busy, 15_000, "operation gate to close");
+    // `busy` is the controller gate, set before the relay/guest has seen the
+    // frame. Killing in that window is a legitimate unobserved-frame case; the
+    // recovery fence will (correctly) reset the guest. This case is about an
+    // observed operation, so wait until the guests themselves report it too.
+    if (activeCount > 0) {
+      const observed = await relayActive({ namespace: NS, until: activeCount, waitMs: 15_000 });
+      if (observed !== activeCount) {
+        throw new Error(`relay saw ${observed}/${activeCount} guest-observed active operations`);
+      }
+      console.log(`relay reports ${observed}/${activeCount} guest-observed active operations`);
+    }
 
     const suspendedEntries = entries.filter((entry) => entry.kind === "suspended");
     await Promise.all(suspendedEntries.map(({ client, handle }) => client.suspend(handle)));

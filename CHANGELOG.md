@@ -5,6 +5,15 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
+## Unreleased
+
+### Added
+
+- The relay exports `sandbox_relay_active_requests`, the number of operations
+  the guests themselves report as running. The lifecycle fault harness waits
+  for this gauge before killing the controller, so it tests an observed
+  operation rather than racing the guest's status frame (#108).
+
 ## 0.1.20
 
 ### Added
