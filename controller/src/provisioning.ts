@@ -14,6 +14,14 @@ import { snapshotOf } from "./session-snapshot.js";
 import type { WarmPool } from "./warm-pool.js";
 
 export class Provisioning {
+  /**
+   * Provisions in flight in this process. The persisted PROVISIONING count is
+   * authoritative across restarts, but it only changes after the pod create
+   * starts; concurrent passes need this counter to enforce the configured cap
+   * in the window between admission and the state write.
+   */
+  private inFlight = 0;
+
   constructor(
     private readonly ctx: ProvisioningContext,
     private readonly warm: WarmPool,
@@ -21,28 +29,44 @@ export class Provisioning {
 
   async provision(session: SessionRecord): Promise<void> {
     const limit = this.ctx.cfg.maxConcurrentProvisioning;
-    if (limit > 0) {
-      const active = this.ctx.store
+    const holdsSlot = limit > 0;
+    if (holdsSlot) {
+      const persisted = this.ctx.store
         .listNonTerminal()
         .filter((s) => s.state === "PROVISIONING").length;
-      if (active >= limit) {
-        const queued = session.timingsJson
-          ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
-          : {};
-        if (typeof queued.provisionQueueEnteredAt !== "number") {
-          this.ctx.store.mergeTimings(session.id, { provisionQueueEnteredAt: this.ctx.now() });
-        }
-        const waited = session.paidAt === null ? 0 : this.ctx.now() - session.paidAt;
-        if (this.ctx.cfg.provisionQueueTimeoutMs > 0 && waited > this.ctx.cfg.provisionQueueTimeoutMs) {
-          this.ctx.store.requestTermination(session.id, "failure:provisioning_queue_timeout", {
-            code: "provisioning_queue_timeout",
-            message: "the provisioning queue did not drain in time",
-          });
-          log.warn("sandbox_provisioning_queue_timeout", { sessionId: session.id, waitedMs: waited });
-        }
+      if (Math.max(persisted, this.inFlight) >= limit) {
+        this.deferForSlot(session);
         return;
       }
+      // No await between the check and the claim: a concurrent worker cannot
+      // slip into the same slot.
+      this.inFlight += 1;
     }
+    try {
+      await this.provisionWithSlot(session);
+    } finally {
+      if (holdsSlot) this.inFlight -= 1;
+    }
+  }
+
+  private deferForSlot(session: SessionRecord): void {
+    const queued = session.timingsJson
+      ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
+      : {};
+    if (typeof queued.provisionQueueEnteredAt !== "number") {
+      this.ctx.store.mergeTimings(session.id, { provisionQueueEnteredAt: this.ctx.now() });
+    }
+    const waited = session.paidAt === null ? 0 : this.ctx.now() - session.paidAt;
+    if (this.ctx.cfg.provisionQueueTimeoutMs > 0 && waited > this.ctx.cfg.provisionQueueTimeoutMs) {
+      this.ctx.store.requestTermination(session.id, "failure:provisioning_queue_timeout", {
+        code: "provisioning_queue_timeout",
+        message: "the provisioning queue did not drain in time",
+      });
+      log.warn("sandbox_provisioning_queue_timeout", { sessionId: session.id, waitedMs: waited });
+    }
+  }
+
+  private async provisionWithSlot(session: SessionRecord): Promise<void> {
     // Admission gate: a paid create must not start while the relay is being
     // replaced. Its registry is in memory, so a pod created now can dial a
     // relay that never accepted the registration and never recover inside the

@@ -29,6 +29,13 @@ async function main(): Promise<void> {
   metrics.histogram("sandbox_exec_duration_seconds", "Operation duration", LATENCY_BUCKETS);
   metrics.histogram("sandbox_cleanup_duration_seconds", "TERMINATING to cleanup complete", LATENCY_BUCKETS);
   metrics.histogram("sandbox_reconcile_duration_seconds", "Reconcile pass duration", LATENCY_BUCKETS);
+  metrics.gauge("sandbox_reconcile_queue_depth", "Sessions waiting for a reconcile worker, by phase");
+  metrics.gauge("sandbox_reconcile_in_flight", "Sessions currently being reconciled, by phase");
+  metrics.histogram(
+    "sandbox_reconcile_queue_wait_seconds",
+    "Time a session waited for a reconcile worker, by phase",
+    LATENCY_BUCKETS,
+  );
   metrics.counter("sandbox_exec_total", "Operations by result");
   metrics.counter("sandbox_sessions_created_total", "Entitlements created");
   metrics.counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED");

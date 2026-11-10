@@ -61,6 +61,8 @@ export interface ControllerConfig {
   relayRegistrationTimeoutMs: number;
   leaseGraceMs: number;
   reconcileIntervalMs: number;
+  /** Max sessions reconciled in parallel per phase; 1 restores sequential passes. */
+  reconcileConcurrency: number;
   maxPodAgeMs: number;
   relayResponseWaitMs: number;
   allowedPorts: number[];
@@ -243,6 +245,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     relayRegistrationTimeoutMs: int(env.RELAY_REGISTRATION_TIMEOUT_MS, 5_000, 500, 60_000),
     leaseGraceMs: int(env.LEASE_GRACE_MS, 2_000, 0, 60_000),
     reconcileIntervalMs: int(env.RECONCILE_INTERVAL_MS, 250, 50, 10_000),
+    reconcileConcurrency: int(env.RECONCILE_CONCURRENCY, 8, 1, 256),
     maxPodAgeMs: int(env.MAX_POD_AGE_MS, 3_600_000, 120_000, 7_200_000),
     relayResponseWaitMs: int(env.RELAY_RESPONSE_WAIT_MS, 25_000, 0, 120_000),
     allowedPorts: (env.EGRESS_ALLOWED_PORTS ?? "443").split(",").map((p) => Number(p.trim())).filter((n) => Number.isInteger(n)),

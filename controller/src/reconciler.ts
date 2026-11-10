@@ -28,6 +28,7 @@ import { NoopSnapshotter, type Snapshotter } from "./snapshotter.js";
 import { CapacityService } from "./capacity/service.js";
 import { BackupService } from "./backup.js";
 import { OperationFence } from "./operation-fence.js";
+import { runBounded } from "./bounded-queue.js";
 import { log } from "@x402s/shared";
 
 export { LifecycleError } from "./lifecycle.js";
@@ -54,6 +55,12 @@ export class Reconciler {
   private housekeepingRunning = false;
   private running = false;
   private wakeRequested = false;
+  /**
+   * Sessions a pass is currently reconciling. No later pass may run one of
+   * these again: lease expiry and termination are stateful, so two concurrent
+   * attempts on one id would race.
+   */
+  private readonly inFlight = new Set<string>();
   /** Last pod-health probe per session (guards K8s API traffic). */
   private readonly healthCheckedAt = new Map<string, number>();
   /** Consecutive *successful* probes reporting a missing/terminal pod. */
@@ -141,22 +148,23 @@ export class Reconciler {
     this.running = true;
     const started = Date.now();
     try {
-      for (const session of this.deps.store.listNonTerminal()) {
-        try {
-          await this.reconcileSession(session);
-        } catch (err) {
+      // Readiness first, terminal cleanup second: cleanup may delete a pod
+      // that a terminating session is still shutting down gracefully, so the
+      // two phases stay ordered even though each is internally concurrent.
+      await this.reconcilePhase("readiness", this.deps.store.listNonTerminal(), (session) =>
+        this.reconcileSession(session).catch((err: unknown) => {
           log.error("reconcile_session_failed", {
             sessionId: session.id,
             state: session.state,
             error: (err as Error).message,
           });
-        }
-      }
-      for (const session of this.deps.store.listTerminalWithPod()) {
-        if (!session.podName) continue;
-        await this.deps.provisioner.deletePod(session.podName, 0).catch(() => undefined);
+        }),
+      );
+      const terminal = this.deps.store.listTerminalWithPod().filter((session) => session.podName);
+      await this.reconcilePhase("cleanup", terminal, async (session) => {
+        await this.deps.provisioner.deletePod(session.podName!, 0).catch(() => undefined);
         this.deps.store.clearPod(session.id);
-      }
+      });
       const nonTerminal = this.deps.store.listNonTerminal();
       const active = nonTerminal.filter((s) => s.state === "READY" || s.state === "ACTIVE").length;
       const provisioning = nonTerminal.filter(
@@ -177,6 +185,63 @@ export class Reconciler {
         this.wakeRequested = false;
         void this.tick();
       }
+    }
+  }
+
+  /**
+   * Run one reconcile phase with bounded concurrency.
+   *
+   * Sessions already in flight are skipped (they are picked up by the next
+   * pass), which is the per-session serialization guarantee. Queue depth and
+   * queue wait are exported with a bounded `phase` label so a burst shows up
+   * before it becomes tail latency; session ids never enter metrics.
+   */
+  private async reconcilePhase(
+    phase: "readiness" | "cleanup",
+    sessions: readonly SessionRecord[],
+    run: (session: SessionRecord) => Promise<void>,
+  ): Promise<void> {
+    const labels = { phase };
+    const depth = metrics.gauge(
+      "sandbox_reconcile_queue_depth",
+      "Sessions waiting for a reconcile worker, by phase",
+    );
+    const wait = metrics.histogram(
+      "sandbox_reconcile_queue_wait_seconds",
+      "Time a session waited for a reconcile worker, by phase",
+      LATENCY_BUCKETS,
+    );
+    const active = metrics.gauge(
+      "sandbox_reconcile_in_flight",
+      "Sessions currently being reconciled, by phase",
+    );
+    const eligible = sessions.filter((session) => !this.inFlight.has(session.id));
+    depth.set(labels, eligible.length);
+    try {
+      await runBounded(
+        eligible,
+        async (session) => {
+          if (this.inFlight.has(session.id)) return;
+          this.inFlight.add(session.id);
+          active.inc(labels);
+          try {
+            await run(session);
+          } finally {
+            this.inFlight.delete(session.id);
+            active.dec(labels);
+          }
+        },
+        {
+          concurrency: this.deps.cfg.reconcileConcurrency,
+          now: () => this.now(),
+          onStart: (waitMs, remaining) => {
+            wait.observe(waitMs / 1000, labels);
+            depth.set(labels, remaining);
+          },
+        },
+      );
+    } finally {
+      depth.set(labels, 0);
     }
   }
 

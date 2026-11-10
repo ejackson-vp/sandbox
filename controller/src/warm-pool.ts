@@ -17,6 +17,8 @@ import type { SessionRecord } from "./store.js";
 
 export class WarmPool {
   private readonly claimed = new Set<string>();
+  /** Serializes pick+reserve; two concurrent provisions must not take one pod. */
+  private claimTail: Promise<void> = Promise.resolve();
   private cache: { pods: WarmPodInfo[]; at: number } | null = null;
 
   constructor(private readonly ctx: WarmPoolContext) {}
@@ -83,14 +85,19 @@ export class WarmPool {
     }
 
     const pickStarted = this.ctx.now();
-    const warm = await this.pick();
+    // `pick` awaits Kubernetes and relay reads, so the reserve has to be
+    // atomic with the pick: two sessions in the same bounded reconcile pass
+    // would otherwise both observe the same free pod.
+    const warm = await this.claimLocked(async () => {
+      const candidate = await this.pick();
+      if (candidate) this.claimed.add(candidate.warmId);
+      return candidate;
+    });
     const warmPickMs = this.ctx.now() - pickStarted;
     if (!warm) {
       metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "miss_empty" });
       return false;
     }
-    // Reserve it immediately so a second session in this tick cannot take it.
-    this.claimed.add(warm.warmId);
 
     const registerStarted = this.ctx.now();
     const guestToken = newOpaqueToken(32);
@@ -197,6 +204,21 @@ export class WarmPool {
       podName: warm.name,
     });
     return true;
+  }
+
+  /** Run one pick+reserve at a time; claims are short and in-process only. */
+  private async claimLocked<T>(fn: () => Promise<T>): Promise<T> {
+    const prior = this.claimTail;
+    let release!: () => void;
+    this.claimTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await prior;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   private async pick(): Promise<WarmPodInfo | null> {
