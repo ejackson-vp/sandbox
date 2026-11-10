@@ -9,6 +9,52 @@ set -euo pipefail
 
 CONTEXT="${CONTEXT:-kind-x402-sandbox}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GUEST_IMAGE="${GUEST_IMAGE:-x402-sandbox/guest:dev}"
+
+# kind has no registry, so a `repo@sha256:…` reference cannot be pulled unless
+# the digest itself exists as an image record in the node's containerd. The
+# controller refuses to start with the dev placeholder when Kubernetes is
+# enabled, so pin the locally built image by its real digest and apply that.
+pin_guest_image_digest() {
+  local image="$1"
+  local ref="$image"
+  local first="${image%%/*}"
+  local digest="" node node_digest
+  case "${first}" in
+    *.*|*:*|localhost) ;;
+    *) ref="docker.io/${image}" ;;
+  esac
+
+  while IFS= read -r node; do
+    [ -n "${node}" ] || continue
+    node_digest="$(docker exec "${node}" ctr -n k8s.io images ls 2>/dev/null \
+      | awk -v ref="${ref}" '$1 == ref { print $3; exit }')"
+    if [ -z "${node_digest}" ]; then
+      echo "error: ${image} is not loaded on kind node ${node} (run make build first)" >&2
+      return 1
+    fi
+    if [ -z "${digest}" ]; then
+      digest="${node_digest}"
+    elif [ "${digest}" != "${node_digest}" ]; then
+      echo "error: ${image} digest differs between kind nodes: ${digest} vs ${node_digest}" >&2
+      return 1
+    fi
+    docker exec "${node}" ctr -n k8s.io images tag "${ref}" "${ref%:*}@${digest}" >/dev/null
+  done < <(kubectl --context "${CONTEXT}" get nodes -o name | sed 's|^node/||')
+
+  if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "error: could not determine a pinned digest for ${image}" >&2
+    return 1
+  fi
+  printf '%s\n' "${digest}"
+}
+
+GUEST_DIGEST="$(pin_guest_image_digest "${GUEST_IMAGE}")"
+MANIFESTS="$(kubectl --context "${CONTEXT}" kustomize "${ROOT}/deploy/kubernetes")"
+if ! grep -Fq 'GUEST_IMAGE_DIGEST: sha256:dev-unpinned-image' <<<"${MANIFESTS}"; then
+  echo "error: could not find the placeholder GUEST_IMAGE_DIGEST to pin in deploy/kubernetes" >&2
+  exit 1
+fi
 
 # Credentials are generated locally and git-ignored. Apply the namespaces and the
 # Secret before the workloads so the first pod start does not race an absent
@@ -17,7 +63,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 kubectl --context "${CONTEXT}" apply -f "${ROOT}/deploy/kubernetes/00-namespaces.yaml"
 kubectl --context "${CONTEXT}" apply -f "${ROOT}/deploy/kubernetes/02-secrets-dev.yaml"
 
-kubectl --context "${CONTEXT}" apply -k "${ROOT}/deploy/kubernetes"
+printf '%s\n' "${MANIFESTS}" \
+  | sed "s|GUEST_IMAGE_DIGEST: sha256:dev-unpinned-image|GUEST_IMAGE_DIGEST: ${GUEST_DIGEST}|" \
+  | kubectl --context "${CONTEXT}" apply -f -
 
 # The shipped Service is ClusterIP: nothing outside the cluster should reach the
 # API over plaintext. kind's extraPortMapping (host :8080 -> node :30080) is a

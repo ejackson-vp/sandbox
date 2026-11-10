@@ -54,6 +54,9 @@ data:
   EXECUTION_MODE: "dev"
   RUNTIME_CLASS: "x402-sandbox"
   GUEST_IMAGE: "x402-sandbox/guest:dev"
+  # The dev placeholder is only valid for the local process provisioner. A
+  # Kubernetes deployment must pin a real sha256 digest; deploy/kind/apply.sh
+  # rewrites this to the digest of the locally loaded image.
   GUEST_IMAGE_DIGEST: "sha256:dev-unpinned-image"
   # StorageClass for checkpointed (suspendable) session workspaces.
   WORKSPACE_STORAGE_CLASS: "standard"

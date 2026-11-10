@@ -105,7 +105,10 @@ function parseRole(env: NodeJS.ProcessEnv): Role {
   return role;
 }
 
-function parseExecution(env: NodeJS.ProcessEnv): Pick<ControllerConfig, "executionMode" | "runtimeClass" | "allowInsecureDev" | "guestImageDigest" | "guestImageRef"> {
+function parseExecution(
+  env: NodeJS.ProcessEnv,
+  kubeEnabled: boolean,
+): Pick<ControllerConfig, "executionMode" | "runtimeClass" | "allowInsecureDev" | "guestImageDigest" | "guestImageRef"> {
   const executionMode = (env.EXECUTION_MODE ?? "dev") as "dev" | "kata";
   if (!["dev", "kata"].includes(executionMode)) {
     throw new Error(`invalid EXECUTION_MODE ${executionMode}`);
@@ -126,6 +129,15 @@ function parseExecution(env: NodeJS.ProcessEnv): Pick<ControllerConfig, "executi
   if (!allowInsecureDev && !PINNED_DIGEST.test(guestImageDigest)) {
     throw new Error(
       "GUEST_IMAGE_DIGEST must be a pinned sha256 digest when ALLOW_INSECURE_DEV is false",
+    );
+  }
+  // A cluster deployment must pull an immutable image, regardless of the
+  // payment/attestation dev switch. The placeholder is only meaningful for the
+  // local process provisioner, where no pod spec references the tag.
+  if (kubeEnabled && !PINNED_DIGEST.test(guestImageDigest)) {
+    throw new Error(
+      "GUEST_IMAGE_DIGEST must be a pinned sha256:<64 hex> digest when KUBERNETES_ENABLED is true; " +
+        "the dev placeholder is only valid for the local process provisioner (KUBERNETES_ENABLED=false)",
     );
   }
 
@@ -191,7 +203,10 @@ function parseTokens(env: NodeJS.ProcessEnv, role: Role, adminToken: string): Pi
 export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): ControllerConfig {
   const role = parseRole(env);
 
-  const execution = parseExecution(env);
+  // Parsed before parseExecution because a real cluster deployment must pin the
+  // guest image by digest independently of the payment/attestation dev switch.
+  const kubeEnabled = bool(env.KUBERNETES_ENABLED, true);
+  const execution = parseExecution(env, kubeEnabled);
   const adminToken = env.ADMIN_TOKEN ?? "";
   if (["controller", "all"].includes(role) && adminToken.length < 16) {
     throw new Error("ADMIN_TOKEN must be set (>=16 chars) for controller roles");
@@ -232,7 +247,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",
     controlNamespace: env.CONTROL_NAMESPACE ?? "sandbox-system",
     ...execution,
-    kubeEnabled: bool(env.KUBERNETES_ENABLED, true),
+    kubeEnabled,
     relayEnabled: bool(env.RELAY_ENABLED, role === "all" || role === "relay"),
     proxyEnabled: bool(env.PROXY_ENABLED, role === "all" || role === "proxy"),
     relayBaseUrl: env.RELAY_URL ?? "http://127.0.0.1:8443",

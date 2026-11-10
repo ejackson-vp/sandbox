@@ -67,10 +67,12 @@ be created and executed but `suspend`/`resume` fails.
 Bump `newTag` in `kustomization.yaml` and `GUEST_IMAGE` together — they are the
 same release.
 
-`GUEST_IMAGE_DIGEST` is left at the dev placeholder deliberately. The controller
-only enforces a real `sha256:` digest when `ALLOW_INSECURE_DEV` is false, which
-also requires a real payment facilitator. For a production deployment, set the
-digest from the release output and turn `ALLOW_INSECURE_DEV` off.
+`GUEST_IMAGE_DIGEST` is set from the release output and the controller refuses
+to start with the dev placeholder when `KUBERNETES_ENABLED=true` (the cluster
+default), even while `ALLOW_INSECURE_DEV=true`. The placeholder is only valid
+for the local process provisioner (`KUBERNETES_ENABLED=false`), which does not
+put an image reference in a pod spec. Keeping the digest pinned here is what
+stops a moved tag from changing what runs inside the VM.
 
 ## 4. Public URL
 

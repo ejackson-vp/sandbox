@@ -101,6 +101,7 @@ describe("reservation fault recovery", () => {
       PROXY_TOKEN_SECRET: "p".repeat(24),
       EXECUTION_MODE: "dev",
       ALLOW_INSECURE_DEV: "true",
+      KUBERNETES_ENABLED: "false",
     });
     const capacity = new CapacityService({ cfg, store, provisioner: fake });
 

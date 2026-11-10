@@ -67,7 +67,7 @@ guest:
 deploy:
 	kind load docker-image $(CONTROL_IMG) --name $(KIND_CLUSTER)
 	kind load docker-image $(GUEST_IMG) --name $(KIND_CLUSTER)
-	./deploy/kind/apply.sh
+	CONTEXT="$(CONTEXT)" GUEST_IMAGE="$(GUEST_IMG)" ./deploy/kind/apply.sh
 	$(KUBECTL) -n $(NAMESPACE) rollout status deploy/controller --timeout=180s
 	$(KUBECTL) -n $(NAMESPACE) rollout status deploy/relay --timeout=120s
 	$(KUBECTL) -n $(NAMESPACE) rollout status deploy/egress-proxy --timeout=120s
