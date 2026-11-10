@@ -5,7 +5,7 @@ All notable changes to this project are recorded here. The format follows
 semantic versioning. Releases before this file existed are in the git history and
 the container registry.
 
-## Unreleased
+## 0.1.20
 
 ### Added
 
@@ -13,6 +13,11 @@ the container registry.
   as `GET /v1/sessions/{id}`. The SDK builds its handle from it, so a create no
   longer needs a status request before the client can start polling. The field
   is additive and older clients ignore it (#27).
+- Orphan workspace PVCs with no live session are deleted after
+  `ORPHAN_PVC_GRACE_MS` (default 1h), bounding the plaintext-checkpoint
+  exposure window after lost metadata or interrupted cleanup (#102).
+- Release images are stamped with `BUILD_VERSION`/`BUILD_COMMIT` and OCI
+  version/revision labels (#98).
 
 ### Security
 
@@ -37,6 +42,15 @@ the container registry.
   dashboard, metric/SLO docs), and the cluster-specific VictoriaMetrics +
   vmalert + Grafana stack moves to the private homelab repository. Object
   names, the dashboard uid and the scrape targets are unchanged.
+- Grafana's homelab memory request is raised to 256Mi (limit 512Mi) after the
+  measured 228Mi steady state made it the first eviction candidate (#101).
+
+### Fixed
+
+- The Kubernetes guest-digest guard applies only to `controller`/`all` roles;
+  relay/proxy/facilitator no longer crashloop on the dev placeholder (#97).
+- The relay loads the shared control ConfigMap, so it receives the pinned guest
+  digest and TLS settings at startup (#95).
 
 ## 0.1.19
 
