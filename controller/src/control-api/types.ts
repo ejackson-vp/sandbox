@@ -1,4 +1,5 @@
 import type { ControllerConfig } from "../config.js";
+import type { TokenBucket } from "@x402s/shared";
 import type { Store } from "../store.js";
 import type { RelayClient } from "../relay-client.js";
 import type { CapacityService } from "../capacity/service.js";
@@ -20,4 +21,9 @@ export interface ControlApiDeps {
   resume?: (id: string) => Promise<void>;
   /** Capacity admission and reservation accounting. */
   capacity: CapacityService;
+  /**
+   * Injectable for tests. Production uses a bounded per-source-IP bucket with
+   * the `INTERNAL_RATE_LIMIT` burst/refill.
+   */
+  internalRateLimiter?: TokenBucket;
 }

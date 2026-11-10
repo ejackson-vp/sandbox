@@ -15,4 +15,5 @@ export * from "./metrics-http.js";
 export * from "./http-metrics.js";
 export * from "./runtime-metrics.js";
 export * from "./request-metrics.js";
+export * from "./rate-limit.js";
 export * from "./readiness.js";

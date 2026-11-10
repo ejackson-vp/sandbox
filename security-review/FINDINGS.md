@@ -23,6 +23,7 @@ executed), `theoretical` (no concrete path found).
 | F-13 | — | reviewed | CodeQL `go/request-forgery` (`relay.go:61`) | False positive under the deploy assumption |
 | F-14 | Low | reviewed | CodeQL `js/resource-exhaustion` (`registry.ts:181`) | Bounded; residual |
 | F-15 | Medium | code-confirmed | GitHub Actions and base images pinned by tag, not digest/SHA | **Open** |
+| F-16 | — | reviewed | CodeQL `js/missing-rate-limiting` ×10 on controller/relay `/internal` routes | Fixed by shared TokenBucket; query model gap documented |
 
 ---
 
@@ -317,6 +318,31 @@ Flagged: `api/src/server.ts:231` (the `POST /v1/sessions` registration) and ever
 (`api/src/routes/sessions.ts:20`). CodeQL does not follow the helper.
 `api/src/mock-facilitator.ts:100` is the local fake facilitator; it is not part of
 the production payment path and has no rate limit by design. **No change.**
+
+### F-16 `js/missing-rate-limiting` ×10 (controller/relay) — fixed; query model gap documented
+
+The metrics change added `recordAuthFailure(...)` calls, which made CodeQL see
+the already-present authorization in `controller/src/control-api.ts` and
+`controller/src/relay/http.ts` as an expensive action. Those internal listeners
+are reachable only on the cluster network and are authenticated, but they had no
+request-rate bound of their own.
+
+**Fix:** `shared/src/rate-limit.ts` now provides a bounded token bucket (the API
+limiter moved there unchanged) and a `rateLimit()` middleware. The controller
+mounts it on `/internal` before `/internal/wake` and the auth middleware; the
+relay mounts it on `/internal` before every authenticated route. Health and
+readiness probes are deliberately mounted before the limiter so a saturated
+bucket cannot make a healthy pod look unready. The key is the socket peer, the
+scope is `internal`/`relay`, and a rejection is `429 {error:"rate_limited"}` plus
+`sandbox_rate_limited_total{scope}`.
+
+**Why the inline suppressions exist:** CodeQL's `RateLimitingMiddleware` models
+only `express-rate-limit`, `express-brute`, `express-limiter`, and
+`rate-limiter-flexible`; it does not follow a repository-owned middleware. The
+ten `codeql[js/missing-rate-limiting]` comments at the route installations are
+therefore documenting a query-model limitation, not accepting the risk. The
+limiter's burst/refill behavior, 429 response and bounded table are covered by
+`tests/unit/rate-limit.test.ts`.
 
 ### F-12 `go/zipslip` (`guest/internal/files/archive.go:54`) — false positive
 
