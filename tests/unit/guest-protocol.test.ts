@@ -86,7 +86,11 @@ function connect(sessions: RelayRegistry): void {
 function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
     id: SESSION_ID,
-    state: "PAID",
+    // awaitReady only ever sees a row the reconciler picked in PROVISIONING or
+    // RESUMING, and both writes (setProvisioning, markResuming) set the pod
+    // name, so the fixture carries one. The transition table refuses a
+    // guest_ready without a pod and a relay entry.
+    state: "PROVISIONING",
     durationSeconds: 300,
     limits: {
       cpuMillis: 500,
@@ -102,7 +106,7 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     paidAt: Date.now(),
     timingsJson: null,
     relayTokenHash: "token-hash",
-    podName: null,
+    podName: "sbx-guest-protocol-0001",
     ...overrides,
   } as unknown as SessionRecord;
 }
@@ -155,7 +159,9 @@ function harness(opts: {
     {
       cfg: config(opts.allowlist),
       store: store as unknown as Store,
-      provisioner: {} as never,
+      // A PROVISIONING row carries a pod name, so awaitReady probes it. There
+      // is no pod to read in this harness, which is a normal miss.
+      provisioner: { getPod: vi.fn(async () => null) } as never,
       relay: relay as never,
       capacity: {} as never,
       snapshotter: {} as never,
