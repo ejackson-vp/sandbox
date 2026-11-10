@@ -136,6 +136,16 @@ describe("execution status and epoch forwarding", () => {
 });
 
 describe("relay generation", () => {
+  it("rejects an unauthenticated control call on the plaintext fallback", async () => {
+    const res = await fetch(`${base}/internal/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: "sbx_no_token", tokenHash: sha256Hex(TOKEN), ttlMs: 60_000 }),
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+  });
+
   it("answers readiness without exposing registry state", async () => {
     const res = await fetch(`${base}/readyz`);
     expect(res.status).toBe(200);

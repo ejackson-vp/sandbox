@@ -85,6 +85,17 @@ export interface RelayOptions {
   internalRateLimiter?: TokenBucket;
 }
 
+function isControlRequest(req: http.IncomingMessage): boolean {
+  const raw = (req.url ?? "/").split("?")[0] ?? "/";
+  let pathname = raw;
+  try {
+    pathname = decodeURIComponent(raw);
+  } catch {
+    /* keep the raw path; an invalid escape is not a control route */
+  }
+  return pathname === "/internal" || pathname.startsWith("/internal/");
+}
+
 function hasRelayAdminToken(req: http.IncomingMessage, adminToken: string): boolean {
   const header = req.headers["x-internal-token"];
   const supplied = Array.isArray(header) ? (header[0] ?? "") : (header ?? "");
@@ -163,7 +174,7 @@ export function createRelay(opts: RelayOptions): RelayServer {
     opts.controlTls
       ? app
       : (req, res) => {
-          if (req.url?.startsWith("/internal") && !hasRelayAdminToken(req, opts.adminToken)) {
+          if (isControlRequest(req) && !hasRelayAdminToken(req, opts.adminToken)) {
             recordAuthFailure("relay_admin_token", metricsRegistry);
             res.writeHead(401, { "content-type": "application/json" });
             res.end(JSON.stringify({ error: "unauthorized" }));
