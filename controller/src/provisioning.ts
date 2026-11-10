@@ -14,6 +14,19 @@ import { snapshotOf } from "./session-snapshot.js";
 import type { WarmPool } from "./warm-pool.js";
 
 export class Provisioning {
+  /**
+   * Session ids holding an in-process provisioning slot. The persisted
+   * PROVISIONING set is authoritative across restarts, but it only changes
+   * after the pod create starts; concurrent passes need this set to enforce
+   * the configured cap in the window between admission and the state write.
+   *
+   * Both sets can overlap: a session stays in this set after it is persisted
+   * as PROVISIONING. Admission deduplicates by id rather than taking a max of
+   * two counts, which would undercount one persisted session plus a different
+   * in-flight one.
+   */
+  private readonly inFlight = new Set<string>();
+
   constructor(
     private readonly ctx: ProvisioningContext,
     private readonly warm: WarmPool,
@@ -21,28 +34,53 @@ export class Provisioning {
 
   async provision(session: SessionRecord): Promise<void> {
     const limit = this.ctx.cfg.maxConcurrentProvisioning;
-    if (limit > 0) {
-      const active = this.ctx.store
-        .listNonTerminal()
-        .filter((s) => s.state === "PROVISIONING").length;
-      if (active >= limit) {
-        const queued = session.timingsJson
-          ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
-          : {};
-        if (typeof queued.provisionQueueEnteredAt !== "number") {
-          this.ctx.store.mergeTimings(session.id, { provisionQueueEnteredAt: this.ctx.now() });
-        }
-        const waited = session.paidAt === null ? 0 : this.ctx.now() - session.paidAt;
-        if (this.ctx.cfg.provisionQueueTimeoutMs > 0 && waited > this.ctx.cfg.provisionQueueTimeoutMs) {
-          this.ctx.store.requestTermination(session.id, "failure:provisioning_queue_timeout", {
-            code: "provisioning_queue_timeout",
-            message: "the provisioning queue did not drain in time",
-          });
-          log.warn("sandbox_provisioning_queue_timeout", { sessionId: session.id, waitedMs: waited });
-        }
+    const holdsSlot = limit > 0;
+    if (holdsSlot) {
+      const persisted = new Set(
+        this.ctx.store
+          .listNonTerminal()
+          .filter((s) => s.state === "PROVISIONING")
+          .map((s) => s.id),
+      );
+      let occupied = persisted.size;
+      for (const id of this.inFlight) {
+        if (!persisted.has(id)) occupied += 1;
+      }
+      if (occupied >= limit) {
+        this.deferForSlot(session);
         return;
       }
+      // No await between the check and the claim: a concurrent worker cannot
+      // slip into the same slot.
+      this.inFlight.add(session.id);
     }
+    try {
+      await this.provisionWithSlot(session);
+    } finally {
+      // Covers every path: warm claim, relay-not-ready, early returns and
+      // errors. Leaving a slot behind would shrink capacity permanently.
+      if (holdsSlot) this.inFlight.delete(session.id);
+    }
+  }
+
+  private deferForSlot(session: SessionRecord): void {
+    const queued = session.timingsJson
+      ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
+      : {};
+    if (typeof queued.provisionQueueEnteredAt !== "number") {
+      this.ctx.store.mergeTimings(session.id, { provisionQueueEnteredAt: this.ctx.now() });
+    }
+    const waited = session.paidAt === null ? 0 : this.ctx.now() - session.paidAt;
+    if (this.ctx.cfg.provisionQueueTimeoutMs > 0 && waited > this.ctx.cfg.provisionQueueTimeoutMs) {
+      this.ctx.store.requestTermination(session.id, "failure:provisioning_queue_timeout", {
+        code: "provisioning_queue_timeout",
+        message: "the provisioning queue did not drain in time",
+      });
+      log.warn("sandbox_provisioning_queue_timeout", { sessionId: session.id, waitedMs: waited });
+    }
+  }
+
+  private async provisionWithSlot(session: SessionRecord): Promise<void> {
     // Admission gate: a paid create must not start while the relay is being
     // replaced. Its registry is in memory, so a pod created now can dial a
     // relay that never accepted the registration and never recover inside the

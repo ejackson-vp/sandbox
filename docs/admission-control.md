@@ -108,6 +108,31 @@ but p95 9.41 s (vs 5.85 s), because queued sessions wait for a slot. Tune the
 limit to the pool replenishment rate and the worker's cold-start parallelism;
 4–8 is a sensible starting range, not a universal constant.
 
+## Reconcile concurrency
+
+The reconciler used to `await` each session in a pass one at a time, so one slow
+Kubernetes or relay call was the head of the line for every other session.
+Each phase now runs through a bounded worker pool:
+
+| Env | Default | Meaning |
+|---|---:|---|
+| `RECONCILE_CONCURRENCY` | `8` | sessions reconciled in parallel per phase (1 = sequential) |
+
+A session already in flight is skipped by a later pass and retried on the next
+tick, so lease expiry and termination never run twice for one id. Terminal-pod
+cleanup is a separate phase that runs after readiness; it never shares the
+readiness queue or its ordering assumptions.
+
+Two bounded-label metrics make bursts visible before they become tail latency:
+
+- `sandbox_reconcile_queue_depth{phase="readiness"|"cleanup"}` — sessions
+  waiting for a worker.
+- `sandbox_reconcile_queue_wait_seconds{phase=...}` — time between being listed
+  and being picked up by a worker.
+- `sandbox_reconcile_in_flight{phase=...}` — sessions currently running.
+
+No session ids or per-session labels are exported.
+
 ## Reproduction
 
 ```bash

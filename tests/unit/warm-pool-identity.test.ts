@@ -107,9 +107,9 @@ function harness(initialPods: WarmPodInfo[], digest = digestA): Harness {
   return { pool, cfg, pods, deletes, claims };
 }
 
-function session(pool: WarmPool): SessionRecord {
+function session(pool: WarmPool, id = "sbx_warm_identity"): SessionRecord {
   return {
-    id: "sbx_warm_identity",
+    id,
     limits: pool.limits(),
     durationSeconds: 60,
     clientPublicKey: "client-public-key",
@@ -119,9 +119,9 @@ function session(pool: WarmPool): SessionRecord {
   } as unknown as SessionRecord;
 }
 
-async function tryClaim(h: Harness): Promise<boolean> {
+async function tryClaim(h: Harness, id?: string): Promise<boolean> {
   return h.pool.tryClaim(
-    session(h.pool),
+    session(h.pool, id),
     { host: "relay", port: 8443 },
     { host: "proxy", port: 3128 },
     Date.now(),
@@ -147,6 +147,14 @@ describe("warm pool identity", () => {
     expect(await tryClaim(h)).toBe(true);
     expect(h.claims).toHaveLength(1);
     expect(h.claims[0]?.claim.imageDigest).toBe(digestB);
+  });
+
+  it("never gives one warm pod to two concurrent claims", async () => {
+    const h = harness([], digestB);
+    h.pods.push(warmPod(identityFor(h.cfg, h.pool), digestB));
+    const results = await Promise.all([tryClaim(h, "sbx_first"), tryClaim(h, "sbx_second")]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(h.claims).toHaveLength(1);
   });
 
   it("keeps a matching pod during reconcile", async () => {

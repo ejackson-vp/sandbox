@@ -85,6 +85,7 @@ spec:
             - {name: DB_PATH, value: "/data/controller.db"}
             - {name: KUBERNETES_ENABLED, value: "true"}
             - {name: RECONCILE_INTERVAL_MS, value: "250"}
+            - {name: RECONCILE_CONCURRENCY, value: "8"}
             - {name: WORKSPACE_DIR, value: "/workspace"}
             - name: ADMIN_TOKEN
               valueFrom:
