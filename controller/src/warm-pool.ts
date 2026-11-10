@@ -119,9 +119,13 @@ export class WarmPool {
     this.ctx.store.setRelayToken(session.id, tokenHash);
     const warmRegisterMs = this.ctx.now() - registerStarted;
 
+    // As in the cold path, registration may have waited through a relay
+    // replacement. The claim must point at the endpoint that accepted it.
+    const currentRelay = await this.ctx.serviceAddress(cfg.relayServiceName);
+    const relay = currentRelay ?? relayAddr;
     const claim: WarmClaim = {
       sessionId: session.id,
-      relayUrl: `ws://${relayAddr.host}:${relayAddr.port}/guest?session=${encodeURIComponent(session.id)}`,
+      relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(session.id)}`,
       guestToken,
       clientPublicKey: session.clientPublicKey,
       clientNonce: session.clientNonce,

@@ -16,6 +16,12 @@ the container registry.
 
 ### Fixed
 
+- A relay replacement no longer strands paid creates on the old relay Pod IP.
+  The controller resolves the relay endpoint on every use instead of caching it
+  for 30 seconds, and re-resolves it after generation-checked registration. If
+  the replacement lands after the Pod was created but before the guest dials,
+  the controller deletes that Pod and recreates it against the current endpoint
+  rather than waiting out `PROVISIONING_TIMEOUT_MS` (#109).
 - A stale operation response can no longer clear the recovery fence. After a
   controller restart, `finishOperation` only clears `active_request_id` when the
   request still transitions from `pending`; a request already marked
