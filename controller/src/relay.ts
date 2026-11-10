@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import express from "express";
 import { WebSocketServer } from "ws";
-import { httpMetricsMiddleware, metrics, registerRequestMetrics, type MetricsRegistry } from "@x402s/shared";
+import { httpMetricsMiddleware, metrics, registerRequestMetrics, type MetricsRegistry, type TokenBucket } from "@x402s/shared";
 import { MAX_FRAME_BYTES, RelayRegistry } from "./relay/registry.js";
 import { registerRelayRoutes } from "./relay/http.js";
 import { attachGuestUpgrade } from "./relay/ws.js";
@@ -38,6 +38,8 @@ export interface RelayOptions {
   wakeToken?: string;
   /** Injectable for tests; defaults to the process-wide registry. */
   metricsRegistry?: MetricsRegistry;
+  /** Injectable for tests; production uses the bounded internal bucket. */
+  internalRateLimiter?: TokenBucket;
 }
 
 export function createRelay(opts: RelayOptions): RelayServer {
@@ -55,7 +57,12 @@ export function createRelay(opts: RelayOptions): RelayServer {
   app.disable("x-powered-by");
   app.use(httpMetricsMiddleware(metricsRegistry));
   app.use(express.json({ limit: "32mb" }));
-  registerRelayRoutes(app, registry, { adminToken: opts.adminToken, generation });
+  registerRelayRoutes(app, registry, {
+    adminToken: opts.adminToken,
+    generation,
+    metricsRegistry,
+    ...(opts.internalRateLimiter ? { internalRateLimiter: opts.internalRateLimiter } : {}),
+  });
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });

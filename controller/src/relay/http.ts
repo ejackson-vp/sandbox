@@ -1,5 +1,12 @@
 import type { Express, NextFunction, Request, Response } from "express";
-import { recordAuthFailure } from "@x402s/shared";
+import {
+  INTERNAL_RATE_LIMIT,
+  metrics,
+  rateLimit,
+  recordAuthFailure,
+  TokenBucket,
+  type MetricsRegistry,
+} from "@x402s/shared";
 import { log } from "@x402s/shared";
 import { constantTimeEqual } from "../tokens.js";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
@@ -8,6 +15,13 @@ export interface RelayHttpOptions {
   adminToken: string;
   /** Identity of this relay process; changes on every restart. */
   generation: string;
+  /**
+   * Injectable for tests. Production uses a bounded per-source-IP bucket with
+   * the `INTERNAL_RATE_LIMIT` burst/refill.
+   */
+  internalRateLimiter?: TokenBucket;
+  /** Injectable for tests; matches the relay's HTTP metrics registry. */
+  metricsRegistry?: MetricsRegistry;
 }
 
 export function registerRelayRoutes(
@@ -39,9 +53,22 @@ export function registerRelayRoutes(
     res.json({ ok: true });
   });
 
+  // Bound every authenticated internal route before it touches the registry.
+  // Health probes above stay unthrottled. Keyed on the socket peer: the
+  // controller pod on the in-cluster listener, never a forwarded header.
+  const internalLimiter =
+    opts.internalRateLimiter ??
+    new TokenBucket(
+      INTERNAL_RATE_LIMIT.capacity,
+      INTERNAL_RATE_LIMIT.refillPerSecond,
+      INTERNAL_RATE_LIMIT.maxBuckets,
+    );
+  app.use("/internal", rateLimit(internalLimiter, "relay", opts.metricsRegistry ?? metrics));
+
   // Guest-facing relay metrics are published on the private METRICS_PORT
   // listener in the composition root, not on this mTLS-reachable listener.
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.post("/internal/register", requireAdmin, (req, res) => {
     const { sessionId, tokenHash, ttlMs, generation } = req.body ?? {};
     if (typeof sessionId !== "string" || typeof tokenHash !== "string") {
@@ -69,10 +96,12 @@ export function registerRelayRoutes(
     res.status(201).json({ ok: true, generation: opts.generation });
   });
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.get("/internal/:sessionId/state", requireAdmin, (req, res) => {
     res.json(registry.state(String(req.params.sessionId ?? "")));
   });
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.post("/internal/:sessionId/request", requireAdmin, (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const { id, envelope, deadlineMs, epoch } = req.body ?? {};
@@ -113,6 +142,7 @@ export function registerRelayRoutes(
     res.status(202).json({ ok: true });
   });
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.post("/internal/:sessionId/cancel", requireAdmin, (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const { id } = req.body ?? {};
@@ -133,6 +163,7 @@ export function registerRelayRoutes(
     res.status(202).json({ ok: true });
   });
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.post("/internal/:sessionId/shutdown", requireAdmin, (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const reason = String(req.body?.reason ?? "lease ended");
@@ -144,6 +175,7 @@ export function registerRelayRoutes(
     res.status(202).json({ ok: true });
   });
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.post("/internal/:sessionId/claim", requireAdmin, (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const claim = req.body?.claim;
@@ -163,6 +195,7 @@ export function registerRelayRoutes(
     res.status(202).json({ ok: true });
   });
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.get("/internal/:sessionId/response/:requestId", requireAdmin, async (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId ?? "");
     const requestId = String(req.params.requestId ?? "");
@@ -186,6 +219,7 @@ export function registerRelayRoutes(
     res.status(202).json({ pending: result.stillPending });
   });
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.delete("/internal/:sessionId", requireAdmin, (req, res) => {
     const sessionId = String(req.params.sessionId ?? "");
     if (!registry.remove(sessionId)) {

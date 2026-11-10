@@ -9,7 +9,17 @@
  * contents and results never appear in this process.
  */
 import express, { type NextFunction, type Request, type Response } from "express";
-import { httpMetricsMiddleware, metrics, ReadinessCache, recordAuthFailure, registerRequestMetrics, type ComponentCheck } from "@x402s/shared";
+import {
+  INTERNAL_RATE_LIMIT,
+  httpMetricsMiddleware,
+  metrics,
+  rateLimit,
+  ReadinessCache,
+  recordAuthFailure,
+  registerRequestMetrics,
+  TokenBucket,
+  type ComponentCheck,
+} from "@x402s/shared";
 import { constantTimeEqual } from "./tokens.js";
 import { log } from "@x402s/shared";
 import { createCapacityRouter } from "./capacity/routes.js";
@@ -69,6 +79,19 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     res.status(report.ok ? 200 : 503).json(report);
   });
 
+  // Bound the authenticated control surface before any handler that reads the
+  // store or forwards to the relay. Probe endpoints above stay unthrottled so a
+  // saturated limiter can never make a healthy pod look unready. The key is the
+  // socket peer (the API/relay pod), never a forwarded header.
+  const internalLimiter =
+    deps.internalRateLimiter ??
+    new TokenBucket(
+      INTERNAL_RATE_LIMIT.capacity,
+      INTERNAL_RATE_LIMIT.refillPerSecond,
+      INTERNAL_RATE_LIMIT.maxBuckets,
+    );
+  app.use("/internal", rateLimit(internalLimiter, "internal"));
+
   // A client certificate signed by the internal CA with CN=api is an
   // authenticated caller. Anything else must present the bearer token, which is
   // what the relay (wake) and in-cluster tooling use on the HTTP listener.
@@ -83,6 +106,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     return socket.getPeerCertificate().subject?.CN;
   };
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.post("/internal/wake", (req, res) => {
     // The relay holds only this token; it can nudge the reconciler but cannot
     // reach any other internal endpoint.
@@ -104,6 +128,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   // Aggregate metrics are served by the private METRICS_PORT listener; this
   // listener is reachable from the API and relay and must not expose them.
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.use("/internal", (req: Request, res: Response, next: NextFunction) => {
     const token = req.header("x-internal-token") ?? "";
     const mtls = mtlsCn(req) === "api";
