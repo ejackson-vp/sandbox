@@ -44,6 +44,8 @@ ARG BUILD_VERSION=dev
 ARG BUILD_COMMIT=unknown
 ENV BUILD_VERSION=$BUILD_VERSION \
     BUILD_COMMIT=$BUILD_COMMIT
+LABEL org.opencontainers.image.version=$BUILD_VERSION \
+      org.opencontainers.image.revision=$BUILD_COMMIT
 WORKDIR /app
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
