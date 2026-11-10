@@ -132,8 +132,9 @@ admission control.
   code/output never appear in any control-plane or pod log.
 - SQLite stores metadata only. Relay stores ciphertext with a 5-minute TTL.
 - Ordinary workspace is memory-backed and deleted with the pod. Suspendable
-  workspaces use a per-session PVC, deleted at termination; storage-class
-  encryption is required in production.
+  workspaces use a per-session PVC, deleted at termination; the PVC is
+  **plaintext** and the node/storage administrator can read it. The control
+  plane still holds no key — see [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md).
 - The controller never logs bodies or headers.
 
 ### L. New session-specific races
@@ -176,8 +177,8 @@ is gone.
 
 | Threat | Handling |
 | --- | --- |
-| Read a suspended workspace | Node/storage admins can read the PVC; at-rest encryption depends on the StorageClass. The controller never mounts it. Use an encrypted class in production. |
-| Reuse another session's workspace | One PVC per session, name-bound, deleted on terminate / suspended expiry / max lifetime; never handed to another session. |
+| Read a suspended workspace | **Yes** for the node/storage administrator. The PVC is plaintext; no component encrypts it and the controller holds no checkpoint key. `local-path` provides no encryption, and an encrypted CSI class (where available) is not verified by the controller and does not remove the node admin. See [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md). |
+| Reuse another session's workspace | One PVC per session, name-bound, deleted on terminate / suspended expiry / max lifetime; never handed to another session. A labelled PVC no session owns is reaped after `ORPHAN_PVC_GRACE_MS`. |
 | Resume with stale guest keys | The resumed guest generates a **new** keypair and fresh evidence; the client must re-verify before operating. The old pod/private key is gone. |
 | Replay a capability after resume | The capability is payment-bound and remains valid for `maxLifetimeSeconds`; the client nonce and session id are unchanged, so operations remain bound to the same session. A leaked capability is the same risk as a live session. |
 | Relay state after suspend | Purged at suspend; resume registers a new entry/token. |
@@ -212,6 +213,6 @@ relay.
 | Fake key binding accepted | Mitigated (signature + session binding) | Mitigated |
 | Filesystem escape | Mitigated | Mitigated |
 | Warm-pool cross-session reuse | Mitigated (claim-once, no reset) | Mitigated |
-| Suspended workspace at rest | PVC; storage-class encryption needed | PVC |
+| Suspended workspace at rest | PVC; plaintext, node admin can read it | Same; VM does not encrypt the volume |
 | Local service HTTP escape | Loopback + declared port; no inbound | Same |
 | Side channels | N/A (no claim) | N/A (no claim) |

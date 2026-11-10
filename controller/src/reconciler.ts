@@ -255,6 +255,7 @@ export class Reconciler {
       await this.warm.reconcile();
       await this.lifecycle.enforce();
       await this.lifecycle.cleanup();
+      await this.termination.sweepPvcs();
       this.termination.reconcileRefunds();
       await this.ctx.capacity.reap();
       await this.backup.maybeRun();

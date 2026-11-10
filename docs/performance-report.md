@@ -198,7 +198,8 @@ a per-session PVC. Three end-to-end kind runs:
 
 These are three kind runs, not a distribution. They prove the control-plane
 semantics, not a performance target. The resume is a cold container start plus PVC mount;
-there is no memory snapshot. Use an encrypted StorageClass in production. See
+there is no memory snapshot. The checkpoint volume itself is plaintext — see
+[ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) — and
 [lifecycle.md](lifecycle.md).
 
 ### 2.8 Checkpoint portability, workspace size, lifecycle soak

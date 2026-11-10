@@ -20,6 +20,14 @@ The copy is made with SQLite's online backup API, so the controller keeps
 serving while it runs. The copy is checked with `PRAGMA integrity_check` and
 table row counts before it is encrypted.
 
+**Checkpoint workspaces are not in these backups.** A suspendable session's
+`/workspace` is a separate per-session PVC, never mounted by the controller, and
+it is plaintext. Restoring the controller restores the session *record*; if the
+workspace PVC is gone, the session resumes as `checkpoint_missing`. Checkpoint
+durability and checkpoint encryption are separate problems — see
+[ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) and
+[lifecycle.md](lifecycle.md#checkpoint-at-rest-expiry-and-backup).
+
 ## Schedule and retention
 
 | Setting | Default | Meaning |
