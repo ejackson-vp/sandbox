@@ -10,8 +10,9 @@
  */
 import express, { type NextFunction, type Request, type Response } from "express";
 import {
-  INTERNAL_RATE_LIMIT,
   httpMetricsMiddleware,
+  INTERNAL_RATE_LIMIT,
+  log,
   metrics,
   rateLimit,
   ReadinessCache,
@@ -19,9 +20,8 @@ import {
   registerRequestMetrics,
   TokenBucket,
   type ComponentCheck,
-} from "@x402s/shared";
+} from "@x402s/shared/runtime";
 import { constantTimeEqual } from "./tokens.js";
-import { log } from "@x402s/shared";
 import { createCapacityRouter } from "./capacity/routes.js";
 import { registerPaymentRoutes } from "./control-api/payments.js";
 import { registerSessionRoutes } from "./control-api/sessions.js";

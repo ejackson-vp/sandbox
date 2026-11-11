@@ -1,5 +1,5 @@
 import type { ControllerConfig } from "../config.js";
-import type { TokenBucket } from "@x402s/shared";
+import type { TokenBucket } from "@x402s/shared/runtime";
 import type { ControlApiStore } from "../store/ports.js";
 import type { RelayClient } from "../relay-client.js";
 import type { CapacityService } from "../capacity/service.js";

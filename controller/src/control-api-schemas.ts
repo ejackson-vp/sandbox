@@ -2,7 +2,7 @@
  * Control API request schemas and metric labels.
  */
 import { z } from "zod";
-import { MAX_LEASE_SECONDS } from "@x402s/shared";
+import { MAX_LEASE_SECONDS } from "@x402s/shared/protocol";
 
 const OP_LABELS = new Set(["exec", "transfer", "file.put", "file.get", "file.list", "file.stat"]);
 export function opLabel(op: string | undefined): string {
