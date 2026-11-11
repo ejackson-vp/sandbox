@@ -132,3 +132,59 @@ describe("relay active gauge", () => {
     expect(parseActiveGauge("")).toBeNull();
   });
 });
+
+describe("relay epoch reset outcome", () => {
+  // Which branch of resetConnection ran. A `terminate` result is a close ordered
+  // after the queued frame, so the withdrawn frame can still be read; recording
+  // it is the difference between the documented race and a bug (#128).
+  function resetCounts(registry: MetricsRegistry): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const line of registry.render().split("\n")) {
+      const match = /^sandbox_relay_connection_resets_total\{mode="([^"]+)"\} (\d+)$/.exec(line);
+      if (match) counts[match[1]!] = Number(match[2]);
+    }
+    return counts;
+  }
+
+  function withdrawOneFrame(sessionId: string, socket: { resetAndDestroy?: () => void } | undefined) {
+    const registry = new MetricsRegistry({ cacheMs: 0 });
+    const sessions = new RelayRegistry({ maxSessions: 1, responseTtlMs: 60_000, metricsRegistry: registry });
+    sessions.register(sessionId, "hash", 60_000);
+    let terminated = false;
+    const ws = {
+      readyState: 1,
+      send: () => undefined,
+      terminate: () => {
+        terminated = true;
+      },
+    } as unknown as WebSocket;
+    sessions.attach(sessionId, ws, socket);
+    // The guest is behind the recovery epoch and has no command running, the
+    // only condition that ends the link.
+    sessions.status(sessionId, "", 1);
+    sessions.request(sessionId, `request-${sessionId}`, "e30=", Date.now() + 60_000, 1);
+    const raised = sessions.raiseEpoch(sessionId, 2);
+    return { registry, raised, terminated };
+  }
+
+  it("counts a TCP reset when the upgrade socket was captured", () => {
+    let reset = false;
+    const { registry, raised, terminated } = withdrawOneFrame("sbx_reset_branch_tcp", {
+      resetAndDestroy: () => {
+        reset = true;
+      },
+    });
+    expect(raised).toEqual({ result: "ok", withdrawn: 1, reset: true });
+    expect(reset).toBe(true);
+    expect(terminated).toBe(false);
+    expect(resetCounts(registry)).toEqual({ tcp_reset: 1 });
+  });
+
+  it("counts and warns on the terminate fallback when it was not", () => {
+    const { registry, raised, terminated } = withdrawOneFrame("sbx_reset_branch_terminate", undefined);
+    expect(raised).toEqual({ result: "ok", withdrawn: 1, reset: true });
+    // The link still ends, but as a close: the queued frame is not discarded.
+    expect(terminated).toBe(true);
+    expect(resetCounts(registry)).toEqual({ terminate: 1 });
+  });
+});

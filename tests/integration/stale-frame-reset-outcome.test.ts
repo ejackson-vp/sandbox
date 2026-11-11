@@ -28,6 +28,7 @@ import {
   toBase64,
 } from "@x402s/shared/crypto";
 import type { SessionLimits } from "@x402s/shared/protocol";
+import { MetricsRegistry } from "@x402s/shared/runtime";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { CapacityService } from "../../controller/src/capacity/service.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
@@ -140,6 +141,16 @@ async function waitFor<T>(
   }
 }
 
+/** Which branch of the relay's resetConnection ran (see controller/src/relay/registry.ts). */
+function resetCounts(registry: MetricsRegistry): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const line of registry.render().split("\n")) {
+    const match = /^sandbox_relay_connection_resets_total\{mode="([^"]+)"\} (\d+)$/.exec(line);
+    if (match) counts[match[1]!] = Number(match[2]);
+  }
+  return counts;
+}
+
 interface Run {
   store: Store;
   sessionId: string;
@@ -150,6 +161,8 @@ interface Run {
   provisioner: LocalProvisioner;
   reconciler: Reconciler;
   clientKeys: Awaited<ReturnType<typeof generateBoxKeyPair>>;
+  /** Relay metrics for this run, so the reset branch can be asserted. */
+  relayMetrics: MetricsRegistry;
   /** Set by the test once the reconciler has named the Pod. */
   podName?: string;
   cleanup(): Promise<void>;
@@ -157,7 +170,10 @@ interface Run {
 
 async function scenario(): Promise<Run> {
   const workDir = mkdtempSync(join(tmpdir(), "x402-stale-reset-"));
-  const relay = createRelay({ adminToken: RELAY_ADMIN, responseTtlMs: 60_000 });
+  // A per-run registry: the counter that distinguishes a TCP reset from the
+  // ws.terminate() fallback must not be shared with another test in the worker.
+  const relayMetrics = new MetricsRegistry({ cacheMs: 0 });
+  const relay = createRelay({ adminToken: RELAY_ADMIN, responseTtlMs: 60_000, metricsRegistry: relayMetrics });
   await new Promise<void>((resolve) => relay.server.listen(0, "127.0.0.1", resolve));
   const relayPort = (relay.server.address() as { port: number }).port;
 
@@ -220,6 +236,7 @@ async function scenario(): Promise<Run> {
     provisioner,
     reconciler,
     clientKeys,
+    relayMetrics,
     cleanup: async () => {
       reconciler.stop();
       // A stopped process does not act on SIGKILL until it is continued.
@@ -294,6 +311,13 @@ describe("a withdrawn stale frame does not strand a READY session", () => {
     );
     const afterReset = await run.relayClient.state(run.sessionId);
     expect(afterReset).toMatchObject({ connected: false, pending: 0, epochFloor: 2 });
+    // The guarantee depends on *which* branch ended the link: a TCP reset
+    // discards unread bytes, while ws.terminate() is a close ordered after the
+    // queued frame, so the withdrawn frame could still be read. Assert the
+    // reset ran, so a CI failure at the marker assertion below has one cause:
+    // the guest read the frame before the reset (the ADR residual), not a
+    // degraded close.
+    expect(resetCounts(run.relayMetrics)).toEqual({ tcp_reset: 1 });
     expect(run.store.getSession(run.sessionId)?.state).toBe("READY");
 
     // Resume the process so it observes the reset and exits, exactly as an

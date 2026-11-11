@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
 import type { AttestationEnvelope, RelaySessionState } from "@x402s/shared/protocol";
-import { metrics, type MetricsRegistry } from "@x402s/shared/runtime";
+import { log, metrics, type MetricsRegistry } from "@x402s/shared/runtime";
 import { constantTimeEqual, sha256Hex } from "../secrets.js";
 import { guestTokenShard } from "../tokens.js";
 import { registerRelayMetrics, type RelayDisconnectReason } from "./metrics.js";
@@ -270,6 +270,14 @@ export class RelayRegistry {
    * guest would still read them; a reset discards unread bytes. The guest
    * supervisor exits on the read error and reconnects (or the session ends),
    * which is the same path as any other relay link loss.
+   *
+   * The reset needs the socket captured by the upgrade handler. `attach` treats
+   * it as optional, so this falls back to `ws.terminate()` when it is missing.
+   * That fallback is a plain close: it does not discard a frame the guest has
+   * not read, so the stale-frame guarantee degrades to the observed-frame
+   * residual in ADR 0008. The `mode` label on
+   * `sandbox_relay_connection_resets_total` and the warn log make that
+   * distinguishable from a real reset.
    */
   private resetConnection(entry: Entry): boolean {
     const ws = entry.ws;
@@ -279,9 +287,21 @@ export class RelayRegistry {
     entry.socket = null;
     for (const pending of entry.pending.values()) pending.waiter?.({ error: "guest disconnected" });
     entry.pending.clear();
+    const resets = this.metrics.counter(
+      "sandbox_relay_connection_resets_total",
+      "Guest link terminations after an epoch withdrawal, by mechanism",
+    );
     try {
-      if (socket && typeof socket.resetAndDestroy === "function") socket.resetAndDestroy();
-      else ws.terminate();
+      if (socket && typeof socket.resetAndDestroy === "function") {
+        resets.inc({ mode: "tcp_reset" });
+        socket.resetAndDestroy();
+      } else {
+        resets.inc({ mode: "terminate" });
+        // Warn because this is the degraded branch: a close is ordered after
+        // the queued frame, so the withdrawn frame may still be read.
+        log.warn("relay_reset_fell_back_to_terminate", { sessionId: entry.sessionId });
+        ws.terminate();
+      }
       return true;
     } catch {
       /* the pod is going away anyway */
