@@ -7,6 +7,7 @@
  * point it at a database nobody else is using.
  */
 import { describe, expect, it } from "vitest";
+import pg from "pg";
 import { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { WriterLockUnavailableError } from "../../controller/src/store/postgres/pg.js";
 import { postgresBackend } from "./store-contract/fixtures.js";
@@ -52,6 +53,33 @@ describe.skipIf(!url)("postgres", () => {
       } finally {
         await first.close();
         await standby.close();
+      }
+    });
+
+    it("reports migrations_incomplete for a standby on an unmigrated database", async () => {
+      const scratch = `sandbox_unmigrated_${Date.now().toString(36)}`;
+      const admin = new pg.Client({ connectionString: url });
+      await admin.connect();
+      try {
+        await admin.query(`CREATE DATABASE "${scratch}"`);
+        const scratchUrl = new URL(url);
+        scratchUrl.pathname = `/${scratch}`;
+        const standby = await PostgresStore.open(scratchUrl.toString(), { writer: false });
+        try {
+          expect(standby.writesAreBlocked).toBe(true);
+          expect(await standby.healthCheck()).toMatchObject({
+            ok: false,
+            reason: "migrations_incomplete",
+          });
+          await expect(
+            standby.claimPaymentIntent("f".repeat(64), "e".repeat(64), 30_000),
+          ).rejects.toThrow(WriterLockUnavailableError);
+        } finally {
+          await standby.close();
+        }
+      } finally {
+        await admin.query(`DROP DATABASE IF EXISTS "${scratch}"`);
+        await admin.end();
       }
     });
   });

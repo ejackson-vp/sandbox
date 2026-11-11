@@ -30,6 +30,12 @@ export async function checkPostgresHealth(
     version = res.rows[0]?.version ?? 0;
   } catch (err) {
     const message = String((err as Error)?.message ?? "");
+    // No version table at all is the "not migrated yet" case, not a broken
+    // server: a standby that starts before the writer has run the ladder should
+    // report `migrations_incomplete`, which is what a missing table means here.
+    if (/does not exist|undefined_table/i.test(message) || (err as { code?: string })?.code === "42P01") {
+      return { ok: false, reason: "migrations_incomplete", schemaVersion: 0 };
+    }
     return {
       ok: false,
       reason: /terminat|closed|ended/i.test(message) ? "closed" : "unavailable",

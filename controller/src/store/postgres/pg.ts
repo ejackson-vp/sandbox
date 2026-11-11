@@ -180,6 +180,9 @@ export class PgConnection implements Querier {
     if (!client) return;
     try {
       await client.query("SELECT pg_advisory_unlock($1)", [WRITER_LOCK_KEY]);
+    } catch {
+      // The connection died, and the session lock died with it. There is nothing
+      // left to unlock, and refusing to close would only strand the pool.
     } finally {
       client.release();
     }
