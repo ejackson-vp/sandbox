@@ -8,7 +8,7 @@ retention period and no PVC.
 | File | Contract |
 | --- | --- |
 | [`prometheus-scrape.yaml`](prometheus-scrape.yaml) | Scrape job and targets, bare-list form |
-| [`rules/sandbox-slo.yaml`](rules/sandbox-slo.yaml) | Ten SLO rules, portable Prometheus rule file |
+| [`rules/sandbox-slo.yaml`](rules/sandbox-slo.yaml) | Fifteen SLO rules, portable Prometheus rule file |
 | [`grafana-dashboard.json`](grafana-dashboard.json) | `sandbox-control-plane`, uid `sandbox-control-plane` |
 | [`README.md`](../README.md) | Metric names, SLO meanings, alert caveats |
 

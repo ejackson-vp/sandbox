@@ -54,10 +54,66 @@ a family to catch an id-shaped label before it reaches storage.
 | File | Contract |
 | --- | --- |
 | [`contract/prometheus-scrape.yaml`](contract/prometheus-scrape.yaml) | The scrape job, bare-list form for `additionalScrapeConfigs` |
-| [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Ten SLO rules, portable Prometheus/vmalert rule file |
+| [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Fifteen SLO rules, portable Prometheus/vmalert rule file |
 | [`contract/grafana-dashboard.json`](contract/grafana-dashboard.json) | `Sandbox control plane`, uid `sandbox-control-plane` |
 | [`contract/kustomization.yaml`](contract/kustomization.yaml) | Renders the three ConfigMaps, namespace `monitoring` |
 | [`contract/README.md`](contract/README.md) | How to consume the ConfigMaps, including with an existing Prometheus |
+
+## Runtime profiles and the warm pool
+
+The controller keeps one warm pool per runtime profile (`base`, `python`,
+`node`) under one `WARM_POOL_SIZE` budget. Profiles come from
+`RUNTIME_PROFILES`; `base` is always present and is the guest image, so it
+cannot be redefined. Every profile's pool is independent: a session can only
+claim a pod booted from the same profile and image digest.
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `sandbox_warm_pool_budget` | gauge | `profile` | Target idle pods for that profile |
+| `sandbox_warm_pool_pods` | gauge | `profile` | Live warm pods: idle plus claimed but not yet relabelled |
+| `sandbox_warm_pool_total` | counter | `profile`, `result` | Claim outcomes |
+| `sandbox_warm_pool_grow_total` | counter | `profile`, `result` | Growth decisions |
+| `sandbox_warm_pool_drain_total` | counter | `profile`, `reason` | Idle drains |
+| `sandbox_warm_pool_created_total` | counter | `profile` | Warm pods created |
+
+Claim `result` is one of `hit`, `miss_empty`, `miss_limits`, `miss_profile`,
+`miss_error`, `miss_disabled` or `miss_unknown_profile`. Only `miss_empty`
+means the profile was under-provisioned. `miss_limits` means the session did
+not fit the pool tier and another pod would not help, `miss_profile` means the
+request was routed to the wrong pool, `miss_error` is a failed handoff after a
+pod was picked, `miss_disabled` means `WARM_POOL_SIZE=0`, and
+`miss_unknown_profile` means the request named a runtime this controller does
+not run.
+
+Growth `result` is `budget` (spent free budget), `steal` (drained an idle
+profile), `cooldown` (inside `WARM_POOL_COOLDOWN_MS`) or `budget_exhausted`
+(no free budget and no idle profile above its floor). Drain `reason` is `idle`
+today.
+
+### `WARM_POOL_BASE_MIN` and `WARM_POOL_SIZE`
+
+`WARM_POOL_SIZE` is the total idle pods across all profiles. `base` starts at
+`min(WARM_POOL_BASE_MIN, WARM_POOL_SIZE)`; `python` and `node` start at zero and
+grow only after a `miss_empty` for their profile.
+
+The default for `WARM_POOL_BASE_MIN` is `WARM_POOL_SIZE`, so by default `base`
+holds the entire budget. `base` cannot be drained below `WARM_POOL_BASE_MIN`,
+which means `python` and `node` have no headroom and every miss records
+`budget_exhausted`. Set `WARM_POOL_BASE_MIN` below `WARM_POOL_SIZE` to leave
+capacity that language profiles can claim. For example, `WARM_POOL_SIZE=8` and
+`WARM_POOL_BASE_MIN=4` gives `base` four pods and four pods of headroom.
+
+`WARM_POOL_SIZE` is not exported as a metric. The allocated part of the budget
+is `sum(sandbox_warm_pool_budget)`; it never exceeds `WARM_POOL_SIZE`, and the
+remainder is free for growth. Compare that sum to the configured value by hand
+or in a recording rule. The `SandboxWarmPoolBudgetExhausted` alert uses the
+controller's own `budget_exhausted` decision counter, so it does not need a
+total-budget gauge.
+
+A profile needs an idle victim above its floor before its growth can `steal`
+capacity. `base`'s floor is its `WARM_POOL_BASE_MIN` target and every language
+profile's floor is zero. Capacity is moved one growth step at a time, never
+created by a steal.
 
 ## Alerts
 
@@ -74,7 +130,12 @@ evaluators all load them unchanged.
 | `SandboxReconcileP95High` | reconcile p95 > 1 s | 10m | warning |
 | `SandboxSQLiteBusyRetries` | busy retry rate > 0 | 10m | warning |
 | `SandboxReconciliationPending` | create-route 409s > 0 | 5m | warning |
-| `SandboxWarmPoolEmpty` | warm pool pods == 0 | 5m | warning |
+| `SandboxWarmPoolEmpty` | no live pods in any profile while a target exists | 5m | warning |
+| `SandboxWarmPoolMissPressure` | `miss_empty` > 20% of hit+miss_empty, at least 20 claims | 15m | warning |
+| `SandboxWarmPoolSustainedMisses` | at least 20 `miss_empty` in 15m, per profile | 15m | warning |
+| `SandboxWarmPoolUnderTarget` | live pods below target, target > 0, per profile | 15m | warning |
+| `SandboxWarmPoolBudgetExhausted` | at least 3 `budget_exhausted` growth decisions in 30m, per profile | 15m | warning |
+| `SandboxWarmPoolDrainThrash` | at least 5 idle drains and 5 growths in 1h, per profile | 30m | warning |
 | `SandboxMetricsTargetDown` | `up{job="sandbox-control"} == 0` | 2m | critical |
 | `SandboxBlastRadius` | controller or relay down with ≥5 relay sessions in the last 15m | 5m | critical |
 
@@ -95,10 +156,27 @@ which also includes `payment_in_progress`, `spec_mismatch`,
 backlog. When the API exports a dedicated bounded counter, replace the
 expression and narrow the rule.
 
-**`SandboxWarmPoolEmpty` is inactive when the pool is disabled.** The controller
-exports `sandbox_warm_pool_pods` only when `WARM_POOL_SIZE > 0`; the homelab
-default is `0`. The rule is intentionally written so an absent series does not
-fire. Enable the pool before relying on it.
+**Warm-pool rules are gated on an enabled pool.** `SandboxWarmPoolEmpty` is
+gated on `sum(sandbox_warm_pool_budget) > 0`, so it stays inactive when
+`WARM_POOL_SIZE=0`, the homelab default. The profile rules are traffic-gated
+instead: with the pool disabled, claims record `miss_disabled`, no profile has
+a non-zero target, and none of the expressions match. Enable the pool and set
+`WARM_POOL_BASE_MIN` below `WARM_POOL_SIZE` before relying on them.
+
+**Profile alerts aggregate per profile, not per session.** They are rate- or
+count-based and held for 15 minutes or longer, so one transient `miss_empty`
+cannot fire them. The `for:` windows and thresholds are small-pool starting
+points, not capacity-derived numbers. Tune them with a recorded reason.
+
+**The profile rules do not select on `role`.** `sandbox_warm_pool_budget`,
+`sandbox_warm_pool_pods`, `sandbox_warm_pool_total`,
+`sandbox_warm_pool_grow_total` and `sandbox_warm_pool_drain_total` are
+exported only by the controller. Dropping the role selector keeps them working
+when a deployment scrapes a single process without a role label. The gauge
+aggregations assume one controller replica, as the scrape contract does. If
+you run more than one, use `max by (profile)` for
+`sandbox_warm_pool_budget` and `sandbox_warm_pool_pods`, and leave the counters
+summed.
 
 **The rules do not deliver notifications.** The rule file carries no receiver.
 The homelab stack evaluates with `-notifier.blackhole`, so alerts are visible as
@@ -121,6 +199,10 @@ The table at the bottom, **Firing SLO alerts (vmalert)**, queries
 `ALERTS{alertstate="firing"}`. It is empty unless the evaluator writes alert
 state back to the queried store; vmalert does, a bare Prometheus exposes
 `ALERTS` from its own rule evaluation.
+
+Panels 14 to 17 cover the profile warm pools: target against live pods, claim
+outcomes, growth decisions and idle drains. They aggregate by `profile`, so
+`base`, `python` and `node` stay comparable even though they share one budget.
 
 ## Portable usage
 
@@ -151,6 +233,7 @@ These checks need no cluster:
 | Rule syntax | `promtool check rules deploy/monitoring/contract/rules/sandbox-slo.yaml` |
 | Scrape syntax | `promtool check config` on the extracted `sandbox-scrape-configs.yaml` |
 | Dashboard JSON | `python3 -m json.tool deploy/monitoring/contract/grafana-dashboard.json` |
+| Dashboard panel ids | `jq -e '([.panels[].id] \| length) == ([.panels[].id] \| unique \| length)' deploy/monitoring/contract/grafana-dashboard.json` |
 | YAML parse | `python3 -c 'yaml.safe_load_all(open(...))'` over every file |
 
 Cluster-only checks — scrape targets up, rules loaded, dashboard panels
@@ -161,7 +244,13 @@ are recorded in the homelab repository.
 
 - **`reconciliation_pending` is approximate** until the API exports a dedicated
   counter (see [Alert caveats](#alert-caveats)).
-- **Warm-pool alert is off** while the homelab default `WARM_POOL_SIZE=0`.
+- **Warm-pool rules are active only when the pool is enabled.** The homelab
+  default `WARM_POOL_SIZE=0` keeps them quiet. `WARM_POOL_BASE_MIN` defaults to
+  the whole budget, which leaves no headroom for `python` and `node`; set it
+  below `WARM_POOL_SIZE` before expecting profile misses to grow a pool.
+- **Profile alert thresholds are starting points.** The 20% miss ratio, 20-miss
+  volume, three blocked growths and five drains per hour are sized for a small
+  pool, not derived from capacity.
 - **Blast-radius threshold** of five sessions is a starting point for a
   single-tenant homelab, not a capacity-derived number.
 - **The contract names two ConfigMaps after their homelab consumers**
