@@ -4,21 +4,31 @@
 
 ```bash
 npm ci
-make verify         # build, typecheck, structure lint, unit + property tests
+make verify         # build, typecheck, structure lint, unit + property, go tests
 make test           # adds integration tests against the real guest binary
-make guest && npm run test:coverage   # same suites with coverage (CI badge source)
+npm run test:coverage   # unit + property under coverage (CI badge source)
 ```
 
 Coverage covers the shipped TypeScript (`shared`, `sdk`, `api`, `controller`,
-`cli`), not tests or the Go guest. CI publishes the number to the `badges`
-branch, which is what the README badge reads; there is no fixed threshold yet,
-so a drop shows up as a smaller badge rather than a red build.
+`cli`), not tests or the Go guest. It measures the **unit and property** suites
+only: integration runs once per push in its own CI job, and instrumenting a
+second concurrent copy of that timing-sensitive suite is what made #128 flake
+(#145). The lines only integration reaches, mostly the controller lifecycle and
+reconciler paths, are therefore not in the badge. CI publishes the number to the
+`badges` branch, which is what the README badge reads; there is no fixed
+threshold yet, so a drop shows up as a smaller badge rather than a red build.
+
+`npm run typecheck` also compiles `tests/` and `scripts/` through
+`tsconfig.tests.json`. Vitest strips types with esbuild and never checks them, so
+without that pass a test can name a symbol that does not exist and still pass.
 
 Cluster-backed tests need a live cluster:
 
 ```bash
 make up
-make security-test
+make security-test       # Cilium packet-level suite
+make kata                # switch the deployment to the Kata RuntimeClass
+make security-isolation  # release gate: both suites, Kata boot probe, digests
 ```
 
 ## Fuzzing
@@ -72,6 +82,11 @@ go test . -run=^$ -fuzz=FuzzChunkDecode -fuzztime=10m
 `-fuzztime` is wall-clock per target. Add `-parallel=1` when reproducing a
 timing-sensitive report, and keep the Fuzz worker count down on a loaded
 machine so the per-target budget is not starved.
+
+CI runs each target as its own step through `scripts/fuzz-go.sh`. That wrapper
+retries a target once when, and only when, the run failed with
+`context deadline exceeded` and found no input (#130); any other nonzero exit is
+fatal and is not retried. A retry is recorded in the job summary.
 
 ### Corpora and reproducers
 

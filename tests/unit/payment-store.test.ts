@@ -103,6 +103,16 @@ function sessionRecord(id: string, key: string): SessionRecord {
     execEpoch: 1,
     relayPurgedAt: null,
     destroyRequested: 0,
+    timingsJson: null,
+    idlePolicyJson: null,
+    maxLifetimeSeconds: null,
+    suspendedAt: null,
+    resumeCount: 0,
+    lastActivityAt: null,
+    workspacePvc: null,
+    baselineCpuMillis: null,
+    baselineMemoryMib: null,
+    nodeName: null,
     updatedAt: now,
   };
 }

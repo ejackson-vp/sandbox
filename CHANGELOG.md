@@ -68,6 +68,21 @@ the container registry.
 - Incident runbooks for egress abuse, orphan Pod/PVC cleanup, relay compromise
   and secret rotation, plus a tabletop exercise script and a gap list, under
   `docs/runbooks/`.
+- Releases are gated on executed isolation evidence (#44). The `isolation` job
+  deploys the scanned image digests to a disposable kind + Cilium cluster,
+  switches the sandbox RuntimeClass to Kata, proves a Pod boots under it, runs
+  the packet-level isolation suite, and records the tested digests in
+  `artifacts/isolation/tested-images.json`. `promote` needs it, so a release
+  cannot be tagged when the suite did not run. A release owner can skip the
+  gate only by setting the repository variable `ISOLATION_EVIDENCE=none`, which
+  stamps a warning into the job summary and the top of the release notes;
+  without a runner or that acknowledgement the tag still fails. See
+  [docs/release-process.md](docs/release-process.md#isolation-gate).
+- `sandbox_relay_connection_resets_total{mode="tcp_reset"|"terminate"}` records
+  which mechanism ended a guest link after an epoch withdrawal (#128). The
+  `terminate` fallback is a close ordered after queued frames, so a non-zero
+  value for it means the stale-frame guarantee degraded; it also logs
+  `relay_reset_fell_back_to_terminate`.
 
 ### Changed
 

@@ -32,6 +32,14 @@ The relay is the execution-epoch authority for a session.
   bytes the guest has not read are discarded rather than delivered after a
   close frame. The supervisor exits on the read error, which is the existing
   "a command cannot survive its relay link" contract, and the fence clears.
+- The reset needs the TCP socket captured by the upgrade handler. `attach`
+  accepts a nullable socket, and when it is missing the relay falls back to
+  `ws.terminate()`, which is a close ordered after the queued frame. The link
+  still ends and the session still fails closed, but in that branch the
+  guarantee is only the observed-frame residual below: a frame the guest has
+  not read can still be delivered. The branch is recorded as
+  `sandbox_relay_connection_resets_total{mode="tcp_reset"|"terminate"}` and a
+  `terminate` also logs `relay_reset_fell_back_to_terminate`.
 
 The guest keeps `admitEpoch` as defence in depth. The model now compares the
 same epoch the implementation enforces (`slotEpoch >= execEpoch`, not
@@ -59,7 +67,9 @@ started by an earlier controller generation.
   `outcome_unknown` path for that operation.
 - The controller logs `operation_fence_guest_reset` with the session, request,
   epoch and number of withdrawn frames, so an operator can connect
-  `failure:guest_exited` to a recovery reset.
+  `failure:guest_exited` to a recovery reset. The relay logs
+  `relay_epoch_raised` with `reset` and the number withdrawn; the counter above
+  says which mechanism ended the link.
 - A relay restart loses the in-memory floor. Recovery republishes it on the next
   fence tick; a non-fenced session needs no floor because there is no
   superseded frame to withdraw.
@@ -81,6 +91,13 @@ frame. It may start, and the fence waits for it. Closing that last window needs
 a start-time round trip per command (the guest asks the relay whether the frame
 is still current before it takes the slot), a larger protocol change than the
 window justifies.
+
+The `terminate` fallback above is this same residual, not a second guarantee:
+a close does not discard unread bytes, so a queued frame may still arrive. The
+integration test asserts that the `tcp_reset` branch ran before it asserts the
+marker file is absent, so a failure has one of two readings from the logs: the
+guest read the frame before the reset on a loaded runner (this residual), or the
+reset never ran. A non-zero `terminate` count on a real relay is worth a bug.
 
 The terminated-session outcome depends on the sandbox Pod's
 `restartPolicy: Never` (set by `controller/src/k8s-pod.ts`). If a deployment

@@ -5,7 +5,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
-import { GuestHarness } from "../helpers/guest.js";
+import { expectGuestOk, GuestHarness } from "../helpers/guest.js";
 import { makeTar } from "../helpers/tar.js";
 import { hostPathEnv } from "./dev-path.js";
 import { testPort } from "./ports.js";
@@ -31,41 +31,52 @@ afterAll(async () => {
 
 describe("multi-command session", () => {
   it("persists filesystem state between commands", async () => {
-    const first = await guest.exec(["bash", "-c", "pwd && mkdir -p sub && echo hello > sub/test.txt"]);
-    expect(first.ok).toBe(true);
+    const first = expectGuestOk(
+      await guest.exec(["bash", "-c", "pwd && mkdir -p sub && echo hello > sub/test.txt"]),
+      "exec",
+    );
     expect(first.exitCode).toBe(0);
     expect(first.stdout.trim()).toMatch(/\/workspace$/);
 
-    const second = await guest.exec(["cat", "sub/test.txt"]);
-    expect(second.ok).toBe(true);
+    const second = expectGuestOk(await guest.exec(["cat", "sub/test.txt"]), "exec");
     expect(second.stdout).toBe("hello\n");
 
-    const third = await guest.exec(["bash", "-c", "echo second >> sub/test.txt && wc -l < sub/test.txt"]);
+    const third = expectGuestOk(
+      await guest.exec(["bash", "-c", "echo second >> sub/test.txt && wc -l < sub/test.txt"]),
+      "exec",
+    );
     expect(third.stdout.trim()).toBe("2");
   });
 
   it("supports argv, env, cwd, stdin, exit codes and separate streams", async () => {
-    const res = await guest.exec(["bash", "-c", "echo $FOO; echo err >&2; exit 7"], {
-      env: { FOO: "bar" },
-    });
+    const res = expectGuestOk(
+      await guest.exec(["bash", "-c", "echo $FOO; echo err >&2; exit 7"], {
+        env: { FOO: "bar" },
+      }),
+      "exec",
+    );
+    // A nonzero exit is still a successful operation; only the command failed.
     expect(res.stdout.trim()).toBe("bar");
     expect(res.stderr.trim()).toBe("err");
     expect(res.exitCode).toBe(7);
 
     await guest.exec(["mkdir", "-p", "workdir"]);
-    const cwdRes = await guest.exec(["pwd"], { cwd: "workdir" });
+    const cwdRes = expectGuestOk(await guest.exec(["pwd"], { cwd: "workdir" }), "exec");
     expect(cwdRes.stdout.trim()).toMatch(/\/workspace\/workdir$/);
 
-    const stdinRes = await guest.exec(["cat"], { stdin: "piped input" });
+    const stdinRes = expectGuestOk(await guest.exec(["cat"], { stdin: "piped input" }), "exec");
     expect(stdinRes.stdout).toBe("piped input");
   });
 
   it("runs python3 and node", async () => {
-    const py = await guest.exec(["python3", "-c", "print(1 + 1)"]);
+    const py = expectGuestOk(await guest.exec(["python3", "-c", "print(1 + 1)"]), "exec");
     expect(py.stdout.trim()).toBe("2");
-    const node = await guest.exec(["node", "-e", "console.log(process.version.startsWith('v'))"], {
-      env: hostPathEnv,
-    });
+    const node = expectGuestOk(
+      await guest.exec(["node", "-e", "console.log(process.version.startsWith('v'))"], {
+        env: hostPathEnv,
+      }),
+      "exec",
+    );
     expect(node.stdout.trim()).toBe("true");
   });
 
@@ -78,17 +89,19 @@ describe("multi-command session", () => {
 
 describe("timeouts and cancellation", () => {
   it("enforces the per-command timeout and kills the process group", async () => {
-    const res = await guest.exec(
-      ["bash", "-c", "sleep 30 & echo $! > bg.pid; wait"],
-      { timeoutMs: 400 },
+    const res = expectGuestOk(
+      await guest.exec(["bash", "-c", "sleep 30 & echo $! > bg.pid; wait"], { timeoutMs: 400 }),
+      "exec",
     );
-    expect(res.ok).toBe(true);
     expect(res.timedOut).toBe(true);
     expect(res.exitCode).not.toBe(0);
     expect(res.durationMs).toBeLessThan(5000);
 
     // The background child must not survive the command.
-    const check = await guest.exec(["bash", "-c", "kill -0 $(cat bg.pid) 2>/dev/null && echo alive || echo dead"]);
+    const check = expectGuestOk(
+      await guest.exec(["bash", "-c", "kill -0 $(cat bg.pid) 2>/dev/null && echo alive || echo dead"]),
+      "exec",
+    );
     expect(check.stdout.trim()).toBe("dead");
   });
 
@@ -104,7 +117,7 @@ describe("timeouts and cancellation", () => {
       expect(result.durationMs).toBeLessThan(10_000);
     }
     // A cancelled command must not poison the session.
-    const after = await guest.exec(["echo", "still-alive"]);
+    const after = expectGuestOk(await guest.exec(["echo", "still-alive"]), "exec");
     expect(after.stdout.trim()).toBe("still-alive");
   }, 30_000);
 });
@@ -112,52 +125,46 @@ describe("timeouts and cancellation", () => {
 describe("filesystem operations", () => {
   it("uploads, lists, stats and downloads files", async () => {
     const content = Buffer.from("uploaded via envelope\n");
-    const put = await guest.op({
-      op: "file.put",
-      path: "incoming/hello.txt",
-      dataBase64: content.toString("base64"),
-    });
-    expect(put.ok).toBe(true);
-    if (put.op === "file.put") {
-      expect(put.bytesWritten).toBe(content.length);
-      expect(put.filesWritten).toBe(1);
-    }
+    const put = expectGuestOk(
+      await guest.op({
+        op: "file.put",
+        path: "incoming/hello.txt",
+        dataBase64: content.toString("base64"),
+      }),
+      "file.put",
+    );
+    expect(put.bytesWritten).toBe(content.length);
+    expect(put.filesWritten).toBe(1);
 
-    const list = await guest.op({ op: "file.list", path: "incoming", recursive: false });
-    expect(list.ok).toBe(true);
-    if (list.op === "file.list") {
-      expect(list.entries.map((e) => e.path)).toContain("incoming/hello.txt");
-    }
+    const list = expectGuestOk(
+      await guest.op({ op: "file.list", path: "incoming", recursive: false }),
+      "file.list",
+    );
+    expect(list.entries.map((e) => e.path)).toContain("incoming/hello.txt");
 
-    const stat = await guest.op({ op: "file.stat", path: "incoming/hello.txt" });
-    expect(stat.ok).toBe(true);
-    if (stat.op === "file.stat") {
-      expect(stat.entry?.size).toBe(content.length);
-      expect(stat.entry?.isDir).toBe(false);
-    }
+    const stat = expectGuestOk(await guest.op({ op: "file.stat", path: "incoming/hello.txt" }), "file.stat");
+    expect(stat.entry.size).toBe(content.length);
+    expect(stat.entry.isDir).toBe(false);
 
-    const get = await guest.op({ op: "file.get", path: "incoming/hello.txt" });
-    expect(get.ok).toBe(true);
-    if (get.op === "file.get") {
-      expect(Buffer.from(get.dataBase64, "base64").toString()).toBe(content.toString());
-    }
+    const get = expectGuestOk(await guest.op({ op: "file.get", path: "incoming/hello.txt" }), "file.get");
+    expect(Buffer.from(get.dataBase64, "base64").toString()).toBe(content.toString());
   });
 
   it("round-trips a directory as an archive", async () => {
     await guest.exec(["bash", "-c", "mkdir -p tree/a && echo one > tree/a/1.txt && echo two > tree/2.txt"]);
-    const get = await guest.op({ op: "file.get", path: "tree", archive: true });
-    expect(get.ok).toBe(true);
-    if (get.op !== "file.get") throw new Error("wrong result");
+    const get = expectGuestOk(await guest.op({ op: "file.get", path: "tree", archive: true }), "file.get");
     const archive = Buffer.from(get.dataBase64, "base64");
 
-    const put = await guest.op({
-      op: "file.put",
-      path: "restored",
-      dataBase64: archive.toString("base64"),
-      archive: true,
-    });
-    expect(put.ok).toBe(true);
-    const cat = await guest.exec(["cat", "restored/tree/a/1.txt"]);
+    expectGuestOk(
+      await guest.op({
+        op: "file.put",
+        path: "restored",
+        dataBase64: archive.toString("base64"),
+        archive: true,
+      }),
+      "file.put",
+    );
+    const cat = expectGuestOk(await guest.exec(["cat", "restored/tree/a/1.txt"]), "exec");
     expect(cat.stdout.trim()).toBe("one");
   });
 });

@@ -18,8 +18,9 @@ build with a different runtime tree, not a separate product. See
 [Profile images](#profile-images).
 
 A release is **staged**: the version, `major.minor` and `latest` tags are only
-created after both images pass the Trivy gate. A scan failure leaves nothing
-deployable behind.
+created after both images pass the Trivy gate and the isolation suites run
+against the same digests. A failed scan or an unrun isolation suite leaves
+nothing deployable behind.
 
 ## Job graph
 
@@ -28,9 +29,12 @@ test
  └── images (matrix: control, guest; push staging-<run-id>-<sha>)
       └── digests (resolve each multi-arch index digest)
            ├── attest (matrix: control, guest; keyless provenance, push to OCI)
-           └── scan (matrix: control, guest; scan image@sha256:…)
-                └── promote (imagetools create: version, major.minor, latest)
-                     └── release (GitHub Release entry + provenance assets)
+           ├── scan (matrix: control, guest; scan image@sha256:…)
+           └── isolation-preflight (require SANDBOX_ISOLATION_RUNNER)
+                └── isolation (Kata + Cilium on a disposable cluster,
+                               tested digests recorded)
+                     └── promote (imagetools create: version, major.minor, latest)
+                          └── release (GitHub Release entry + provenance assets)
 ```
 
 - `images` pushes exactly one tag per image, `staging-<run-id>-<sha>`. It is
@@ -47,16 +51,118 @@ test
   pushes it to GHCR. The bundle is attached to the GitHub Release as
   `sandbox-<name>.sigstore.json`, alongside the in-toto statement it contains
   (`sandbox-<name>.intoto.jsonl`).
-- `promote` runs only after both matrix scans pass. It uses
-  `docker buildx imagetools create` to add the release tags to the scanned
-  index digest, then re-inspects every tag and fails if it does not resolve to
-  that same digest.
+- `isolation` runs the packet-level isolation and Kata suites against the
+  exact scanned digests. See [Isolation gate](#isolation-gate).
+- `promote` runs only after both matrix scans pass and the isolation gate is
+  green. It uses `docker buildx imagetools create` to add the release tags to
+  the scanned index digest, then re-inspects every tag and fails if it does not
+  resolve to that same digest.
 - `release` depends on `promote` and `attest`, so the GitHub Release entry and
   its provenance assets are created last.
 
 `imagetools create` copies the source index and its child manifests, so the
 multi-arch (`linux/amd64`, `linux/arm64`) index and the SBOM/provenance OCI
 attestations are preserved. No image is rebuilt at promotion time.
+
+## Isolation gate
+
+`security-review/RELEASE_GATE.md` lists Kata guest-to-host and Cilium pod-to-pod
+isolation as UNVERIFIED because nothing in CI executed them. The `isolation` job
+exists to turn those into evidence. It is honest by default: `promote` needs it,
+so a suite that did not run blocks the tag. A release owner can skip it on
+purpose, never by accident; see
+[Deliberately skipping the gate](#deliberately-skipping-the-gate).
+
+What it does:
+
+1. Pulls `-control@<digest>` and `-guest@<digest>` (the digests `scan` gated) and
+   retags them to the local deploy tags. `scripts/isolation-gate.sh` then checks
+   the docker `RepoDigests` still name the expected digests; a mismatch fails.
+2. Creates a run-scoped kind cluster with Cilium (`./deploy/kind/up.sh`),
+   deploys the release images (`make deploy`), and switches the RuntimeClass to
+   Kata (`make kata`, which renders `deploy/kata` through the same digest pinning
+   as the base overlay).
+3. Applies a probe Pod with `runtimeClassName: x402-sandbox` and waits for it to
+   reach `Succeeded`. A handler that is not installed leaves the Pod in
+   `ContainerCreating`, so this proves the sandbox path boots and is not just a
+   RuntimeClass object.
+4. Runs `tests/security` with a JUnit report. The gate fails when
+   `network.test.ts` or `workload.test.ts` produced zero executed tests or any
+   skip: a skipped suite is not evidence.
+5. Writes `artifacts/isolation/tested-images.json` (context, RuntimeClass handler,
+   control and guest digests, commit, run id) and a run summary, and uploads the
+   artifact for 90 days. `warm-pool.test.ts` may skip when `WARM_POOL_SIZE` is
+   `0`; that skip is recorded but is not an isolation claim.
+
+Local equivalent, against a cluster you already deployed:
+
+```bash
+make up
+make kata
+make security-isolation
+```
+
+### Runner requirement
+
+The job runs on the labels in the repository variable
+`SANDBOX_ISOLATION_RUNNER` (a JSON array, for example
+`["self-hosted","linux","x64","sandbox-isolation"]`). The runner needs:
+
+- Docker, `kind` and `kubectl`, plus the `cilium` CLI (`make up` installs Cilium
+  through it);
+- a kind node image that has Kata installed and registers the `kata` handler
+  with containerd, and nested virtualisation with `/dev/kvm` exposed to the kind
+  containers. Without this the Kata boot probe fails, which is the intended
+  failure mode: it means the runner cannot demonstrate the claim.
+- network access to GHCR for the digest pull, and about 25 GiB of disk for two
+  multi-arch pulls plus the kind node.
+
+Set the runner (or point the job at a cluster that already runs Kata, the Talos
+overlay in `deploy/talos/`) before the next release. As of this commit the job
+has not executed anywhere; the first green run produces the evidence.
+
+### Deliberately skipping the gate
+
+Three states, decided by `scripts/isolation-preflight.mjs`:
+
+| `SANDBOX_ISOLATION_RUNNER` | `ISOLATION_EVIDENCE` | Outcome |
+|---|---|---|
+| set (JSON label array) | anything | the suites run; the acknowledgement is ignored |
+| unset | `none` | the suites are skipped and the release is stamped |
+| unset | unset | the tag fails at `isolation-preflight` |
+
+A skip is a recorded decision, not a side effect of a missing runner. To take
+it, set the acknowledgement on the repository:
+
+```bash
+gh variable set ISOLATION_EVIDENCE --repo ejackson-vp/sandbox --body none
+```
+
+The release then completes, and the following block appears at the top of the
+job summary and of the GitHub Release body:
+
+```text
+## ⚠️ Isolation suites were not run for this tag
+
+The Cilium packet-level suite and the Kata boot probe did not execute, so
+tenant isolation is **unverified** and the control and guest image digests
+were **not verified** by them. This release continues only because the
+repository variable `ISOLATION_EVIDENCE=none` acknowledges the skip.
+
+Set `SANDBOX_ISOLATION_RUNNER`, re-run the release, and remove
+`ISOLATION_EVIDENCE`. See docs/release-process.md#isolation-gate.
+```
+
+The acknowledgement must be removed as soon as a runner exists:
+
+```bash
+gh variable delete ISOLATION_EVIDENCE --repo ejackson-vp/sandbox
+```
+
+A stale acknowledgement is ignored while a runner is set, but it would silently
+re-enable skips if the runner variable were ever unset or mistyped, and the
+notes would then claim the skip was deliberate. Removing it restores the
+fail-closed default: no runner, no acknowledgement, no tag.
 
 ## Profile images
 

@@ -6,7 +6,7 @@ import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
 import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
-import { config, digestBase, digestNode, digestPython } from "./helpers/warm-pool-fixtures.js";
+import { config, digestBase, digestPython } from "./helpers/warm-pool-fixtures.js";
 
 function session(overrides: Partial<SessionRecord> = {}, runtime?: string): SessionRecord {
   return {

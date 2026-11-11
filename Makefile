@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-network logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-go verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -33,12 +33,14 @@ help:
 	@echo "  make demo-sse      stream SSE chunks through the relay"
 	@echo "  make demo-ws       WebSocket echo through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
-	@echo "  make verify         build, typecheck, structure lint, unit + property tests"
+	@echo "  make verify         build, typecheck, structure lint, unit + property + go tests"
 	@echo "  make verify-model   model-check the lifecycle/payment/operation/fence state machines (TLA+)"
 	@echo "  make docs-check     markdownlint + internal link check"
 	@echo "  make assets         re-render docs/assets/social-preview.png"
 	@echo "  make demo-gif       record docs/assets/demo.gif with vhs (needs a cluster)"
 	@echo "  make security-test  network + isolation tests against the real cluster"
+	@echo "  make kata           switch the deployment to the Kata microVM RuntimeClass"
+	@echo "  make security-isolation  release-gate Kata + Cilium suites with digests"
 	@echo "  benchmarks live in the sandbox-bench repository"
 	@echo "  make logs           tail control-plane logs"
 	@echo "  make down           delete the kind cluster"
@@ -171,7 +173,7 @@ test-integration: cli guest
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest npx vitest run tests/integration
 
 # Everything a reviewer can run without a cluster.
-verify: build typecheck lint-structure test-unit test-property
+verify: build typecheck lint-structure test-unit test-property test-go
 
 # Exhaustive-over-interleavings check of the session lifecycle, payment intent,
 # single-operation slot and capacity reservation. TLC is pinned; the first run
@@ -187,6 +189,11 @@ lint-structure:
 
 test-property:
 	npx vitest run tests/property
+
+# The guest's own suite. Without it a guard in guest/internal/files or the
+# envelope parser can be removed with every TypeScript gate still green.
+test-go:
+	cd guest && go test ./...
 
 # Markdown lint always; link check when lychee is installed (CI always runs it).
 docs-check:
@@ -207,6 +214,17 @@ demo-gif:
 	vhs docs/assets/demo.tape
 
 security-test: security-network
+
+security-isolation: guest
+	ARTIFACTS=$(or $(ARTIFACTS),artifacts/isolation) ./scripts/isolation-gate.sh
+
+# Switch the running deployment to the Kata microVM RuntimeClass. The overlay
+# patches both the RuntimeClass handler and EXECUTION_MODE; the controller is
+# restarted because the config is read at start-up. Release gate only (#44).
+kata:
+	KUSTOMIZE_DIR=$(PWD)/deploy/kata CONTEXT="$(CONTEXT)" GUEST_IMAGE="$(GUEST_IMG)" ./deploy/kind/apply.sh
+	$(KUBECTL) -n $(NAMESPACE) rollout restart deploy/controller
+	$(KUBECTL) -n $(NAMESPACE) rollout status deploy/controller --timeout=300s
 
 security-network: guest cli
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest \

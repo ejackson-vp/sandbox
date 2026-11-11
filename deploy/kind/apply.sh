@@ -10,6 +10,10 @@ set -euo pipefail
 CONTEXT="${CONTEXT:-kind-x402-sandbox}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GUEST_IMAGE="${GUEST_IMAGE:-x402-sandbox/guest:dev}"
+# Which overlay to render. The base deploy is runc; deploy/kata flips the
+# RuntimeClass handler and EXECUTION_MODE. Both go through the same digest
+# pinning below, which is why the gate can apply the Kata overlay at all.
+KUSTOMIZE_DIR="${KUSTOMIZE_DIR:-${ROOT}/deploy/kubernetes}"
 
 # kind has no registry, so a `repo@sha256:…` reference cannot be pulled unless
 # the digest itself exists as an image record in the node's containerd. The
@@ -50,7 +54,7 @@ pin_guest_image_digest() {
 }
 
 GUEST_DIGEST="$(pin_guest_image_digest "${GUEST_IMAGE}")"
-MANIFESTS="$(kubectl --context "${CONTEXT}" kustomize "${ROOT}/deploy/kubernetes")"
+MANIFESTS="$(kubectl --context "${CONTEXT}" kustomize "${KUSTOMIZE_DIR}")"
 if ! grep -Fq 'GUEST_IMAGE_DIGEST: sha256:dev-unpinned-image' <<<"${MANIFESTS}"; then
   echo "error: could not find the placeholder GUEST_IMAGE_DIGEST to pin in deploy/kubernetes" >&2
   exit 1

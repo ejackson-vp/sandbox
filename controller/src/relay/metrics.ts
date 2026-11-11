@@ -53,6 +53,14 @@ export function registerRelayMetrics(registry: MetricsRegistry = metrics): void 
     "sandbox_relay_frames_withdrawn_total",
     "Frames withdrawn from the pending set after a recovery epoch increase",
   );
+  // Which branch closed the guest link. `tcp_reset` discards unread bytes;
+  // `terminate` is a close frame ordered after them, so a queued frame can
+  // still be delivered (#128). A non-zero `terminate` means the guarantee
+  // degraded to the documented observed-frame residual.
+  registry.counter(
+    "sandbox_relay_connection_resets_total",
+    "Guest link terminations after an epoch withdrawal, by mechanism",
+  );
 }
 
 /** The counters the scrape reads. Declared here so metrics does not import the registry. */

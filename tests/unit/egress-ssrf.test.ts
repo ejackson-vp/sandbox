@@ -16,9 +16,14 @@ afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
 });
 
-async function start(resolve: (host: string) => Promise<string[]>, dial = () => {
-  throw new Error("dial must not be called");
-}) {
+async function start(
+  resolve: (host: string) => Promise<string[]>,
+  // Typed explicitly: the default alone infers `() => never`, which no real
+  // dialer assignment satisfies.
+  dial: (opts: { host: string; port: number; family: number }) => net.Socket = () => {
+    throw new Error("dial must not be called");
+  },
+) {
   const proxy = createEgressProxy({
     tokenSecret: SECRET,
     allowedPorts: [443],
@@ -35,7 +40,9 @@ async function start(resolve: (host: string) => Promise<string[]>, dial = () => 
 function attempt(port: number, authority: string): Promise<string> {
   return new Promise((resolve) => {
     const socket = net.connect({ host: "127.0.0.1", port });
-    cleanups.push(() => socket.destroy());
+    cleanups.push(() => {
+    socket.destroy();
+  });
     let buffered = "";
     socket.on("connect", () => {
       socket.write(
@@ -140,7 +147,9 @@ describe("egress destination validation", () => {
     const { port } = await start(async () => ["93.184.216.34"]);
     const noAuth = await new Promise<string>((resolve) => {
       const socket = net.connect({ host: "127.0.0.1", port });
-      cleanups.push(() => socket.destroy());
+      cleanups.push(() => {
+        socket.destroy();
+      });
       let buffered = "";
       socket.on("connect", () => socket.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com\r\n\r\n"));
       socket.on("data", (c) => {

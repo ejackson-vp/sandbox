@@ -25,7 +25,7 @@ describe("sealed-box confidentiality", () => {
     const guest = await generateBoxKeyPair();
     const envelope = await sealJsonTo(guest.publicKey, { code: "print(1)" });
     const raw = Buffer.from(envelope, "base64");
-    raw[0] ^= 0xff;
+    raw[0] = (raw[0] ?? 0) ^ 0xff;
     await expect(openSealedJson(raw.toString("base64"), guest.publicKey, guest.privateKey)).rejects.toThrow(
       /decryption failed/,
     );

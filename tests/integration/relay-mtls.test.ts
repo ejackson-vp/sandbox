@@ -6,7 +6,7 @@
  * the plaintext listener, using its existing bearer token.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { GuestHarness } from "../helpers/guest.js";
+import { expectGuestOk, GuestHarness } from "../helpers/guest.js";
 import { makeTestPki, type TestPki } from "../helpers/tls.js";
 import { testPort } from "./ports.js";
 
@@ -41,8 +41,7 @@ describe("relay control mTLS with a real guest", () => {
     expect(state.connected).toBe(true);
     expect(state.attestation?.sessionId).toBe(guest.sessionId);
 
-    const result = await guest.exec(["bash", "-c", "echo mtls-ok"]);
-    expect(result.ok).toBe(true);
+    const result = expectGuestOk(await guest.exec(["bash", "-c", "echo mtls-ok"]), "exec");
     expect(result.stdout.trim()).toBe("mtls-ok");
   }, 30_000);
 

@@ -28,6 +28,7 @@ import {
   generateNonce,
   toBase64,
 } from "@x402s/shared/crypto";
+import type { SessionLimits } from "@x402s/shared/protocol";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { CapacityService } from "../../controller/src/capacity/service.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
@@ -36,7 +37,6 @@ import { Reconciler } from "../../controller/src/reconciler.js";
 import {
   Store,
   type PaymentRecord,
-  type SessionLimits,
   type SessionRecord,
 } from "../../controller/src/store.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";

@@ -16,7 +16,7 @@
   },
   "scripts": {
     "build": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && npm run build -w @x402s/api && npm run build -w @x402s/controller && npm run build -w @x402s/cli",
-    "typecheck": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && tsc -p api/tsconfig.json --noEmit && tsc -p controller/tsconfig.json --noEmit && tsc -p cli/tsconfig.json --noEmit",
+    "typecheck": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && tsc -p api/tsconfig.json --noEmit && tsc -p controller/tsconfig.json --noEmit && tsc -p cli/tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
@@ -24,7 +24,7 @@
     "test:fuzz": "vitest run tests/fuzz",
     "clean": "rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist",
     "test:property": "vitest run tests/property",
-    "test:coverage": "vitest run tests/unit tests/property tests/integration --coverage",
+    "test:coverage": "vitest run tests/unit tests/property --coverage",
     "lint:structure": "node scripts/check-structure.mjs && node scripts/check-singletons.mjs",
     "coupling": "node scripts/coupling.mjs",
     "bench:ceiling": "tsx scripts/bench-reconcile-ceiling.ts"

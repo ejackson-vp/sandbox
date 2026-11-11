@@ -1,11 +1,31 @@
 name: ci
 
+# Every branch push used to start a `push` run *and* a `pull_request` run for
+# the same commit, with nothing to deduplicate them. Coverage re-ran the
+# integration suite in one of those, so a branch push drove the 62
+# SIGSTOP/socket tests four times (#145). Feature branches are now covered by
+# `pull_request` alone; `push` is main and tags. `workflow_call` stays for
+# release.yml.
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
   # Required so release.yml can gate image publishing on the test suite.
   workflow_call:
+
+# One group per head branch. `github.head_ref` is only set on `pull_request`;
+# `ref_name` covers main pushes, tags and dispatch.
+#
+# Only a pull request cancels in progress. A rapid second push to main must not
+# kill the first run's `coverage-badge` job mid-publish: with `false` the new
+# main run stays pending behind the running one and supersedes only a previously
+# pending run. A superseded PR run is cancelled, which is the case that used to
+# race two copies of the integration suite under load.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Keep the token read-only even though the repository default is now write
 # (GHCR pushes require that default; explicit workflow permissions cap it).
@@ -24,6 +44,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # Vitest strips types without checking them, so the suite is compiled
+      # separately. A test that imports a symbol shared no longer exports fails
+      # here instead of passing (#144).
+      - run: npx tsc -p tsconfig.tests.json --noEmit
       - run: npm run lint:structure
       # The published profile set is guest/profiles/runtime-images.conf; the
       # release workflow builds exactly those and nothing else.
@@ -48,15 +72,28 @@ jobs:
           cache-dependency-path: guest/go.sum
       - run: npm ci
       - run: npm run build
-      - name: go fuzz targets (20s each)
+      # One step per target, so the retry in scripts/fuzz-go.sh costs another
+      # 20 s for the target that lost the engine's shutdown race instead of
+      # re-running the whole matrix. Every failure other than
+      # `context deadline exceeded` stays fatal (#130).
+      - name: fuzz FuzzOpen (envelope)
         working-directory: guest
-        run: |
-          go test ./internal/envelope -run=^$ -fuzz=FuzzOpen -fuzztime=20s
-          go test ./internal/files -run=^$ -fuzz=FuzzResolve -fuzztime=20s
-          go test . -run=^$ -fuzz=FuzzTransferFraming -fuzztime=20s
-          go test . -run=^$ -fuzz=FuzzSupervisorDecrypt -fuzztime=20s
-          go test . -run=^$ -fuzz=FuzzFrameDecode -fuzztime=20s
-          go test . -run=^$ -fuzz=FuzzChunkDecode -fuzztime=20s
+        run: ../scripts/fuzz-go.sh ./internal/envelope FuzzOpen 20s
+      - name: fuzz FuzzResolve (files)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh ./internal/files FuzzResolve 20s
+      - name: fuzz FuzzTransferFraming (guest)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh . FuzzTransferFraming 20s
+      - name: fuzz FuzzSupervisorDecrypt (guest)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh . FuzzSupervisorDecrypt 20s
+      - name: fuzz FuzzFrameDecode (guest)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh . FuzzFrameDecode 20s
+      - name: fuzz FuzzChunkDecode (guest)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh . FuzzChunkDecode 20s
       - name: typescript fuzz targets
         run: npm run test:fuzz
 
@@ -79,14 +116,22 @@ jobs:
       - name: go tests
         working-directory: guest
         run: go test ./...
+      # The only run of this suite per push. It SIGSTOPs a real guest process
+      # and uses real sockets, so a second concurrent run doubles the runner
+      # load and flakes (#145, #128). Coverage must not re-run it.
       - name: integration tests
         env:
           GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
         run: npm run test:integration
 
   # The README coverage badge is measured, not hand-maintained. This job runs
-  # the portable suites (unit, property, integration) under instrumentation and
-  # publishes the json-summary; the separate job below turns it into a badge.
+  # the portable suites (unit, property) under instrumentation and publishes the
+  # json-summary; the separate job below turns it into a badge.
+  #
+  # Integration is deliberately excluded: it already runs once in `integration`
+  # above, and instrumenting a second concurrent copy is what made #128 and the
+  # `stale-frame-recovery` test flake. The cost is the line coverage only those
+  # tests reach (the controller lifecycle/reconciler paths); see CONTRIBUTING.md.
   coverage:
     name: coverage
     runs-on: ubuntu-latest
@@ -96,16 +141,9 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: guest/go.mod
-          cache-dependency-path: guest/go.sum
       - run: npm ci
       - run: npm run build
-      - run: make guest
-      - name: coverage (unit + property + integration)
-        env:
-          GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
+      - name: coverage (unit + property)
         run: npm run test:coverage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

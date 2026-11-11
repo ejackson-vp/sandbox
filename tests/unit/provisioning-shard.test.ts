@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadControllerConfig, type ControllerConfig } from "../../controller/src/config.js";
 import { dataPlaneShard } from "../../controller/src/data-plane-shard.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
+import type { Endpoint } from "../../controller/src/provisioning/endpoints.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
@@ -57,7 +58,11 @@ interface CreatedPod {
 
 function harness(
   cfg: ControllerConfig,
-  serviceAddress = vi.fn(async (_name: string, _shard?: number) => null),
+  // Typed like EndpointRuntime.serviceAddress; the default alone infers
+  // `Promise<null>`, which no real lookup satisfies.
+  serviceAddress: (name: string, shard?: number, podPrefix?: string) => Promise<Endpoint | null> = vi.fn(
+    async (_name: string, _shard?: number) => null,
+  ),
 ) {
   const createPod = vi.fn(async (_spec: CreatedPod) => ({ podName: "sbx-pod" }));
   const requestTermination = vi.fn();
