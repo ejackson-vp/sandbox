@@ -31,6 +31,40 @@ performs the effects; the table is the tested contract.
 - **No monad transformers, no fp-ts.** `Result`/`Option` with `map`/`flatMap`/
   `match` are enough. Abstractions must pay rent in readability.
 
+## Deployment invariants
+
+Some control-plane state is per process and cannot be shared by replicas. A
+second replica is not a capacity change for any of these; it is a second copy of
+the truth.
+
+| State | Component | Why a second replica is unsafe |
+|---|---|---|
+| SQLite, the single writer | controller | Two reconcilers schedule the same rows. The `WHERE state = …` guards stop one effect applying twice; they do not stop two schedulers disagreeing about which effect to run. |
+| Guest registry, in memory | relay | A session is pinned to the pod holding its socket. A second registry means guests registered where the controller is not looking. |
+| Rate-limit buckets, in memory | api | Limits are per replica, so N replicas multiply every limit by N. This is a known limitation of the single-replica deployment, not a guarded invariant. |
+
+The first two are enforced three ways, deliberately:
+
+- **Code.** ADR 0009: the controller takes a Kubernetes Lease, only the leader
+  reconciles, and a standby's store connection is `query_only` so a leaked write
+  throws instead of diverging. The relay refuses to start when its pod ordinal is
+  outside `RELAY_REPLICAS`, or when the replica count is above 1 and it has no
+  ordinal to pin itself to, so a scaled StatefulSet fails closed instead of
+  serving from a registry the controller is not addressing.
+- **Manifest.** `replicas: 1` for the controller Deployment and the relay
+  StatefulSet, with a rollout that cannot run two pods against one resource:
+  `strategy: Recreate` (or `RollingUpdate` with `maxSurge: 0`) for the
+  controller, `podManagementPolicy: OrderedReady` and no surge for the relay.
+- **CI.** `scripts/check-singletons.mjs`, run by `npm run lint:structure` and
+  therefore by `make verify`, fails on any of those edits. It is a manifest
+  check, not a cluster check, so it catches the pull request rather than the
+  rollout.
+
+This does not make the deployment highly available. ADR 0010 is the record: one
+writer on one node until the store itself supports several readers (#25). The
+guard exists so that nobody scales the manifest into a failure the code cannot
+see.
+
 ## DDIA ideas in practice
 
 | Principle | Implementation |
