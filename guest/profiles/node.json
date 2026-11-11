@@ -1,0 +1,10 @@
+{
+  "name": "node",
+  "version": "22",
+  "env": {
+    "PATH": "/runtimes/node/bin:/usr/local/bin:/usr/bin:/bin",
+    "NODE_PATH": "/runtimes/node/lib/node_modules",
+    "NPM_CONFIG_CACHE": "/workspace/.cache/npm"
+  },
+  "commands": ["node", "npm"]
+}

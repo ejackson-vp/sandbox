@@ -1,12 +1,22 @@
 /**
  * Warm pool: pre-booted, unleased pods. Policy and lifecycle live here; the
  * reconciler only schedules the calls.
+ *
+ * One instance exists per runtime profile. A pool only ever claims a pod that
+ * booted the same profile and image it would create itself, so a session can
+ * never land on a language runtime it did not ask for. The shared budget and
+ * the growth policy across profiles live in {@link WarmPoolManager}.
  */
 import { randomBytes } from "node:crypto";
 import type { SessionLimits, WarmClaim } from "@x402s/shared/protocol";
 import { log, metrics } from "@x402s/shared/runtime";
 import { GUEST_TOOLS, type WarmPodInfo } from "./k8s.js";
-import { proxyTokenFor } from "./config.js";
+import {
+  proxyTokenFor,
+  runtimeProfileEnv,
+  sessionRuntime,
+  type RuntimeProfile,
+} from "./config.js";
 import { warmPoolIdentity } from "./warm-pool-identity.js";
 import { newOpaqueToken, sha256Hex, guestTokenFor } from "./tokens.js";
 import { pinnedShard, shardClaim } from "./data-plane-shard.js";
@@ -16,13 +26,32 @@ import type { WarmPoolStore } from "./store/ports.js";
 type WarmPoolContext = Omit<ReconcilerContext, "store"> & { store: WarmPoolStore };
 import type { SessionRecord } from "./store/models.js";
 
+/**
+ * Why a claim did or did not happen.
+ *
+ * `miss_empty` is the only miss that says "this profile is under-provisioned";
+ * `miss_limits` is permanent for that session shape, `miss_profile` means the
+ * caller routed to the wrong pool, and `miss_error` is a failed handoff after a
+ * pod was already picked, which more pods would not have prevented.
+ */
+export type WarmClaimOutcome =
+  | "hit"
+  | "miss_disabled"
+  | "miss_profile"
+  | "miss_limits"
+  | "miss_empty"
+  | "miss_error";
+
 export class WarmPool {
   private readonly claimed = new Set<string>();
   /** Serializes pick+reserve; two concurrent provisions must not take one pod. */
   private claimTail: Promise<void> = Promise.resolve();
   private cache: { pods: WarmPodInfo[]; at: number } | null = null;
 
-  constructor(private readonly ctx: WarmPoolContext) {}
+  constructor(
+    private readonly ctx: WarmPoolContext,
+    readonly profile: RuntimeProfile,
+  ) {}
 
   limits(): SessionLimits {
     const def = this.ctx.cfg.tiers[this.ctx.cfg.warmPoolTier];
@@ -39,10 +68,11 @@ export class WarmPool {
   }
 
   /** The identity a warm pod must carry to be claimable right now. */
-  private identity(): string {
+  identity(): string {
     const cfg = this.ctx.cfg;
     return warmPoolIdentity({
-      imageDigest: cfg.guestImageDigest,
+      runtime: this.profile.name,
+      imageDigest: this.profile.digest,
       runtimeClass: cfg.runtimeClass,
       executionMode: cfg.executionMode,
       workspaceDir: cfg.workspaceDir,
@@ -68,9 +98,15 @@ export class WarmPool {
     relayAddr: { host: string; port: number },
     proxyAddr: { host: string; port: number },
     provisionBeginAt: number,
-  ): Promise<boolean> {
+  ): Promise<WarmClaimOutcome> {
     const cfg = this.ctx.cfg;
-    if (cfg.warmPoolSize === 0) return false;
+    if (cfg.warmPoolSize === 0) return "miss_disabled";
+    // A profile mismatch is a miss, never a claim: the pod's image is decided
+    // at boot and cannot be changed by a claim.
+    if (sessionRuntime(session) !== this.profile.name) {
+      this.count("miss_profile");
+      return "miss_profile";
+    }
     const poolLimits = this.limits();
     const poolBaseline = {
       cpuMillis: Math.max(50, Math.floor(poolLimits.cpuMillis / 4)),
@@ -81,8 +117,8 @@ export class WarmPool {
       (session.baselineCpuMillis ?? 0) > poolBaseline.cpuMillis ||
       (session.baselineMemoryMib ?? 0) > poolBaseline.memoryMiB
     ) {
-      metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "miss_limits" });
-      return false;
+      this.count("miss_limits");
+      return "miss_limits";
     }
 
     const pickStarted = this.ctx.now();
@@ -96,8 +132,8 @@ export class WarmPool {
     });
     const warmPickMs = this.ctx.now() - pickStarted;
     if (!warm) {
-      metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "miss_empty" });
-      return false;
+      this.count("miss_empty");
+      return "miss_empty";
     }
 
     const registerStarted = this.ctx.now();
@@ -115,7 +151,8 @@ export class WarmPool {
     } catch (err) {
       log.warn("warm_relay_register_failed", { sessionId: session.id, error: (err as Error).message });
       this.claimed.delete(warm.warmId);
-      return false;
+      this.count("miss_error");
+      return "miss_error";
     }
     this.ctx.store.setRelayToken(session.id, tokenHash);
     const warmRegisterMs = this.ctx.now() - registerStarted;
@@ -144,7 +181,10 @@ export class WarmPool {
       leaseSeconds: session.durationSeconds,
       executionMode: cfg.executionMode,
       runtimeClass: cfg.runtimeClass,
-      imageDigest: cfg.guestImageDigest,
+      // Empty for `base`: the base image has no manifest, and a name would
+      // make the guest refuse the claim at profile load.
+      runtime: runtimeProfileEnv(this.profile),
+      imageDigest: this.profile.digest,
       proxyUrl: `http://${proxy.host}:${proxy.port}`,
       proxyToken: proxyTokenFor(cfg, session.id),
       maxOutputBytes: session.limits.maxOutputBytes,
@@ -163,7 +203,8 @@ export class WarmPool {
       this.claimed.delete(warm.warmId);
       await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
       await this.ctx.relay.purge(warm.poolId).catch(() => undefined);
-      return false;
+      this.count("miss_error");
+      return "miss_error";
     }
 
     const warmClaimCallMs = this.ctx.now() - claimCallStarted;
@@ -181,7 +222,8 @@ export class WarmPool {
       this.claimed.delete(warm.warmId);
       await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
       await this.ctx.relay.purge(session.id).catch(() => undefined);
-      return false;
+      this.count("miss_error");
+      return "miss_error";
     }
 
     if (!this.ctx.store.setProvisioning(session.id, warm.name)) {
@@ -189,7 +231,8 @@ export class WarmPool {
       this.claimed.delete(warm.warmId);
       await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
       await this.ctx.relay.purge(session.id).catch(() => undefined);
-      return false;
+      this.count("miss_error");
+      return "miss_error";
     }
 
     if (warm.nodeName) {
@@ -213,13 +256,20 @@ export class WarmPool {
     this.claimed.delete(warm.warmId);
     // The pooled identity is dead the moment the guest reconnects.
     await this.ctx.relay.purge(warm.poolId).catch(() => undefined);
-    metrics.counter("sandbox_warm_pool_total", "Warm pool claim outcomes").inc({ result: "hit" });
+    this.count("hit");
     log.info("sandbox_warm_claimed", {
       sessionId: session.id,
       warmId: warm.warmId,
       podName: warm.name,
+      runtime: this.profile.name,
     });
-    return true;
+    return "hit";
+  }
+
+  private count(result: string): void {
+    metrics
+      .counter("sandbox_warm_pool_total", "Warm pool claim outcomes")
+      .inc({ result, profile: this.profile.name });
   }
 
   /** Run one pick+reserve at a time; claims are short and in-process only. */
@@ -256,9 +306,11 @@ export class WarmPool {
       if (!pod.warmId || this.claimed.has(pod.warmId)) continue;
       if (pod.phase !== "Running" && pod.phase !== "Pending") continue;
       if (pod.createdAt > 0 && now - pod.createdAt > this.ctx.cfg.warmPoolTtlMs) continue;
-      // A pod from an older image/config must never be claimed: the guest would
-      // run stale code and could attest the claim's digest instead of its own.
-      if (pod.identity !== identity || pod.imageDigest !== this.ctx.cfg.guestImageDigest) continue;
+      // A pod from another profile, an older image or an older config must
+      // never be claimed: the guest would run stale code, a different runtime,
+      // or attest the claim's digest instead of its own.
+      if (pod.runtime !== this.profile.name) continue;
+      if (pod.identity !== identity || pod.imageDigest !== this.profile.digest) continue;
       try {
         const state = await this.ctx.relay.state(pod.poolId);
         // `attestation` here is the *pool* hello, not customer evidence. The
@@ -272,36 +324,47 @@ export class WarmPool {
     return null;
   }
 
-  /** Keep the pool topped up and recycle stale, dead or unrecoverable pods. */
-  async reconcile(): Promise<void> {
+  /**
+   * Recycle stale, dead or unrecoverable pods for this profile, trim to
+   * `target`, and create up to `maxCreate` replacements.
+   *
+   * `pods` is the pass-wide warm pod snapshot, so a manager running several
+   * profiles does not list the namespace once per profile.
+   *
+   * Returns the unspent create budget.
+   */
+  async reconcile(
+    pods: readonly WarmPodInfo[],
+    opts: {
+      target: number;
+      maxCreate: number;
+      relayAddr?: { host: string; port: number };
+      proxyAddr?: { host: string; port: number };
+    },
+  ): Promise<number> {
     const cfg = this.ctx.cfg;
-    let pods: WarmPodInfo[];
-    try {
-      pods = await this.ctx.provisioner.listWarmPods();
-    } catch {
-      return;
-    }
-    if (pods.length === 0 && cfg.warmPoolSize === 0) return;
-
     const now = this.ctx.now();
     const identity = this.identity();
-    let live = 0;
+    let claimedLive = 0;
+    const idle: WarmPodInfo[] = [];
     for (const pod of pods) {
       if (!pod.warmId) continue;
+      if (pod.runtime !== this.profile.name) continue;
       if (this.claimed.has(pod.warmId)) {
-        live++;
+        claimedLive++;
         continue;
       }
       const staleIdentity =
-        pod.identity !== identity || pod.imageDigest !== cfg.guestImageDigest;
+        pod.identity !== identity || pod.imageDigest !== this.profile.digest;
       const dead = pod.phase === "Failed" || pod.phase === "Succeeded";
       const tooOld = pod.createdAt > 0 && now - pod.createdAt > cfg.warmPoolTtlMs;
-      const scaleDown = cfg.warmPoolSize === 0;
+      const scaleDown = opts.target <= 0;
       if (staleIdentity || dead || tooOld || scaleDown) {
         await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
         await this.ctx.relay.purge(pod.poolId).catch(() => undefined);
         log.info("warm_pod_recycled", {
           podName: pod.name,
+          runtime: this.profile.name,
           reason: staleIdentity ? "identity" : scaleDown ? "scale_down" : dead ? "dead" : "ttl",
         });
         continue;
@@ -311,32 +374,60 @@ export class WarmPool {
       const state = await this.ctx.relay.state(pod.poolId).catch(() => null);
       if (state && !state.registered && pod.createdAt > 0 && now - pod.createdAt > 30_000) {
         await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
-        log.info("warm_pod_recycled", { podName: pod.name, reason: "unregistered" });
+        log.info("warm_pod_recycled", {
+          podName: pod.name,
+          runtime: this.profile.name,
+          reason: "unregistered",
+        });
         continue;
       }
-      live++;
+      idle.push(pod);
     }
 
-    metrics.gauge("sandbox_warm_pool_pods", "Warm pool pods (live)").set({}, live);
-    if (cfg.warmPoolSize === 0) return;
+    // Trim oversupply. These pods are idle by definition, so the whole excess
+    // can go in one pass; replenishment is what needs to stay slow. Oldest
+    // first: they are closest to the TTL and the least useful to keep.
+    const excess = Math.max(0, claimedLive + idle.length - Math.max(0, opts.target));
+    const victims = [...idle]
+      .sort((a, b) => a.createdAt - b.createdAt || (a.warmId < b.warmId ? -1 : 1))
+      .slice(0, excess);
+    for (const pod of victims) {
+      await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
+      await this.ctx.relay.purge(pod.poolId).catch(() => undefined);
+      log.info("warm_pod_recycled", {
+        podName: pod.name,
+        runtime: this.profile.name,
+        reason: "surplus",
+      });
+    }
 
-    const missing = Math.max(0, cfg.warmPoolSize - live);
-    if (missing === 0) return;
+    const live = claimedLive + idle.length - victims.length;
+    metrics
+      .gauge("sandbox_warm_pool_pods", "Warm pool pods (live)")
+      .set({ profile: this.profile.name }, live);
 
-    const relayAddr = await this.ctx.serviceAddress(cfg.relayServiceName);
-    const proxyAddr = await this.ctx.serviceAddress(cfg.proxyServiceName);
-    if (!relayAddr || !proxyAddr) return;
-    // Bounded per pass so a large pool does not burst the kubelet. Capacity is
-    // checked against actual warm pods; replenishment is intentionally slow so
-    // the next housekeeping pass observes the pod we just created.
-    for (let i = 0; i < Math.min(missing, 2); i++) {
+    if (opts.target <= 0 || !opts.relayAddr || !opts.proxyAddr) return opts.maxCreate;
+
+    let budget = opts.maxCreate;
+    const missing = Math.max(0, opts.target - live);
+    // `budget` shrinks below, so freeze the count the loop is allowed to run:
+    // re-reading it in the condition would stop after the first create.
+    const creates = Math.min(missing, budget);
+    for (let i = 0; i < creates; i++) {
+      // Bounded so a large pool does not burst the kubelet. The next
+      // housekeeping pass observes the pod we just created.
       const decision = await this.ctx.capacity.preflight({ limits: this.limits() });
       if (!decision.admitted) {
-        log.info("warm_pool_capacity_rejected", { reason: decision.reason });
+        log.info("warm_pool_capacity_rejected", {
+          runtime: this.profile.name,
+          reason: decision.reason,
+        });
         break;
       }
-      await this.create(relayAddr, proxyAddr);
+      await this.create(opts.relayAddr, opts.proxyAddr);
+      budget--;
     }
+    return budget;
   }
 
   private async create(
@@ -387,18 +478,26 @@ export class WarmPool {
         relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(poolId)}`,
         proxyUrl: `http://${proxy.host}:${proxy.port}`,
         proxyToken: proxyTokenFor(cfg, poolId),
-        image: cfg.guestImageRef,
-        imageDigest: cfg.guestImageDigest,
+        image: this.profile.imageRef,
+        imageDigest: this.profile.digest,
+        runtime: this.profile.name,
+        runtimeProfile: runtimeProfileEnv(this.profile),
         identity: this.identity(),
         runtimeClass: cfg.runtimeClass,
         executionMode: cfg.executionMode,
         workspaceDir: cfg.workspaceDir,
         tools: GUEST_TOOLS.join(","),
       });
-      metrics.counter("sandbox_warm_pool_created_total", "Warm pods created").inc();
+      metrics
+        .counter("sandbox_warm_pool_created_total", "Warm pods created")
+        .inc({ profile: this.profile.name });
     } catch (err) {
       await this.ctx.relay.purge(poolId).catch(() => undefined);
-      log.warn("warm_pod_create_failed", { warmId, error: (err as Error).message });
+      log.warn("warm_pod_create_failed", {
+        warmId,
+        runtime: this.profile.name,
+        error: (err as Error).message,
+      });
     }
   }
 }

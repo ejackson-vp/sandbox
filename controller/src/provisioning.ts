@@ -19,6 +19,7 @@ import {
   type RelayStateSnapshot,
 } from "@x402s/shared/protocol";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
+import { sessionRuntime } from "./config.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { EffectStore, ProvisioningStore } from "./store/ports.js";
 
@@ -27,7 +28,7 @@ type ProvisioningContext = Omit<ReconcilerContext, "store"> & {
 };
 import type { SessionRecord } from "./store/models.js";
 import { snapshotOf } from "./session-snapshot.js";
-import type { WarmPool } from "./warm-pool.js";
+import type { WarmPoolManager } from "./warm-pool-manager.js";
 import { createPath, effectContext, executeEffects, isOk } from "./effects.js";
 import type { CreatePath, StartPodRequest } from "./effects.js";
 import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
@@ -60,7 +61,7 @@ export class Provisioning implements CreatePath {
 
   constructor(
     private readonly ctx: ProvisioningContext,
-    private readonly warm: WarmPool,
+    private readonly warm: WarmPoolManager,
   ) {
     this.endpoints = new DataPlaneEndpoints(ctx);
     this.admission = new ProvisioningAdmission(ctx);
@@ -127,10 +128,16 @@ export class Provisioning implements CreatePath {
   }
 
   private async provisionWithSlot(session: SessionRecord): Promise<void> {
-    // Admission, in front of the transition: a paid session whose relay, slot,
-    // reservation or shard endpoint is not ready must stay PAID so the next
-    // pass can retry. None of these is an effect, so none of them can leave the
-    // row half-moved.
+    // Admission, in front of the transition: a paid session whose profile,
+    // relay, slot, reservation or shard endpoint is not ready must stay PAID
+    // so the next pass can retry. None of these is an effect, so none of them
+    // can leave the row half-moved.
+    //
+    // The runtime profile comes first: a session that asks for a profile this
+    // controller does not run can never be provisioned, so it is terminated
+    // before it reserves compute or a provisioning slot.
+    const profile = this.admission.runtimeProfile(session);
+    if (!profile) return;
     if (!(await this.admission.relayReady(session))) return;
     const reservation = await this.admission.reserve(session);
     if (!reservation) return;
@@ -259,6 +266,7 @@ export class Provisioning implements CreatePath {
       sessionId: session.id,
       podName,
       runtimeClass: this.ctx.cfg.runtimeClass,
+      runtime: sessionRuntime(session),
       tier: session.tier,
       leaseSeconds: session.durationSeconds,
       suspendable: Boolean(session.idlePolicyJson),

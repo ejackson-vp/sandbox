@@ -100,7 +100,9 @@ export class CapacityService {
     metrics.gauge("sandbox_capacity_available_memory_bytes", "Available memory bytes").set({}, available.memoryBytes);
   }
 
-  async preflight(spec: { limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } }): Promise<AdmissionDecision> {
+  async preflight(spec: { runtime?: string; limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } }): Promise<AdmissionDecision> {
+    const unavailable = this.runtimeUnavailable(spec);
+    if (unavailable) return unavailable;
     const started = Date.now();
     const snapshot = await this.builder.snapshotWithWarm();
     const decision = admitCapacity(snapshot, requestForLimits(spec.limits, spec.baseline));
@@ -112,8 +114,10 @@ export class CapacityService {
   async hold(
     paymentKey: string,
     specHash: string,
-    spec: { limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } },
+    spec: { runtime?: string; limits: { cpuMillis: number; memoryMiB: number; diskMiB: number }; baseline?: { cpuMillis: number; memoryMiB: number } },
   ): Promise<ReservationAdmission> {
+    const unavailable = this.runtimeUnavailable(spec);
+    if (unavailable) return unavailable;
     const started = Date.now();
     const snapshot = await this.builder.snapshotWithWarm();
     const admission = this.reservations.admit(
@@ -124,6 +128,24 @@ export class CapacityService {
     this.observe(admission, Date.now() - started);
     this.publishGauges(snapshot);
     return admission;
+  }
+
+  /**
+   * A known profile is only runnable when the controller has an image for it.
+   * Reject it before a settlement hold is created, not after payment.
+   */
+  private runtimeUnavailable(spec: {
+    runtime?: string;
+    limits: { cpuMillis: number; memoryMiB: number; diskMiB: number };
+  }): Extract<AdmissionDecision, { admitted: false }> | null {
+    const runtime = spec.runtime ?? "base";
+    if (this.deps.cfg.runtimeProfiles[runtime]) return null;
+    return {
+      admitted: false,
+      reason: "runtime_profile_unavailable",
+      retryable: false,
+      requested: requestForLimits(spec.limits, undefined).peak,
+    };
   }
 
   async attach(

@@ -75,6 +75,7 @@ type Claim struct {
 	LeaseSeconds      int64  `json:"leaseSeconds"`
 	ExecutionMode     string `json:"executionMode"`
 	RuntimeClass      string `json:"runtimeClass"`
+	Runtime           string `json:"runtime,omitempty"`
 	ImageDigest       string `json:"imageDigest"`
 	ProxyURL          string `json:"proxyUrl"`
 	ProxyToken        string `json:"proxyToken"`

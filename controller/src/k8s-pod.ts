@@ -9,6 +9,8 @@ export type PodEnvSpec = {
   executionMode: string;
   image: string;
   imageDigest: string;
+  /** Empty or absent selects the base image's built-in environment. */
+  runtimeProfile?: string;
   runtimeClass: string;
   proxyUrl: string;
   workspaceDir: string;
@@ -39,6 +41,9 @@ export function guestEnvFor(
     { name: "EXECUTION_MODE", value: spec.executionMode },
     { name: "GUEST_IMAGE_REF", value: spec.image },
     { name: "GUEST_IMAGE_DIGEST", value: spec.imageDigest },
+    // Omitted for the base profile: the base image has no `/runtimes/<name>`
+    // manifest, and a non-empty name would make the guest refuse to boot.
+    ...(spec.runtimeProfile ? [{ name: "RUNTIME_PROFILE", value: spec.runtimeProfile }] : []),
     { name: "RUNTIME_CLASS", value: spec.runtimeClass },
     { name: "EGRESS_PROXY_URL", value: spec.proxyUrl },
     { name: "WORKSPACE_DIR", value: spec.workspaceDir },

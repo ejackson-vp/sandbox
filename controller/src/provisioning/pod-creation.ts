@@ -12,8 +12,14 @@
  * does the effect that starts the pod.
  */
 import { log } from "@x402s/shared/runtime";
-import { proxyTokenFor } from "../config.js";
-import type { ControllerConfig } from "../config.js";
+import {
+  proxyTokenFor,
+  resolveRuntimeProfile,
+  runtimeProfileEnv,
+  sessionRuntime,
+  type ControllerConfig,
+  type RuntimeProfile,
+} from "../config.js";
 import type { CapacityService } from "../capacity/service.js";
 import type { Provisioner } from "../k8s.js";
 import type { RelayClient } from "../relay-client.js";
@@ -46,6 +52,27 @@ export class PodCreation {
   private readonly relayGeneration = new Map<string, string>();
 
   constructor(private readonly ctx: PodCreationRuntime) {}
+
+  /**
+   * The image this session's pod must run.
+   *
+   * Read from the catalog on every create rather than carried in an argument,
+   * so a replacement pod is built for the same profile as the original: the
+   * session's `runtime` is immutable, and admission has already rejected an
+   * unknown name before any pod exists.
+   */
+  private profileFor(session: SessionRecord): RuntimeProfile {
+    const requested = sessionRuntime(session);
+    const profile = resolveRuntimeProfile(this.ctx.cfg.runtimeProfiles, requested);
+    if (!profile) {
+      // Admission terminates an unknown profile; reaching here means a caller
+      // bypassed it. Refuse rather than boot the base image.
+      throw new Error(
+        `runtime profile ${requested.slice(0, 64)} is not configured on this controller`,
+      );
+    }
+    return profile;
+  }
 
   /** The relay generation that accepted this session's pod, if one is recorded. */
   generationFor(sessionId: string): string | undefined {
@@ -183,6 +210,11 @@ export class PodCreation {
       provisionStartAt: Date.now(),
       podRequestedAt: Date.now(),
     });
+    // The image is part of the boot identity, so resolve it before any work
+    // that could leave a half-registered credential behind.
+    const profile = this.profileFor(session);
+    // Empty for `base`: its image carries no profile manifest.
+    const runtimeProfile = runtimeProfileEnv(profile);
     const registration = opts.registration ?? (await this.registerRelay(session));
     const { guestToken } = registration;
 
@@ -208,8 +240,9 @@ export class PodCreation {
       relayPort: relay.port,
       proxyUrl: `http://${proxy.host}:${proxy.port}`,
       proxyToken: proxyTokenFor(this.ctx.cfg, session.id),
-      image: this.ctx.cfg.guestImageRef,
-      imageDigest: this.ctx.cfg.guestImageDigest,
+      image: profile.imageRef,
+      imageDigest: profile.digest,
+      ...(runtimeProfile ? { runtimeProfile } : {}),
       runtimeClass: this.ctx.cfg.runtimeClass,
       executionMode: this.ctx.cfg.executionMode,
       workspaceDir: this.ctx.cfg.workspaceDir,

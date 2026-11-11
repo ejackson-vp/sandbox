@@ -15,11 +15,11 @@ import {
 } from "@x402s/shared/crypto";
 import {
   PAYMENT_VERSION,
-  formatUsd,
   paymentKey,
   resolveSessionSpec,
   specHash,
 } from "@x402s/shared/payment";
+import { formatUsd } from "@x402s/shared/money";
 import type {
   CreateSessionResponse,
   CreateSessionRequest,
@@ -341,6 +341,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
           tier: spec.tier,
           durationSeconds: spec.durationSeconds,
           limits: spec.limits,
+          runtime: spec.runtime,
           capabilityExpiresAt: new Date(capabilityExpiresAt).toISOString(),
           clientNonce: body.clientNonce,
           payment: {

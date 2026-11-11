@@ -1,6 +1,7 @@
 /**
  * Session lifecycle vocabulary: states, guards, tiers and resource limits.
  */
+import type { RuntimeName } from "../runtimes.js";
 
 export type SessionState =
   | "CREATED"
@@ -84,6 +85,8 @@ export interface SessionSpec {
   tier: SessionTier;
   durationSeconds: number;
   limits: SessionLimits;
+  /** Guest runtime profile; `base` when the request omitted it. */
+  runtime: RuntimeName;
   /** Steady-state reservation; `limits` is the burst ceiling. */
   baseline?: SessionBaseline;
   /** Present when the session is suspendable. */

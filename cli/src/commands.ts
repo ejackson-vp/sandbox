@@ -16,7 +16,8 @@ import {
 export const HELP = `x402 sandbox sessions
 
 Usage:
-  sandbox create [--tier short|standard|extended|long] [--duration 15m]
+  sandbox create [--tier short|standard|extended|long] [--runtime base|python|node]
+                 [--duration 15m]
                  [--cpu 1] [--memory 1Gi] [--disk 1Gi]
                  [--baseline-cpu 0.25] [--baseline-memory 256Mi]
                  [--idle 5m] [--max-lifetime 8h]
@@ -33,7 +34,7 @@ Usage:
   sandbox stop-service <session-id> <name>
   sandbox http <session-id> <port> <path> [--method GET] [--body text] [--stream]
   sandbox destroy <session-id>
-  sandbox run [create options] [--runtime base] [--file local=remote]
+  sandbox run [create options] [--runtime base|python|node] [--file local=remote]
               [--return remote] -- <command> [args...]
                                 # one-shot: create, upload, exec, download, destroy
   sandbox run <file> [create options]   # legacy: run a local .py/.js/.sh file
@@ -113,6 +114,7 @@ function parseCreateOptions(values: CommandContext["values"]): CreateOptions {
     ...(values["max-lifetime"]
       ? { maxLifetimeSeconds: parseDuration(values["max-lifetime"] as string) }
       : {}),
+    ...(values.runtime === undefined ? {} : { runtime: String(values.runtime) }),
   };
 }
 
@@ -550,7 +552,6 @@ async function runOneShot(ctx: CommandContext): Promise<number> {
 
   const result = await client.run({
     ...parseCreateOptions(values),
-    ...(values.runtime === undefined ? {} : { runtime: String(values.runtime) }),
     command,
     ...(Object.keys(files).length === 0 ? {} : { files }),
     ...(returnFiles.length === 0 ? {} : { returnFiles }),

@@ -22,7 +22,7 @@ import { loadControllerConfig } from "../../controller/src/config.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import { RelayRegistry } from "../../controller/src/relay/registry.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
-import type { WarmPool } from "../../controller/src/warm-pool.js";
+import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 
 const SESSION_ID = "sbx_guest_protocol_0001";
 const NONCE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
@@ -168,7 +168,7 @@ function harness(opts: {
       now: () => Date.now(),
       serviceAddress: vi.fn(async () => null),
     },
-    {} as WarmPool,
+    {} as WarmPoolManager,
   );
   return { provisioning, store };
 }

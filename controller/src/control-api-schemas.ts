@@ -24,6 +24,7 @@ const idlePolicySchema = z.object({
 
 export const specSchema = z.object({
   tier: z.enum(["short", "standard", "extended", "long", "custom"]),
+  runtime: z.enum(["base", "python", "node"]).optional(),
   durationSeconds: z.number().int().min(1).max(MAX_LEASE_SECONDS),
   idlePolicy: idlePolicySchema.optional(),
   maxLifetimeSeconds: z.number().int().min(1).max(28800).optional(),

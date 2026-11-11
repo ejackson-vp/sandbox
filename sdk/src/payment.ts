@@ -13,9 +13,9 @@ import {
   MOCK_NETWORK,
   MockExactClientScheme,
   TESTNET_NETWORK,
-  formatUsd,
   paymentKey,
 } from "@x402s/shared/payment";
+import { formatUsd } from "@x402s/shared/money";
 import type { CreateSessionRequest } from "@x402s/shared/protocol";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 

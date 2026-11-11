@@ -2,6 +2,7 @@
  * Persistence models and row mappers. Kept independent of SQLite so the
  * controller and tests can share the shapes.
  */
+import { DEFAULT_RUNTIME, type RuntimeName } from "@x402s/shared/runtimes";
 import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared/protocol";
 
 export type { SessionState };
@@ -45,6 +46,12 @@ export interface SessionRecord {
   podName: string | null;
   runtimeClass: string | null;
   executionMode: string | null;
+  /**
+   * Guest runtime profile. Always present on rows written by v12 or later;
+   * optional so a hand-built record (or a caller from an older build) is
+   * treated as the historical default.
+   */
+  runtime?: RuntimeName;
   relayTokenHash: string | null;
   activeRequestId: string | null;
   /** Monotonic fence bumped when restart recovery abandons an operation. */
@@ -164,7 +171,7 @@ export const SESSION_COLUMNS = `
   state, created_at, paid_at, ready_at, lease_expires_at, terminating_at,
   destroyed_at, termination_reason, failure_code, failure_message,
   attestation_json, guest_public_key, payment_key, pod_name, runtime_class,
-  execution_mode, relay_token_hash, active_request_id, exec_epoch, relay_purged_at,
+  execution_mode, runtime, relay_token_hash, active_request_id, exec_epoch, relay_purged_at,
   destroy_requested, timings_json, idle_policy_json, max_lifetime_seconds,
   suspended_at, resume_count, last_activity_at, workspace_pvc,
   baseline_cpu_millis, baseline_memory_mib, node_name, updated_at
@@ -202,6 +209,7 @@ export interface RawSession {
   pod_name: string | null;
   runtime_class: string | null;
   execution_mode: string | null;
+  runtime: string | null;
   relay_token_hash: string | null;
   active_request_id: string | null;
   exec_epoch: number;
@@ -255,6 +263,7 @@ export function mapSession(r: RawSession): SessionRecord {
     podName: r.pod_name,
     runtimeClass: r.runtime_class,
     executionMode: r.execution_mode,
+    runtime: (r.runtime as RuntimeName | null) ?? DEFAULT_RUNTIME,
     relayTokenHash: r.relay_token_hash,
     activeRequestId: r.active_request_id,
     execEpoch: r.exec_epoch,

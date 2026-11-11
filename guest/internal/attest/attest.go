@@ -24,6 +24,8 @@ type Config struct {
 	GuestPublicKey  string
 	ExecutionMode   string // dev | kata | confidential
 	RuntimeClass    string
+	RuntimeProfile  string
+	RuntimeVersion  string
 	ImageDigest     string
 	DevKeyID        string
 	DevKeySeedB64   string
@@ -93,15 +95,7 @@ func BuildEvidence(cfg Config) (map[string]any, error) {
 		"issuedAt":        now.UnixMilli(),
 		"expiresAt":       now.Add(time.Duration(cfg.LeaseSeconds)*time.Second + 300*time.Second).UnixMilli(),
 		"report":          "",
-		"claims": map[string]any{
-			"guestMeasurement":    measurement,
-			"imageDigest":         cfg.ImageDigest,
-			"runtimeClass":        cfg.RuntimeClass,
-			"kernelRelease":       KernelRelease(),
-			"hardwareBacked":      false,
-			"guestPolicyEnforced": false,
-			"tools":               cfg.Tools,
-		},
+		"claims":          claimsFor(cfg, measurement),
 	}
 
 	priv, keyID, err := devKey(cfg)
@@ -119,6 +113,25 @@ func BuildEvidence(cfg Config) (map[string]any, error) {
 		"value": base64.StdEncoding.EncodeToString(sig),
 	}
 	return env, nil
+}
+
+func claimsFor(cfg Config, measurement string) map[string]any {
+	claims := map[string]any{
+		"guestMeasurement":    measurement,
+		"imageDigest":         cfg.ImageDigest,
+		"runtimeClass":        cfg.RuntimeClass,
+		"kernelRelease":       KernelRelease(),
+		"hardwareBacked":      false,
+		"guestPolicyEnforced": false,
+		"tools":               cfg.Tools,
+	}
+	if cfg.RuntimeProfile != "" {
+		claims["runtime"] = map[string]any{
+			"name":    cfg.RuntimeProfile,
+			"version": cfg.RuntimeVersion,
+		}
+	}
+	return claims
 }
 
 // devKey loads the Ed25519 seed from the environment. The seed is injected by

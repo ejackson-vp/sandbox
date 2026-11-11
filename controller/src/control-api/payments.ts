@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { canonicalJson } from "@x402s/shared/crypto";
 import { resolveSessionSpec, specHash as computeSpecHash } from "@x402s/shared/payment";
 import type { PaymentIntentStatus, SessionSpec, SessionState } from "@x402s/shared/protocol";
+import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { log, metrics } from "@x402s/shared/runtime";
 import { PaymentAlreadyRedeemedError, PaymentClaimLostError, type LedgerStatus } from "../store/models.js";
 import { completeSchema, intentClaimSchema } from "../control-api-schemas.js";
@@ -108,6 +109,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     const resolution = resolveSessionSpec(
       {
         tier: body.spec.tier,
+        runtime: body.spec.runtime,
         durationSeconds: body.spec.durationSeconds,
         cpuMillis: body.spec.limits.cpuMillis,
         memoryMiB: body.spec.limits.memoryMiB,
@@ -132,7 +134,9 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       res.status(400).json({ error: resolution.code, message: resolution.message });
       return;
     }
-    const spec: SessionSpec = body.spec;
+    // Normalise an older API that did not send `runtime`: the spec and its hash
+    // must describe the same base session the API priced.
+    const spec: SessionSpec = { ...body.spec, runtime: body.spec.runtime ?? DEFAULT_RUNTIME };
     if (canonicalJson(resolution.spec) !== canonicalJson(spec)) {
       res.status(400).json({ error: "spec_not_allowed", message: "requested limits are not permitted" });
       return;
@@ -196,6 +200,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
           podName: null,
           runtimeClass: cfg.runtimeClass,
           executionMode: cfg.executionMode,
+          runtime: spec.runtime,
           relayTokenHash: null,
           activeRequestId: null,
           execEpoch: 1,

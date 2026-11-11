@@ -30,7 +30,7 @@ resources:
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: 0.1.22
+    newTag: 0.1.24
   # 0.1.9 adds the mTLS controller listener and the inlined release gate. (npm removed from the
   # runtime, Go 1.27.3 + x/crypto 0.58.0 in the guest).
 
@@ -42,13 +42,21 @@ patches:
     patch: |-
       - op: replace
         path: /data/GUEST_IMAGE
-        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.21
-      # Index digest from the v0.1.21 release. The controller pulls
+        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.24
+      # Index digest from the v0.1.24 release. The controller pulls
       # `repo@sha256:…` whenever a digest is set (dev mode or not), so a moved
       # tag cannot change what runs inside the sandbox.
       - op: replace
         path: /data/GUEST_IMAGE_DIGEST
-        value: sha256:50088fc243e0e5eabaef6fbddfb295f1f896f29987a0fd850f15cbd4421ee145
+        value: sha256:915aa25799d74ca7505c664aee5d461fcc9b8f03f105cd88c4c10966a2761f33
+      # Keep most of the warm budget on the default profile. Other profiles
+      # start at zero and grow from observed misses into the remaining slots.
+      - op: add
+        path: /data/WARM_POOL_BASE_MIN
+        value: "16"
+      - op: add
+        path: /data/RUNTIME_PROFILES
+        value: '{"python":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:62487a7bda310bcf3b5992c4b02d74befbf8d2118cbfb36b2ad0da16fac2528e"},"node":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:c28d2e0338abf9bdf1742a2623b1f0be772dd9e050debd9894f17a0c10000007"}}'
       - op: replace
         path: /data/PUBLIC_BASE_URL
         value: https://sandbox.example.ts.net

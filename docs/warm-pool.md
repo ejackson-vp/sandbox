@@ -6,11 +6,13 @@ Status: **implemented and measured on the local kind rig.** Not enabled by
 default.
 
 > **Position:** this pool is a development stand-in for snapshot restore, not a
-> scaling strategy. It is deliberately simpler than FES: fixed size, claim-once,
-> no reuse, no autoscaler, no Redis pool state. Do not add warm-VM reuse or
-> autoscaling. On a KVM host the fast path should be a Firecracker snapshot
-> restore per session; at that point this module should be deleted, not
-> extended.
+> scaling strategy. It is deliberately simpler than FES: claim-once, no reuse, no
+> Redis pool state, and no predictive autoscaler. Sizing is elastic only within a
+> fixed total budget, driven by observed misses and one profile at a time; that is
+> demand accounting, not capacity planning. Do not add warm-VM reuse, host-side
+> runtime caches, or a predictor. On a KVM host the fast path should be a
+> Firecracker snapshot restore per session; at that point this module should be
+> deleted, not extended.
 
 ## Why
 
@@ -52,15 +54,49 @@ the claim; the pool connection is discarded.
 
 | Env | Default | Meaning |
 |---|---|---|
-| `WARM_POOL_SIZE` | `0` | Number of idle pods to keep. `0` disables the pool. |
+| `WARM_POOL_SIZE` | `0` | Total idle pods across all profiles. `0` disables the pool. |
+| `WARM_POOL_BASE_MIN` | `WARM_POOL_SIZE` | Idle `base` pods reserved inside that total. |
+| `WARM_POOL_GROWTH_STEP` | `1` | Pods added to a profile after a claim miss. |
+| `WARM_POOL_COOLDOWN_MS` | `15000` | Minimum gap between two growths of one profile. |
+| `WARM_POOL_IDLE_DRAIN_MS` | `60000` | How long a profile must be unused before its extra pods may be drained. |
+| `WARM_POOL_DEMAND_WINDOW_MS` | `120000` | Window over which a claim miss counts as demand. |
 | `WARM_POOL_TIER` | `short` | Tier whose cgroup/disk limits size the pods. |
 | `WARM_POOL_TTL_MS` | `300000` | Maximum age of an idle pod before recycling. |
 | `WARM_CLAIM_TIMEOUT_MS` | `8000` | If a claimed pod does not attach, fail the session. |
+| `RUNTIME_PROFILES` | unset | JSON catalog of selectable profiles, see below. |
 
 A session may claim a warm pod only if its `cpuMillis`, `memoryMiB`, and
 `diskMiB` are **at or below** the pool tier. Output/file/command/process limits
 are re-sent in the claim and enforced by the guest. Sessions that do not fit
 (custom large tiers, or an empty pool) take the normal cold path.
+
+## Runtime profiles
+
+Each selectable runtime is a separate image, so each gets its own pool. `base`
+is the default and is always the guest image from `GUEST_IMAGE` and
+`GUEST_IMAGE_DIGEST`; it cannot be redefined. Additional profiles are declared
+as one JSON object:
+
+```sh
+RUNTIME_PROFILES='{"python":{"image":"ghcr.io/x402s/sandbox-guest:0.1.23-python","digest":"sha256:…"},"node":{"image":"ghcr.io/x402s/sandbox-guest:0.1.23-node","digest":"sha256:…"}}'
+```
+
+Names must match `[a-z][a-z0-9-]{0,31}`, `image` must not embed a digest, and
+`digest` follows the same rule as `GUEST_IMAGE_DIGEST`: pinned `sha256:<64 hex>`
+whenever `ALLOW_INSECURE_DEV` is false or Kubernetes provisioning is on, with the
+dev placeholder allowed only for the local process provisioner.
+
+Pools share one budget. `base` holds `WARM_POOL_BASE_MIN`; every other profile
+starts at zero and grows only after a claim misses it, one growth per
+`WARM_POOL_COOLDOWN_MS`. When the budget is full the manager drains an idle
+profile before refusing the growth, and never drains a profile that is serving
+claims. Idle extra capacity is handed back one pod per pass after
+`WARM_POOL_IDLE_DRAIN_MS`.
+
+A session whose profile this controller does not run is terminated with
+`runtime_profile_unavailable` instead of being booted on `base`. A warm pod is
+claimable only by a session with the same profile and the same identity hash, so
+a stale or foreign pod is a miss, never a claim.
 
 A warm guest announces itself before it has a session, so its evidence is bound
 at claim time rather than at boot. That is acceptable here because the evidence

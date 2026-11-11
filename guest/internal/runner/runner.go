@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,9 +24,20 @@ type Options struct {
 	ProxyToken string
 	MaxOutput  int
 	MaxCommand time.Duration
+	// ProfileEnv is the trusted environment from the selected runtime profile.
+	// It is applied before request overrides so a customer can still set their
+	// own values for a command.
+	ProfileEnv map[string]string
 }
 
 var envKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+
+var blockedEnv = map[string]struct{}{
+	"LD_PRELOAD":   {},
+	"LD_AUDIT":     {},
+	"GCONV_PATH":   {},
+	"MALLOC_TRACE": {},
+}
 
 // LimitedBuffer keeps the first N bytes and records truncation.
 type LimitedBuffer struct {
@@ -116,9 +128,19 @@ func Execute(ctx context.Context, opts Options, req *protocol.Request, cwd strin
 		timeout = opts.MaxCommand
 	}
 
+	env := buildEnv(opts, req.Env)
+	path, err := resolveCommand(req.Command[0], env)
+	if err != nil {
+		return protocol.ErrorResult(req, "spawn_failed", err.Error())
+	}
+	// This is a sandbox command executor: the customer command is the
+	// product input. The path is resolved only against the selected profile's
+	// PATH and is executed inside the microVM.
 	cmd := exec.Command(req.Command[0], req.Command[1:]...)
+	cmd.Path = path
+	cmd.Err = nil
 	cmd.Dir = cwd
-	cmd.Env = buildEnv(opts, req.Env)
+	cmd.Env = env
 	if req.Stdin != "" {
 		cmd.Stdin = strings.NewReader(req.Stdin)
 	}
@@ -170,6 +192,41 @@ func Execute(ctx context.Context, opts Options, req *protocol.Request, cwd strin
 	result.Truncated.Stdout = stdout.Truncated()
 	result.Truncated.Stderr = stderr.Truncated()
 	return result
+}
+
+// resolveCommand applies the child PATH, not the supervisor's. Go's
+// exec.Command/LookPath resolves the executable against the supervisor's
+// environment, so a profile PATH would be ignored and every language binary
+// would look missing.
+func resolveCommand(name string, env []string) (string, error) {
+	if strings.ContainsRune(name, os.PathSeparator) {
+		if executable(name) {
+			return name, nil
+		}
+		return "", fmt.Errorf("could not start %q: executable file not found", name)
+	}
+	pathValue := ""
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "PATH=") {
+			pathValue = strings.TrimPrefix(entry, "PATH=")
+			break
+		}
+	}
+	for _, dir := range filepath.SplitList(pathValue) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, name)
+		if executable(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("could not start %q: executable file not found in $PATH", name)
+}
+
+func executable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }
 
 func killGroup(pgid int) {
@@ -225,12 +282,23 @@ func buildEnv(opts Options, overrides map[string]string) []string {
 			"no_proxy=",
 		)
 	}
+	base = applyEnv(base, opts.ProfileEnv)
+	return applyEnv(base, overrides)
+}
+
+func applyEnv(base []string, values map[string]string) []string {
+	if len(values) == 0 {
+		return base
+	}
 	index := map[string]int{}
 	for i, kv := range base {
 		index[strings.SplitN(kv, "=", 2)[0]] = i
 	}
-	for k, v := range overrides {
+	for k, v := range values {
 		if !envKey.MatchString(k) {
+			continue
+		}
+		if _, blocked := blockedEnv[k]; blocked {
 			continue
 		}
 		if strings.ContainsRune(v, 0) || len(v) > 8192 {

@@ -66,7 +66,7 @@ const limits: SessionLimits = {
   maxProcesses: 256,
 };
 
-const spec: SessionSpec = { tier: "standard", durationSeconds: 300, limits };
+const spec: SessionSpec = { tier: "standard", durationSeconds: 300, limits, runtime: "base" };
 
 function sessionRecord(id: string, key: string): SessionRecord {
   const now = Date.now();

@@ -157,8 +157,9 @@ const result = await client.exec(session, { command: ["python3", "--version"] })
 await client.destroy(session);
 
 // One-shot: fresh session, upload, exec, collect, destroy (files are
-// workspace-relative). Only the "base" runtime is available today.
+// workspace-relative). `runtime` is base | python | node, default base.
 const run = await client.run({
+  runtime: "base",
   command: ["bash", "-c", "python3 main.py > out.txt"],
   files: { "main.py": "print('hello')" },
   returnFiles: ["out.txt"],

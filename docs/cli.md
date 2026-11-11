@@ -73,8 +73,8 @@ sandbox run --runtime base --timeout 30s --return out.txt -- bash -c 'echo hi > 
 
 # One-shot file paths are workspace-relative (/workspace is implied). --return
 # writes the downloaded file to the same relative path in the current directory.
-# Only the "base" runtime exists today; anything else fails with
-# unsupported_runtime before a session is created.
+# Supported runtimes are base, python and node. An unknown name fails with
+# unsupported_runtime before a session is created; the server rejects it too.
 
 sandbox pricing
 ```
@@ -119,7 +119,7 @@ always destroy it:
 
 ```ts
 const result = await client.run({
-  runtime: "base",                       // optional; currently the only runtime
+  runtime: "python",                     // optional: base | python | node (default base)
   command: ["bash", "-c", "python3 app.py > out.txt"],
   files: { "app.py": "print('hello')" }, // workspace-relative keys
   returnFiles: ["out.txt"],              // workspace-relative paths
