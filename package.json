@@ -26,6 +26,7 @@
     "test:property": "vitest run tests/property",
     "test:coverage": "vitest run tests/unit tests/property tests/integration --coverage",
     "lint:structure": "node scripts/check-structure.mjs",
+    "coupling": "node scripts/coupling.mjs",
     "bench:ceiling": "tsx scripts/bench-reconcile-ceiling.ts"
   },
   "devDependencies": {

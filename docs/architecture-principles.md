@@ -112,7 +112,8 @@ Completed slices:
   `npm run lint:structure` asserts the layer direction (pure → crypto → payment
   → runtime, and runtime never reaches crypto), that every module is reachable
   from an entry, that no symbol is reachable from two entries, and that no root
-  barrel has grown back.
+  barrel has grown back. `npm run coupling` reports Ca, Ce, instability and
+  distance from the main sequence, plus cycles, so the numbers are reproducible.
 - Guest split into entrypoint, config, supervisor and log modules.
 - Explicit `SUSPENDING`/`RESUMING` states with idempotent crash recovery.
 - `Snapshotter` checkpoint port with a no-op local adapter, wired into
