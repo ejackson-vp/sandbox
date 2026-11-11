@@ -494,51 +494,72 @@ jobs:
         run: node scripts/isolation-preflight.mjs release-note
 
       - name: Publish release
+        id: publish
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           generate_release_notes: true
           # Signed provenance for both images. `*.sigstore.json` is the bundle
           # to verify; `*.intoto.jsonl` is the statement it carries.
           files: release-assets/*
-          append_body: |
-            ${{ steps.isolation-note.outputs.body }}
 
-            ## Images
+      # `append_body` is dropped when the body comes from
+      # `generate_release_notes`, so v0.1.26 shipped without the isolation
+      # notice or the image section. Both are appended here instead, and the
+      # notice comes from the same script that decided the gate.
+      - name: append the isolation notice and the image notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          NOTE: ${{ steps.isolation-note.outputs.body }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
+          : > "$notes"
+          if [ -n "${NOTE:-}" ]; then
+            printf '%s\n\n' "$NOTE" >> "$notes"
+          fi
+          gh release view "$TAG" --repo "$REPO" --json body --jq .body >> "$notes"
+          printf '\n\n' >> "$notes"
+          cat >> "$notes" <<'IMG'
+          ## Images
 
-            Multi-arch (`linux/amd64`, `linux/arm64`), published to GHCR:
+          Multi-arch (`linux/amd64`, `linux/arm64`), published to GHCR:
 
-            - `ghcr.io/${{ github.repository }}-control:${{ github.ref_name }}`
-            - `ghcr.io/${{ github.repository }}-guest:${{ github.ref_name }}`
+          - `ghcr.io/${{ github.repository }}-control:${{ github.ref_name }}`
+          - `ghcr.io/${{ github.repository }}-guest:${{ github.ref_name }}`
 
-            These tags were created only after both images passed the Trivy
-            gate. Each image carries an SBOM and SLSA build provenance as OCI
-            attestations:
+          These tags were created only after both images passed the Trivy
+          gate. Each image carries an SBOM and SLSA build provenance as OCI
+          attestations:
 
-            ```bash
-            docker buildx imagetools inspect ghcr.io/${{ github.repository }}-control:${{ github.ref_name }}
-            ```
+          ```bash
+          docker buildx imagetools inspect ghcr.io/${{ github.repository }}-control:${{ github.ref_name }}
+          ```
 
-            ## Verifying provenance
+          ## Verifying provenance
 
-            The `*.sigstore.json` assets are keyless Sigstore bundles produced by
-            this workflow, covering exactly the digests above. Verify the image
-            itself:
+          The `*.sigstore.json` assets are keyless Sigstore bundles produced by
+          this workflow, covering exactly the digests above. Verify the image
+          itself:
 
-            ```bash
-            gh attestation verify \
-              oci://ghcr.io/${{ github.repository }}-control:${{ github.ref_name }} \
-              --repo ${{ github.repository }}
-            ```
+          ```bash
+          gh attestation verify \
+            oci://ghcr.io/${{ github.repository }}-control:${{ github.ref_name }} \
+            --repo ${{ github.repository }}
+          ```
 
-            Add `--bundle-from-oci` to check the attestation stored in the
-            registry instead of the one on GitHub.
+          Add `--bundle-from-oci` to check the attestation stored in the
+          registry instead of the one on GitHub.
 
-            `*.intoto.jsonl` is the in-toto statement carried inside the bundle,
-            for SLSA tooling that consumes statements rather than bundles.
+          `*.intoto.jsonl` is the in-toto statement carried inside the bundle,
+          for SLSA tooling that consumes statements rather than bundles.
 
-            The guest image is what runs inside the microVM and must match the
-            cluster architecture. CVE results for this tag are in the Security
-            tab (`trivy-control`, `trivy-guest`).
+          The guest image is what runs inside the microVM and must match the
+          cluster architecture. CVE results for this tag are in the Security
+          tab (`trivy-control`, `trivy-guest`).
 
-            Staging images from the build (`staging-<run-id>-<sha>`) are not
-            release artifacts; see `docs/release-process.md` for cleanup.
+          Staging images from the build (`staging-<run-id>-<sha>`) are not
+          release artifacts; see `docs/release-process.md` for cleanup.
+          IMG
+          gh release edit "$TAG" --repo "$REPO" --notes-file "$notes"
