@@ -56,6 +56,11 @@ export interface ControllerConfig {
   relayClientTls?: RelayClientTlsOptions;
   proxyPort: number;
   adminToken: string;
+  /**
+   * Previous admin token, accepted but never presented, for the overlap window
+   * of a rotation. Undefined when no rotation is in progress.
+   */
+  adminTokenPrevious?: string;
   relayAdminToken: string;
   /** Low-privilege token the relay uses to nudge the reconciler. */
   wakeToken: string;
@@ -274,12 +279,17 @@ function parseTls(env: NodeJS.ProcessEnv): Pick<ControllerConfig, "tlsPort" | "t
   return tls;
 }
 
-function parseTokens(env: NodeJS.ProcessEnv, role: Role, adminToken: string): Pick<ControllerConfig, "relayAdminToken" | "wakeToken" | "proxyTokenSecret"> {
+function parseTokens(
+  env: NodeJS.ProcessEnv,
+  role: Role,
+  adminToken: string,
+  adminTokenPrevious?: string,
+): Pick<ControllerConfig, "relayAdminToken" | "wakeToken" | "proxyTokenSecret"> {
   const requireDistinctToken = (name: string, value: string | undefined): string => {
     if (!value || value.length < 16) {
       throw new Error(`${name} must be set (>=16 chars) and must not reuse ADMIN_TOKEN`);
     }
-    if (value === adminToken) {
+    if (value === adminToken || (adminTokenPrevious !== undefined && value === adminTokenPrevious)) {
       throw new Error(`${name} must differ from ADMIN_TOKEN (key separation)`);
     }
     return value;
@@ -311,6 +321,18 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   const adminToken = env.ADMIN_TOKEN ?? "";
   if (["controller", "all"].includes(role) && adminToken.length < 16) {
     throw new Error("ADMIN_TOKEN must be set (>=16 chars) for controller roles");
+  }
+  // Rotation overlap: the new token is presented, the old one is still accepted
+  // until every caller has been switched over. Validated here rather than in
+  // the control API so a bad pair fails at startup, not on the first request.
+  const adminTokenPrevious = env.ADMIN_TOKEN_PREVIOUS ?? "";
+  if (adminTokenPrevious.length > 0) {
+    if (["controller", "all"].includes(role) && adminTokenPrevious.length < 16) {
+      throw new Error("ADMIN_TOKEN_PREVIOUS must be at least 16 characters when set");
+    }
+    if (adminTokenPrevious === adminToken) {
+      throw new Error("ADMIN_TOKEN_PREVIOUS must differ from ADMIN_TOKEN");
+    }
   }
 
   const tiers = loadTiers(env);
@@ -346,7 +368,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   if (!relayClientTls && /^https:/i.test(env.RELAY_URL ?? "")) {
     throw new Error("RELAY_CLIENT_TLS_CERT_FILE/RELAY_CLIENT_TLS_KEY_FILE/RELAY_CLIENT_TLS_CA_FILE are required for an https:// RELAY_URL");
   }
-  const tokens = parseTokens(env, role, adminToken);
+  const tokens = parseTokens(env, role, adminToken, adminTokenPrevious || undefined);
   const backupEnabled = role === "controller" || role === "all";
   const backupDir = backupEnabled ? (env.BACKUP_DIR ?? "") : "";
   const backupKey =
@@ -369,6 +391,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     ...(relayClientTls ? { relayClientTls } : {}),
     proxyPort: int(env.X402_PROXY_PORT ?? env.PROXY_PORT, 3128, 1, 65535),
     adminToken,
+    ...(adminTokenPrevious ? { adminTokenPrevious } : {}),
     ...tokens,
     controllerUrl: env.CONTROLLER_URL ?? "http://127.0.0.1:3001",
     dbPath: env.DB_PATH ?? "/data/controller.db",

@@ -116,6 +116,16 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     return socket.getPeerCertificate().subject?.CN;
   };
 
+  // The current token plus, during a rotation, the previous one. Accepting a
+  // set is what lets the caller switch tokens without a window where one side
+  // of the rollout is rejected; it does not weaken the check, and the previous
+  // token is removed from the deployment as soon as the overlap ends.
+  const adminTokens = [cfg.adminToken, cfg.adminTokenPrevious].filter(
+    (token): token is string => Boolean(token),
+  );
+  const isAdminToken = (supplied: string): boolean =>
+    adminTokens.some((token) => constantTimeEqual(supplied, token));
+
   // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted above; CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.post("/internal/wake", (req, res) => {
     // The relay holds only this token; it can nudge the reconciler but cannot
@@ -125,7 +135,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     const authorized =
       mtlsCn(req) === "api" ||
       (Boolean(cfg.wakeToken) && constantTimeEqual(token, cfg.wakeToken)) ||
-      (Boolean(cfg.adminToken) && constantTimeEqual(token, cfg.adminToken));
+      isAdminToken(token);
     if (!authorized) {
       recordAuthFailure("internal_token");
       res.status(401).json({ error: "unauthorized" });
@@ -142,7 +152,7 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   app.use("/internal", (req: Request, res: Response, next: NextFunction) => {
     const token = req.header("x-internal-token") ?? "";
     const mtls = mtlsCn(req) === "api";
-    if (!mtls && (!cfg.adminToken || !constantTimeEqual(token, cfg.adminToken))) {
+    if (!mtls && !isAdminToken(token)) {
       recordAuthFailure("internal_token");
       res.status(401).json({ error: "unauthorized" });
       return;

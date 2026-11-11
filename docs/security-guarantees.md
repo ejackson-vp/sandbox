@@ -38,10 +38,18 @@ guest.
 | Disk quota / file-size limits | Enforced + tested | Enforced |
 | No persistence after termination | Enforced by construction | Enforced |
 | Supervisor keys hidden from customer code | Best effort (§4) | VM boundary |
+| Capability survives a secret rotation | Enforced + tested | Enforced + tested |
 
 "Enforced + tested" means there is a test in `tests/` that fails if the property
 regresses. `make security-test` runs the packet-level ones against a live
 cluster.
+
+A capability is `HMAC(secret, paymentKey, clientCommitment)`, prefixed with the id
+of the key that signed it. The API holds a signing key plus, during a rotation,
+the previous one, so a capability issued before the rotation keeps verifying and
+new ones are signed with the new key. Retiring a key rejects its id immediately.
+The key material is still a Kubernetes Secret: there is no KMS/HSM and no
+scheduled rotation; see [runbooks/secret-rotation.md](runbooks/secret-rotation.md).
 
 The two checkpoint rows are not a gap in the ciphertext-only claim; they are the
 end of it. Encryption covers transport and the data sealed inside it. A

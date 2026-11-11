@@ -6,6 +6,11 @@
  */
 import { envBool as bool, envInt as int } from "@x402s/shared/env";
 import {
+  CAPABILITY_KEY_ID_PATTERN,
+  capabilityKeyRing,
+  type CapabilityKeyRing,
+} from "@x402s/shared/crypto";
+import {
   MOCK_NETWORK,
   loadPlatformLimits,
   loadTiers,
@@ -32,6 +37,11 @@ export interface ApiConfig {
   controllerTls?: { certFile: string; keyFile: string; caFile: string };
   controllerAdminToken: string;
   capabilitySecret: string;
+  /**
+   * Signing key plus any key still inside the rotation overlap window. The
+   * secret itself never leaves this object: handlers use the ring helpers.
+   */
+  capabilityKeys: CapabilityKeyRing;
   capabilityTtlSeconds: number;
   maxBodyBytes: number;
   publicBaseUrl: string;
@@ -94,7 +104,9 @@ function parsePayment(env: NodeJS.ProcessEnv): Pick<ApiConfig, "paymentMode" | "
   return { paymentMode, network: requestedNetwork, payTo, facilitatorUrl };
 }
 
-function parseCredentials(env: NodeJS.ProcessEnv): Pick<ApiConfig, "controllerAdminToken" | "capabilitySecret"> {
+function parseCredentials(
+  env: NodeJS.ProcessEnv,
+): Pick<ApiConfig, "controllerAdminToken" | "capabilitySecret" | "capabilityKeys"> {
   const controllerAdminToken = env.CONTROLLER_ADMIN_TOKEN ?? env.ADMIN_TOKEN ?? "";
   if (controllerAdminToken.length < 16) {
     throw new Error("CONTROLLER_ADMIN_TOKEN (or ADMIN_TOKEN) must be at least 16 characters");
@@ -111,7 +123,38 @@ function parseCredentials(env: NodeJS.ProcessEnv): Pick<ApiConfig, "controllerAd
   if (capabilitySecret === controllerAdminToken) {
     throw new Error("CAPABILITY_SECRET must differ from CONTROLLER_ADMIN_TOKEN");
   }
-  return { controllerAdminToken, capabilitySecret };
+
+  // Rotation without draining: the previous key verifies existing capabilities
+  // while the current key signs new ones. It is opt-in, so a single-key
+  // deployment needs no new configuration and keeps minting the same tokens.
+  const keyId = env.CAPABILITY_KEY_ID ?? "k1";
+  if (!CAPABILITY_KEY_ID_PATTERN.test(keyId)) {
+    throw new Error("CAPABILITY_KEY_ID must be 1-16 characters of [A-Za-z0-9_-]");
+  }
+  const previousSecret = env.CAPABILITY_SECRET_PREVIOUS ?? "";
+  const previousKeyId = env.CAPABILITY_PREVIOUS_KEY_ID ?? "";
+  if (previousSecret.length > 0 && previousSecret.length < 16) {
+    throw new Error("CAPABILITY_SECRET_PREVIOUS must be at least 16 characters when set");
+  }
+  if (previousSecret === capabilitySecret) {
+    throw new Error("CAPABILITY_SECRET_PREVIOUS must differ from CAPABILITY_SECRET");
+  }
+  if (previousSecret.length > 0 && !CAPABILITY_KEY_ID_PATTERN.test(previousKeyId)) {
+    throw new Error("CAPABILITY_PREVIOUS_KEY_ID is required with CAPABILITY_SECRET_PREVIOUS and must be 1-16 characters of [A-Za-z0-9_-]");
+  }
+  if (previousKeyId.length > 0 && previousKeyId === keyId) {
+    throw new Error("CAPABILITY_PREVIOUS_KEY_ID must differ from CAPABILITY_KEY_ID");
+  }
+  if (previousSecret.length > 0 && previousSecret === controllerAdminToken) {
+    throw new Error("CAPABILITY_SECRET_PREVIOUS must differ from CONTROLLER_ADMIN_TOKEN");
+  }
+
+  const capabilityKeys = capabilityKeyRing({
+    keyId,
+    secret: capabilitySecret,
+    ...(previousSecret.length > 0 ? { previous: { keyId: previousKeyId, secret: previousSecret } } : {}),
+  });
+  return { controllerAdminToken, capabilitySecret, capabilityKeys };
 }
 
 function parsePublicBaseUrl(env: NodeJS.ProcessEnv, port: number): string {

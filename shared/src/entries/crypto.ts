@@ -7,5 +7,6 @@
  */
 export * from "../crypto.js";
 export * from "../commitment.js";
+export * from "../capability.js";
 export * from "../attestation.js";
 export * from "../dev-attestation.js";

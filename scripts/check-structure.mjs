@@ -88,7 +88,8 @@ const SHARED_LAYERS = [
   },
   {
     name: "crypto",
-    match: (rel) => ["crypto.ts", "commitment.ts", "attestation.ts"].includes(rel),
+    match: (rel) =>
+      ["crypto.ts", "commitment.ts", "attestation.ts", "capability.ts"].includes(rel),
   },
   {
     name: "payment",

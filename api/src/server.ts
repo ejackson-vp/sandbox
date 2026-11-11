@@ -11,12 +11,12 @@
  *  - the API never logs bodies, headers or payment payloads.
  */
 import express, { type NextFunction, type Request, type Response } from "express";
-import { createHmac } from "node:crypto";
 import { ZodError } from "zod";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import type { Network, PaymentRequirements } from "@x402/core/types";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
+import { mintCapability, recoverCapability } from "@x402s/shared/crypto";
 import { MOCK_NETWORK, MockExactServerScheme } from "@x402s/shared/payment";
 import type { SessionSpec } from "@x402s/shared/protocol";
 import {
@@ -169,11 +169,16 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   };
 
   // Bound to the payment *and* the client commitment: the same receipt with a
-  // different client key derives a different capability.
+  // different client key derives a different capability. Signed with the
+  // current key of the ring; see docs/runbooks/secret-rotation.md.
   const capabilityFor = (key: string, commitment: string): string =>
-    createHmac("sha256", config.capabilitySecret)
-      .update(`x402-capability:v2:${key}:${commitment}`)
-      .digest("base64url");
+    mintCapability(config.capabilityKeys.signing, key, commitment);
+
+  // A replay must hand back the token the client already holds, which may have
+  // been signed by the previous key. Null means no key in the ring can produce
+  // the stored hash, i.e. the signing key was retired too early.
+  const recoverCapabilityFor = (key: string, commitment: string, storedHash: string): string | null =>
+    recoverCapability(config.capabilityKeys, key, commitment, storedHash);
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, paymentMode: config.paymentMode, network: config.network });
@@ -266,6 +271,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
       requirementFor,
       payment402,
       capabilityFor,
+      recoverCapability: recoverCapabilityFor,
       ipCreateLimiter,
       createLimiter,
     }),
