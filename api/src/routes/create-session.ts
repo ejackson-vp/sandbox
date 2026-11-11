@@ -10,6 +10,7 @@ import type { x402ResourceServer } from "@x402/core/server";
 import type { PaymentRequirements } from "@x402/core/types";
 import {
   clientCommitmentMessage,
+  isChallengeNonce,
   paymentAuthorizer,
   sha256Hex,
 } from "@x402s/shared/crypto";
@@ -168,8 +169,10 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     const key = paymentKey(payload);
 
     // The receipt alone is not authority. The wallet that signed the payment
-    // must also sign this exact client key, so a captured PAYMENT-SIGNATURE
-    // cannot bind the session to another client or reclaim the capability.
+    // must also sign this exact client key *and* the server-issued challenge
+    // nonce, so a captured PAYMENT-SIGNATURE cannot bind the session to another
+    // client, and a captured complete request stops working once its challenge
+    // is burned or expires (F-07).
     const authorizer = paymentAuthorizer(payload);
     if (!authorizer) {
       await deps.payment402(res, requirement, "malformed_payment_authorization");
@@ -180,6 +183,14 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       res.status(401).json({ error: "client_proof_required" });
       return;
     }
+    if (!isChallengeNonce(body.challengeNonce)) {
+      // An older client sent a v1 commitment. Answer with a challenge so a
+      // current client can retry instead of failing without guidance.
+      recordAuthFailure("challenge_nonce_missing");
+      await deps.payment402(res, requirement, "challenge_nonce_required");
+      return;
+    }
+    const challengeNonce = body.challengeNonce;
     let proofOk = false;
     try {
       proofOk = await verifyMessage({
@@ -188,6 +199,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
           paymentKey: key,
           clientPublicKey: body.clientPublicKey,
           clientNonce: body.clientNonce,
+          challengeNonce,
         }),
         signature: body.clientSignature as `0x${string}`,
       });
@@ -198,6 +210,17 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       recordAuthFailure("client_proof_invalid");
       log.warn("client_commitment_invalid", { paymentKeyPrefix: key.slice(0, 12) });
       res.status(401).json({ error: "client_proof_invalid" });
+      return;
+    }
+
+    // Burn the challenge before any capacity is held or money is moved. A
+    // `replay` is the same payment retrying (the documented crash-recovery
+    // path) and continues; every other non-ok answer ends the request with a
+    // fresh challenge, so the client can re-sign for the same payment.
+    const burn = await deps.controller.burnChallengeNonce(challengeNonce, key);
+    if (burn.status !== "burned" && burn.status !== "replay") {
+      recordAuthFailure(`challenge_nonce_${burn.status}`);
+      await deps.payment402(res, requirement, `challenge_nonce_${burn.status}`);
       return;
     }
 

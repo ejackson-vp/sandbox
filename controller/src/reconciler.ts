@@ -385,6 +385,9 @@ export class Reconciler {
       await this.lifecycle.cleanup();
       await this.termination.sweepPvcs();
       this.termination.reconcileRefunds();
+      // Expired challenge nonces are dead weight; the TTL check on burn is what
+      // enforces the bound, this just keeps the table small.
+      this.deps.store.pruneChallengeNonces();
       await this.ctx.capacity.reap();
       await this.backup.maybeRun();
     } catch (err) {

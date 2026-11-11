@@ -48,8 +48,25 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
         `UPDATE payment_ledger SET status='REFUNDED', reason=?, refund_tx=?, updated_at=?
          WHERE payment_key=? AND status IN ('SETTLED','REFUND_PENDING')`,
       ),
-      insertIntent: db.prepare(
-        `INSERT INTO payment_intents
+      /* ---------------- challenge nonces (F-07) ---------------- */
+      insertChallengeNonce: db.prepare(
+        "INSERT INTO challenge_nonces (nonce, payment_key, issued_at, expires_at, burned_at) VALUES (?, NULL, ?, ?, NULL)",
+      ),
+      getChallengeNonce: db.prepare("SELECT * FROM challenge_nonces WHERE nonce = ?"),
+      /**
+       * Conditional on "still unburned and unexpired": two concurrent creates
+       * presenting one nonce cannot both burn it, and a stale challenge cannot
+       * be redeemed after its TTL.
+       */
+      burnChallengeNonce: db.prepare(
+        `UPDATE challenge_nonces SET payment_key=?, burned_at=?
+         WHERE nonce=? AND burned_at IS NULL AND expires_at > ?`,
+      ),
+      pruneChallengeNonces: db.prepare("DELETE FROM challenge_nonces WHERE expires_at <= ?"),
+      countActiveChallengeNonces: db.prepare(
+        "SELECT COUNT(*) AS n FROM challenge_nonces WHERE expires_at > ?",
+      ),
+      insertIntent: db.prepare(        `INSERT INTO payment_intents
            (payment_key, status, session_id, spec_hash, reason, claim_token, claim_expires_at, created_at, updated_at)
          VALUES (?, 'claimed', NULL, ?, NULL, ?, ?, ?, ?)`,
       ),

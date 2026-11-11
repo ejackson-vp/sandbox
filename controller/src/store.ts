@@ -29,6 +29,7 @@ import { migrate } from "./store/schema.js";
 import { checkStoreHealth, type StoreHealth } from "./store/health.js";
 import { prepareStatements } from "./store/statements.js";
 import { PaymentRepository } from "./store/payments.js";
+import { ChallengeNonceRepository, type ChallengeBurnResult } from "./store/challenges.js";
 import { cadenceFor } from "./reconcile-cadence.js";
 import { finalStateForReason, SOURCE_STATES } from "@x402s/shared/protocol";
 import { metrics } from "@x402s/shared/runtime";
@@ -91,6 +92,7 @@ export class Store {
   private readonly stmts: Record<string, StatementSync>;
   readonly reservations: ReservationStore;
   readonly payments: PaymentRepository;
+  readonly challenges: ChallengeNonceRepository;
   /** Path of the main database file (`:memory:` in tests). */
   readonly path: string;
   /**
@@ -123,6 +125,7 @@ export class Store {
 
     this.stmts = prepareStatements(this.db);
     this.payments = new PaymentRepository(this.db, this.stmts);
+    this.challenges = new ChallengeNonceRepository(this.db, this.stmts);
   }
 
   close(): void {
@@ -205,6 +208,23 @@ export class Store {
     session: SessionRecord,
   ): { sessionId: string; created: boolean } {
     return this.payments.completeEntitlement(paymentKey, claimToken, payment, session);
+  }
+
+  /* ---------------- challenge nonces (F-07) ---------------- */
+
+  /** Mint a single-use nonce for one 402 challenge. */
+  issueChallengeNonce(nonce: string, ttlMs: number, maxActive: number): { nonce: string; expiresAt: number } {
+    return this.challenges.issue(nonce, Date.now(), ttlMs, maxActive);
+  }
+
+  /** Burn a nonce for one payment; see ChallengeNonceRepository. */
+  burnChallengeNonce(nonce: string, paymentKey: string): ChallengeBurnResult {
+    return this.challenges.burn(nonce, paymentKey, Date.now());
+  }
+
+  /** Drop expired nonces. Called from housekeeping so the table stays bounded. */
+  pruneChallengeNonces(): number {
+    return this.challenges.prune(Date.now());
   }
 
   /* ---------------- sessions ---------------- */

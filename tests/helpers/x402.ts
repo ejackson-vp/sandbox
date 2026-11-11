@@ -62,7 +62,8 @@ export async function signChallenge(challenge: PaymentChallenge): Promise<string
 
 /**
  * Challenge + pay with a single wallet, and sign the client commitment with
- * that same wallet. Returns the body to post: it carries `clientSignature`.
+ * that same wallet. Returns the body to post: it carries `challengeNonce` and
+ * `clientSignature`.
  */
 export async function createSessionPayment(
   apiUrl: string,
@@ -72,9 +73,12 @@ export async function createSessionPayment(
   challenge: PaymentChallenge;
   body: Record<string, unknown>;
   account: ReturnType<typeof privateKeyToAccount>;
+  /** The single-use challenge value the commitment is signed over (#47). */
+  challengeNonce: string;
 }> {
   const account = privateKeyToAccount(generatePrivateKey());
   const { challenge } = await requestChallenge(`${apiUrl}/v1/sessions`, body);
+  const challengeNonce = challengeNonceOf(challenge);
   const { client, http } = createMockPayingClient(account);
   const payload = await client.createPaymentPayload(challenge.paymentRequired as never);
   const header = http.encodePaymentSignatureHeader(payload)["PAYMENT-SIGNATURE"];
@@ -85,12 +89,27 @@ export async function createSessionPayment(
       paymentKey: paymentKey(payload as never),
       clientPublicKey: signed.clientPublicKey,
       clientNonce: signed.clientNonce,
+      challengeNonce,
     }),
   });
   return {
     header,
     challenge,
-    body: { ...(body as Record<string, unknown>), clientSignature },
+    challengeNonce,
+    body: { ...(body as Record<string, unknown>), challengeNonce, clientSignature },
     account,
   };
+}
+
+/**
+ * The single-use value from a challenge. Throws rather than returning a
+ * placeholder: a test that signs a commitment without the server's nonce is
+ * testing a protocol the server no longer speaks.
+ */
+export function challengeNonceOf(challenge: PaymentChallenge): string {
+  const nonce = challenge.requirement.extra["challengeNonce"];
+  if (typeof nonce !== "string" || !/^cn_[0-9a-f]{32}$/.test(nonce)) {
+    throw new Error("challenge carries no challengeNonce; #47 is not active on this server");
+  }
+  return nonce;
 }

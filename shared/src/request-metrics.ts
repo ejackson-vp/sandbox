@@ -13,6 +13,12 @@ export const AUTH_FAILURE_REASONS = [
   "capability_expired",
   "client_proof_missing",
   "client_proof_invalid",
+  // Server-issued challenge nonce (#47): absent, expired, already burned by a
+  // different payment, or unknown to this controller.
+  "challenge_nonce_missing",
+  "challenge_nonce_expired",
+  "challenge_nonce_reused",
+  "challenge_nonce_unknown",
   "internal_token",
   "relay_admin_token",
 ] as const;

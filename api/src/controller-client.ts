@@ -39,6 +39,19 @@ export type IntentClaim =
   | { status: "failed"; reason?: string }
   | { status: "mismatch" };
 
+/** Server-issued single-use challenge value (#47). */
+export interface ChallengeNonce {
+  nonce: string;
+  expiresAt: number;
+}
+
+/**
+ * Why a nonce burn did not succeed. Mirrors the controller's
+ * `ChallengeBurnResult`; declared here because the API does not import the
+ * controller workspace.
+ */
+export type ChallengeBurnStatus = "burned" | "replay" | "expired" | "unknown" | "reused";
+
 export type CapacityDecision =
   | { admitted: true; nodeId: string; reservation: { nodeId: string } }
   | {
@@ -173,6 +186,29 @@ export class ControllerClient {
       method: "POST",
       body: JSON.stringify({ reason }),
     });
+  }
+
+  /* ---------------- challenge nonces (#47) ---------------- */
+
+  /** Mint the single-use value that goes into the 402 challenge. */
+  async issueChallengeNonce(): Promise<ChallengeNonce> {
+    return this.call<ChallengeNonce>("/internal/challenge-nonces", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }, 5_000);
+  }
+
+  /**
+   * Burn a challenge for one payment. `replay` (same payment) is not an error:
+   * it is the crash-recovery retry. A transport failure is surfaced so the
+   * caller can refuse rather than accept an unproven freshness value.
+   */
+  async burnChallengeNonce(nonce: string, paymentKey: string): Promise<{ status: ChallengeBurnStatus }> {
+    return this.call<{ status: ChallengeBurnStatus }>(
+      `/internal/challenge-nonces/${encodeURIComponent(nonce)}/burn`,
+      { method: "POST", body: JSON.stringify({ paymentKey }) },
+      5_000,
+    );
   }
 
   async preflightCapacity(spec: SessionSpec): Promise<CapacityDecision> {

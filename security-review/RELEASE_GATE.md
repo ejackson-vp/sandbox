@@ -9,6 +9,7 @@ Four deployment profiles are gated separately. "Unverified" is not "passed".
 | Payment replay cannot mint a second entitlement | PASS | F-02 integration tests |
 | Receipt holder cannot bind another client key | PASS | F-02 integration tests |
 | Capability is bound to the client commitment | PASS | F-02, `capabilityFor(key, commitment)` |
+| A captured create request is not a permanent replay | PASS | F-07, challenge nonce (#47), `tests/unit/challenge-nonce.test.ts` |
 | Exactly-once ledger under crash/retry (mock) | PASS | crash-recovery test, `countPayments` |
 | Unknown-database downgrade / destructive upgrade | PASS | F-03 migration tests |
 | Custom price ≠ admitted limit divergence | PASS | property test, controller re-resolution |
@@ -59,7 +60,9 @@ reachable, guests run code you would tolerate on a shared VM.
 3. Keep `TRUST_PROXY_HOPS=0` unless a proxy you control overwrites
    `X-Forwarded-For` (F-09).
 4. Run single-replica API/controller; do not scale the controller.
-5. Accept that a full create-request capture is equivalent to the client (F-07).
+5. Accept that a capture of the live challenge *and* its signed request, replayed
+   before the real client, is equivalent to the client (F-07 residual). A capture
+   of an older request no longer works (#47).
 6. Onboard only tenants for whom `runc`-class isolation is acceptable; Kata is
    unverified here.
 

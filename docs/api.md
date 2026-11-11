@@ -17,9 +17,23 @@ session id and expires `lease + 900s` (configurable grace, `CAPABILITY_GRACE_SEC
 `POST /v1/sessions` is x402 v2 protected.
 
 1. Unpaid request → `402` with a base64 `PAYMENT-REQUIRED` header containing the
-   price for the requested tier.
-2. Client signs the requirement and retries with `PAYMENT-SIGNATURE`.
-3. The API verifies and settles, then creates **one** session.
+   price for the requested tier and a single-use `challengeNonce` (`cn_…`) in
+   `accepts[0].extra`, echoed at the top level of the JSON body.
+2. Client signs the requirement, then signs the **client commitment** with the
+   paying wallet over `(paymentKey, clientPublicKey, clientNonce,
+   challengeNonce)`. The retry carries `PAYMENT-SIGNATURE`, `challengeNonce` and
+   `clientSignature`.
+3. The API verifies the commitment, burns the nonce (one payment only, TTL
+   `CHALLENGE_NONCE_TTL_MS`, default 180 s), verifies and settles, then creates
+   **one** session.
+
+The nonce is what stops a captured *complete* create request from being a
+permanent replay: the signature covers a value the server issued and will accept
+once. A reused, expired or unknown nonce is answered with `402` and a fresh
+challenge, so a client retries with the **same payment payload** and a new
+signature. Because the payment key does not change, that retry recovers the
+existing entitlement rather than paying twice. There is no cached-challenge fast
+path: each create takes the 402 round trip.
 
 The price is bound to the requested tier/limits (`amount` differs per tier), and
 the payment is bound to a `specHash` recorded in a durable intent. A retried
@@ -39,6 +53,8 @@ PAYMENT-SIGNATURE: <base64 x402 payload>   # omitted on the first attempt
   "durationSeconds": 300,                   // required only for custom tiers
   "clientPublicKey": "<base64 X25519 pub>", // 32 bytes
   "clientNonce": "<base64 32 bytes>",       // freshness nonce bound into attestation
+  "challengeNonce": "cn_…",                 // from the 402; required with a payment
+  "clientSignature": "0x…",                 // payer wallet over the commitment
   "cpuMillis": 1000,                        // custom only
   "memoryMiB": 1024,                        // custom only
   "diskMiB": 1024,                          // custom only

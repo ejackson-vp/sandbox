@@ -199,6 +199,13 @@ export interface ControllerConfig {
    * valid.
    */
   shardIndex?: number;
+  /**
+   * Lifetime of a server-issued challenge nonce (#47). A client that takes
+   * longer than this to get its payment signed re-challenges once.
+   */
+  challengeNonceTtlMs: number;
+  /** Hard cap on unburned, unexpired nonces; 0 disables the cap. */
+  challengeNonceMaxActive: number;
 }
 
 /**
@@ -453,6 +460,10 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     orphanPvcGraceMs: int(env.ORPHAN_PVC_GRACE_MS, 3_600_000, 60_000, 86_400_000),
     maxConcurrentProvisioning: int(env.MAX_CONCURRENT_PROVISIONING, 0, 0, 1_000),
     provisionQueueTimeoutMs: int(env.PROVISION_QUEUE_TIMEOUT_MS, 120_000, 0, 3_600_000),
+    // Long enough for a human-speed wallet signature, short enough that a
+    // captured challenge is worthless by the time a log is read.
+    challengeNonceTtlMs: int(env.CHALLENGE_NONCE_TTL_MS, 180_000, 10_000, 900_000),
+    challengeNonceMaxActive: int(env.CHALLENGE_NONCE_MAX_ACTIVE, 20_000, 0, 1_000_000),
     capacityEnabled: bool(env.CAPACITY_ENABLED, true),
     capacityAccounting: (() => {
       const mode = env.CAPACITY_ACCOUNTING ?? "baseline";

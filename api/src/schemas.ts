@@ -20,6 +20,8 @@ export const createSchema = z.object({
   diskMiB: z.number().int().positive().optional(),
   clientPublicKey: z.string().min(40).max(64),
   clientNonce: z.string().min(40).max(64),
+  /** Server-issued single-use challenge value from the 402 response. */
+  challengeNonce: z.string().regex(/^cn_[0-9a-f]{32}$/).optional(),
   /** Payer-wallet proof over the client commitment; required on paid requests. */
   clientSignature: z.string().regex(/^0x[0-9a-fA-F]{130}$/).optional(),
   baselineCpuMillis: z.number().int().min(50).optional(),

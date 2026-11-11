@@ -4,11 +4,21 @@
  * The buyer performs the protocol manually so callers can surface the 402
  * challenge, price and settlement result. Payload creation and header encoding
  * use the official @x402 packages.
+ *
+ * Every create takes the 402 round trip. The server issues a single-use
+ * `challengeNonce` with each challenge and the wallet signature covers it, so a
+ * cached challenge would be unusable after its first (or any) use. The previous
+ * challenge cache existed to save one round trip; correctness costs it back.
+ *
+ * A rejected challenge is retried once with the *same* payment payload and the
+ * fresh nonce from that 402. Reusing the payload keeps the payment key stable,
+ * which is what makes a retry after a lost response recover the existing
+ * entitlement instead of paying twice.
  */
 import { x402Client, x402HTTPClient } from "@x402/core/client";
-import type { PaymentRequired } from "@x402/core/types";
+import type { PaymentPayload, PaymentRequired, PaymentRequirements } from "@x402/core/types";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
-import { clientCommitmentMessage } from "@x402s/shared/crypto";
+import { clientCommitmentMessage, isChallengeNonce } from "@x402s/shared/crypto";
 import {
   MOCK_NETWORK,
   MockExactClientScheme,
@@ -71,28 +81,16 @@ function buildClient(mode: PaymentMode): {
   };
 }
 
+/** A parsed 402: the requirements to pay and the nonce to sign over. */
+interface Challenge {
+  required: PaymentRequired;
+  requirement: PaymentRequirements;
+  nonce: string;
+}
+
 export function createPayer(mode: PaymentMode): Payer {
   const { client, address, signMessage } = buildClient(mode);
   const httpClient = new x402HTTPClient(client);
-  /**
-   * A challenge is a function of the session spec, not of the request. Caching
-   * it lets repeat creates skip the unauthenticated 402 round trip: send the
-   * payment on the first request and only take the challenge path when the
-   * server rejects it (a price or payTo change) or when it is not cached yet.
-   */
-  const challenges = new Map<string, PaymentRequired>();
-  const cacheKey = (apiUrl: string, body: CreateSessionRequest): string =>
-    JSON.stringify([
-      apiUrl,
-      body.tier ?? null,
-      body.durationSeconds ?? null,
-      body.cpuMillis ?? null,
-      body.memoryMiB ?? null,
-      body.diskMiB ?? null,
-      body.baselineCpuMillis ?? null,
-      body.baselineMemoryMiB ?? null,
-      body.maxLifetimeSeconds ?? null,
-    ]);
 
   return {
     mode,
@@ -107,123 +105,108 @@ export function createPayer(mode: PaymentMode): Payer {
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(120_000),
         });
-      const pay = async (required: PaymentRequired): Promise<Response> => {
-        const payload = await client.createPaymentPayload(required);
-        const paymentHeaders = httpClient.encodePaymentSignatureHeader(payload);
-        // Prove the client key is controlled by the wallet that pays. The
-        // receipt alone then cannot be replayed by another client.
-        const commitment = await signMessage(
-          clientCommitmentMessage({
-            paymentKey: paymentKey(payload as never),
-            clientPublicKey: body.clientPublicKey,
-            clientNonce: body.clientNonce,
-          }),
-        );
-        return fetch(url, {
-          method: "POST",
-          headers: { ...headers, ...paymentHeaders },
-          body: JSON.stringify({ ...body, clientSignature: commitment }),
-          signal: AbortSignal.timeout(120_000),
-        });
-      };
-      const paid = (response: Response, required: PaymentRequired): PaidResponse => {
-        const requirement = required.accepts[0]!;
-        return {
-          response,
-          priceUsd: formatUsd(requirement.amount),
-          network: requirement.network,
-          mode,
-          payer: address,
-        };
+
+      /** Read the challenge, its price and its single-use nonce from a 402. */
+      const challengeOf = (response: Response): Challenge | { error: string } => {
+        if (!response.headers.get("payment-required")) {
+          return { error: "server returned 402 without a PAYMENT-REQUIRED header" };
+        }
+        let required: PaymentRequired;
+        try {
+          required = httpClient.getPaymentRequiredResponse(
+            (name) => response.headers.get(name) ?? undefined,
+          );
+        } catch (err) {
+          return { error: `invalid payment requirements: ${(err as Error).message}` };
+        }
+        const requirement = required.accepts[0];
+        if (!requirement) return { error: "server advertised no payment options" };
+        const nonce = requirement.extra?.["challengeNonce"];
+        if (!isChallengeNonce(nonce)) {
+          // An older server, or one that failed to mint a nonce: refuse rather
+          // than sign a commitment the server will not verify.
+          return { error: "server did not issue a challenge nonce" };
+        }
+        return { required, requirement, nonce };
       };
 
-      const key = cacheKey(apiUrl, body);
-      const cached = challenges.get(key);
-      if (cached) {
-        const response = await pay(cached);
-        if (response.ok) return paid(response, cached);
-        if (response.status !== 402) {
-          return {
-            response,
-            priceUsd: "unknown",
-            network: cached.accepts[0]?.network ?? "unknown",
-            mode,
-            payer: address,
-          };
+      const errorOf = async (response: Response): Promise<string> => {
+        try {
+          const parsed = (await response.clone().json()) as { error?: unknown };
+          return typeof parsed.error === "string" ? parsed.error : "";
+        } catch {
+          return "";
         }
-        // Rejected or stale: forget it and take the challenge path once.
-        challenges.delete(key);
-      }
+      };
+
+      /**
+       * Sign the commitment for this challenge and post the payment. A caller
+       * that passes `payload` reuses it, so the payment key does not change.
+       */
+      const pay = async (challenge: Challenge, payload?: PaymentPayload) => {
+        const created = payload ?? (await client.createPaymentPayload(challenge.required));
+        const paymentHeaders = httpClient.encodePaymentSignatureHeader(created);
+        const commitment = await signMessage(
+          clientCommitmentMessage({
+            paymentKey: paymentKey(created as never),
+            clientPublicKey: body.clientPublicKey,
+            clientNonce: body.clientNonce,
+            challengeNonce: challenge.nonce,
+          }),
+        );
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { ...headers, ...paymentHeaders },
+          body: JSON.stringify({
+            ...body,
+            challengeNonce: challenge.nonce,
+            clientSignature: commitment,
+          }),
+          signal: AbortSignal.timeout(120_000),
+        });
+        return { response, payload: created };
+      };
+
+      const unpaid = (response: Response, priceUsd: string, network: string): PaidResponse => ({
+        response,
+        priceUsd,
+        network,
+        mode,
+        payer: address,
+      });
 
       let response = await request();
       if (response.status !== 402) {
-        return {
-          response,
-          priceUsd: "unknown",
-          network: mode === "mock" ? MOCK_NETWORK : TESTNET_NETWORK,
-          mode,
-          payer: address,
-        };
+        return unpaid(response, "unknown", mode === "mock" ? MOCK_NETWORK : TESTNET_NETWORK);
       }
 
-      const requiredHeader = response.headers.get("payment-required");
-      if (!requiredHeader) {
-        return {
-          response,
-          priceUsd: "unknown",
-          network: "unknown",
-          mode,
-          payer: address,
-          paymentError: "server returned 402 without a PAYMENT-REQUIRED header",
-        };
+      const challenged = challengeOf(response);
+      if ("error" in challenged) {
+        return { ...unpaid(response, "unknown", "unknown"), paymentError: challenged.error };
       }
 
-      let paymentRequired;
-      try {
-        paymentRequired = httpClient.getPaymentRequiredResponse((name) => response.headers.get(name) ?? undefined);
-      } catch (err) {
-        return {
-          response,
-          priceUsd: "unknown",
-          network: "unknown",
-          mode,
-          payer: address,
-          paymentError: `invalid payment requirements: ${(err as Error).message}`,
-        };
+      let attempt = await pay(challenged);
+      // One retry, and only for a challenge problem: the 402 carries a fresh
+      // nonce, and reusing the payload keeps the payment key (so a payment that
+      // already settled recovers its entitlement instead of being charged again).
+      const firstError = attempt.response.status === 402 ? await errorOf(attempt.response) : "";
+      if (firstError.startsWith("challenge_nonce")) {
+        const renewed = challengeOf(attempt.response);
+        if (!("error" in renewed)) attempt = await pay(renewed, attempt.payload);
       }
-
-      const requirement = paymentRequired.accepts[0];
-      if (!requirement) {
-        return {
-          response,
-          priceUsd: "unknown",
-          network: "unknown",
-          mode,
-          payer: address,
-          paymentError: "server advertised no payment options",
-        };
-      }
-
-      if (challenges.size >= 64) challenges.clear();
-      challenges.set(key, paymentRequired);
-      response = await pay(paymentRequired);
 
       let paymentError: string | undefined;
-      if (response.status === 402) {
-        try {
-          const bodyJson = (await response.clone().json()) as { error?: string };
-          paymentError = bodyJson.error ?? "payment_rejected";
-        } catch {
-          paymentError = "payment_rejected";
-        }
+      if (attempt.response.status === 402) {
+        const code = await errorOf(attempt.response);
+        paymentError = code || "payment_rejected";
       }
 
       return {
-        response,
-        priceUsd: formatUsd(requirement.amount),
-        network: requirement.network,
-        mode,
-        payer: address,
+        ...unpaid(
+          attempt.response,
+          formatUsd(challenged.requirement.amount),
+          challenged.requirement.network,
+        ),
         ...(paymentError ? { paymentError } : {}),
       };
     },

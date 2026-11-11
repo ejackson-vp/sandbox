@@ -9,7 +9,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { NON_TERMINAL_STATE_SQL } from "./models.js";
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /**
  * Due-time index. The due query filters on exactly the states in
@@ -64,6 +64,14 @@ const BASE_SCHEMA = `
     );
     CREATE INDEX IF NOT EXISTS payment_ledger_status ON payment_ledger(status);
     CREATE INDEX IF NOT EXISTS payment_ledger_session ON payment_ledger(session_id);
+    CREATE TABLE IF NOT EXISTS challenge_nonces (
+    nonce TEXT PRIMARY KEY,
+    payment_key TEXT,
+    issued_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    burned_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS challenge_nonces_expires ON challenge_nonces(expires_at);
     CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     capability_hash TEXT NOT NULL,
@@ -199,6 +207,25 @@ function migrateV11toV12(db: DatabaseSync): void {
   db.exec("ALTER TABLE sessions ADD COLUMN runtime TEXT NOT NULL DEFAULT 'base';");
 }
 
+/**
+ * v12 -> v13: single-use challenge nonces for the client commitment. A new
+ * table only; no existing row is read or rewritten, so the money tables are
+ * untouched. Pre-v13 clients have no nonce and must re-challenge (see
+ * docs/security-guarantees.md and F-07).
+ */
+function migrateV12toV13(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS challenge_nonces (
+    nonce TEXT PRIMARY KEY,
+    payment_key TEXT,
+    issued_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    burned_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS challenge_nonces_expires ON challenge_nonces(expires_at);
+  `);
+}
+
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = FULL;");
@@ -224,6 +251,7 @@ export function migrate(db: DatabaseSync): void {
       if (version < 10) migrateV9toV10(db);
       if (version < 11) migrateV10toV11(db);
       if (version < 12) migrateV11toV12(db);
+      if (version < 13) migrateV12toV13(db);
       // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

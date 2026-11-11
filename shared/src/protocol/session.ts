@@ -24,9 +24,17 @@ export interface CreateSessionRequest {
   /** Customer freshness nonce (base64, 32 bytes) bound into attestation. */
   clientNonce: string;
   /**
+   * Server-issued, single-use challenge value (`cn_…`) from the 402 response.
+   * Bound into the signed commitment and burned on first use, so a captured
+   * request cannot be replayed after the challenge expires. Required on the
+   * paid request; absent on the initial 402 probe.
+   */
+  challengeNonce?: string;
+  /**
    * Proof that the payer wallet (the EIP-3009 `from`) authorised this exact
-   * payment + client key. Personal-sign over `clientCommitmentMessage`.
-   * Required on the paid request; absent on the initial 402 probe.
+   * payment + client key + challenge nonce. Personal-sign over
+   * `clientCommitmentMessage`. Required on the paid request; absent on the
+   * initial 402 probe.
    */
   clientSignature?: string;
   /** Opt into checkpointed suspend/resume. */

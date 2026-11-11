@@ -10,6 +10,7 @@ import type {
   SessionState,
 } from "./models.js";
 import type { ReservationStore } from "../capacity/reservation-store.js";
+import type { ChallengeBurnResult } from "./challenges.js";
 import type { StoreHealth } from "./health.js";
 
 /**
@@ -147,6 +148,9 @@ export interface ControlApiStore {
     specHashValue: string,
     staleMs: number,
   ): IntentClaimResult;
+  /** Single-use challenge nonce (#47): mint, burn, and never resurrect. */
+  issueChallengeNonce(nonce: string, ttlMs: number, maxActive: number): { nonce: string; expiresAt: number };
+  burnChallengeNonce(nonce: string, paymentKey: string): ChallengeBurnResult;
   completeEntitlement(
     paymentKey: string,
     claimToken: string,
@@ -197,6 +201,8 @@ export interface SchedulerStore {
   getSession(id: string): SessionRecord | null;
   listDue(nowMs: number, limit: number): SessionRecord[];
   listTerminalWithPod(): SessionRecord[];
+  /** Drop expired single-use challenge nonces (#47). */
+  pruneChallengeNonces(): number;
   rearmDue(id: string, atMs: number, nowMs: number): boolean;
 }
 

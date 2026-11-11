@@ -14,7 +14,7 @@ executed), `theoretical` (no concrete path found).
 | F-04 | Medium | proven | Custom sessions were priced by duration only: 4 vCPU/8 GiB cost the same as 100m/128 MiB | Fixed |
 | F-05 | Medium | proven | RateLimiter cleared the whole table past 10k buckets, resetting unrelated penalties | Fixed |
 | F-06 | High | code-confirmed | Release images are pushed and tagged before the vulnerability scan; a failing scan leaves the tag pullable | **Open** |
-| F-07 | Medium | code-confirmed | A *full* create-request capture (payment header + wallet proof) still recovers the capability | Accepted residual |
+| F-07 | Medium | code-confirmed | A *full* create-request capture was replayable forever: the commitment was a static signature over (paymentKey, clientPublicKey, clientNonce) | **Fixed** (#47) |
 | F-08 | Low | code-confirmed | Capability derivation changed (`v2` HMAC); capabilities issued by an older build stop verifying after upgrade | Accepted |
 | F-09 | Low | proven | Payer rate-limit key comes from the unverified `from` field; only the per-IP bucket bounds key rotation | Accepted (documented) |
 | F-10 | High | code-confirmed | Testnet crash between settlement and entitlement has no reconciliation and no automatic refund | **Open** |
@@ -235,25 +235,53 @@ then a `promote` job uses `docker buildx imagetools create` to add the version a
 
 ---
 
-## F-07 — Full create-request capture still recovers the capability (residual)
+## F-07 — Full create-request capture is replayable only inside one challenge (fixed for #47)
 
 **Attacker prerequisites:** read access to the complete request (TLS termination,
-client-side compromise, verbose proxy capture). This is strictly stronger than
-"has the payment header".
-**What happens:** the request contains the payer's commitment signature. Replaying
-it is, cryptographically, the payer retrying after a crash — the API cannot tell
-them apart, and must not, or the documented crash-recovery path breaks.
+client-side compromise, verbose proxy capture), plus submission inside the
+challenge TTL and before the real client's request lands. This is strictly
+stronger than "has the payment header".
+**What was wrong:** the request carried the payer's commitment signature over
+`(paymentKey, clientPublicKey, clientNonce)`. Replaying it was,
+cryptographically, the payer retrying after a crash — the API could not tell them
+apart, and must not, or the documented crash-recovery path breaks. A captured
+request therefore worked forever.
 
-**Why proof-of-possession does not fully solve it:** the proof is a *static*
-signature over `(paymentKey, clientPublicKey, clientNonce)`. Preventing replay of
-a captured request needs a server-issued, single-use freshness value inside the
-signed message (or wallet proof on every capability use). That is a protocol
-change with real costs: challenge caching is used to skip the 402 round trip, and
-the server would need durable, expiring nonce state (a new DoS surface).
+**Fix (#47):** the 402 challenge carries a server-issued, single-use
+`challengeNonce` (`cn_` + 128 bits). It joins the commitment message under the
+`x402-sandbox/client-commitment/v2` domain, so the wallet signature covers it.
+The API burns it before holding capacity or settling:
 
-**Decision:** accepted residual, documented in the threat model. It does not
-weaken the F-02 fix (header-only theft is blocked). Affected: all configurations;
-the bar is "full request capture", not "receipt capture".
+| Burn answer | Meaning | Result |
+|---|---|---|
+| `burned` | first use | continue |
+| `replay` | same payment, same nonce | continue (crash recovery) |
+| `reused` | different payment | `402 challenge_nonce_reused` + fresh challenge |
+| `expired` | past `CHALLENGE_NONCE_TTL_MS` (default 180 s) | `402 challenge_nonce_expired` |
+| `unknown` | never issued, or pruned | `402 challenge_nonce_unknown` |
+
+The client retries a rejected challenge with the **same payment payload** and a
+new signature, so the payment key does not change and a settled payment recovers
+its entitlement instead of being charged twice. State lives in the controller's
+SQLite database (`challenge_nonces`), is pruned on a TTL and capped at
+`CHALLENGE_NONCE_MAX_ACTIVE` (default 20 000) because issuing is an
+unauthenticated write; the per-IP create bucket bounds the rate.
+
+**Cost:** the SDK's cached-challenge fast path is gone (the nonce makes a cached
+challenge unusable after one use), so a create takes one extra round trip. The
+commitment domain is v2, so a capability minted by a v1 build cannot be replayed
+into a v2 one; the API and SDK ship together.
+
+**Regressions:** `tests/unit/challenge-nonce.test.ts` (burn/replay/reuse, TTL,
+restart durability, cap, and the route refusing a spent nonce before capacity,
+intent claim or settlement), `tests/unit/sdk-payment-nonce.test.ts` (no cache,
+same payload on retry, no retry for a payment rejection),
+`tests/integration/api-flow.test.ts` (full handshake and idempotent replay).
+
+**Residual:** an attacker who captures the challenge *and* the signed request and
+submits first wins that race. Without wallet proof on every capability use, a
+capability remains a bearer token for its TTL (documented in
+[security-guarantees.md](../docs/security-guarantees.md)).
 
 ---
 

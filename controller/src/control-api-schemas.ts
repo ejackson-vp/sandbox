@@ -16,6 +16,12 @@ export const intentClaimSchema = z.object({
   staleMs: z.number().int().min(1000).max(600_000).optional(),
 });
 
+/** Burn one server-issued challenge nonce for one payment (#47). */
+export const burnChallengeNonceSchema = z.object({
+  nonce: z.string().regex(/^cn_[0-9a-f]{32}$/),
+  paymentKey: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
 const idlePolicySchema = z.object({
   maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
   suspendedDurationSeconds: z.number().int().min(1).max(28800).optional(),

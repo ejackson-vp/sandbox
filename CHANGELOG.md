@@ -9,6 +9,32 @@ the container registry.
 
 ### Added
 
+- Single-use challenge nonce in the 402 response (`accepts[0].extra.challengeNonce`,
+  `cn_` + 128 bits), bound into the client commitment signature and burned in the
+  controller's `challenge_nonces` table (schema v13) before capacity is held.
+  This closes F-07: a captured *complete* create request is no longer a permanent
+  replay. TTL `CHALLENGE_NONCE_TTL_MS` (180 s), cap
+  `CHALLENGE_NONCE_MAX_ACTIVE` (20 000). See
+  [docs/security-guarantees.md](docs/security-guarantees.md) and #47.
+- Kyverno `ClusterPolicy` that rejects a guest pod whose image is not
+  `<repository>@sha256:<64 hex>` in the pinned repository, or whose digest is not
+  the released one. Scoped by the namespace label `x402.io/image-policy`
+  (`enforce` by default, `dev-unpinned` documented for local kind). Not installed
+  by `make deploy`; see
+  [deploy/kubernetes/kyverno](deploy/kubernetes/kyverno/README.md) and #30.
+
+### Changed
+
+- **Breaking:** the client commitment domain is `v2` and covers
+  `challengeNonce`. `POST /v1/sessions` now requires `challengeNonce` and a
+  signature over it on any paid request; a request without one gets a 402 with a
+  fresh challenge instead of a capability. The SDK is updated in the same
+  release and its cached-challenge fast path is removed, so every create takes
+  the 402 round trip (+1 RTT). No external clients exist yet.
+- The SDK retries a rejected challenge with the same payment payload and a new
+  signature, so a burned/expired challenge recovers the same entitlement instead
+  of paying twice.
+
 - `runtime` is part of the create request, the immutable session spec and its
   hash, the session row (schema v12, `base` for existing rows), the controller
   view and the status/create responses. Profiles are `base`, `python` and
