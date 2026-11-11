@@ -1,12 +1,14 @@
 # Sandbox SLO rules.
 #
 # Portable Prometheus/vmalert rule file. The scrape job adds a `role` label
-# (`api`, `controller`, `relay`), so every expression below can select the
-# process that owns the metric instead of double-counting across roles.
+# (`api`, `controller`, `relay`), so most expressions below select the process
+# that owns the metric instead of double-counting across roles. The warm-pool
+# profile rules deliberately do not: those families are controller-only and
+# must keep working when a deployment scrapes one process without a role label.
 #
 # Thresholds are the ones agreed in issue #38. They are deliberately small and
 # explainable for a single-tenant homelab; tune them only with a recorded
-# reason. `reconciliation_pending` and `warm_pool_empty` carry caveats in
+# reason. `reconciliation_pending` and the warm-pool rules carry caveats in
 # deploy/monitoring/README.md because the current API does not export a
 # per-error-code counter and the warm pool can be disabled.
 groups:
@@ -149,18 +151,154 @@ groups:
           runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
 
       - alert: SandboxWarmPoolEmpty
-        expr: max(sandbox_warm_pool_pods{role="controller"}) == 0
+        expr: |
+          sum(sandbox_warm_pool_pods) == 0
+          and on ()
+          sum(sandbox_warm_pool_budget) > 0
         for: 5m
         labels:
           severity: warning
           service: sandbox
         annotations:
-          summary: "The warm pool has had no pods for 5 minutes"
+          summary: "No runtime profile has a live warm pod"
           description: >-
-            `sandbox_warm_pool_pods` has been zero for 5 minutes. This rule is
-            inactive when `WARM_POOL_SIZE=0` (the metric is not exported), so
-            enable the pool before relying on it. Check pod scheduling and the
-            warm-pool creation errors.
+            Every profile in `sandbox_warm_pool_pods` has been at zero for 5
+            minutes while at least one profile still has a non-zero target.
+            Check pod scheduling, capacity preflight rejections and
+            `warm_pod_create_failed` in the controller log. This rule is gated
+            on `sum(sandbox_warm_pool_budget) > 0`, so it stays inactive when
+            `WARM_POOL_SIZE=0`.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      # Runtime-profile warm pools. Each profile has its own target inside one
+      # shared `WARM_POOL_SIZE` budget. These expressions do not select on
+      # `role`: the families are exported only by the controller, and a single
+      # scrape target without a role label must still evaluate them.
+      - alert: SandboxWarmPoolMissPressure
+        expr: |
+          (
+            sum by (profile) (rate(sandbox_warm_pool_total{result="miss_empty"}[15m]))
+            /
+            clamp_min(
+              sum by (profile) (
+                rate(sandbox_warm_pool_total{result=~"hit|miss_empty"}[15m])
+              ),
+              0.001
+            )
+          ) > 0.2
+          and on (profile)
+          (
+            sum by (profile) (
+              increase(sandbox_warm_pool_total{result=~"hit|miss_empty"}[15m])
+            ) >= 20
+          )
+        for: 15m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Warm pool misses for {{ $labels.profile }} are above 20%"
+          description: >-
+            More than 20% of claims for the `{{ $labels.profile }}` profile
+            have fallen back to a cold start over the last 15 minutes (current
+            {{ $value | humanizePercentage }}, at least 20 claims). Check
+            `sandbox_warm_pool_budget{profile="{{ $labels.profile }}"}`
+            against `sandbox_warm_pool_pods`, the growth decisions, and whether
+            `WARM_POOL_SIZE` has free headroom above `WARM_POOL_BASE_MIN`.
+            A single miss does not fire this rule.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxWarmPoolSustainedMisses
+        expr: |
+          sum by (profile) (
+            increase(sandbox_warm_pool_total{result="miss_empty"}[15m])
+          ) >= 20
+        for: 15m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "{{ $labels.profile }} is taking sustained cold starts"
+          description: >-
+            The `{{ $labels.profile }}` profile has produced {{ $value |
+            humanize }} `miss_empty` claims in the last 15 minutes and has held
+            that rate for 15 minutes. A miss here means a session paid the cold
+            path. Check the profile target, live pods and the growth decisions
+            for budget, cooldown or budget-exhausted blocks.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxWarmPoolUnderTarget
+        expr: |
+          (
+            sum by (profile) (sandbox_warm_pool_budget)
+            -
+            sum by (profile) (sandbox_warm_pool_pods)
+          ) > 0
+          and on (profile)
+          (
+            sum by (profile) (sandbox_warm_pool_budget) > 0
+          )
+        for: 15m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Warm pool {{ $labels.profile }} cannot reach its target"
+          description: >-
+            The `{{ $labels.profile }}` profile has held fewer live warm pods
+            than its target for 15 minutes (short by {{ $value }} pods). The
+            controller wants to fill the pool but creates are not landing.
+            Check pod scheduling, capacity preflight rejections, image pulls
+            and `warm_pod_create_failed` in the controller log.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxWarmPoolBudgetExhausted
+        expr: |
+          sum by (profile) (
+            increase(sandbox_warm_pool_grow_total{result="budget_exhausted"}[30m])
+          ) >= 3
+        for: 15m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Warm pool growth for {{ $labels.profile }} is blocked by the budget"
+          description: >-
+            The `{{ $labels.profile }}` profile has hit `budget_exhausted`
+            {{ $value | humanize }} times in 30 minutes and held the condition
+            for 15 minutes. The sum of all profile targets has reached
+            `WARM_POOL_SIZE` and no idle profile had headroom above its floor.
+            Check `sum(sandbox_warm_pool_budget)` against `WARM_POOL_SIZE`, and
+            check `WARM_POOL_BASE_MIN`: it defaults to `WARM_POOL_SIZE`, which
+            leaves `base` unable to donate and starves every other profile.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxWarmPoolDrainThrash
+        expr: |
+          (
+            sum by (profile) (
+              increase(sandbox_warm_pool_drain_total{reason="idle"}[1h])
+            ) >= 5
+          )
+          and on (profile)
+          (
+            sum by (profile) (
+              increase(sandbox_warm_pool_grow_total{result=~"budget|steal"}[1h])
+            ) >= 5
+          )
+        for: 30m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Warm pool {{ $labels.profile }} is draining and regrowing"
+          description: >-
+            The `{{ $labels.profile }}` profile has drained and regrown at
+            least 5 times each in the last hour (drains: {{ $value | humanize
+            }}). Capacity is oscillating instead of settling. Check
+            `WARM_POOL_IDLE_DRAIN_MS` against `WARM_POOL_DEMAND_WINDOW_MS` and
+            `WARM_POOL_COOLDOWN_MS`; if the regrowth came from `steal`, a
+            neighbouring profile is being drained to fund this one.
           runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
 
       - alert: SandboxMetricsTargetDown
