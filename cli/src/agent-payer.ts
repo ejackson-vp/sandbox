@@ -6,7 +6,7 @@
  * SDK payer so the commitment signing cannot drift from the normal client path.
  */
 import { createPayer, type Payer, type PaymentMode } from "@x402s/sdk";
-import { MOCK_NETWORK, TESTNET_NETWORK, formatUsd } from "@x402s/shared";
+import { MOCK_NETWORK, TESTNET_NETWORK, formatUsd } from "@x402s/shared/payment";
 
 export async function createAgentPayer(
   mode: PaymentMode,
