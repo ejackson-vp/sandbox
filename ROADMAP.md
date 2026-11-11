@@ -23,10 +23,12 @@ catalog does not start until that gate is met.
    the completion response. #26 removes the remaining readiness poll tick.
    Measure the 0.1.20 warm p95 regression in #116 first; do not trade
    correctness checks for latency.
-3. **Move the store behind an adapter tested against a second backend.**
-   SQLite is the single writer and therefore the HA ceiling. Postgres or
-   DynamoDB with conditional writes, preserving the unique payment key and
-   guarded transitions. (#25)
+3. **Move the store behind an adapter tested against a second backend.** The
+   asynchronous ports and the Postgres adapter are done: `STORE_BACKEND=postgres`
+   with `DATABASE_URL`, the same tables and guards, a `pg_advisory_lock` writer
+   backstop, and one contract suite run against SQLite and Postgres in CI (#25).
+   SQLite is still the `make dev-local` path and the deployment default, so this
+   step is not finished until the manifest and its backup path switch over.
 4. **Relay state out of process.** One in-memory relay pod loses pending
    ciphertext on restart. Redis or NATS with per-session queues and TTLs,
    ciphertext only. (#24)
