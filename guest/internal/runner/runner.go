@@ -136,6 +136,7 @@ func Execute(ctx context.Context, opts Options, req *protocol.Request, cwd strin
 	// This is a sandbox command executor: the customer command is the
 	// product input. The path is resolved only against the selected profile's
 	// PATH and is executed inside the microVM.
+	// lgtm[go/command-injection]
 	// codeql[go/command-injection]
 	cmd := exec.Command(path, req.Command[1:]...)
 	cmd.Dir = cwd
