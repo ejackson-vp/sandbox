@@ -2,7 +2,7 @@
  * Test harness for the real Go guest: starts a relay, spawns the supervisor,
  * verifies its evidence, and issues encrypted operations directly (no API).
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,6 +26,15 @@ import { RelayClient, type RelayClientTlsOptions } from "../../controller/src/re
 
 export const DEV_SEED = "qSgP+dPwGhb/58O0ZD/dSqCMovhhWNIQbT3MeTD35WY=";
 export const DEV_KEY_ID = "x402-dev-attestation-key-INSECURE-DEV-ONLY";
+
+/** Process state letter from `ps`: "T" means stopped, "R"/"S" mean running. */
+function processState(pid: number): string {
+  try {
+    return execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim()[0] ?? "";
+  } catch {
+    return "";
+  }
+}
 
 export interface GuestOptions {
   port: number;
@@ -177,9 +186,24 @@ export class GuestHarness {
    * not yet observed" deterministic: the process cannot read its socket while
    * stopped, so a forwarded frame stays queued in the kernel.
    */
+  /**
+   * Stop the guest and wait until it is actually stopped.
+   *
+   * SIGSTOP is asynchronous: `process.kill` returns once the signal is queued,
+   * not once the process has stopped. A caller that queues work immediately
+   * afterwards can race the delivery, which is how a withdrawn frame reached a
+   * running guest on a loaded CI runner and wrote its marker. Polling `ps` for
+   * state "T" makes the stop observable instead of hoping 100ms is enough.
+   */
   pause(): void {
-    if (!this.proc?.pid) throw new Error("guest not running");
-    process.kill(this.proc.pid, "SIGSTOP");
+    const pid = this.proc?.pid;
+    if (!pid) throw new Error("guest not running");
+    process.kill(pid, "SIGSTOP");
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      if (processState(pid) === "T") return;
+    }
+    throw new Error(`guest ${pid} did not stop within 2s`);
   }
 
   resume(): void {
