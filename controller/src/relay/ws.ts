@@ -1,8 +1,8 @@
 import type { Server } from "node:http";
 import type { Socket } from "node:net";
 import type { WebSocketServer, WebSocket } from "ws";
-import type { AttestationEnvelope, GuestToRelay } from "@x402s/shared";
-import { log, metrics } from "@x402s/shared";
+import type { AttestationEnvelope, GuestToRelay } from "@x402s/shared/protocol";
+import { log, metrics } from "@x402s/shared/runtime";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
 import { disconnectReasonLabel } from "./metrics.js";
 

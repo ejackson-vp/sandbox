@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
-import type { AttestationEnvelope, RelaySessionState } from "@x402s/shared";
-import { metrics, type MetricsRegistry } from "@x402s/shared";
+import type { AttestationEnvelope, RelaySessionState } from "@x402s/shared/protocol";
+import { metrics, type MetricsRegistry } from "@x402s/shared/runtime";
 import { constantTimeEqual, guestTokenShard, sha256Hex } from "../tokens.js";
 import { registerRelayMetrics, type RelayDisconnectReason } from "./metrics.js";
 

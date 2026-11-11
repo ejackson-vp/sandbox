@@ -5,7 +5,7 @@
  * truth. Disconnect reasons are a closed enum derived from the WebSocket close
  * code, never from the guest-provided text.
  */
-import { metrics, type MetricsRegistry } from "@x402s/shared";
+import { metrics, type MetricsRegistry } from "@x402s/shared/runtime";
 
 export const RELAY_DISCONNECT_REASONS = [
   "normal",

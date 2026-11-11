@@ -26,7 +26,7 @@
  * never reported status (an older guest build) keeps the gate closed: failing
  * closed is the contract.
  */
-import { log } from "@x402s/shared";
+import { log } from "@x402s/shared/runtime";
 import type { RelayClient } from "./relay-client.js";
 import type { FenceStore } from "./store/ports.js";
 

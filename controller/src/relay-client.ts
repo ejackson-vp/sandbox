@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Agent, fetch as undiciFetch } from "undici";
-import type { RelayStateSnapshot, WarmClaim } from "@x402s/shared";
+import type { RelayStateSnapshot, WarmClaim } from "@x402s/shared/protocol";
 import { dataPlaneShard, shardHost } from "./data-plane-shard.js";
 
 export interface RelayClientTlsOptions {

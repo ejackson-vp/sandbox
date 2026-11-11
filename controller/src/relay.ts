@@ -24,7 +24,7 @@ import {
   registerRequestMetrics,
   type MetricsRegistry,
   type TokenBucket,
-} from "@x402s/shared";
+} from "@x402s/shared/runtime";
 import { MAX_FRAME_BYTES, RelayRegistry } from "./relay/registry.js";
 import { registerRelayControlRoutes, registerRelayProbeRoutes } from "./relay/http.js";
 import { attachGuestUpgrade } from "./relay/ws.js";

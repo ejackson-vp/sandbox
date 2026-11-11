@@ -1,12 +1,12 @@
 import type { Express, Request, Response } from "express";
 import {
   INTERNAL_RATE_LIMIT,
+  log,
   metrics,
   rateLimit,
   TokenBucket,
   type MetricsRegistry,
-} from "@x402s/shared";
-import { log } from "@x402s/shared";
+} from "@x402s/shared/runtime";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
 
 export interface RelayProbeOptions {
