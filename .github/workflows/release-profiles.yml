@@ -442,13 +442,9 @@ jobs:
           body=""
           for attempt in $(seq 1 80); do
             body=$(gh release view "$TAG" --json body --jq .body 2>/dev/null || true)
-            case "$body" in
-              *"## Images"*) found=true; break ;;
-            esac
-            if [ $((attempt % 8)) -eq 0 ]; then
-              status=$(gh run list --workflow release.yml --commit "$GITHUB_SHA" \
-                --limit 1 --json status --jq '.[0].status // empty' || true)
-              if [ "$status" = "completed" ]; then break; fi
+            if [ -n "$body" ]; then
+              found=true
+              break
             fi
             sleep 15
           done
@@ -457,6 +453,15 @@ jobs:
             echo "::notice title=Profile digests::release.yml published no release for ${TAG}; profile digests are in this run's summary and the profile-images artifact" >&2
             exit 0
           fi
+
+          # The release body is written by release.yml. Wait for that run to
+          # finish before editing the same field, so the two writes cannot race.
+          for attempt in $(seq 1 80); do
+            status=$(gh run list --workflow release.yml --commit "$GITHUB_SHA" \
+              --limit 1 --json status --jq '.[0].status // empty' || true)
+            if [ "$status" = "completed" ] || [ "$status" = "" ]; then break; fi
+            sleep 15
+          done
 
           gh release upload "$TAG" release-assets/* --clobber
 
