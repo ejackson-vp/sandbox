@@ -126,6 +126,7 @@ describe.skipIf(!available || pool.length === 0)("warm pool (real cluster)", () 
       timeoutMs: 15_000,
     });
     expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error(`exec failed: ${res.error?.code}`);
     // The legacy admin-token route is not mounted on the guest listener: control
     // routes live only on the mTLS listener (8444), which the sandbox cannot
     // reach. 404 proves the guest path has no control surface at all.

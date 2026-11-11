@@ -18,7 +18,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -28,6 +27,7 @@ import {
   sealJsonTo,
   toBase64,
 } from "@x402s/shared/crypto";
+import type { SessionLimits } from "@x402s/shared/protocol";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { CapacityService } from "../../controller/src/capacity/service.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
@@ -37,7 +37,6 @@ import { OperationFence } from "../../controller/src/operation-fence.js";
 import {
   Store,
   type PaymentRecord,
-  type SessionLimits,
   type SessionRecord,
 } from "../../controller/src/store.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
@@ -124,17 +123,6 @@ function sessionRecord(
     nodeName: null,
     updatedAt: now,
   };
-}
-
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as { port: number }).port;
-      server.close(() => resolve(port));
-    });
-  });
 }
 
 async function waitFor<T>(

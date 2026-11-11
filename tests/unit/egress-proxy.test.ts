@@ -66,7 +66,9 @@ function connectVia(port: number, host: string, token: string): Attempt {
       `CONNECT ${host} HTTP/1.1\r\nHost: ${host}\r\nProxy-Authorization: Bearer ${token}\r\n\r\n`,
     );
   });
-  cleanups.push(() => socket.destroy());
+  cleanups.push(() => {
+    socket.destroy();
+  });
   return { socket, status };
 }
 

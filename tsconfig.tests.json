@@ -1,0 +1,36 @@
+{
+  // Tests and offline scripts are compiled, not just stripped. Vitest strips
+  // types with esbuild and never checks them, so a type-only import of a symbol
+  // that does not exist used to compile to nothing and the test still passed
+  // (#144). This project is a check-only target: `npm run typecheck` runs it
+  // with --noEmit, and CI runs the same command.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "sourceMap": false,
+    // tests/unit/fault-matrix-report.test.ts imports the nightly wrapper, which
+    // is plain ESM by design (node runs it in CI). With allowJs the checker
+    // infers its exports; `checkJs` stays off so the JS is not re-linted here.
+    "allowJs": true,
+    // A handful of tests import `shared/src/<module>.js` directly to construct
+    // a real instance (a metrics registry, a token bucket) and pass it into
+    // controller code. The controller resolves `@x402s/shared/runtime` through
+    // node_modules to `shared/dist`, so the same class has two declarations and
+    // its private fields make the two structurally incompatible. Point the
+    // package specifier at source here as well, so the checker sees one class.
+    // Runtime resolution is unchanged: vitest still loads the built package.
+    "paths": {
+      "@x402s/shared/protocol": ["./shared/src/entries/protocol.ts"],
+      "@x402s/shared/runtimes": ["./shared/src/entries/runtimes.ts"],
+      "@x402s/shared/money": ["./shared/src/entries/money.ts"],
+      "@x402s/shared/crypto": ["./shared/src/entries/crypto.ts"],
+      "@x402s/shared/payment": ["./shared/src/entries/payment.ts"],
+      "@x402s/shared/runtime": ["./shared/src/entries/runtime.ts"],
+      "@x402s/shared/env": ["./shared/src/entries/env.ts"],
+      "@x402s/shared/ip": ["./shared/src/entries/ip.ts"],
+      "@x402s/sdk": ["./sdk/src/index.ts"]
+    }
+  },
+  "include": ["tests/**/*.ts", "scripts/**/*.ts", "scripts/**/*.mjs", "vitest.config.ts"]
+}

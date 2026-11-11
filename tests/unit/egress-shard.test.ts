@@ -65,7 +65,9 @@ function connectVia(port: number, token: string): { socket: net.Socket; status: 
       `CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Bearer ${token}\r\n\r\n`,
     );
   });
-  cleanups.push(() => socket.destroy());
+  cleanups.push(() => {
+    socket.destroy();
+  });
   return { socket, status };
 }
 

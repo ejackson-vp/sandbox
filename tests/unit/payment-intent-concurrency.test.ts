@@ -82,19 +82,19 @@ describe("real SQLite payment-intent concurrency", () => {
     expect(staleIndex).toBeGreaterThanOrEqual(0);
     expect(liveIndex).toBeGreaterThanOrEqual(0);
     expect(staleIndex).not.toBe(liveIndex);
-    const staleToken = String(claims[staleIndex].token);
-    const liveToken = String(claims[liveIndex].token);
+    const staleToken = String(claims[staleIndex]?.token);
+    const liveToken = String(claims[liveIndex]?.token);
     expect(staleToken).not.toBe(liveToken);
 
     // 2. The stale owner cannot settle while the live owner holds the claim.
-    workers[staleIndex].send({
+    workers[staleIndex]?.send({
       type: "complete",
       opId: "stale-before",
       paymentKey,
       token: staleToken,
       sessionId: "sbx_0000000000000000000000a1",
     });
-    const staleBefore = await waitFor(workers[staleIndex], "result");
+    const staleBefore = await waitFor(workers[staleIndex]!, "result");
     expect(staleBefore).toMatchObject({ ok: false, error: "PaymentClaimLostError" });
 
     const probe = new Store(dbPath);
@@ -116,7 +116,7 @@ describe("real SQLite payment-intent concurrency", () => {
           opId: `complete-${i}`,
           paymentKey,
           token: liveToken,
-          sessionId: sessionIds[i],
+          sessionId: sessionIds[i]!,
         });
         return waitFor(worker, "result");
       }),
@@ -125,19 +125,19 @@ describe("real SQLite payment-intent concurrency", () => {
     const idempotent = completions.filter((c) => c.ok === true && c.created === false);
     expect(created).toHaveLength(1);
     expect(idempotent).toHaveLength(1);
-    const winner = String(created[0].sessionId);
-    expect(idempotent[0].sessionId).toBe(winner);
+    const winner = String(created[0]?.sessionId);
+    expect(idempotent[0]?.sessionId).toBe(winner);
     expect(sessionIds).toContain(winner);
 
     // 4. The stale owner now learns the outcome: the winning session, no error.
-    workers[staleIndex].send({
+    workers[staleIndex]?.send({
       type: "complete",
       opId: "stale-after",
       paymentKey,
       token: staleToken,
       sessionId: "sbx_0000000000000000000000a2",
     });
-    const staleAfter = await waitFor(workers[staleIndex], "result");
+    const staleAfter = await waitFor(workers[staleIndex]!, "result");
     expect(staleAfter).toMatchObject({ ok: true, created: false, sessionId: winner });
 
     const final = new Store(dbPath);

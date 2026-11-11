@@ -15,6 +15,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { ReadinessCache } from "../../shared/src/entries/runtime.js";
 import { createControlApi } from "../../controller/src/control-api.js";
+import type { Leadership } from "../../controller/src/leadership.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";

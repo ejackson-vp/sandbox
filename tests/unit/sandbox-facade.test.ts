@@ -45,7 +45,9 @@ describe("Sandbox facade", () => {
 
     const sandbox = new Sandbox(client, handle);
     expect(sandbox.id).toBe("sbx_test");
-    expect((await sandbox.upload(local, "/workspace/out.txt")).ok).toBe(true);
+    // A small file goes through putFile; the transfer arm of the union has no
+    // `ok`, so assert on the shape instead of a property only one arm has.
+    expect(await sandbox.upload(local, "/workspace/out.txt")).toMatchObject({ ok: true, filesWritten: 1 });
     expect(client.putFile).toHaveBeenCalledWith(handle, {
       path: "/workspace/out.txt",
       data: Buffer.from("hello"),

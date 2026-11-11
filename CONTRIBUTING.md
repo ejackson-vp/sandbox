@@ -4,7 +4,7 @@
 
 ```bash
 npm ci
-make verify         # build, typecheck, structure lint, unit + property tests
+make verify         # build, typecheck, structure lint, unit + property, go tests
 make test           # adds integration tests against the real guest binary
 npm run test:coverage   # unit + property under coverage (CI badge source)
 ```
@@ -17,6 +17,10 @@ second concurrent copy of that timing-sensitive suite is what made #128 flake
 reconciler paths, are therefore not in the badge. CI publishes the number to the
 `badges` branch, which is what the README badge reads; there is no fixed
 threshold yet, so a drop shows up as a smaller badge rather than a red build.
+
+`npm run typecheck` also compiles `tests/` and `scripts/` through
+`tsconfig.tests.json`. Vitest strips types with esbuild and never checks them, so
+without that pass a test can name a symbol that does not exist and still pass.
 
 Cluster-backed tests need a live cluster:
 

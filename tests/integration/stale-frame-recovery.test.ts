@@ -18,12 +18,12 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sealJsonTo } from "@x402s/shared/crypto";
+import type { SessionLimits } from "@x402s/shared/protocol";
 import { OperationFence } from "../../controller/src/operation-fence.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import {
   Store,
   type PaymentRecord,
-  type SessionLimits,
   type SessionRecord,
 } from "../../controller/src/store.js";
 import { GuestHarness } from "../helpers/guest.js";

@@ -24,6 +24,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # Vitest strips types without checking them, so the suite is compiled
+      # separately. A test that imports a symbol shared no longer exports fails
+      # here instead of passing (#144).
+      - run: npx tsc -p tsconfig.tests.json --noEmit
       - run: npm run lint:structure
       # The published profile set is guest/profiles/runtime-images.conf; the
       # release workflow builds exactly those and nothing else.

@@ -405,7 +405,7 @@ describe("PAID -> PROVISIONING through the effect interpreter", () => {
 describe("SUSPENDED -> RESUMING through the effect interpreter", () => {
   it("restores the workspace, registers the credential and boots a cold pod", async () => {
     const h = harness();
-    const row = seedSuspended(h.store, "sbx_resume_path_01");
+    seedSuspended(h.store, "sbx_resume_path_01");
 
     await h.lifecycle.resume("sbx_resume_path_01");
 

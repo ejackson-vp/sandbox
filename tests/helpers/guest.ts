@@ -27,6 +27,31 @@ import { RelayClient, type RelayClientTlsOptions } from "../../controller/src/re
 export const DEV_SEED = "qSgP+dPwGhb/58O0ZD/dSqCMovhhWNIQbT3MeTD35WY=";
 export const DEV_KEY_ID = "x402-dev-attestation-key-INSECURE-DEV-ONLY";
 
+/**
+ * The successful result shape for one operation verb.
+ *
+ * `GuestResult` is a union whose failure arm (`OperationError`) carries the
+ * whole `GuestRequest["op"]` union, so `result.op === "exec"` does not exclude
+ * it: reading `result.stdout` off the union is a type error. `ok` is the
+ * discriminant, but vitest's `expect(result.ok).toBe(true)` has no assertion
+ * signature, so it does not narrow either.
+ */
+type SuccessfulResult<O extends GuestRequest["op"]> = Extract<GuestResult, { ok: true; op: O }>;
+
+/** Assert a guest result succeeded for `op`, and narrow it to that shape. */
+export function expectGuestOk<O extends GuestRequest["op"]>(
+  result: GuestResult,
+  op: O,
+): SuccessfulResult<O> {
+  if (result.op !== op || !result.ok) {
+    const detail = result.ok ? "wrong operation" : (result.error?.code ?? "no error code");
+    throw new Error(`expected a successful ${op} result, got ${result.op}: ${detail}`);
+  }
+  // `op` and `ok` are both checked above; TypeScript cannot distribute the
+  // generic `O` over the union's literal `op`, so the cast states the check.
+  return result as SuccessfulResult<O>;
+}
+
 /** Process state letter from `ps`: "T" means stopped, "R"/"S" mean running. */
 function processState(pid: number): string {
   try {

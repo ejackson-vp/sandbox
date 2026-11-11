@@ -14,6 +14,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openSealedJson, sealJsonTo } from "@x402s/shared/crypto";
+import type { SessionLimits } from "@x402s/shared/protocol";
 import { createControlApi } from "../../controller/src/control-api.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { OperationFence } from "../../controller/src/operation-fence.js";
@@ -21,7 +22,6 @@ import { RelayClient } from "../../controller/src/relay-client.js";
 import {
   Store,
   type PaymentRecord,
-  type SessionLimits,
   type SessionRecord,
 } from "../../controller/src/store.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
