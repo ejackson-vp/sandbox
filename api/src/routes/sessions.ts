@@ -2,13 +2,19 @@
  * Session routes: status, the single operations surface, and lifecycle.
  */
 import express, { type Request, type Response } from "express";
-import { LATENCY_BUCKETS, metrics, recordAuthFailure, recordRateLimited, sha256Hex, safeEqualHex } from "@x402s/shared";
+import { safeEqualHex, sha256Hex } from "@x402s/shared/crypto";
+import {
+  LATENCY_BUCKETS,
+  log,
+  metrics,
+  recordAuthFailure,
+  recordRateLimited,
+} from "@x402s/shared/runtime";
 import { RateLimiter } from "../admission.js";
 import { ControllerError, type ControllerClient, type SessionView } from "../controller-client.js";
 import type { ApiConfig } from "../config.js";
 import { operationSchema, requestIdSchema, rejectPlaintextBodies } from "../schemas.js";
 import { toStatus } from "../status.js";
-import { log } from "@x402s/shared";
 
 export interface SessionsDeps {
   config: ApiConfig;

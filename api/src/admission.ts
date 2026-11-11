@@ -11,11 +11,11 @@
  * `from` field only moves their own bucket, and the IP bucket still bounds the
  * total. The verified payer is recorded separately on the payment.
  *
- * The token-bucket implementation lives in `@x402s/shared` so the controller
- * and relay use the same bounded table for their internal listeners.
+ * The token-bucket implementation lives in `@x402s/shared/runtime` so the
+ * controller and relay use the same bounded table for their internal listeners.
  */
 
-export { TokenBucket as RateLimiter } from "@x402s/shared";
+export { TokenBucket as RateLimiter } from "@x402s/shared/runtime";
 
 /**
  * Best-effort payer identity from an x402 payment payload. Falls back to the

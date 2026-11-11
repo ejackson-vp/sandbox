@@ -17,21 +17,20 @@ import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import type { Network, PaymentRequirements } from "@x402/core/types";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
+import { MOCK_NETWORK, MockExactServerScheme } from "@x402s/shared/payment";
+import type { SessionSpec } from "@x402s/shared/protocol";
 import {
   LATENCY_BUCKETS,
-  MOCK_NETWORK,
-  MockExactServerScheme,
   ReadinessCache,
   httpMetricsMiddleware,
+  log,
   metrics,
   registerRequestMetrics,
-  type SessionSpec,
-} from "@x402s/shared";
+} from "@x402s/shared/runtime";
 import type { ApiConfig } from "./config.js";
 import { RateLimiter } from "./admission.js";
 import { ControllerClient } from "./controller-client.js";
 import { HttpSettlementLookup, UnsupportedSettlementLookup, type SettlementLookup } from "./settlement-lookup.js";
-import { log } from "@x402s/shared";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 import { createSessionHandler } from "./routes/create-session.js";

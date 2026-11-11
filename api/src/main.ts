@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import { loadConfig } from "./config.js";
 import { createApp } from "./server.js";
 import { ControllerClient } from "./controller-client.js";
-import { log, registerBuildInfo, registerRuntimeMetrics, startMetricsServer } from "@x402s/shared";
+import { log, registerBuildInfo, registerRuntimeMetrics, startMetricsServer } from "@x402s/shared/runtime";
 
 async function main(): Promise<void> {
   const config = loadConfig();

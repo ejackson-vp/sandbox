@@ -3,7 +3,7 @@
  */
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { MAX_LEASE_SECONDS } from "@x402s/shared";
+import { MAX_LEASE_SECONDS } from "@x402s/shared/protocol";
 
 
 export const createSchema = z.object({
