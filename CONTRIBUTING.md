@@ -26,7 +26,9 @@ Cluster-backed tests need a live cluster:
 
 ```bash
 make up
-make security-test
+make security-test       # Cilium packet-level suite
+make kata                # switch the deployment to the Kata RuntimeClass
+make security-isolation  # release gate: both suites, Kata boot probe, digests
 ```
 
 ## Fuzzing

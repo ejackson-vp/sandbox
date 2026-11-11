@@ -20,8 +20,8 @@ Four deployment profiles are gated separately. "Unverified" is not "passed".
 | Real-mode refunds executed | **FAIL** | F-10 (`REFUND_PENDING`, no worker) |
 | Actions/images pinned by digest | **FAIL** | F-15 |
 | Least-privilege workflow tokens | **FAIL** | 3 `TokenPermissionsID` alerts |
-| Kata guest→host isolation | **UNVERIFIED** | not executed |
-| Cilium pod→pod / pod→API / metadata isolation | **UNVERIFIED** | not executed |
+| Kata guest→host isolation | **UNVERIFIED** | release gate added (`make security-isolation`); no run yet (#44) |
+| Cilium pod→pod / pod→API / metadata isolation | **UNVERIFIED** | packet-level suite wired into the release gate; no run yet (#44) |
 | Image vulnerability status | **UNVERIFIED** | no image built |
 | Multi-replica controller | NOT SUPPORTED | SQLite on a ReadWriteOnce volume; [ADR 0010](../docs/adr/0010-controller-ha-storage.md) targets Postgres behind the store port |
 | Capacity quotas per payer/IP | PARTIAL | admission exists; no durable per-payer budget |
@@ -88,9 +88,11 @@ Profile: arbitrary internet tenants, real money, untrusted code, SLA.
 
 **Verdict: BLOCKED.** All public-beta blockers, plus:
 
-- No verified microVM isolation or packet-level network attestation in CI. The
-  release gate must run the Kata/Cilium suites on a disposable cluster and record
-  the digest of the tested images.
+- No executed microVM isolation or packet-level network attestation. The
+  release gate now runs the Kata/Cilium suites on a disposable cluster and
+  records the digests it tested (`docs/release-process.md#isolation-gate`), and
+  blocks a tag when the suite did not run. Until the first green run exists,
+  this row is still unverified.
 - Control plane is a single writer on a SQLite file on a `ReadWriteOnce` volume
   pinned to the control-plane node. The lease failover is implemented and
   measured, but a replacement pod waits 30 s to 2 min for the volume, so what
@@ -158,7 +160,7 @@ rather than leaving it undecided.
 | F-06 | A release run where the version/latest tags appear only after Trivy passes; a deliberately failing scan produces no deployable tag |
 | F-10 | End-to-end test in a non-production settlement sandbox: crash after settle → retry returns the entitlement or a refund is executed; ledger auditable |
 | F-15 | Actions pinned to SHAs, images by digest, job-scoped `permissions` |
-| Kata/Cilium | `make security-test` on a disposable kind/Cilium cluster **and** the real Kata class, with image digests recorded |
+| Kata/Cilium | A release run whose `isolation` job is green, with `tested-images.json` naming the same control and guest digests that `promote` tags. `make security-isolation` reproduces it locally. |
 | Abuse | Durable per-payer quota with a test that survives a restart |
 
 ## Appendix — point-in-time security assessment
@@ -181,7 +183,8 @@ claim, because no cluster was available.
 
 The three changes that would move public-beta readiness most:
 
-1. Execute the Kata and Cilium suites in a trusted release gate (#44).
+1. Run the Kata and Cilium suites in the release gate on a Kata-capable runner
+   (the gate exists; it has not executed yet, #44).
 2. Close the release-promotion and settlement-refund gaps (#42, #31).
 3. Add durable per-payer quotas and a freshness nonce / per-request proof of
    possession (#48, #47).
