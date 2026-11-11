@@ -185,7 +185,8 @@ export class PaymentRepository {
           payment.mode,
           refunded ? "REFUNDED" : "REFUND_PENDING",
           reason,
-          refunded ? `mock:refund:${payment.paymentKey.slice(0, 12)}:${now.toString(36)}` : payment.settlementNonce ?? null,
+          refunded ? `mock:refund:${payment.paymentKey.slice(0, 12)}:${now.toString(36)}` : null,
+          payment.settlementNonce ?? null,
           now,
           now,
         );

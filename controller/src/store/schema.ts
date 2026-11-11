@@ -171,6 +171,8 @@ const BASE_SCHEMA = `
     -- Concurrency is counted from live sessions per verified payer. The ledger
     -- keeps the checksummed address, so the lookup is on the lowercased form.
     CREATE INDEX IF NOT EXISTS payment_ledger_payer ON payment_ledger(lower(payer));
+    -- Double-charge guard: a client key pair may own at most one session (#31).
+    CREATE INDEX IF NOT EXISTS sessions_client_key ON sessions(client_public_key, client_nonce);
     CREATE INDEX IF NOT EXISTS exec_requests_session ON exec_requests(session_id);
 ${DUE_INDEX}`;
 
@@ -277,6 +279,9 @@ function migrateV14toV15(db: DatabaseSync): void {
   db.exec("ALTER TABLE payment_ledger ADD COLUMN refund_next_attempt_at INTEGER;");
   db.exec("CREATE INDEX IF NOT EXISTS payment_ledger_nonce ON payment_ledger(settlement_nonce);");
   db.exec("ALTER TABLE payment_intents ADD COLUMN requirements_json TEXT;");
+  // The double-charge guard looks a session up by client key pair on the create
+  // path, so it must not be a table scan.
+  db.exec("CREATE INDEX IF NOT EXISTS sessions_client_key ON sessions(client_public_key, client_nonce);");
 }
 
 export function migrate(db: DatabaseSync): void {

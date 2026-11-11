@@ -40,7 +40,7 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
         `INSERT OR IGNORE INTO payment_ledger
            (payment_key, session_id, payer, amount, asset, network, mode, status, reason, refund_tx,
             settlement_nonce, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ),
       getLedgerByPayment: db.prepare("SELECT * FROM payment_ledger WHERE payment_key = ?"),
       getLedgerBySession: db.prepare("SELECT * FROM payment_ledger WHERE session_id = ?"),

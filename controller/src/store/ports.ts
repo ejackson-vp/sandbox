@@ -156,6 +156,7 @@ export interface SettlementRecoveryStore {
     mode: "mock" | "testnet";
     status: LedgerStatus;
     reason: string;
+    refundTransaction?: string | null;
     settlementNonce: string | null;
   }): boolean;
   listStaleClaimedIntents(olderThan: number, limit: number): PaymentIntentRecord[];

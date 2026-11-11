@@ -338,6 +338,9 @@ describe("double charge", () => {
     expect(ledger.sessionId).toBe(`duplicate:${secondKey}`);
     expect(ledger.reason).toBe("duplicate_client_nonce");
     expect(ledger.status).toBe("REFUNDED");
+    // The mock transaction id lands in refund_tx, not in the settlement nonce.
+    expect(ledger.refundTransaction).toMatch(/^mock:refund:/);
+    expect(ledger.settlementNonce).toBe(`0x${"1".repeat(64)}`);
     // The intent is failed, so a retry of that payment cannot mint a session.
     expect(store.getPaymentIntent(secondKey)?.status).toBe("failed");
   });

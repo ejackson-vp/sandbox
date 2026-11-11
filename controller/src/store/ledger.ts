@@ -26,6 +26,8 @@ export interface UnclaimedLedgerEntry {
   mode: "mock" | "testnet";
   status: LedgerStatus;
   reason: string;
+  /** Set when the row is written already refunded (a mock refund). */
+  refundTransaction?: string | null;
   settlementNonce: string | null;
 }
 
@@ -120,6 +122,7 @@ export class LedgerRepository {
         entry.mode,
         entry.status,
         entry.reason,
+        entry.refundTransaction ?? null,
         entry.settlementNonce,
         now,
         now,
