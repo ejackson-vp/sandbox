@@ -124,6 +124,11 @@ concrete next step.
   PVC-full and orphan-pod alerts are still not implemented. The rule file
   carries no receiver and the homelab stack evaluates with
   `-notifier.blackhole`: alert state is visible, nothing is paged.
+- Incident procedures: egress abuse, orphan Pod/PVC cleanup, relay compromise and
+  secret rotation each have a runbook under `docs/runbooks/`, plus a
+  [tabletop script](runbooks/tabletop.md). None has been rehearsed, and the
+  detection steps lean on log lines because the matching alerts (egress volume,
+  orphan objects, PVC-full) are still not implemented.
 - Load test: 100+ concurrent sessions; measure reconcile p95, relay fan-out, API
   latency for 8 MiB uploads.
 - **Clock discipline.** Leases, payment-intent staleness and the 8 h lifetime cap

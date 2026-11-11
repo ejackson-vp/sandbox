@@ -77,7 +77,10 @@ settlement, money changes hands automatically.
 4. **Kata and Cilium are UNVERIFIED.** A public beta that runs hostile code
    cannot claim tenant isolation from `runc` or from unit tests.
 5. No durable per-payer capacity/abuse budget; only in-memory token buckets.
-6. No incident runbook for egress abuse, orphan PVCs, or a compromised relay.
+6. **Incident response: written, not rehearsed.** Three runbooks and a tabletop
+   script exist under `docs/runbooks/`. No exercise has been run, so the
+   procedures are unverified and the gaps they will find are unknown
+   ([tabletop.md](../docs/runbooks/tabletop.md)).
 
 ## 4. Unrestricted hostile multi-tenant production — **BLOCKED**
 
@@ -92,9 +95,57 @@ Profile: arbitrary internet tenants, real money, untrusted code, SLA.
   automation, or cross-region story.
 - Capability remains a bearer token for its TTL (F-07); no per-request
   proof-of-possession.
-- No KMS/HSM for `CAPABILITY_SECRET` / `CONTROLLER_ADMIN_TOKEN` rotation.
+- No KMS/HSM for `CAPABILITY_SECRET` / `CONTROLLER_ADMIN_TOKEN` rotation. Key ids
+  plus a previous-key verify set make a manual rotation safe without draining
+  sessions ([docs/runbooks/secret-rotation.md](../docs/runbooks/secret-rotation.md));
+  custody is still a Kubernetes Secret.
 - No per-tenant spend caps, anomaly detection, or abuse escalation path.
 - No independent penetration test of the guest/host boundary.
+
+## OpenSSF process decisions (proposed, not decided)
+
+Two Scorecard alerts are maintainer decisions, not code changes
+(#99). This section is the proposed wording so the decision is recorded in one
+place. Nothing here is in force until it is agreed and the alerts are handled.
+
+Proposed: **register the project for the OpenSSF Best Practices Passing badge**,
+and keep the answers auditable by linking the badge entry from the README.
+
+> **OpenSSF Best Practices badge — decision.** The project targets the
+> **Passing** badge only. Several criteria already hold and can be checked in this
+> repository: `SECURITY.md` (vulnerability reporting), a committed lockfile for
+> every dependency, fuzzing targets and their corpora documented in
+> [CONTRIBUTING.md](../CONTRIBUTING.md), and a test gate on every pull request.
+> Where a criterion is not met, the answer says so rather than arguing the point;
+> F-06, F-10 and F-15 in [FINDINGS.md](FINDINGS.md) are the three that this gate
+> already knows about. Silver is out of scope because it requires a reviewer who
+> is not the author, and this repository has one maintainer. The badge entry is
+> the record of the answers, linked from `README.md` so a reader can audit a claim
+> against the criterion it scores. A `CII-Best-Practices` score below 5 is not a
+> blocker for the private beta and is not a substitute for any control here.
+
+Proposed: **record the solo-maintainer exception** rather than requiring an
+approval that no second person can give.
+
+> **Code review — decision.** `main` does not require an approving review,
+> because there is one collaborator and Scorecard does not count bot or
+> AI-generated approvals. Requiring an approval would either block every merge or
+> be satisfied by a bot, and the second outcome makes the metric lie. What
+> compensates for the missing second reader is written down, not implied: every
+> change arrives as a pull request whose description says what was verified; the
+> required checks (`unit`, `integration (local guest)`, `markdownlint`,
+> `internal links`) gate the merge; `codeql` analyses the branch head and `main`;
+> a change to a trust boundary, a durability guarantee or a deployment constraint
+> needs an ADR and a note in [FINDINGS.md](FINDINGS.md); and the release gate is
+> gated on `make verify`. This exception is reviewed if a second maintainer is
+> added, at which point one approval is required and administrators are included
+> in the rule. It does not claim a control the repository does not enforce.
+
+Do not close either alert by configuration alone. If the badge is not
+registered, dismiss `CIIBestPracticesID` as "won't fix" with a pointer here
+rather than leaving it undecided.
+
+---
 
 ## Exit criteria for re-gating
 

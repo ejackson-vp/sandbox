@@ -53,9 +53,27 @@ the container registry.
 - `guest/build-profiles.sh` builds from that same pin file, so a local image has
   the release's build inputs, and `guest/check-profiles.sh` fails CI when the
   pin file and `guest/profiles/*.json` disagree.
+- Capabilities carry a key id (`k1.<mac>`) and the API holds a verify set, so
+  `CAPABILITY_SECRET` can be rotated without draining sessions:
+  `CAPABILITY_KEY_ID`, `CAPABILITY_SECRET_PREVIOUS` and
+  `CAPABILITY_PREVIOUS_KEY_ID` are accepted during the overlap. The MAC input is
+  unchanged, so this is not a repeat of the F-08 derivation break, and a token
+  issued before the key id existed still verifies. A create replay after a
+  rotation returns the capability the session was issued rather than a fresh one
+  whose hash would not match. Retiring a key rejects its id immediately. See
+  `docs/runbooks/secret-rotation.md`.
+- `ADMIN_TOKEN_PREVIOUS` is accepted, not presented, on the controller's
+  `/internal/*` routes during an admin token rotation, so the API and the
+  controller can be rolled in either order.
+- Incident runbooks for egress abuse, orphan Pod/PVC cleanup, relay compromise
+  and secret rotation, plus a tabletop exercise script and a gap list, under
+  `docs/runbooks/`.
 
 ### Changed
 
+- CodeQL analyses every branch push, not just `main`, so a commit that lands
+  inside a multi-commit push still has its own analysis (the OpenSSF `SAST`
+  check reads that).
 - Provisioning is table-driven end to end. `PAID -> PROVISIONING` and
   `SUSPENDED -> RESUMING` now execute the effect list their transition returns
   through the controller's effect interpreter, so `register_relay`,

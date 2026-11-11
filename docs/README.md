@@ -30,6 +30,16 @@ jump to the full index below.
 - [warm-pool.md](warm-pool.md) — pre-booted guests and the claim path
 - [production-readiness.md](production-readiness.md) — known gaps, ordered
 
+### "Something is happening right now"
+
+| Situation | Runbook |
+| --- | --- |
+| A session is abusing its egress | [runbooks/egress-abuse.md](runbooks/egress-abuse.md) |
+| A Pod or PVC has no live session | [runbooks/orphan-storage.md](runbooks/orphan-storage.md) |
+| The relay is suspect, or a guest token leaked | [runbooks/relay-compromise.md](runbooks/relay-compromise.md) |
+| A capability, admin or mTLS key must be rotated | [runbooks/secret-rotation.md](runbooks/secret-rotation.md) |
+| Rehearsing any of the above | [runbooks/tabletop.md](runbooks/tabletop.md) |
+
 ### "I want to change the code"
 
 - [architecture-principles.md](architecture-principles.md) — the working rulebook
