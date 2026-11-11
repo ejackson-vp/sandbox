@@ -12,7 +12,8 @@ import type { AddressInfo, Server as NetServer } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
-import { guestTokenFor, sha256Hex } from "../../controller/src/tokens.js";
+import { sha256Hex } from "../../controller/src/secrets.js";
+import { guestTokenFor } from "../../controller/src/tokens.js";
 
 const ADMIN = "relay-admin-token-0123456789";
 const OPAQUE_TOKEN = "guest-token-0123456789";

@@ -114,8 +114,14 @@ Prerequisites: Docker, `kind`, `kubectl`, Cilium CLI, Node >= 24, Go >= 1.26.
 ```bash
 make up             # kind + Cilium + images + deploy (~2 min)
 make demo-session   # pay, create, exec, upload, run, download, destroy
+make dev-scale 2    # relay + egress-proxy at N replicas; bare `make dev-scale` prints the counts
 make down
 ```
+
+`make dev-scale N` is the multi-replica validation path: it patches
+`RELAY_REPLICAS`/`PROXY_REPLICAS`, scales both StatefulSets, restarts the control
+plane and waits for the rollout. It is idempotent, and `make deploy` resets it.
+The controller stays at one replica (ADR 0010).
 
 Local clusters use `runc`, not microVMs. The demo exercises the same API, relay
 and guest as a real deployment.

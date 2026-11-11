@@ -14,7 +14,7 @@ import { Agent, fetch as undiciFetch } from "undici";
 import WebSocket from "ws";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
-import { sha256Hex } from "../../controller/src/tokens.js";
+import { sha256Hex } from "../../controller/src/secrets.js";
 import type { WarmClaim } from "@x402s/shared/protocol";
 import { makeTestPki, type TestPki } from "../helpers/tls.js";
 

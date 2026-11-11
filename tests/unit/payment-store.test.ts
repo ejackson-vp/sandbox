@@ -25,7 +25,8 @@ import {
   type SessionRecord,
 } from "../../controller/src/store.js";
 import { RefundService } from "../../controller/src/refunds.js";
-import { mintProxyToken, verifyProxyToken, newOpaqueToken } from "../../controller/src/tokens.js";
+import { newOpaqueToken } from "../../controller/src/secrets.js";
+import { mintProxyToken, verifyProxyToken } from "../../controller/src/tokens.js";
 import { extractProxyToken, parseAuthority } from "../../controller/src/egress-proxy.js";
 
 class MemoryNonceStore implements MockNonceStore {

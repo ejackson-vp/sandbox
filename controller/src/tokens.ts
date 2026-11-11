@@ -10,22 +10,25 @@
  *
  * None of these are user accounts or long-lived API keys.
  */
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { constantTimeEqual } from "./secrets.js";
 
-export function sha256Hex(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
+/**
+ * The claims a verified proxy token carries. Split out as a type so the token
+ * format has a named contract and `verifyProxyToken` does not return an
+ * anonymous object (#148).
+ */
+export interface ProxyTokenClaims {
+  sessionId: string;
+  /** Epoch milliseconds. */
+  expiresAt: number;
+  /** Present on v2 tokens only: the proxy shard the token is scoped to. */
+  shard?: number;
 }
 
-export function constantTimeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
-}
-
-export function newOpaqueToken(bytes = 32): string {
-  return randomBytes(bytes).toString("base64url");
-}
+export type ProxyTokenVerification =
+  | ({ ok: true } & ProxyTokenClaims)
+  | { ok: false; reason: string };
 
 /**
  * Stateless proxy token: v1.<expMs>.<sessionId>.<hmacBase64url>, or
@@ -48,7 +51,7 @@ export function mintProxyToken(secret: string, sessionId: string, ttlMs: number,
 export function verifyProxyToken(
   secret: string,
   token: string,
-): { ok: true; sessionId: string; expiresAt: number; shard?: number } | { ok: false; reason: string } {
+): ProxyTokenVerification {
   const parts = token.split(".");
   let expRaw: string;
   let sessionId: string;

@@ -21,7 +21,7 @@ import {
   MAX_PENDING,
   RelayRegistry,
 } from "../../controller/src/relay/registry.js";
-import { sha256Hex } from "../../controller/src/tokens.js";
+import { sha256Hex } from "../../controller/src/secrets.js";
 
 const ADMIN = "relay-fuzz-admin-token-0123456789";
 const TOKEN = "relay-fuzz-guest-token-0123456789";

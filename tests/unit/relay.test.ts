@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
-import { sha256Hex } from "../../controller/src/tokens.js";
+import { sha256Hex } from "../../controller/src/secrets.js";
 
 const ADMIN = "relay-admin-token-0123456789";
 const TOKEN = "guest-token-0123456789";

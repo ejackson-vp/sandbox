@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-network logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-network logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -22,6 +22,7 @@ help:
 	@echo "  make demo-agent     same purchase driven by the x402 client SDK"
 	@echo "  make demo-placement two-worker least-allocated placement (make up-2w)"
 	@echo "  make demo-session   full multi-command session workflow"
+	@echo "  make dev-scale N    scale relay + egress-proxy to N and restart; no N prints the counts"
 	@echo "  make demo-expire    demonstrate lease expiration and cleanup"
 	@echo "  make demo-timeout   demonstrate the per-command timeout"
 	@echo "  make demo-lifecycle checkpoint a session, resume it, verify the workspace"
@@ -88,6 +89,18 @@ demo-timeout: cli
 
 demo-session: cli
 	./scripts/demo-session.sh
+
+# `make dev-scale 2` passes the count as a goal, not a variable. The bare number
+# is picked out of MAKECMDGOALS and declared a no-op goal, but only when it is
+# numeric, so `make dev-scale 2 demo-session` still runs the real demo target.
+DEV_SCALE_ARG := $(word 2,$(MAKECMDGOALS))
+ifneq ($(shell echo '$(DEV_SCALE_ARG)' | grep -E '^[0-9]+$$'),)
+$(DEV_SCALE_ARG):
+	@:
+endif
+
+dev-scale:
+	CONTEXT="$(CONTEXT)" NAMESPACE="$(NAMESPACE)" ./scripts/dev-scale.sh $(or $(N),$(DEV_SCALE_ARG))
 
 demo-expire: cli
 	./scripts/demo-expire.sh

@@ -25,7 +25,7 @@
     "clean": "rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist",
     "test:property": "vitest run tests/property",
     "test:coverage": "vitest run tests/unit tests/property tests/integration --coverage",
-    "lint:structure": "node scripts/check-structure.mjs",
+    "lint:structure": "node scripts/check-structure.mjs && node scripts/check-singletons.mjs",
     "coupling": "node scripts/coupling.mjs",
     "bench:ceiling": "tsx scripts/bench-reconcile-ceiling.ts"
   },

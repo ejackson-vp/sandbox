@@ -103,6 +103,8 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     clientPublicKey: CLIENT_KEY,
     clientNonce: NONCE,
     paidAt: Date.now(),
+    createdAt: Date.now(),
+    maxLifetimeSeconds: null,
     timingsJson: null,
     relayTokenHash: "token-hash",
     podName: "sbx-guest-protocol-0001",
