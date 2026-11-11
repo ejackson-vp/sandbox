@@ -2,7 +2,7 @@
  * Capacity service: builds an immutable snapshot from Kubernetes + SQLite,
  * delegates the decision to the pure model, and persists the reservation.
  */
-import { LATENCY_BUCKETS, metrics } from "@x402s/shared";
+import { LATENCY_BUCKETS, metrics } from "@x402s/shared/runtime";
 import type { ControllerConfig } from "../config.js";
 import type { Provisioner } from "../k8s.js";
 import type { SessionRecord } from "../store/models.js";

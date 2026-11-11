@@ -3,13 +3,13 @@
  * reconciler only schedules the calls.
  */
 import { randomBytes } from "node:crypto";
-import { metrics, type SessionLimits, type WarmClaim } from "@x402s/shared";
+import type { SessionLimits, WarmClaim } from "@x402s/shared/protocol";
+import { log, metrics } from "@x402s/shared/runtime";
 import { GUEST_TOOLS, type WarmPodInfo } from "./k8s.js";
 import { proxyTokenFor } from "./config.js";
 import { warmPoolIdentity } from "./warm-pool-identity.js";
 import { newOpaqueToken, sha256Hex, guestTokenFor } from "./tokens.js";
 import { pinnedShard, shardClaim } from "./data-plane-shard.js";
-import { log } from "@x402s/shared";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { WarmPoolStore } from "./store/ports.js";
 

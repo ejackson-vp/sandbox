@@ -1,7 +1,7 @@
 /**
  * Kubernetes provisioner contract and pod specs.
  */
-import type { SessionLimits } from "@x402s/shared";
+import type { SessionLimits } from "@x402s/shared/protocol";
 import type { WorkspacePvcInfo } from "./checkpoint-retention.js";
 
 export interface SandboxPodSpec {

@@ -8,21 +8,17 @@
  * in front of each transition: a session whose relay, slot, reservation or shard
  * endpoint is not ready returns from its current state and is retried.
  */
+import { verifyAttestation } from "@x402s/shared/crypto";
 import {
-  LATENCY_BUCKETS,
   lifetimeExpired,
-  metrics,
   MIN_SUPPORTED_GUEST_PROTOCOL_VERSION,
   supportsGuestProtocolVersion,
   transition,
-  verifyAttestation,
-} from "@x402s/shared";
-import type {
-  AttestationEnvelope,
-  RelaySessionState,
-  RelayStateSnapshot,
-} from "@x402s/shared";
-import { log } from "@x402s/shared";
+  type AttestationEnvelope,
+  type RelaySessionState,
+  type RelayStateSnapshot,
+} from "@x402s/shared/protocol";
+import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { EffectStore, ProvisioningStore } from "./store/ports.js";
 

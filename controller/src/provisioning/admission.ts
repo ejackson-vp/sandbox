@@ -8,7 +8,7 @@
  * actually is, and none of them can terminate a paid session except on the
  * configured timeout.
  */
-import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared";
+import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import type { CapacityService } from "../capacity/service.js";
 import type { ReservationRecord } from "../capacity/reservation-store.js";
 import type { ControllerConfig } from "../config.js";

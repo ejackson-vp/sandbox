@@ -8,7 +8,7 @@
  * diagnostics and evidence.
  */
 import { createHash } from "node:crypto";
-import type { SessionLimits } from "@x402s/shared";
+import type { SessionLimits } from "@x402s/shared/protocol";
 
 export const WARM_IDENTITY_ANNOTATION = "x402.io/warm-identity";
 export const WARM_IMAGE_DIGEST_ANNOTATION = "x402.io/image-digest";

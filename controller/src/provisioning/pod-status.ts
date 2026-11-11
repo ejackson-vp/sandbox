@@ -6,7 +6,7 @@
  * the workspace node pin and the pod phase agree with what the controller
  * recorded. It runs on every readiness pass, before and after READY.
  */
-import { log, metrics } from "@x402s/shared";
+import { log, metrics } from "@x402s/shared/runtime";
 import type { CapacityService } from "../capacity/service.js";
 import type { Provisioner } from "../k8s.js";
 import type { SessionRecord } from "../store/models.js";

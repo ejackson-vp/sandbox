@@ -11,7 +11,7 @@
  * rather than a local call for the same reason: the pod spec needs them, and so
  * does the effect that starts the pod.
  */
-import { log } from "@x402s/shared";
+import { log } from "@x402s/shared/runtime";
 import { proxyTokenFor } from "../config.js";
 import type { ControllerConfig } from "../config.js";
 import type { CapacityService } from "../capacity/service.js";

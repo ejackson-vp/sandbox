@@ -7,7 +7,7 @@
  * as an effect context. Nothing here mutates session state or the store, so it
  * is safe to call from any of those.
  */
-import { log } from "@x402s/shared";
+import { log } from "@x402s/shared/runtime";
 import { pinnedShard, shardClaim } from "../data-plane-shard.js";
 import type { DataPlanePlacement, DataPlaneService } from "../data-plane-shard.js";
 import type { SessionRecord } from "../store/models.js";

@@ -3,7 +3,7 @@
  * of the provisioner makes the security-relevant spec independently reviewable.
  */
 import * as k8s from "@kubernetes/client-node";
-import type { SessionLimits } from "@x402s/shared";
+import type { SessionLimits } from "@x402s/shared/protocol";
 
 export type PodEnvSpec = {
   executionMode: string;
