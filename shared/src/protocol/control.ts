@@ -75,3 +75,22 @@ export interface PaymentIntentStatus {
   sessionId?: string;
   reason?: string;
 }
+
+/** One component of a readiness report. */
+export interface ComponentHealth {
+  ok: boolean;
+  /**
+   * Stable, bounded reason code. Never an exception message: those can carry
+   * connection strings, file paths or other operational detail.
+   */
+  reason?: string;
+}
+
+/** Body of `GET /internal/readyz`, which the API reads before routing work. */
+export interface ReadinessReport {
+  ok: boolean;
+  checkedAt: number;
+  /** True when the report came from the TTL cache instead of a fresh probe. */
+  cached: boolean;
+  components: Record<string, ComponentHealth>;
+}

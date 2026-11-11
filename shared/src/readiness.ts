@@ -6,24 +6,12 @@
  * and is allowed to be briefly stale: Kubernetes probes run every few seconds,
  * so a short positive and negative cache keeps a dependency outage from turning
  * into a probe storm against the store, relay or Kubernetes API.
+ *
+ * The report shape itself is wire contract, so it lives in `protocol/control.ts`
+ * with the rest of the API <-> controller surface. This module owns the cache
+ * and the probes.
  */
-
-export interface ComponentHealth {
-  ok: boolean;
-  /**
-   * Stable, bounded reason code. Never an exception message: those can carry
-   * connection strings, file paths or other operational detail.
-   */
-  reason?: string;
-}
-
-export interface ReadinessReport {
-  ok: boolean;
-  checkedAt: number;
-  /** True when the report came from the TTL cache instead of a fresh probe. */
-  cached: boolean;
-  components: Record<string, ComponentHealth>;
-}
+import type { ComponentHealth, ReadinessReport } from "./protocol/control.js";
 
 export type ComponentCheck = () => Promise<ComponentHealth> | ComponentHealth;
 

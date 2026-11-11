@@ -10,7 +10,7 @@ import type {
   SessionState,
   ControllerSessionView,
 } from "@x402s/shared/protocol";
-import type { ReadinessReport } from "@x402s/shared/runtime";
+import type { ReadinessReport } from "@x402s/shared/protocol";
 
 export type SessionView = ControllerSessionView;
 
