@@ -39,6 +39,42 @@ export type IntentClaim =
   | { status: "failed"; reason?: string }
   | { status: "mismatch" };
 
+/** Server-issued single-use challenge value (#47). */
+export interface ChallengeNonce {
+  nonce: string;
+  expiresAt: number;
+}
+
+/**
+ * Why a nonce burn did not succeed. Mirrors the controller's
+ * `ChallengeBurnResult`; declared here because the API does not import the
+ * controller workspace.
+ */
+export type ChallengeBurnStatus = "burned" | "replay" | "expired" | "unknown" | "reused";
+
+/**
+ * Durable create-budget decision (#48). Mirrors the controller's
+ * `BudgetDecision`; the API does not import the controller workspace.
+ */
+export interface BudgetRemaining {
+  payerCreates: number | null;
+  payerSpend: string | null;
+  /** null means unlimited (the corresponding limit is 0). */
+  payerConcurrent: number | null;
+  globalCreates: number;
+  globalConcurrent: number | null;
+}
+
+export type BudgetDecision =
+  | { ok: true; remaining: BudgetRemaining; windowResetsAt: number }
+  | {
+      ok: false;
+      scope: string;
+      retryAfterSeconds: number;
+      remaining: BudgetRemaining;
+      windowResetsAt: number;
+    };
+
 export type CapacityDecision =
   | { admitted: true; nodeId: string; reservation: { nodeId: string } }
   | {
@@ -146,10 +182,15 @@ export class ControllerClient {
 
   /* ---------------- payment intents ---------------- */
 
-  async claimIntent(paymentKey: string, specHash: string, staleMs?: number): Promise<IntentClaim> {
+  async claimIntent(
+    paymentKey: string,
+    specHash: string,
+    staleMs?: number,
+    requirements?: { network: string; scheme: string; asset: string; amount: string; payTo: string },
+  ): Promise<IntentClaim> {
     const res = await this.raw("/internal/payment-intents/claim", {
       method: "POST",
-      body: JSON.stringify({ paymentKey, specHash, staleMs }),
+      body: JSON.stringify({ paymentKey, specHash, staleMs, requirements }),
     });
     const body = (await res.json().catch(() => ({}))) as IntentClaim & { status?: string };
     if (res.ok) return body as IntentClaim;
@@ -173,6 +214,44 @@ export class ControllerClient {
       method: "POST",
       body: JSON.stringify({ reason }),
     });
+  }
+
+  /* ---------------- durable budgets (#48) ---------------- */
+
+  /**
+   * Reserve one create for a payer (or globally) before any capacity hold. A
+   * rejection is a decided answer; a transport failure throws and the caller
+   * fails closed rather than settling without a budget check.
+   */
+  async reserveBudget(payer: string | null, amountAtomic: string): Promise<BudgetDecision> {
+    return this.call<BudgetDecision>(
+      "/internal/budgets/reserve",
+      { method: "POST", body: JSON.stringify({ ...(payer ? { payer } : {}), amount: amountAtomic }) },
+      5_000,
+    );
+  }
+
+  /* ---------------- challenge nonces (#47) ---------------- */
+
+  /** Mint the single-use value that goes into the 402 challenge. */
+  async issueChallengeNonce(): Promise<ChallengeNonce> {
+    return this.call<ChallengeNonce>("/internal/challenge-nonces", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }, 5_000);
+  }
+
+  /**
+   * Burn a challenge for one payment. `replay` (same payment) is not an error:
+   * it is the crash-recovery retry. A transport failure is surfaced so the
+   * caller can refuse rather than accept an unproven freshness value.
+   */
+  async burnChallengeNonce(nonce: string, paymentKey: string): Promise<{ status: ChallengeBurnStatus }> {
+    return this.call<{ status: ChallengeBurnStatus }>(
+      `/internal/challenge-nonces/${encodeURIComponent(nonce)}/burn`,
+      { method: "POST", body: JSON.stringify({ paymentKey }) },
+      5_000,
+    );
   }
 
   async preflightCapacity(spec: SessionSpec): Promise<CapacityDecision> {

@@ -17,6 +17,8 @@ export interface PaymentRecord {
   payer?: string;
   transaction?: string;
   mode: "mock" | "testnet";
+  /** EIP-3009 authorisation nonce, when the payload carried one. */
+  settlementNonce?: string | null;
 }
 
 export interface SessionRecord {
@@ -101,6 +103,12 @@ export interface PaymentLedgerRecord {
   status: LedgerStatus;
   reason: string | null;
   refundTransaction: string | null;
+  /** EIP-3009 authorisation nonce; lets a refund be keyed by it (#31). */
+  settlementNonce: string | null;
+  /** Refund worker retry state. */
+  refundAttempts: number;
+  refundLastError: string | null;
+  refundNextAttemptAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -115,6 +123,11 @@ export interface PaymentIntentRecord {
   claimToken: string | null;
   /** Lease deadline for the current claim, in epoch ms. */
   claimExpiresAt: number | null;
+  /**
+   * Payment requirements recorded at claim time (`PaymentRequirements` JSON).
+   * Settlement recovery needs them to describe a payment the API no longer has.
+   */
+  requirementsJson: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -123,6 +136,20 @@ export class PaymentAlreadyRedeemedError extends Error {
   constructor(paymentKey: string) {
     super(`payment ${paymentKey.slice(0, 12)}… has already been redeemed`);
     this.name = "PaymentAlreadyRedeemedError";
+  }
+}
+
+/**
+ * A second payment settled for a client key pair that already owns a session.
+ * The new payment is refunded rather than creating a second session (#31).
+ */
+export class DuplicateEntitlementError extends Error {
+  constructor(
+    readonly paymentKey: string,
+    readonly existingSessionId: string,
+  ) {
+    super(`client key pair already owns session ${existingSessionId}`);
+    this.name = "DuplicateEntitlementError";
   }
 }
 
@@ -292,6 +319,7 @@ export function mapIntent(r: Record<string, unknown>): PaymentIntentRecord {
     reason: (r.reason as string | null) ?? null,
     claimToken: (r.claim_token as string | null) ?? null,
     claimExpiresAt: (r.claim_expires_at as number | null) ?? null,
+    requirementsJson: (r.requirements_json as string | null) ?? null,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
   };
@@ -309,6 +337,10 @@ export function mapLedger(r: Record<string, unknown>): PaymentLedgerRecord {
     status: r.status as LedgerStatus,
     reason: (r.reason as string | null) ?? null,
     refundTransaction: (r.refund_tx as string | null) ?? null,
+    settlementNonce: (r.settlement_nonce as string | null) ?? null,
+    refundAttempts: (r.refund_attempts as number | null) ?? 0,
+    refundLastError: (r.refund_last_error as string | null) ?? null,
+    refundNextAttemptAt: (r.refund_next_attempt_at as number | null) ?? null,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
   };

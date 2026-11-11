@@ -12,7 +12,6 @@
 import { statSync } from "node:fs";
 import { backup as sqliteBackup, DatabaseSync, type StatementSync } from "node:sqlite";
 import {
-  mapLedger,
   mapSession,
   type ClaimOperationResult,
   type ExecRequestRecord,
@@ -29,6 +28,9 @@ import { migrate } from "./store/schema.js";
 import { checkStoreHealth, type StoreHealth } from "./store/health.js";
 import { prepareStatements } from "./store/statements.js";
 import { PaymentRepository } from "./store/payments.js";
+import { ChallengeNonceRepository, type ChallengeBurnResult } from "./store/challenges.js";
+import { LedgerRepository, type UnclaimedLedgerEntry } from "./store/ledger.js";
+import { BudgetRepository, type BudgetDecision, type BudgetLimits } from "./store/budgets.js";
 import { cadenceFor } from "./reconcile-cadence.js";
 import { finalStateForReason, SOURCE_STATES } from "@x402s/shared/protocol";
 import { metrics } from "@x402s/shared/runtime";
@@ -49,7 +51,11 @@ export type {
   SessionRecord,
   SessionState,
 } from "./store/models.js";
-export { PaymentAlreadyRedeemedError, PaymentClaimLostError } from "./store/models.js";
+export {
+  DuplicateEntitlementError,
+  PaymentAlreadyRedeemedError,
+  PaymentClaimLostError,
+} from "./store/models.js";
 
 const SCHEMA_LOCK = /database is locked|database table is locked|SQLITE_BUSY/i;
 
@@ -91,6 +97,9 @@ export class Store {
   private readonly stmts: Record<string, StatementSync>;
   readonly reservations: ReservationStore;
   readonly payments: PaymentRepository;
+  readonly challenges: ChallengeNonceRepository;
+  readonly ledger: LedgerRepository;
+  readonly budgets: BudgetRepository;
   /** Path of the main database file (`:memory:` in tests). */
   readonly path: string;
   /**
@@ -100,9 +109,16 @@ export class Store {
    * covered by one guard and a new statement cannot forget to check it.
    */
   private writesBlocked = false;
+  private readonly budgetWindowMs: number;
 
-  constructor(path: string) {
+  /**
+   * `budgetWindowMs` is the fixed window for the durable create budget. It is a
+   * storage concern because the spend commit happens inside the settlement
+   * transaction; the default matches the controller's own default.
+   */
+  constructor(path: string, opts: { budgetWindowMs?: number } = {}) {
     this.path = path;
+    this.budgetWindowMs = opts.budgetWindowMs ?? 3_600_000;
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA busy_timeout = 5000;");
     for (let attempt = 0; ; attempt += 1) {
@@ -122,7 +138,10 @@ export class Store {
     this.reservations = new ReservationRepository(this.db);
 
     this.stmts = prepareStatements(this.db);
-    this.payments = new PaymentRepository(this.db, this.stmts);
+    this.budgets = new BudgetRepository(this.db, this.stmts);
+    this.payments = new PaymentRepository(this.db, this.stmts, this.budgets, this.budgetWindowMs);
+    this.challenges = new ChallengeNonceRepository(this.db, this.stmts);
+    this.ledger = new LedgerRepository(this.stmts);
   }
 
   close(): void {
@@ -185,8 +204,13 @@ export class Store {
   /* ---------------- payment intents (outbox) ---------------- */
 
   /** Lease an intent; see PaymentRepository for the ownership contract. */
-  claimPaymentIntent(paymentKey: string, specHashValue: string, staleMs: number): IntentClaimResult {
-    return this.payments.claimPaymentIntent(paymentKey, specHashValue, staleMs);
+  claimPaymentIntent(
+    paymentKey: string,
+    specHashValue: string,
+    staleMs: number,
+    requirementsJson: string | null = null,
+  ): IntentClaimResult {
+    return this.payments.claimPaymentIntent(paymentKey, specHashValue, staleMs, requirementsJson);
   }
 
   getPaymentIntent(paymentKey: string): PaymentIntentRecord | null {
@@ -207,6 +231,34 @@ export class Store {
     return this.payments.completeEntitlement(paymentKey, claimToken, payment, session);
   }
 
+  /* ---------------- challenge nonces (F-07) ---------------- */
+
+  /** Mint a single-use nonce for one 402 challenge. */
+  issueChallengeNonce(nonce: string, ttlMs: number, maxActive: number): { nonce: string; expiresAt: number } {
+    return this.challenges.issue(nonce, Date.now(), ttlMs, maxActive);
+  }
+
+  /** Burn a nonce for one payment; see ChallengeNonceRepository. */
+  burnChallengeNonce(nonce: string, paymentKey: string): ChallengeBurnResult {
+    return this.challenges.burn(nonce, paymentKey, Date.now());
+  }
+
+  /** Drop expired nonces. Called from housekeeping so the table stays bounded. */
+  pruneChallengeNonces(): number {
+    return this.challenges.prune(Date.now());
+  }
+
+  /* ---------------- durable budgets (#48) ---------------- */
+
+  /**
+   * Reserve one create against the global and (optionally) per-payer budget.
+   * See BudgetRepository: all-or-nothing, one transaction, no spend until the
+   * ledger row is written.
+   */
+  reserveBudgets(payer: string | null, amountAtomic: string, limits: BudgetLimits): BudgetDecision {
+    return this.budgets.reserve(payer, amountAtomic, limits, Date.now());
+  }
+
   /* ---------------- sessions ---------------- */
 
   getSession(id: string): SessionRecord | null {
@@ -215,46 +267,67 @@ export class Store {
   }
 
   getPayment(key: string): PaymentRecord | null {
-    const row = this.stmts.getPayment!.get(key) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    return {
-      paymentKey: row.payment_key as string,
-      network: row.network as string,
-      scheme: row.scheme as string,
-      asset: row.asset as string,
-      amount: row.amount as string,
-      payTo: row.pay_to as string,
-      payer: row.payer as string | undefined,
-      transaction: row.tx as string | undefined,
-      mode: row.mode as "mock" | "testnet",
-    };
+    return this.payments.getPaymentRecord(key);
   }
 
+  /* ---------------- payment ledger (delegated) ---------------- */
+
   getLedgerByPayment(paymentKey: string): PaymentLedgerRecord | null {
-    const row = this.stmts.getLedgerByPayment!.get(paymentKey) as Record<string, unknown> | undefined;
-    return row ? mapLedger(row) : null;
+    return this.ledger.getByPayment(paymentKey);
   }
 
   getLedgerBySession(sessionId: string): PaymentLedgerRecord | null {
-    const row = this.stmts.getLedgerBySession!.get(sessionId) as Record<string, unknown> | undefined;
-    return row ? mapLedger(row) : null;
+    return this.ledger.getBySession(sessionId);
+  }
+
+  /** By EIP-3009 authorisation nonce, for a facilitator webhook or an operator. */
+  getLedgerByNonce(settlementNonce: string): PaymentLedgerRecord | null {
+    return this.ledger.getByNonce(settlementNonce);
   }
 
   listLedgerByStatus(status: LedgerStatus): PaymentLedgerRecord[] {
-    return (this.stmts.listLedgerByStatus!.all(status) as unknown as Array<Record<string, unknown>>).map(mapLedger);
+    return this.ledger.listByStatus(status);
+  }
+
+  countLedgerByStatus(status: LedgerStatus): number {
+    return this.ledger.countByStatus(status);
   }
 
   listUnrefundedTerminalBeforeReady(): PaymentLedgerRecord[] {
-    return (this.stmts.listUnrefundedTerminalBeforeReady!.all() as unknown as Array<Record<string, unknown>>)
-      .map(mapLedger);
+    return this.ledger.listUnrefundedTerminalBeforeReady();
+  }
+
+  /** Settled rows with no session (unentitled or duplicate charges). */
+  listUnclaimedSettled(): PaymentLedgerRecord[] {
+    return this.ledger.listUnclaimedSettled();
+  }
+
+  /** REFUND_PENDING rows whose next attempt is due (#31). */
+  listRefundPendingDue(now: number, limit: number): PaymentLedgerRecord[] {
+    return this.ledger.listRefundPendingDue(now, limit);
   }
 
   markRefundPending(paymentKey: string, reason: string): boolean {
-    return this.stmts.markRefundPending!.run(reason.slice(0, 500), Date.now(), paymentKey).changes > 0;
+    return this.ledger.markRefundPending(paymentKey, reason);
   }
 
   markRefunded(paymentKey: string, transaction: string, reason: string): boolean {
-    return this.stmts.markRefunded!.run(reason.slice(0, 500), transaction, Date.now(), paymentKey).changes > 0;
+    return this.ledger.markRefunded(paymentKey, transaction, reason);
+  }
+
+  /** Record one failed refund attempt and back off. */
+  recordRefundAttempt(paymentKey: string, error: string, nextAttemptAt: number): boolean {
+    return this.ledger.recordRefundAttempt(paymentKey, error, nextAttemptAt);
+  }
+
+  /** Write the ledger row for a settled payment that no session consumed (#31). */
+  insertUnclaimedLedger(entry: UnclaimedLedgerEntry): boolean {
+    return this.ledger.insertUnclaimed(entry);
+  }
+
+  /** Claimed intents past the recovery grace: the settle-then-crash window. */
+  listStaleClaimedIntents(olderThan: number, limit: number): PaymentIntentRecord[] {
+    return this.ledger.listStaleClaimedIntents(olderThan, limit);
   }
 
   listNonTerminal(): SessionRecord[] {

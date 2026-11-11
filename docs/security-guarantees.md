@@ -20,6 +20,7 @@ guest.
 | No accounts / API keys | Enforced | Enforced |
 | One settled payment -> one session | Enforced + tested | Enforced |
 | Duplicate settlement / replay rejected | Enforced + tested | Enforced |
+| A captured create request is not a permanent replay | Enforced + tested (challenge nonce TTL) | Enforced |
 | API accepts only ciphertext | Enforced + tested | Enforced |
 | Control-plane logs and database free of plaintext | Enforced + tested | Enforced |
 | Suspended workspace PVC free of plaintext | **No** | **No** |
@@ -59,6 +60,27 @@ controller never mounts the PVC, which is why the control plane still holds no
 plaintext; but "the control plane cannot read it" is not the same as "it is
 encrypted". See [lifecycle.md](lifecycle.md#checkpoint-at-rest-expiry-and-backup)
 and [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md).
+
+### Payment proof is bound to a server challenge
+
+A `PAYMENT-SIGNATURE` alone is not session authority: the paying wallet must also
+sign `(paymentKey, clientPublicKey, clientNonce, challengeNonce)`, where
+`challengeNonce` came from the 402 that this API issued and is burned on first
+use (default TTL 180 s, `CHALLENGE_NONCE_TTL_MS`). Consequences:
+
+- A stolen payment header cannot bind a session to another client key (F-02).
+- A captured *complete* create request works only once, and only inside the
+  challenge TTL. Before #47 it worked forever (F-07).
+- A retry after a lost response still recovers the same entitlement, because the
+  client reuses the payment payload and only re-signs the commitment.
+- The nonce table is durable, TTL-pruned and count-capped
+  (`CHALLENGE_NONCE_MAX_ACTIVE`, default 20 000). Issuing is unauthenticated, so
+  the per-IP create bucket is the bound on how fast the table can grow.
+
+Residual: an attacker who captures the *challenge and the signed request
+together* and submits it before the real client does wins that race, exactly as
+they would win a network race for any one-time token. There is still no
+per-request proof of possession: a capability is a bearer token for its TTL.
 
 ## 2. There is no hardware root of trust
 

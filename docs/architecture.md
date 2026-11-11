@@ -173,6 +173,14 @@ One payment creates at most one session: the intent is keyed by payment,
 `payments.payment_key` is UNIQUE, `sessions.payment_key` is UNIQUE, and the
 facilitator rejects a reused nonce.
 
+**Freshness nonce (F-07).** The 402 carries a single-use `challengeNonce`, the
+payer wallet signs it as part of the client commitment, and the controller burns
+it in `challenge_nonces` before capacity is held. A captured complete create
+request therefore stops working once its challenge is spent, and the
+crash-recovery retry is preserved by reusing the same payment payload with a new
+challenge. The table is TTL- and count-bounded; issuing a challenge is a small
+write on an unauthenticated path, which the per-IP admission bucket bounds.
+
 ## 5. Confidentiality protocol
 
 ```text

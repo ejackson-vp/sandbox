@@ -19,7 +19,9 @@ const requirement = {
   amount: "10000",
   payTo: "0x0000000000000000000000000000000000000402",
   maxTimeoutSeconds: 300,
-  extra: { tier: "short", durationSeconds: 60 },
+  // The SDK refuses to sign a commitment the server cannot verify, so every
+  // challenge carries the single-use value (#47).
+  extra: { tier: "short", durationSeconds: 60, challengeNonce: "cn_0123456789abcdef0123456789abcdef" },
 };
 
 const paymentRequired = {

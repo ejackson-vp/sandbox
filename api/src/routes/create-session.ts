@@ -10,7 +10,9 @@ import type { x402ResourceServer } from "@x402/core/server";
 import type { PaymentRequirements } from "@x402/core/types";
 import {
   clientCommitmentMessage,
+  isChallengeNonce,
   paymentAuthorizer,
+  settlementNonce,
   sha256Hex,
 } from "@x402s/shared/crypto";
 import {
@@ -26,7 +28,13 @@ import type {
   SessionSpec,
 } from "@x402s/shared/protocol";
 import type { ApiConfig } from "../config.js";
-import { ControllerError, type CapacityDecision, type ControllerClient, type IntentCompletion } from "../controller-client.js";
+import {
+  ControllerError,
+  type BudgetDecision,
+  type CapacityDecision,
+  type ControllerClient,
+  type IntentCompletion,
+} from "../controller-client.js";
 import { createSchema } from "../schemas.js";
 import { RateLimiter, paymentPayerKey } from "../admission.js";
 import type { SettlementLookup } from "../settlement-lookup.js";
@@ -168,8 +176,10 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     const key = paymentKey(payload);
 
     // The receipt alone is not authority. The wallet that signed the payment
-    // must also sign this exact client key, so a captured PAYMENT-SIGNATURE
-    // cannot bind the session to another client or reclaim the capability.
+    // must also sign this exact client key *and* the server-issued challenge
+    // nonce, so a captured PAYMENT-SIGNATURE cannot bind the session to another
+    // client, and a captured complete request stops working once its challenge
+    // is burned or expires (F-07).
     const authorizer = paymentAuthorizer(payload);
     if (!authorizer) {
       await deps.payment402(res, requirement, "malformed_payment_authorization");
@@ -180,6 +190,14 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       res.status(401).json({ error: "client_proof_required" });
       return;
     }
+    if (!isChallengeNonce(body.challengeNonce)) {
+      // An older client sent a v1 commitment. Answer with a challenge so a
+      // current client can retry instead of failing without guidance.
+      recordAuthFailure("challenge_nonce_missing");
+      await deps.payment402(res, requirement, "challenge_nonce_required");
+      return;
+    }
+    const challengeNonce = body.challengeNonce;
     let proofOk = false;
     try {
       proofOk = await verifyMessage({
@@ -188,6 +206,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
           paymentKey: key,
           clientPublicKey: body.clientPublicKey,
           clientNonce: body.clientNonce,
+          challengeNonce,
         }),
         signature: body.clientSignature as `0x${string}`,
       });
@@ -198,6 +217,62 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       recordAuthFailure("client_proof_invalid");
       log.warn("client_commitment_invalid", { paymentKeyPrefix: key.slice(0, 12) });
       res.status(401).json({ error: "client_proof_invalid" });
+      return;
+    }
+
+    // Burn the challenge before any capacity is held or money is moved. A
+    // `replay` is the same payment retrying (the documented crash-recovery
+    // path) and continues; every other non-ok answer ends the request with a
+    // fresh challenge, so the client can re-sign for the same payment.
+    let burn: { status: "burned" | "replay" | "expired" | "unknown" | "reused" };
+    try {
+      burn = await deps.controller.burnChallengeNonce(challengeNonce, key);
+    } catch (err) {
+      // Fail closed: an unproven freshness value must not buy an entitlement.
+      log.error("challenge_nonce_burn_failed", { error: (err as Error).message });
+      res.status(503).json({
+        error: "challenge_unavailable",
+        retryable: true,
+        message: "try again shortly; no payment was taken",
+      });
+      return;
+    }
+    if (burn.status !== "burned" && burn.status !== "replay") {
+      recordAuthFailure(`challenge_nonce_${burn.status}`);
+      await deps.payment402(res, requirement, `challenge_nonce_${burn.status}`);
+      return;
+    }
+
+    // Durable per-payer and global budget (#48), before any capacity hold, intent
+    // claim or settlement. The in-memory buckets above are the first line; this
+    // one survives a restart, and the global row cannot be influenced by a
+    // client-chosen field. `authorizer` is proven here: the commitment signature
+    // recovers to it, so the budget key is a key the caller controls.
+    let budget: BudgetDecision;
+    try {
+      budget = await deps.controller.reserveBudget(authorizer, requirement.amount);
+    } catch (err) {
+      log.error("budget_reservation_failed", { error: (err as Error).message });
+      res.status(503).json({
+        error: "admission_unavailable",
+        retryable: true,
+        message: "try again shortly; no payment was taken",
+      });
+      return;
+    }
+    if (!budget.ok) {
+      const globalScope = budget.scope.startsWith("global_");
+      recordRateLimited(globalScope ? "global_budget" : "payer_budget");
+      res.setHeader("Retry-After", String(budget.retryAfterSeconds));
+      res.status(429).json({
+        error: "budget_exhausted",
+        scope: budget.scope,
+        retryAfterSeconds: budget.retryAfterSeconds,
+        windowResetsAt: new Date(budget.windowResetsAt).toISOString(),
+        // What the payer has left, so a client can back off without guessing.
+        remaining: budget.remaining,
+        message: "this payer's create budget is exhausted; no payment was taken",
+      });
       return;
     }
 
@@ -220,7 +295,13 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       return;
     }
 
-    const claim = await deps.controller.claimIntent(key, specDigest, deps.config.intentStaleMs);
+    const claim = await deps.controller.claimIntent(key, specDigest, deps.config.intentStaleMs, {
+      network: requirement.network,
+      scheme: requirement.scheme,
+      asset: requirement.asset,
+      amount: requirement.amount,
+      payTo: requirement.payTo,
+    });
     if (claim.status === "in_progress") {
       res.status(409).json({ error: "payment_in_progress", message: "this payment is already being processed" });
       return;
@@ -294,6 +375,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
             payer: settled.payer,
             transaction: settled.transaction,
             mode: deps.config.paymentMode,
+            settlementNonce: settlementNonce(payload),
           },
         });
       } catch (err) {

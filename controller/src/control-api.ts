@@ -23,6 +23,8 @@ import {
 } from "@x402s/shared/runtime";
 import { constantTimeEqual } from "./secrets.js";
 import { createCapacityRouter } from "./capacity/routes.js";
+import { registerBudgetRoutes } from "./control-api/budgets.js";
+import { registerChallengeNonceRoutes } from "./control-api/challenges.js";
 import { registerPaymentRoutes } from "./control-api/payments.js";
 import { registerSessionRoutes } from "./control-api/sessions.js";
 import type { ControlApiDeps } from "./control-api/types.js";
@@ -164,6 +166,10 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   /* ---------------- payment intent outbox ---------------- */
 
   registerPaymentRoutes(app, deps);
+
+  registerChallengeNonceRoutes(app, deps);
+
+  registerBudgetRoutes(app, deps);
 
   registerSessionRoutes(app, deps);
 

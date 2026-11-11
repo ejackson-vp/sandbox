@@ -163,6 +163,12 @@ beforeAll(async () => {
     RECONCILE_INTERVAL_MS: "100",
     RELAY_RESPONSE_WAIT_MS: "30000",
     ALLOW_CUSTOM_DURATIONS: "true",
+    // The durable create budget (#48) is a production ceiling; this suite uses
+    // one ephemeral payer for dozens of sequential creates, so give it headroom
+    // rather than tuning the test around the default window.
+    PAYER_CREATES_PER_WINDOW: "1000",
+    PAYER_CONCURRENT_SESSIONS: "0",
+    GLOBAL_CREATES_PER_WINDOW: "10000",
   });
 
   provisioner = new LocalProvisioner({
@@ -404,7 +410,7 @@ describe("payments and entitlements", () => {
     // B has A's PAYMENT-SIGNATURE but not A's wallet. B tries to bind the
     // session to B's client key before A submits.
     const bodyA = await createBody();
-    const { header, challenge, body: signedA } = await createSessionPayment(apiUrl, bodyA);
+    const { header, challenge, challengeNonce, body: signedA } = await createSessionPayment(apiUrl, bodyA);
     const bodyB = await createBody();
     const b = privateKeyToAccount(generatePrivateKey());
     const payload = decodePaymentSignatureHeader(header);
@@ -413,11 +419,12 @@ describe("payments and entitlements", () => {
         paymentKey: paymentKey(payload),
         clientPublicKey: bodyB.clientPublicKey,
         clientNonce: bodyB.clientNonce,
+        challengeNonce,
       }),
     });
 
     const before = store.countSessions();
-    const hijack = await postSession({ ...bodyB, clientSignature: bSignature }, header);
+    const hijack = await postSession({ ...bodyB, challengeNonce, clientSignature: bSignature }, header);
     expect(hijack.status).toBe(401);
     expect(((await hijack.json()) as { error: string }).error).toBe("client_proof_invalid");
     expect(store.countSessions()).toBe(before);
@@ -433,7 +440,7 @@ describe("payments and entitlements", () => {
     // A pays and owns a live session. B steals the header and asks for the
     // capability with its own client key, then with A's key but no proof.
     const bodyA = await createBody();
-    const { header, body: signedA, account: payer } = await createSessionPayment(apiUrl, bodyA);
+    const { header, challengeNonce, body: signedA, account: payer } = await createSessionPayment(apiUrl, bodyA);
     const first = await postSession(signedA, header);
     expect(first.status).toBe(201);
     const created = (await first.json()) as { sessionId: string; capability: string };
@@ -446,11 +453,12 @@ describe("payments and entitlements", () => {
         paymentKey: paymentKey(payload),
         clientPublicKey: bodyB.clientPublicKey,
         clientNonce: bodyB.clientNonce,
+        challengeNonce,
       }),
     });
 
     // B's own wallet cannot sign A's payment: rejected before any intent work.
-    const bAttempt = await postSession({ ...bodyB, clientSignature: bSignature }, header);
+    const bAttempt = await postSession({ ...bodyB, challengeNonce, clientSignature: bSignature }, header);
     expect(bAttempt.status).toBe(401);
     expect(((await bAttempt.json()) as { error: string }).error).toBe("client_proof_invalid");
 
@@ -462,10 +470,11 @@ describe("payments and entitlements", () => {
         paymentKey: paymentKey(payload),
         clientPublicKey: bodyA2.clientPublicKey,
         clientNonce: bodyA2.clientNonce,
+        challengeNonce,
       }),
     });
     const withDifferentKey = await postSession(
-      { ...bodyA2, clientSignature: aDifferentKeySignature },
+      { ...bodyA2, challengeNonce, clientSignature: aDifferentKeySignature },
       header,
     );
     expect(withDifferentKey.status).toBe(409);

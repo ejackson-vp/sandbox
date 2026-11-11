@@ -16,6 +16,11 @@ metadata:
   labels:
     app.kubernetes.io/part-of: sandbox
     x402.io/role: sandbox-workloads
+    # Guest-image admission (deploy/kubernetes/kyverno/guest-image-policy.yaml):
+    # `enforce` requires the released digest, `dev-unpinned` keeps the
+    # repository+digest shape only. Local kind relabels to `dev-unpinned`; see
+    # that directory's README. Removing the label disables both rules.
+    x402.io/image-policy: enforce
     # No customer workload may escape the restricted profile.
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest

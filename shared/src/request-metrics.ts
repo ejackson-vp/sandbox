@@ -13,13 +13,28 @@ export const AUTH_FAILURE_REASONS = [
   "capability_expired",
   "client_proof_missing",
   "client_proof_invalid",
+  // Server-issued challenge nonce (#47): absent, expired, already burned by a
+  // different payment, or unknown to this controller.
+  "challenge_nonce_missing",
+  "challenge_nonce_expired",
+  "challenge_nonce_reused",
+  "challenge_nonce_unknown",
   "internal_token",
   "relay_admin_token",
 ] as const;
 
 export type AuthFailureReason = (typeof AUTH_FAILURE_REASONS)[number];
 
-export const RATE_LIMIT_SCOPES = ["ip", "payer", "read", "internal", "relay"] as const;
+export const RATE_LIMIT_SCOPES = [
+  "ip",
+  "payer",
+  // Durable budget (#48): a payer window and the global window.
+  "payer_budget",
+  "global_budget",
+  "read",
+  "internal",
+  "relay",
+] as const;
 
 export type RateLimitScope = (typeof RATE_LIMIT_SCOPES)[number];
 

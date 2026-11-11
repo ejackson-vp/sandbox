@@ -80,6 +80,7 @@ and can run code that is malicious inside its own sandbox.
 | Threat | Handling |
 | --- | --- |
 | Same payment used twice | facilitator nonce store + `payment_intents` PK + `payments` PK + `sessions.payment_key` UNIQUE; replay returns the same session (200) |
+| Captured create request replayed later | the wallet signature covers a server-issued single-use `challengeNonce`; the controller burns it before capacity or settlement (#47) |
 | Concurrent duplicates | intent `claimed` → `409 in_progress`; exactly one session (tested 6-way) |
 | Settled but API crashed before entitlement | durable intent + facilitator settlement lookup completes it on retry (tested) |
 | Reused settlement with a different spec | intent stores `spec_hash`; mismatch → 409, no session |

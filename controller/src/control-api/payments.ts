@@ -4,7 +4,12 @@ import { resolveSessionSpec, specHash as computeSpecHash } from "@x402s/shared/p
 import type { PaymentIntentStatus, SessionSpec, SessionState } from "@x402s/shared/protocol";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { log, metrics } from "@x402s/shared/runtime";
-import { PaymentAlreadyRedeemedError, PaymentClaimLostError, type LedgerStatus } from "../store/models.js";
+import {
+  DuplicateEntitlementError,
+  PaymentAlreadyRedeemedError,
+  PaymentClaimLostError,
+  type LedgerStatus,
+} from "../store/models.js";
 import { completeSchema, intentClaimSchema } from "../control-api-schemas.js";
 import { describeSession } from "../session-view.js";
 import type { ControlApiDeps } from "./types.js";
@@ -36,6 +41,9 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       parsed.data.paymentKey,
       parsed.data.specHash,
       parsed.data.staleMs ?? 30_000,
+      // Recorded so settlement recovery can describe the payment after the API
+      // has forgotten the request (#31).
+      parsed.data.requirements ? JSON.stringify(parsed.data.requirements) : null,
     );
     if (result.status === "mismatch") {
       res.status(409).json({ status: "mismatch", error: "spec_hash_mismatch" });
@@ -173,6 +181,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
           payer: body.payment.payer,
           transaction: body.payment.transaction,
           mode: body.payment.mode,
+          settlementNonce: body.payment.settlementNonce ?? null,
         },
         {
           id: body.sessionId,
@@ -241,6 +250,16 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
         res.status(409).json({ error: "payment_already_redeemed", sessionId: existing?.sessionId });
         return;
       }
+      if (err instanceof DuplicateEntitlementError) {
+        // The second payment was recorded and marked refundable in the same
+        // transaction; the client must not retry it.
+        res.status(409).json({
+          error: "duplicate_session",
+          sessionId: err.existingSessionId,
+          message: "this client key already owns a session; the new payment was recorded for refund",
+        });
+        return;
+      }
       if (err instanceof PaymentClaimLostError) {
         // The claim was reclaimed while this request was in flight. Do not free
         // capacity here: the live owner holds the same payment reservation.
@@ -291,6 +310,22 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     res.json({ payments: store.listLedgerByStatus(status as LedgerStatus) });
   });
 
+  // A facilitator webhook or an operator can key a refund by the EIP-3009
+  // authorisation nonce instead of the payment key (#31).
+  app.get("/internal/payments/by-nonce/:nonce", (req: Request, res: Response) => {
+    const nonce = String(req.params.nonce ?? "").toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(nonce)) {
+      res.status(400).json({ error: "invalid_nonce" });
+      return;
+    }
+    const ledger = store.getLedgerByNonce(nonce);
+    if (!ledger) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json(ledger);
+  });
+
   app.get("/internal/payments/:paymentKey", (req: Request, res: Response) => {
     const ledger = store.getLedgerByPayment(String(req.params.paymentKey ?? ""));
     if (!ledger) {
@@ -301,7 +336,13 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
   });
 
   app.post("/internal/payments/:paymentKey/refund", (req: Request, res: Response) => {
-    const paymentKey = String(req.params.paymentKey ?? "");
+    // `:paymentKey` may be a payment key or an EIP-3009 nonce; both identify at
+    // most one ledger row.
+    const identifier = String(req.params.paymentKey ?? "");
+    const byNonce = /^0x[0-9a-fA-F]{64}$/.test(identifier);
+    const paymentKey = byNonce
+      ? store.getLedgerByNonce(identifier.toLowerCase())?.paymentKey ?? ""
+      : identifier;
     const transaction = typeof req.body?.transaction === "string" ? req.body.transaction : "";
     if (!transaction) {
       res.status(400).json({ error: "transaction_required" });

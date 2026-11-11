@@ -9,6 +9,52 @@ the container registry.
 
 ### Added
 
+- Single-use challenge nonce in the 402 response (`accepts[0].extra.challengeNonce`,
+  `cn_` + 128 bits), bound into the client commitment signature and burned in the
+  controller's `challenge_nonces` table (schema v13) before capacity is held.
+  This closes F-07: a captured *complete* create request is no longer a permanent
+  replay. TTL `CHALLENGE_NONCE_TTL_MS` (180 s), cap
+  `CHALLENGE_NONCE_MAX_ACTIVE` (20 000). See
+  [docs/security-guarantees.md](docs/security-guarantees.md) and #47.
+- Kyverno `ClusterPolicy` that rejects a guest pod whose image is not
+  `<repository>@sha256:<64 hex>` in the pinned repository, or whose digest is not
+  the released one. Scoped by the namespace label `x402.io/image-policy`
+  (`enforce` by default, `dev-unpinned` documented for local kind). Not installed
+  by `make deploy`; see
+  [deploy/kubernetes/kyverno](deploy/kubernetes/kyverno/README.md) and #30.
+
+- Durable per-payer and global create budgets in the controller (schema v14,
+  `payer_budgets`): creates and committed spend per fixed window, plus
+  concurrency counted from live sessions. Checked after the client commitment is
+  verified and before any capacity hold, intent claim or settlement; a rejection
+  is `429 budget_exhausted` with the scope, `Retry-After` and the remaining
+  budget. Spend is committed in the same transaction as the payment and ledger
+  rows, against the payer the facilitator verified, so a failure cannot lock a
+  payer out and a settlement cannot be invisible to the budget. Limits:
+  `BUDGET_WINDOW_MS`, `PAYER_CREATES_PER_WINDOW`, `PAYER_SPEND_PER_WINDOW`,
+  `PAYER_CONCURRENT_SESSIONS`, `GLOBAL_CREATES_PER_WINDOW`,
+  `GLOBAL_CONCURRENT_SESSIONS`. See
+  [docs/admission-control.md](docs/admission-control.md) and #48.
+- API metrics `sandbox_rate_limited_total{scope="payer_budget"|"global_budget"}`
+  and controller metric `sandbox_budget_rejections_total{scope}`; auth failures
+  gain `challenge_nonce_{missing,expired,reused,unknown}`.
+
+- Settlement reconciliation and an opt-in refund worker (#31, schema v15).
+  `payment_intents` records the payment requirements at claim time;
+  `SettlementRecovery` finds intents `claimed` past
+  `SETTLEMENT_RECOVERY_GRACE_MS` whose payment settled at the facilitator and
+  writes a `REFUND_PENDING` ledger row (`unsettled:<paymentKey>`,
+  `settled_without_entitlement`) instead of losing the payment. `RefundWorker`
+  executes `REFUND_PENDING` rows through `REFUND_WEBHOOK_URL` with attempt
+  counting, backoff and a give-up limit; with no webhook it does nothing.
+  `payment_ledger.settlement_nonce` lets a refund be keyed by the EIP-3009 nonce
+  (`GET /internal/payments/by-nonce/:nonce`, refund endpoint accepts either).
+  Never run against real money; the mock facilitator is the only backend tested.
+- Double-charge guard: a second signed payment for a `(clientPublicKey,
+  clientNonce)` pair that already owns a session is refunded
+  (`duplicate_client_nonce`) and refused with `409 duplicate_session`.
+- Metrics: `sandbox_refund_worker_total{result}`, `sandbox_refunds_pending`,
+  `sandbox_settlement_recovery_total{result}`.
 - `runtime` is part of the create request, the immutable session spec and its
   hash, the session row (schema v12, `base` for existing rows), the controller
   view and the status/create responses. Profiles are `base`, `python` and
@@ -89,6 +135,17 @@ the container registry.
 - CodeQL analyses every branch push, not just `main`, so a commit that lands
   inside a multi-commit push still has its own analysis (the OpenSSF `SAST`
   check reads that).
+- **Breaking (SDK 0.3.0):** the client commitment is domain
+  `x402-sandbox/client-commitment/v2`, which covers `challengeNonce`, and
+  `challengeNonce` is now required on any paid `POST /v1/sessions`. A v1 client
+  (no `challengeNonce`, signature over the v1 message) receives a `402` with a
+  fresh challenge instead of a capability, so it fails closed rather than being
+  served on an unproven freshness value. `@x402s/sdk` 0.3.0 signs v2 and drops
+  the cached-challenge fast path, so every create takes the 402 round trip
+  (+1 RTT). No external clients exist yet; the SDK is unpublished.
+- The SDK retries a rejected challenge with the same payment payload and a new
+  signature, so a burned/expired challenge recovers the same entitlement instead
+  of paying twice.
 - Provisioning is table-driven end to end. `PAID -> PROVISIONING` and
   `SUSPENDED -> RESUMING` now execute the effect list their transition returns
   through the controller's effect interpreter, so `register_relay`,
