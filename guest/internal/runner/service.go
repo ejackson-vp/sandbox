@@ -43,9 +43,14 @@ func StartService(
 		return nil, fmt.Errorf("port must be between 1024 and 65535")
 	}
 
-	cmd := exec.Command(command[0], command[1:]...)
+	childEnv := buildEnv(opts, env)
+	path, err := resolveCommand(command[0], childEnv)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(path, command[1:]...)
 	cmd.Dir = cwd
-	cmd.Env = buildEnv(opts, env)
+	cmd.Env = childEnv
 	limit := opts.MaxOutput
 	if limit < 16*1024 {
 		limit = 16 * 1024

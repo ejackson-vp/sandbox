@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -127,9 +128,14 @@ func Execute(ctx context.Context, opts Options, req *protocol.Request, cwd strin
 		timeout = opts.MaxCommand
 	}
 
-	cmd := exec.Command(req.Command[0], req.Command[1:]...)
+	env := buildEnv(opts, req.Env)
+	path, err := resolveCommand(req.Command[0], env)
+	if err != nil {
+		return protocol.ErrorResult(req, "spawn_failed", err.Error())
+	}
+	cmd := exec.Command(path, req.Command[1:]...)
 	cmd.Dir = cwd
-	cmd.Env = buildEnv(opts, req.Env)
+	cmd.Env = env
 	if req.Stdin != "" {
 		cmd.Stdin = strings.NewReader(req.Stdin)
 	}
@@ -181,6 +187,41 @@ func Execute(ctx context.Context, opts Options, req *protocol.Request, cwd strin
 	result.Truncated.Stdout = stdout.Truncated()
 	result.Truncated.Stderr = stderr.Truncated()
 	return result
+}
+
+// resolveCommand applies the child PATH, not the supervisor's. Go's
+// exec.Command/LookPath resolves the executable against the supervisor's
+// environment, so a profile PATH would be ignored and every language binary
+// would look missing.
+func resolveCommand(name string, env []string) (string, error) {
+	if strings.ContainsRune(name, os.PathSeparator) {
+		if executable(name) {
+			return name, nil
+		}
+		return "", fmt.Errorf("could not start %q: executable file not found", name)
+	}
+	pathValue := ""
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "PATH=") {
+			pathValue = strings.TrimPrefix(entry, "PATH=")
+			break
+		}
+	}
+	for _, dir := range filepath.SplitList(pathValue) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, name)
+		if executable(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("could not start %q: executable file not found in $PATH", name)
+}
+
+func executable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }
 
 func killGroup(pgid int) {
