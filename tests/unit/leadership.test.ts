@@ -14,6 +14,7 @@ import {
 } from "../../controller/src/leadership.js";
 import {
   LeaseLeadership,
+  microTime,
   type LeaseClient,
   type LeaseRecord,
   type LeaseSnapshot,
@@ -125,8 +126,8 @@ function seedHolder(holder: string, acquireTimeMs = 0): LeaseRecord {
   return {
     holderIdentity: holder,
     leaseDurationSeconds: 10,
-    acquireTime: new Date(acquireTimeMs),
-    renewTime: new Date(acquireTimeMs),
+    acquireTime: microTime(acquireTimeMs),
+    renewTime: microTime(acquireTimeMs),
     leaseTransitions: 1,
   };
 }
@@ -173,7 +174,9 @@ describe("lease leadership", () => {
     expect(client.holder).toBe("controller-0");
     expect(client.creates).toBe(1);
     expect(client.record.leaseTransitions).toBe(0);
-    expect(client.record.renewTime.getTime()).toBe(time.now());
+    // MicroTime: exactly six fractional digits, or the API server answers 400.
+    expect(client.record.renewTime).toBe(microTime(time.now()));
+    expect(client.record.renewTime).toMatch(/\.\d{6}Z$/);
     await lease.stop();
   });
 
@@ -190,7 +193,7 @@ describe("lease leadership", () => {
     await lease.tick();
 
     expect(client.replaces).toBe(renewals + 1);
-    expect(client.record.renewTime.getTime()).toBe(time.now());
+    expect(client.record.renewTime).toBe(microTime(time.now()));
     expect(client.record.leaseTransitions).toBe(0);
     expect(lease.isLeader()).toBe(true);
     expect(seen).toEqual([true]);

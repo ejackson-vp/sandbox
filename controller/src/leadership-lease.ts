@@ -34,12 +34,27 @@ export const LEASE_DURATION_MS = 10_000;
  */
 const LEASE_CALL_TIMEOUT_MS = 1_500;
 
+/**
+ * A Lease as this module reads and writes it.
+ *
+ * Times are strings, not `Date`, because Kubernetes MicroTime only accepts
+ * exactly six fractional digits and the generated client passes whatever it is
+ * given straight through (`Date.toISOString()` produces three, which the API
+ * server rejects with 400).
+ */
 export interface LeaseRecord {
   holderIdentity: string;
   leaseDurationSeconds: number;
-  acquireTime: Date;
-  renewTime: Date;
+  /** RFC3339 with microseconds. */
+  acquireTime: string;
+  /** RFC3339 with microseconds. */
+  renewTime: string;
   leaseTransitions: number;
+}
+
+/** Format an epoch millisecond value the way MicroTime demands. */
+export function microTime(ms: number): string {
+  return new Date(ms).toISOString().replace(/\.(\d{3})Z$/, ".$1000Z");
 }
 
 export interface LeaseSnapshot {
@@ -244,8 +259,8 @@ export class LeaseLeadership extends BaseLeadership {
           this.client.create(this.name, this.namespace, {
             holderIdentity: this.identity,
             leaseDurationSeconds: this.durationSeconds,
-            acquireTime: new Date(now),
-            renewTime: new Date(now),
+            acquireTime: microTime(now),
+            renewTime: microTime(now),
             leaseTransitions: 0,
           }),
         "create",
@@ -265,7 +280,7 @@ export class LeaseLeadership extends BaseLeadership {
           this.client.replace(
             this.name,
             this.namespace,
-            { ...record, leaseDurationSeconds: this.durationSeconds, renewTime: new Date(this.now()) },
+            { ...record, leaseDurationSeconds: this.durationSeconds, renewTime: microTime(this.now()) },
             resourceVersion,
           ),
         "renew",
@@ -323,8 +338,8 @@ export class LeaseLeadership extends BaseLeadership {
             {
               holderIdentity: this.identity,
               leaseDurationSeconds: this.durationSeconds,
-              acquireTime: new Date(now),
-              renewTime: new Date(now),
+              acquireTime: microTime(now),
+              renewTime: microTime(now),
               leaseTransitions: record.leaseTransitions + 1,
             },
             resourceVersion,
@@ -377,7 +392,7 @@ export class LeaseLeadership extends BaseLeadership {
               ...snapshot.record,
               holderIdentity: "",
               leaseDurationSeconds: this.durationSeconds,
-              renewTime: new Date(this.now()),
+              renewTime: microTime(this.now()),
             },
             snapshot.resourceVersion,
           ),
@@ -421,8 +436,10 @@ function toSpec(record: LeaseRecord): k8s.V1LeaseSpec {
   return {
     holderIdentity: record.holderIdentity,
     leaseDurationSeconds: record.leaseDurationSeconds,
-    acquireTime: record.acquireTime,
-    renewTime: record.renewTime,
+    // Strings: the generated model types these as Date, but MicroTime needs six
+    // fractional digits and the serializer forwards the value untouched.
+    acquireTime: record.acquireTime as unknown as k8s.V1MicroTime,
+    renewTime: record.renewTime as unknown as k8s.V1MicroTime,
     leaseTransitions: record.leaseTransitions,
   };
 }
@@ -434,8 +451,8 @@ function toSnapshot(lease: k8s.V1Lease): LeaseSnapshot {
     record: {
       holderIdentity: spec.holderIdentity ?? "",
       leaseDurationSeconds: spec.leaseDurationSeconds ?? 0,
-      acquireTime: spec.acquireTime ?? new Date(0),
-      renewTime: spec.renewTime ?? new Date(0),
+      acquireTime: String(spec.acquireTime ?? ""),
+      renewTime: String(spec.renewTime ?? ""),
       leaseTransitions: spec.leaseTransitions ?? 0,
     },
   };
