@@ -4,7 +4,9 @@
 
 Status: two-bucket admission and global capacity admission are implemented;
 the burst matrix and constrained-capacity results are measured on the local
-kind rig.
+kind rig. Guest-image admission is a Kyverno policy shipped in
+[deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md), verified by
+a documented cluster check rather than by CI.
 
 ## Why two buckets
 
@@ -169,7 +171,55 @@ authoritative hold keyed by payment key and spec hash. A capacity rejection is
 `503 capacity_unavailable` with `retryable` and requested baseline resources;
 no payment is settled.
 
+## Guest image admission
+
+Two independent controls decide which guest image a session runs:
+
+1. **The controller** only runs a runtime profile from its own catalog, and pulls
+   `repo@sha256:<64 hex>` whenever a digest is configured. With
+   `KUBERNETES_ENABLED=true` a non-pinned digest is a startup error
+   (`controller/src/runtime-profiles.ts`), so a moved tag cannot change what runs
+   inside the VM.
+2. **The API server**, via Kyverno, rejects a guest pod whose image is not
+   `<repository>@sha256:<64 hex>` in an allowed repository, or whose digest is
+   not one of the released digests. Manifests and install steps live in
+   [deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md).
+
+The second control exists because the first one depends on the controller being
+honest. It is inert unless an operator installs Kyverno, and it is not part of
+`deploy/kubernetes/kustomization.yaml`.
+
+Scope is the namespace label `x402.io/image-policy`, which
+`deploy/kubernetes/00-namespaces.yaml` sets to `enforce` on `sandbox-workloads`:
+
+| Label value | repository + `@sha256:` shape | released digest allowlist |
+| --- | --- | --- |
+| `enforce` | enforced | enforced |
+| `dev-unpinned` | enforced | skipped |
+| absent | policy does not match | policy does not match |
+
+`dev-unpinned` is the documented local-kind exception: `deploy/kind/apply.sh`
+loads a locally built image and pins the digest read out of containerd, which is
+machine-specific and therefore cannot appear in a committed allowlist.
+`deploy/kind/apply.sh` sets the label only when the Kyverno CRD exists. A
+production cluster must never carry it, and deleting the label (rather than
+setting it) turns both rules off, so it ships with the namespace.
+
+The allowlist in rule 2 duplicates `GUEST_IMAGE_DIGEST` and each
+`RUNTIME_PROFILES.<profile>.digest` from `deploy/kubernetes/03-config.yaml`.
+Both must change in the same commit; a missing entry rejects the pod, which is
+the intended failure direction. Verifying the policy needs Kyverno and a live
+API server (`kubectl apply --dry-run=server`), so it is a documented manual step
+and not a CI job. `tests/unit/provisioning-profile-image.test.ts` covers the
+controller-side refusal.
+
 ## Not implemented
+
+- **Policy enforcement in CI.** The Kyverno policy is a manifest plus a manual
+  check; no PR CI job installs Kyverno or runs `kyverno test`.
+- **Signing/attestation verification at admission.** The policy pins a digest.
+  It does not verify the Sigstore bundle that `docs/release-process.md` produces,
+  so a digest that was built by the wrong pipeline would still be admitted.
 
 - **Capacity wait queue.** A retryable rejection is immediate; clients retry
   themselves. A bounded wait queue is the next experiment.

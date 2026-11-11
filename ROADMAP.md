@@ -54,9 +54,10 @@ catalog does not start until that gate is met.
 - **Real settlement reconciliation and refunds.** Mock mode auto-refunds
   terminal-before-`READY` sessions. Testnet/mainnet need facilitator webhooks or
   an on-chain refund worker before money is real. (#31)
-- **Admission control for images.** Digest pinning exists; Kyverno or sigstore
-  policy would make a moved tag or a compromised node a second, independent
-  failure rather than the only one. (#30)
+- **Signing verification at admission.** A Kyverno policy now pins the guest
+  repository and digest ([deploy/kubernetes/kyverno](deploy/kubernetes/kyverno/README.md)).
+  It does not verify the Sigstore bundle produced by the release workflow, and it
+  has only been reviewed, not executed against a cluster. (#30)
 - **HTTP/2 and gRPC workloads.** The guest supports HTTP/1.1, SSE and a polled
   WebSocket; gRPC and HTTP/2 are not available today. (#55)
 - **Elastic warm pool.** Scale the pool from in-flight demand instead of a fixed

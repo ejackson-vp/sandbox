@@ -67,6 +67,15 @@ fi
 kubectl --context "${CONTEXT}" apply -f "${ROOT}/deploy/kubernetes/00-namespaces.yaml"
 kubectl --context "${CONTEXT}" apply -f "${ROOT}/deploy/kubernetes/02-secrets-dev.yaml"
 
+# Guest-image admission (deploy/kubernetes/kyverno/). A locally built image has a
+# machine-specific digest, which a committed allowlist cannot contain, so on kind
+# the namespace drops only the released-digest rule. The repository+digest-shape
+# rule still applies. No-op when Kyverno is not installed.
+if kubectl --context "${CONTEXT}" get crd clusterpolicies.kyverno.io >/dev/null 2>&1; then
+  kubectl --context "${CONTEXT}" label namespace sandbox-workloads \
+    x402.io/image-policy=dev-unpinned --overwrite
+fi
+
 printf '%s\n' "${MANIFESTS}" \
   | sed "s|GUEST_IMAGE_DIGEST: sha256:dev-unpinned-image|GUEST_IMAGE_DIGEST: ${GUEST_DIGEST}|" \
   | kubectl --context "${CONTEXT}" apply -f -

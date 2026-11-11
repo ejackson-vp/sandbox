@@ -19,6 +19,7 @@ Four deployment profiles are gated separately. "Unverified" is not "passed".
 | Real-mode settled-but-not-provisioned reconciliation | **FAIL** | F-10 |
 | Real-mode refunds executed | **FAIL** | F-10 (`REFUND_PENDING`, no worker) |
 | Actions/images pinned by digest | **FAIL** | F-15 |
+| Guest pod image pinned at admission | PARTIAL | Kyverno policy shipped; unexecuted against a cluster (#30) |
 | Least-privilege workflow tokens | **FAIL** | 3 `TokenPermissionsID` alerts |
 | Kata guest→host isolation | **UNVERIFIED** | release gate added (`make security-isolation`); no run yet (#44) |
 | Cilium pod→pod / pod→API / metadata isolation | **UNVERIFIED** | packet-level suite wired into the release gate; no run yet (#44) |
