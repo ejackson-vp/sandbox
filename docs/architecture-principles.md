@@ -8,6 +8,11 @@ grows (Kata, Firecracker, autoscaling). It is deliberately small.
 - **Pure decisions** live in `shared/src/domain/` and `shared/src/fp.ts`: no
   clock, no I/O, no Kubernetes, no SQLite.
 - **Use cases** orchestrate ports; they are allowed to do I/O and are kept short.
+- **Ports are asynchronous.** Every method on a store port returns a `Promise`,
+  even where the only implementation today is synchronous (ADR 0010). A port
+  method is an interleaving point, so a decision that must be atomic belongs
+  inside one adapter statement or transaction, never in a read-then-write pair
+  in a use case.
 - **Adapters** own the messy details (SQL, Kubernetes, WebSocket/relay, HTTP).
 - **The scheduler** (`Reconciler.tick`) lists work and dispatches; it should not
   contain policy.
@@ -105,7 +110,7 @@ controller/src/warm-pool.ts     warm-pool policy and lifecycle
 controller/src/lifecycle.ts     suspend/resume, idle/expiry policy, PVC cleanup
 controller/src/termination.ts   terminate/finalise/reap
 controller/src/snapshotter.ts   checkpoint port; no-op locally, Firecracker/Kata later
-controller/src/store/           models + schema; Store is the SQL adapter facade
+controller/src/store/           models + schema, SQL repositories; Store is the SQL adapter facade over async ports
 controller/src/k8s-types.ts     provisioner contract and pod specs
 controller/src/k8s-null.ts      no-op provisioner for unit tests
 controller/src/capacity/        pure admission, placement, snapshot builder, reservation port + SQLite adapter
