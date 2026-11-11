@@ -38,6 +38,21 @@ the container registry.
   scheduler over the same rows. A standby's store connection refuses writes.
   Failover, not throughput: the writer is still one process, and the SQLite
   volume is still ReadWriteOnce.
+- The `python` and `node` profile images are released by the pipeline instead of
+  by hand. `.github/workflows/release-profiles.yml` runs on the same `v*` tag,
+  builds `guest/Dockerfile.profile` for `linux/amd64,linux/arm64` from the
+  runtime images pinned in `guest/profiles/runtime-images.conf`, scans the
+  staging digest with the guest image's `CRITICAL,HIGH`/`ignore-unfixed` policy,
+  and only then creates `<version>-python` and `<version>-node` in the existing
+  public `sandbox-guest` package. Each profile carries an SBOM and Sigstore
+  build provenance, and its tag and index digest are recorded under
+  `## Profile images` in the release body and in a `profile-images.json` asset.
+  Profile tags are never moved, and never created for a tag whose control/guest
+  release did not succeed. The `0.1.23-*` and `0.1.24-*` tags remain the
+  hand-built images that predate this.
+- `guest/build-profiles.sh` builds from that same pin file, so a local image has
+  the release's build inputs, and `guest/check-profiles.sh` fails CI when the
+  pin file and `guest/profiles/*.json` disagree.
 
 ### Changed
 
@@ -50,6 +65,9 @@ the container registry.
   that is not ready leaves the session in its current state and the next pass
   retries. The SUSPENDING crash-repair replay is a new `suspend_retry` event
   rather than a hand-built effect list.
+- The SDK `run` doc comment no longer says `base` is the only runtime. It
+  documents `runtime` as `base` (default), `python` or `node`, rejected at
+  create time when the controller does not run that profile.
 
 ## 0.1.22
 

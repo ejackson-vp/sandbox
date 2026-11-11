@@ -1,8 +1,10 @@
 name: scan
 
-# Manual vulnerability scan for an already-published tag. The release workflow
-# runs the same scanner as a gate; this one is read-only and prints the table,
-# so you can inspect a failure without cutting a new release.
+# Manual vulnerability scan for an already-published tag. The release workflows
+# run the same scanner as a gate; this one is read-only and prints the table,
+# so you can inspect a failure without cutting a new release. It covers the
+# control and guest images plus the `<tag>-python` / `<tag>-node` profile images
+# that release-profiles.yml publishes into the guest package.
 on:
   workflow_dispatch:
     inputs:
@@ -21,7 +23,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: [control, guest]
+        include:
+          - image: control
+            tag: ${{ inputs.tag }}
+            category: control
+          - image: guest
+            tag: ${{ inputs.tag }}
+            category: guest
+          - image: guest
+            tag: ${{ inputs.tag }}-python
+            category: guest-python
+          - image: guest
+            tag: ${{ inputs.tag }}-node
+            category: guest-node
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -31,10 +45,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Scan ${{ matrix.name }}
+      - name: Scan ${{ matrix.category }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}-${{ matrix.name }}:${{ inputs.tag }}
+          image-ref: ghcr.io/${{ github.repository }}-${{ matrix.image }}:${{ matrix.tag }}
           format: table
           scanners: vuln,secret
           severity: CRITICAL,HIGH
@@ -43,12 +57,12 @@ jobs:
 
       # Same parameters as the release gate, so a red release can be reproduced
       # here without cutting a tag.
-      - name: Gate ${{ matrix.name }}
+      - name: Gate ${{ matrix.category }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}-${{ matrix.name }}:${{ inputs.tag }}
+          image-ref: ghcr.io/${{ github.repository }}-${{ matrix.image }}:${{ matrix.tag }}
           format: sarif
-          output: gate-${{ matrix.name }}.sarif
+          output: gate-${{ matrix.category }}.sarif
           scanners: vuln
           severity: CRITICAL,HIGH
           ignore-unfixed: true

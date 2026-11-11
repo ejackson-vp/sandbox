@@ -25,6 +25,9 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run lint:structure
+      # The published profile set is guest/profiles/runtime-images.conf; the
+      # release workflow builds exactly those and nothing else.
+      - run: ./guest/check-profiles.sh
       - run: npm run test:unit
       - run: npm run test:property
 
