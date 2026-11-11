@@ -5,7 +5,7 @@
  * (reconciler, use cases) builds a SessionSnapshot, asks for a decision, and
  * performs the effects. Property tests exercise the table directly.
  */
-import { type IdlePolicy, type SessionState, isTerminal } from "../protocol.js";
+import { type IdlePolicy, type SessionState, isTerminal, MAX_SESSION_LIFETIME_SECONDS } from "../protocol.js";
 import { Err, Ok, type Result } from "../fp.js";
 
 export interface SessionSnapshot {
@@ -315,6 +315,30 @@ export function lifetimeExpired(snapshot: SessionSnapshot, now: number): boolean
     snapshot.maxLifetimeSeconds &&
       now - snapshot.createdAt > snapshot.maxLifetimeSeconds * 1000,
   );
+}
+
+/**
+ * The immutable deadline written at READY: the purchased duration measured from
+ * the moment the guest is ready, capped by the wall-clock lifetime.
+ *
+ * The cap exists because `readyAt` is a wall-clock reading. A forward step
+ * between settlement and readiness would otherwise persist a deadline later
+ * than `createdAt + maxLifetimeSeconds`, where the lease path disagrees with
+ * `lifetimeExpired` and with the pod's `activeDeadlineSeconds`. Both are
+ * wall-clock bounds on the same session, so they have to agree.
+ *
+ * A session with no `maxLifetimeSeconds` is capped at the protocol maximum,
+ * which is above the largest purchasable duration and therefore never binds.
+ */
+export function leaseDeadline(
+  createdAt: number,
+  readyAt: number,
+  durationSeconds: number,
+  maxLifetimeSeconds: number | null,
+): number {
+  const purchased = readyAt + durationSeconds * 1000;
+  const lifetime = createdAt + (maxLifetimeSeconds ?? MAX_SESSION_LIFETIME_SECONDS) * 1000;
+  return Math.min(purchased, lifetime);
 }
 
 export function idleExpired(snapshot: SessionSnapshot, now: number): boolean {

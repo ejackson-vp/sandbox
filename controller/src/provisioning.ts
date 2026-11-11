@@ -10,6 +10,7 @@
  */
 import { verifyAttestation } from "@x402s/shared/crypto";
 import {
+  leaseDeadline,
   lifetimeExpired,
   MIN_SUPPORTED_GUEST_PROTOCOL_VERSION,
   supportsGuestProtocolVersion,
@@ -445,7 +446,25 @@ export class Provisioning implements CreatePath {
           // where termination is refundable. A versionless hello is accepted.
           if (this.rejectUnsupportedGuest(session, state, state.attestation)) return;
           const readyAt = this.ctx.now();
-          const leaseExpiresAt = readyAt + session.durationSeconds * 1000;
+          const requestedLease = readyAt + session.durationSeconds * 1000;
+          const leaseExpiresAt = leaseDeadline(
+            session.createdAt,
+            readyAt,
+            session.durationSeconds,
+            session.maxLifetimeSeconds,
+          );
+          if (leaseExpiresAt !== requestedLease) {
+            // The purchased duration would run past the wall-clock lifetime, so
+            // the deadline is clamped to the bound the lifetime sweep enforces.
+            // A wall-clock step is the usual reason; the clock guard logs the
+            // step itself, this line ties it to a session.
+            log.warn("sandbox_lease_clamped", {
+              sessionId: session.id,
+              requestedLeaseExpiresAt: new Date(requestedLease).toISOString(),
+              leaseExpiresAt: new Date(leaseExpiresAt).toISOString(),
+              maxLifetimeSeconds: session.maxLifetimeSeconds,
+            });
+          }
           // PROVISIONING/RESUMING + guest_ready is the table's decision; its
           // single effect is the guarded write, so a lost race skips the
           // bookkeeping below exactly as a refused setReady did before.

@@ -20,16 +20,19 @@ function config() {
   });
 }
 
-function session(): SessionRecord {
+function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
     id: "sbx_ready",
     state: "PROVISIONING",
     durationSeconds: 300,
+    createdAt: Date.now(),
+    maxLifetimeSeconds: null,
     relayTokenHash: "token-hash",
     clientPublicKey: "client-key",
     clientNonce: "client-nonce",
     paidAt: Date.now(),
     timingsJson: null,
+    ...overrides,
   } as unknown as SessionRecord;
 }
 
@@ -41,7 +44,11 @@ const attestation = {
   signature: "sig",
 };
 
-function harness(state: ReturnType<typeof vi.fn>, registerCurrent = vi.fn()) {
+function harness(
+  state: ReturnType<typeof vi.fn>,
+  registerCurrent = vi.fn(),
+  now: () => number = () => Date.now(),
+) {
   const store = {
     setReady: vi.fn(() => true),
     mergeTimings: vi.fn(),
@@ -66,7 +73,7 @@ function harness(state: ReturnType<typeof vi.fn>, registerCurrent = vi.fn()) {
       relay,
       capacity: {} as never,
       snapshotter: {} as never,
-      now: () => Date.now(),
+      now,
       serviceAddress: vi.fn(async () => ({ host: "10.0.0.1", port: 8443 })),
     },
     {} as WarmPoolManager,
@@ -151,5 +158,52 @@ describe("provisioning readiness generation", () => {
     expect(state.mock.calls[1]![1]).toEqual({ reuse: true });
     expect(state.mock.calls[2]![1]).toBeUndefined();
     expect(store.setReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps the lease to the wall-clock lifetime after a forward clock step", async () => {
+    // The clock stepped 70s forward while the pod was booting. Readiness is
+    // recorded at the stepped time, so the purchased 60s lease would end at
+    // createdAt + 130s while maxLifetimeSeconds terminates the session at
+    // createdAt + 120s. Both enforcement paths must agree on the earlier bound.
+    const createdAt = 1_700_000_000_000;
+    const readyAt = createdAt + 70_000;
+    const state = vi.fn(async () => ({
+      registered: true,
+      connected: true,
+      attestation,
+      pending: 0,
+      generation: "relay-a",
+    }));
+    const { provisioning, store } = harness(state, vi.fn(), () => readyAt);
+
+    await provisioning.awaitReady(
+      session({ createdAt, paidAt: createdAt, durationSeconds: 60, maxLifetimeSeconds: 120 }),
+    );
+
+    expect(store.setReady).toHaveBeenCalledTimes(1);
+    const calls = (store.setReady as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const [, persistedReadyAt, leaseExpiresAt] = calls[0]!;
+    expect(persistedReadyAt).toBe(readyAt);
+    expect(leaseExpiresAt).toBe(createdAt + 120_000);
+  });
+
+  it("keeps the purchased lease when no clock step happened", async () => {
+    const createdAt = 1_700_000_000_000;
+    const readyAt = createdAt + 5_000;
+    const state = vi.fn(async () => ({
+      registered: true,
+      connected: true,
+      attestation,
+      pending: 0,
+      generation: "relay-a",
+    }));
+    const { provisioning, store } = harness(state, vi.fn(), () => readyAt);
+
+    await provisioning.awaitReady(
+      session({ createdAt, paidAt: createdAt, durationSeconds: 60, maxLifetimeSeconds: 120 }),
+    );
+
+    const calls = (store.setReady as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls[0]![2]).toBe(readyAt + 60_000);
   });
 });

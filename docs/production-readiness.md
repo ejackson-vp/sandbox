@@ -126,6 +126,15 @@ concrete next step.
   `-notifier.blackhole`: alert state is visible, nothing is paged.
 - Load test: 100+ concurrent sessions; measure reconcile p95, relay fan-out, API
   latency for 8 MiB uploads.
+- **Clock discipline.** Leases, payment-intent staleness and the 8 h lifetime cap
+  are wall-clock values, and the guest, the controller and Kubernetes each
+  enforce the same deadline from their own clock, so every node must run NTP
+  (`chronyd` or `systemd-timesyncd`), correcting by slew once the cluster is
+  serving traffic. A step is logged as `clock_skew_detected` with both readings
+  and the sessions it moved; it is not corrected in-process. See
+  [lifecycle.md](lifecycle.md#clock-assumptions) for what a step does and does
+  not affect. Alert on any `clock_skew_detected` line, because the sessions it
+  names may have ended early.
 - Backup/restore of the SQLite metadata (sessions are disposable; payment records
   are not).
 

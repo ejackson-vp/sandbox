@@ -45,6 +45,37 @@ between `markSuspending` and `markSuspended` is repaired by the reconciler;
 lease of the purchased duration. `maxLifetimeSeconds` is a wall-clock cap that
 includes suspended time.
 
+## Clock assumptions
+
+Deadlines are stored as wall-clock epoch milliseconds because they have to
+survive a controller restart, and the guest watchdog, the controller and
+Kubernetes `activeDeadlineSeconds` each enforce the same timestamp from their
+own clock (ADR 0006). The deployment therefore depends on the clocks agreeing:
+
+- Every node runs NTP (`chronyd` or `systemd-timesyncd`), correcting by **slew**
+  once the cluster is serving traffic. `makestep` is acceptable only in the
+  first minutes of boot; a step while sessions are live moves every stored
+  deadline at once.
+- The controller compares the wall clock with the process monotonic clock and
+  logs `clock_skew_detected` when they disagree by more than 5s, with `from`,
+  `to`, `deltaMs`, `direction`, and the ids of live sessions whose lease
+  deadline fell inside the jumped window. It does not correct the clock.
+- Anything that must not be shortened by a step (leader-lease renewal, the
+  decision to step down) is measured on a monotonic clock; see
+  `controller/src/leadership-lease.ts`.
+- The deadline written at READY is `min(readyAt + durationSeconds, createdAt +
+  maxLifetimeSeconds)`, so a forward step cannot put the lease past the lifetime
+  sweep. A clamped deadline is logged as `sandbox_lease_clamped`.
+
+What that leaves, stated plainly: a step under the 5s tolerance is invisible,
+and a larger one is logged but not prevented. A backward step extends the
+deadline of every live session by the size of the step, bounded by
+`maxLifetimeSeconds`. A forward step ends live sessions early, and can fail a
+provisioning session against `PROVISIONING_TIMEOUT_MS`. The response is to fix
+the clock, correlate the named sessions from the log line and refund where a
+lease was cut short. Renewing leases would make the window unbounded, which is
+the trade ADR 0006 already rejected.
+
 ## What suspend actually does
 
 1. The controller moves the session to `SUSPENDING` (atomic, from `READY`/`ACTIVE`).

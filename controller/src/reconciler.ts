@@ -33,6 +33,7 @@ import { OperationFence } from "./operation-fence.js";
 import { runBounded } from "./bounded-queue.js";
 import { ServiceAddressResolver } from "./service-address.js";
 import { cadenceFor } from "./reconcile-cadence.js";
+import { ClockGuard, type ClockJump } from "./clock-guard.js";
 
 export { LifecycleError } from "./lifecycle.js";
 
@@ -81,10 +82,18 @@ export class Reconciler {
   private readonly termination: Termination;
   private readonly backup: BackupService;
   private readonly fence: OperationFence;
+  private readonly clock: ClockGuard;
   private readonly now: () => number;
 
   constructor(private readonly deps: ReconcilerDeps) {
-    this.now = deps.now ?? (() => Date.now());
+    // Every deadline decision in this class goes through one guarded clock, so
+    // a wall-clock step (NTP, operator, VM resume) is logged once with the old
+    // and new readings instead of silently shortening or extending leases.
+    this.clock = new ClockGuard({
+      now: deps.now ?? (() => Date.now()),
+      onJump: (jump) => this.reportClockJump(jump),
+    });
+    this.now = () => this.clock.now();
     this.serviceAddresses = new ServiceAddressResolver(() => this.now());
     const capacity = deps.capacity ?? new CapacityService({
       cfg: deps.cfg,
@@ -160,7 +169,9 @@ export class Reconciler {
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    const started = Date.now();
+    // Monotonic: a wall-clock step during a pass must not be reported as a pass
+    // that overran its budget.
+    const started = this.clock.monotonic();
     const budget = this.deps.cfg.reconcileBudget;
     try {
       const now = this.now();
@@ -222,7 +233,7 @@ export class Reconciler {
     } catch (err) {
       log.error("reconcile_pass_failed", { error: (err as Error).message });
     } finally {
-      const durationMs = Date.now() - started;
+      const durationMs = this.clock.monotonic() - started;
       metrics
         .histogram("sandbox_reconcile_duration_seconds", "Reconcile pass duration", LATENCY_BUCKETS)
         .observe(durationMs / 1000);
@@ -265,6 +276,41 @@ export class Reconciler {
         error: (err as Error).message,
       });
     }
+  }
+
+  /**
+   * A wall-clock step. The guard has already decided it is a step, not drift;
+   * this reports the readings and the sessions the step moved, because "the
+   * clock jumped" alone does not tell an operator whether anything was
+   * affected. A session whose immutable deadline falls inside the jumped window
+   * is the one that ends early (forward) or late (backward).
+   */
+  private reportClockJump(jump: ClockJump): void {
+    const low = Math.min(jump.from, jump.to);
+    const high = Math.max(jump.from, jump.to);
+    let affected: string[] = [];
+    try {
+      affected = this.deps.store
+        .listNonTerminal()
+        .filter(
+          (session) =>
+            session.leaseExpiresAt !== null &&
+            session.leaseExpiresAt >= low &&
+            session.leaseExpiresAt <= high,
+        )
+        .map((session) => session.id);
+    } catch {
+      // Reporting must never be the reason a reconcile pass fails.
+    }
+    log.warn("clock_skew_detected", {
+      from: new Date(jump.from).toISOString(),
+      to: new Date(jump.to).toISOString(),
+      deltaMs: jump.deltaMs,
+      direction: jump.direction,
+      affectedSessions: affected.length,
+      affectedSessionIds: affected.slice(0, 20),
+      jumps: this.clock.jumpCount,
+    });
   }
 
   /**
