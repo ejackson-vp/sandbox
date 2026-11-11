@@ -14,10 +14,6 @@
       "types": "./dist/entries/protocol.d.ts",
       "default": "./dist/entries/protocol.js"
     },
-    "./domain": {
-      "types": "./dist/entries/domain.d.ts",
-      "default": "./dist/entries/domain.js"
-    },
     "./crypto": {
       "types": "./dist/entries/crypto.d.ts",
       "default": "./dist/entries/crypto.js"

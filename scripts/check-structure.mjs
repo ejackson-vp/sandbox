@@ -185,6 +185,58 @@ function exportedClosure(rel, seen = new Set()) {
 const barrel = exportedClosure("index.ts");
 const unexported = modules.filter((rel) => !isAggregator(rel) && !barrel.has(rel));
 
+// Each subpath must be the single home of its symbols. Two entries exporting
+// the same name means a consumer can import it from either, so the layering
+// stops telling you where a symbol's dependencies come from.
+function reexportsOf(path) {
+  const text = readFileSync(path, "utf8");
+  const wildcards = [];
+  for (const match of text.matchAll(/(?:^|\n)\s*export\s+(?:type\s+)?\*\s+from\s*["']([^"']+)["']/g)) {
+    wildcards.push(match[1]);
+  }
+  return wildcards;
+}
+
+/** Names a module contributes: its own declarations plus its re-exports. */
+function exportedNames(rel, seen = new Set()) {
+  if (seen.has(rel)) return new Set();
+  seen.add(rel);
+  const text = readFileSync(join(ROOT, SHARED, rel), "utf8");
+  const names = new Set();
+  for (const match of text.matchAll(
+    /^export\s+(?:declare\s+)?(?:async\s+)?(?:abstract\s+)?(?:const|let|var|function|class|interface|type|enum)\s+([A-Za-z0-9_$]+)/gm,
+  )) {
+    names.add(match[1]);
+  }
+  // `export { a, b as c }` and `export { a } from "./x.js"`: named, not wildcard.
+  for (const match of text.matchAll(
+    /(?:^|\n)\s*export\s+(?:type\s+)?\{([^}]*)\}(?:\s*from\s*["'][^"']+["'])?/g,
+  )) {
+    for (const part of match[1].split(",")) {
+      const alias = part.split(/\s+as\s+/);
+      const name = (alias[1] ?? alias[0]).trim();
+      if (name) names.add(name);
+    }
+  }
+  for (const specifier of reexportsOf(join(ROOT, SHARED, rel))) {
+    const target = resolveSpecifier(rel, specifier);
+    if (target === rel || !modules.includes(target)) continue;
+    for (const name of exportedNames(target, seen)) names.add(name);
+  }
+  return names;
+}
+
+const sharedEntries = modules.filter((rel) => rel.startsWith("entries/"));
+const entryOwners = new Map();
+const duplicateExports = [];
+for (const entry of sharedEntries) {
+  for (const name of exportedNames(entry)) {
+    const owner = entryOwners.get(name);
+    if (owner !== undefined) duplicateExports.push(`${name}: ${owner} and ${entry}`);
+    else entryOwners.set(name, entry);
+  }
+}
+
 if (unclassified.length > 0) {
   console.error("shared/src modules with no layer (add them to SHARED_LAYERS):");
   for (const rel of unclassified) console.error(`  ${rel}`);
@@ -197,10 +249,18 @@ if (layeringOffenders.length > 0) {
   console.error("shared/src layering violations (see the guard above):");
   for (const line of layeringOffenders) console.error(`  ${line}`);
 }
-if (unclassified.length + unexported.length + layeringOffenders.length > 0) {
+if (duplicateExports.length > 0) {
+  console.error("shared/src symbols reachable from more than one subpath:");
+  for (const line of duplicateExports) console.error(`  ${line}`);
+}
+if (
+  unclassified.length + unexported.length + layeringOffenders.length + duplicateExports.length >
+  0
+) {
   process.exit(1);
 }
 
 console.log(
-  `structure ok: every module is <= ${MAX_LINES} lines; ${modules.length} shared modules layered, barrel complete`,
+  `structure ok: every module is <= ${MAX_LINES} lines; ${modules.length} shared modules layered, ` +
+    `${entryOwners.size} symbols over ${sharedEntries.length} entries, barrel complete`,
 );

@@ -105,11 +105,13 @@ Completed slices:
   through a port, so no effect is built by hand outside the table.
 - API split into create/session routers, schemas, status mapping and composition.
 - Wire protocol split by concept while keeping `@x402s/shared` exports stable.
-- `@x402s/shared` subpath entry points (`./protocol`, `./domain`, `./crypto`,
-  `./payment`, `./runtime`, `./env`, `./ip`) so a wire-type consumer no longer
-  loads libsodium or the metrics listeners. `npm run lint:structure` asserts the
-  layer direction (pure → crypto → payment → runtime, and runtime never reaches
-  crypto) and that the root barrel still re-exports every module.
+- `@x402s/shared` subpath entry points (`./protocol`, `./crypto`, `./payment`,
+  `./runtime`, `./env`, `./ip`) so a wire-type consumer no longer loads libsodium
+  or the metrics listeners. `./protocol` is the single home of the pure core:
+  the wire types, `domain/session.ts` and `fp.ts`. `npm run lint:structure`
+  asserts the layer direction (pure → crypto → payment → runtime, and runtime
+  never reaches crypto), that no symbol is reachable from two entries, and that
+  the root barrel still re-exports every module.
 - Guest split into entrypoint, config, supervisor and log modules.
 - Explicit `SUSPENDING`/`RESUMING` states with idempotent crash recovery.
 - `Snapshotter` checkpoint port with a no-op local adapter, wired into
