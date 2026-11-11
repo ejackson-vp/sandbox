@@ -271,50 +271,28 @@ jobs:
 
   # Isolation gate (#44). `security-review/RELEASE_GATE.md` lists Kata
   # guest->host and Cilium pod->pod as UNVERIFIED because nothing in CI ran
-  # them. This job does, against a disposable cluster, and records the digests
-  # it tested. It fails closed: without a configured runner or without the two
-  # isolation files actually executing, `promote` never runs.
+  # them. This job runs them against a disposable cluster and records the
+  # digests it tested.
+  #
+  # Three states, decided by scripts/isolation-preflight.mjs (unit-tested):
+  #   SANDBOX_ISOLATION_RUNNER set -> run the suites
+  #   ISOLATION_EVIDENCE=none      -> skip on purpose, and say so loudly
+  #   neither                      -> fail the tag
+  # A skip is never implicit: forgetting to configure a runner still blocks.
   isolation-preflight:
     name: isolation runner preflight
     runs-on: ubuntu-latest
     outputs:
+      mode: ${{ steps.check.outputs.mode }}
       runner: ${{ steps.check.outputs.runner }}
     steps:
-      - name: require the isolation runner
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: decide whether the isolation suites run
         id: check
         env:
-          ISOLATION_RUNNER: ${{ vars.SANDBOX_ISOLATION_RUNNER }}
-        run: |
-          set -euo pipefail
-          if [ -z "${ISOLATION_RUNNER:-}" ]; then
-            {
-              echo "### Release blocked: no isolation runner configured"
-              echo ""
-              echo "\`SANDBOX_ISOLATION_RUNNER\` is unset, so nothing can run the"
-              echo "Cilium and Kata isolation suites. A release must not carry an"
-              echo "unverified isolation claim (#44). Set the repository variable to"
-              echo "a JSON array of self-hosted runner labels; see"
-              echo "\`docs/release-process.md\` for the runner contract."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error title=Isolation gate not configured::Set SANDBOX_ISOLATION_RUNNER to a JSON array of runner labels (docs/release-process.md). The release is blocked."
-            exit 1
-          fi
-          node - "$ISOLATION_RUNNER" <<'NODE'
-          const raw = process.argv[2];
-          let labels;
-          try {
-            labels = JSON.parse(raw);
-          } catch {
-            console.error(`SANDBOX_ISOLATION_RUNNER is not valid JSON: ${raw}`);
-            process.exit(1);
-          }
-          if (!Array.isArray(labels) || labels.length === 0 ||
-              labels.some((label) => typeof label !== "string" || label.trim() === "")) {
-            console.error("SANDBOX_ISOLATION_RUNNER must be a non-empty JSON array of runner label strings");
-            process.exit(1);
-          }
-          NODE
-          echo "runner=$ISOLATION_RUNNER" >> "$GITHUB_OUTPUT"
+          SANDBOX_ISOLATION_RUNNER: ${{ vars.SANDBOX_ISOLATION_RUNNER }}
+          ISOLATION_EVIDENCE: ${{ vars.ISOLATION_EVIDENCE }}
+        run: node scripts/isolation-preflight.mjs preflight
 
   isolation:
     name: isolation (Kata + Cilium)
@@ -332,25 +310,40 @@ jobs:
       CONTROL_IMG: x402-sandbox/control:dev
       GUEST_IMG: x402-sandbox/guest:dev
     steps:
+      # Checkout is unconditional so the deliberate-skip step can run the same
+      # script that produced the decision. Every other step is gated on the
+      # mode: skipping the *job* would skip `promote` and block the tag, which
+      # is exactly what the acknowledgement exists to avoid.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: record the acknowledged skip
+        if: needs.isolation-preflight.outputs.mode != 'run'
+        env:
+          SANDBOX_ISOLATION_RUNNER: ${{ vars.SANDBOX_ISOLATION_RUNNER }}
+          ISOLATION_EVIDENCE: ${{ vars.ISOLATION_EVIDENCE }}
+        run: node scripts/isolation-preflight.mjs summary
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        if: needs.isolation-preflight.outputs.mode == 'run'
         with:
           node-version: "24"
           cache: npm
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        if: needs.isolation-preflight.outputs.mode == 'run'
         with:
           go-version-file: guest/go.mod
           cache-dependency-path: guest/go.sum
 
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        if: needs.isolation-preflight.outputs.mode == 'run'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: pull the scanned digests and alias them to the deploy tags
+        if: needs.isolation-preflight.outputs.mode == 'run'
         env:
           CONTROL_DIGEST: ${{ needs.digests.outputs.control }}
           GUEST_DIGEST: ${{ needs.digests.outputs.guest }}
@@ -372,22 +365,29 @@ jobs:
           done
 
       - run: npm ci
+        if: needs.isolation-preflight.outputs.mode == 'run'
 
       - run: npm run build
+        if: needs.isolation-preflight.outputs.mode == 'run'
 
       - name: build the guest binaries for the suite
+        if: needs.isolation-preflight.outputs.mode == 'run'
         run: make guest
 
       - name: create the disposable kind + Cilium cluster
+        if: needs.isolation-preflight.outputs.mode == 'run'
         run: ./deploy/kind/up.sh
 
       - name: deploy the release images
+        if: needs.isolation-preflight.outputs.mode == 'run'
         run: make deploy
 
       - name: switch to the Kata RuntimeClass
+        if: needs.isolation-preflight.outputs.mode == 'run'
         run: make kata
 
       - name: isolation gate
+        if: needs.isolation-preflight.outputs.mode == 'run'
         env:
           EXPECT_CONTROL_IMAGE: ${{ env.IMAGE_PREFIX }}-control
           EXPECT_CONTROL_DIGEST: ${{ needs.digests.outputs.control }}
@@ -398,7 +398,7 @@ jobs:
         run: make security-isolation
 
       - name: upload the isolation record
-        if: always()
+        if: always() && needs.isolation-preflight.outputs.mode == 'run'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: isolation-${{ github.run_id }}
@@ -407,7 +407,7 @@ jobs:
           retention-days: 90
 
       - name: delete the disposable cluster
-        if: always()
+        if: always() && needs.isolation-preflight.outputs.mode == 'run'
         run: ./deploy/kind/down.sh
 
   # The only job allowed to create release tags. Runs after both matrix scans
@@ -483,6 +483,16 @@ jobs:
           merge-multiple: true
           path: release-assets
 
+      # Renders the same warning block the isolation job wrote to its summary,
+      # from the same tested script, so the release notes cannot drift from the
+      # decision. Empty when the suites ran.
+      - name: isolation evidence note
+        id: isolation-note
+        env:
+          SANDBOX_ISOLATION_RUNNER: ${{ vars.SANDBOX_ISOLATION_RUNNER }}
+          ISOLATION_EVIDENCE: ${{ vars.ISOLATION_EVIDENCE }}
+        run: node scripts/isolation-preflight.mjs release-note
+
       - name: Publish release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
@@ -491,6 +501,8 @@ jobs:
           # to verify; `*.intoto.jsonl` is the statement it carries.
           files: release-assets/*
           append_body: |
+            ${{ steps.isolation-note.outputs.body }}
+
             ## Images
 
             Multi-arch (`linux/amd64`, `linux/arm64`), published to GHCR:

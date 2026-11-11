@@ -160,7 +160,7 @@ rather than leaving it undecided.
 | F-06 | A release run where the version/latest tags appear only after Trivy passes; a deliberately failing scan produces no deployable tag |
 | F-10 | End-to-end test in a non-production settlement sandbox: crash after settle → retry returns the entitlement or a refund is executed; ledger auditable |
 | F-15 | Actions pinned to SHAs, images by digest, job-scoped `permissions` |
-| Kata/Cilium | A release run whose `isolation` job is green, with `tested-images.json` naming the same control and guest digests that `promote` tags. `make security-isolation` reproduces it locally. |
+| Kata/Cilium | A release run whose `isolation` job is green, with `tested-images.json` naming the same control and guest digests that `promote` tags. `make security-isolation` reproduces it locally. A release cut with `ISOLATION_EVIDENCE=none` does not satisfy this row. |
 | Abuse | Durable per-payer quota with a test that survives a restart |
 
 ## Appendix — point-in-time security assessment

@@ -68,8 +68,10 @@ attestations are preserved. No image is rebuilt at promotion time.
 
 `security-review/RELEASE_GATE.md` lists Kata guest-to-host and Cilium pod-to-pod
 isolation as UNVERIFIED because nothing in CI executed them. The `isolation` job
-exists to turn those into evidence, and it **fails closed**: `promote` needs it,
-so an unconfigured runner or a suite that did not run blocks the tag.
+exists to turn those into evidence. It is honest by default: `promote` needs it,
+so a suite that did not run blocks the tag. A release owner can skip it on
+purpose, never by accident; see
+[Deliberately skipping the gate](#deliberately-skipping-the-gate).
 
 What it does:
 
@@ -115,12 +117,52 @@ The job runs on the labels in the repository variable
 - network access to GHCR for the digest pull, and about 25 GiB of disk for two
   multi-arch pulls plus the kind node.
 
-The runner variable is unset today, so every tag currently fails at
-`isolation-preflight` rather than shipping an unverified claim. Set it (or point
-the job at a cluster that already runs Kata, the Talos overlay in
-`deploy/talos/`) before the next release. As of this commit the job has not
-executed anywhere; the first green run produces the evidence, and the first red
-one blocks the tag.
+Set the runner (or point the job at a cluster that already runs Kata, the Talos
+overlay in `deploy/talos/`) before the next release. As of this commit the job
+has not executed anywhere; the first green run produces the evidence.
+
+### Deliberately skipping the gate
+
+Three states, decided by `scripts/isolation-preflight.mjs`:
+
+| `SANDBOX_ISOLATION_RUNNER` | `ISOLATION_EVIDENCE` | Outcome |
+|---|---|---|
+| set (JSON label array) | anything | the suites run; the acknowledgement is ignored |
+| unset | `none` | the suites are skipped and the release is stamped |
+| unset | unset | the tag fails at `isolation-preflight` |
+
+A skip is a recorded decision, not a side effect of a missing runner. To take
+it, set the acknowledgement on the repository:
+
+```bash
+gh variable set ISOLATION_EVIDENCE --repo ejackson-vp/sandbox --body none
+```
+
+The release then completes, and the following block appears at the top of the
+job summary and of the GitHub Release body:
+
+```text
+## ⚠️ Isolation suites were not run for this tag
+
+The Cilium packet-level suite and the Kata boot probe did not execute, so
+tenant isolation is **unverified** and the control and guest image digests
+were **not verified** by them. This release continues only because the
+repository variable `ISOLATION_EVIDENCE=none` acknowledges the skip.
+
+Set `SANDBOX_ISOLATION_RUNNER`, re-run the release, and remove
+`ISOLATION_EVIDENCE`. See docs/release-process.md#isolation-gate.
+```
+
+The acknowledgement must be removed as soon as a runner exists:
+
+```bash
+gh variable delete ISOLATION_EVIDENCE --repo ejackson-vp/sandbox
+```
+
+A stale acknowledgement is ignored while a runner is set, but it would silently
+re-enable skips if the runner variable were ever unset or mistyped, and the
+notes would then claim the skip was deliberate. Removing it restores the
+fail-closed default: no runner, no acknowledgement, no tag.
 
 ## Profile images
 

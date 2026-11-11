@@ -73,7 +73,10 @@ the container registry.
   switches the sandbox RuntimeClass to Kata, proves a Pod boots under it, runs
   the packet-level isolation suite, and records the tested digests in
   `artifacts/isolation/tested-images.json`. `promote` needs it, so a release
-  cannot be tagged when the suite did not run. See
+  cannot be tagged when the suite did not run. A release owner can skip the
+  gate only by setting the repository variable `ISOLATION_EVIDENCE=none`, which
+  stamps a warning into the job summary and the top of the release notes;
+  without a runner or that acknowledgement the tag still fails. See
   [docs/release-process.md](docs/release-process.md#isolation-gate).
 - `sandbox_relay_connection_resets_total{mode="tcp_reset"|"terminate"}` records
   which mechanism ended a guest link after an epoch withdrawal (#128). The
