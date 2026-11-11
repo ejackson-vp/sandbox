@@ -10,7 +10,7 @@ concrete next step.
 | --- | --- | --- | --- |
 | 1 | **No hardware attestation** | dev/Kata evidence is signed by a published key | out of scope for this repository; it needs TEE hardware and an independent verifier |
 | 2 | **Shared host kernel in dev mode** | container escape is possible for hostile code | require Kata minimum; validate before launch |
-| 3 | **SQLite single writer** | one controller, one node's PVC, no HA | Postgres/DynamoDB with conditional writes; keep UNIQUE payment key and conditional transitions |
+| 3 | **SQLite single writer on a ReadWriteOnce volume** | one writer holds the lease and the standby opens the store `query_only`, so two reconcilers cannot diverge. A replacement pod still waits for the volume it cannot mount from another node, so what ships is single-node HA: 0.25s takeover on graceful release, 10.10s for a stale holder | Postgres behind the store port, which needs the ports to become asynchronous first ([ADR 0010](adr/0010-controller-ha-storage.md), #25) |
 | 4 | **Relay is an in-memory registry per pod** | a restart loses pending ciphertext and sessions in flight; replicas hold disjoint sessions, addressed by deterministic shard affinity and enforced in the token, so N>1 no longer splits a session | Redis/NATS with per-session queues and TTLs (ciphertext only) if a relay restart must stop interrupting sessions |
 | 5 | **Settlement recovery is mock-only** | only the mock facilitator exposes a settlement lookup | add on-chain/testnet reconciliation (nonce used ⇒ settled) or facilitator webhooks; until then the API fails closed with `409 reconciliation_pending` |
 | 6 | **No refunds (real modes)** | a settled payment whose provisioning fails is not returned | mock mode now auto-refunds terminal-before-READY sessions; real modes record `REFUND_PENDING` and need an on-chain/facilitator refund worker or an explicit credit policy. See [payment-ledger.md](payment-ledger.md) |
@@ -95,8 +95,10 @@ concrete next step.
 
 ## 3. Reliability / operations
 
-- Controller HA with leader election or a single-writer queue (deliberately
-  single-writer today).
+- Controller HA beyond one node. Leader election, the writer guard and the
+  measured failover are in place, but the SQLite file on a ReadWriteOnce volume
+  keeps a second replica `Pending`, so single-node HA is what ships
+  ([ADR 0010](adr/0010-controller-ha-storage.md)).
 - Persist relay state so a relay restart does not fail paid sessions (or fail and
   refund them cleanly).
 - Metrics: sessions created/expired/failed, provisioning latency, operation
