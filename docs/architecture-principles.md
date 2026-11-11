@@ -9,10 +9,10 @@ grows (Kata, Firecracker, autoscaling). It is deliberately small.
   clock, no I/O, no Kubernetes, no SQLite.
 - **Use cases** orchestrate ports; they are allowed to do I/O and are kept short.
 - **Ports are asynchronous.** Every method on a store port returns a `Promise`,
-  even where the only implementation today is synchronous (ADR 0010). A port
-  method is an interleaving point, so a decision that must be atomic belongs
-  inside one adapter statement or transaction, never in a read-then-write pair
-  in a use case.
+  including the SQLite adapter, which is synchronous underneath (ADR 0010). A
+  port method is an interleaving point, so a decision that must be atomic belongs
+  inside one adapter statement or transaction, never in a read-then-write pair in
+  a use case.
 - **Adapters** own the messy details (SQL, Kubernetes, WebSocket/relay, HTTP).
 - **The scheduler** (`Reconciler.tick`) lists work and dispatches; it should not
   contain policy.
@@ -65,10 +65,12 @@ The first two are enforced three ways, deliberately:
   check, not a cluster check, so it catches the pull request rather than the
   rollout.
 
-This does not make the deployment highly available. ADR 0010 is the record: one
-writer on one node until the store itself supports several readers (#25). The
-guard exists so that nobody scales the manifest into a failure the code cannot
-see.
+This does not make the deployment highly available. ADR 0010 is the record: the
+store port now has a second adapter (Postgres) with the same invariants, proved
+by one contract suite over both backends, but the shipped deployment still runs
+SQLite on a `ReadWriteOnce` volume, so it is still one writer on one node (#25).
+The guard exists so that nobody scales the manifest into a failure the code
+cannot see.
 
 ## DDIA ideas in practice
 

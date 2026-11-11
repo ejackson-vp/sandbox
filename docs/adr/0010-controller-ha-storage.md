@@ -1,6 +1,8 @@
 # 0010. Controller HA needs a multi-reader store, not shared storage
 
-Status: accepted (2026-11-11, recommended in #147)
+Status: accepted (2026-11-11, recommended in #147). Adapter implemented and
+contract-tested against both backends on 2026-11-11 (#25); the deployment is
+still SQLite, see "Decision".
 
 ## Context
 
@@ -33,10 +35,19 @@ is how long a replacement pod waits for its volume, which on the clouds this
 runs on is 30s to 2min for detach and re-attach. On RWO storage the failover
 time is that number, not 10.10s, and no amount of lease tuning changes it.
 
-Until the Postgres adapter lands, **the shipped state is single-node HA,
-documented as such** (`docs/architecture-principles.md`, and the manifest guard
-in #22 that fails CI if `replicas` or the rollout strategy drifts). Nobody
-should read the lease implementation as a durability claim it cannot keep.
+Until the Postgres adapter ships as the deployment default, **the shipped state is
+single-node HA, documented as such** (`docs/architecture-principles.md`, and the
+manifest guard in #22 that fails CI if `replicas` or the rollout strategy
+drifts). Nobody should read the lease implementation as a durability claim it
+cannot keep.
+
+Progress as of 2026-11-11 (#25): the asynchronous ports and the Postgres adapter
+are merged, and one contract suite exercises the payment, session, transition and
+reservation invariants against both backends. The deployment is unchanged, so
+the sentence above still holds. What is still missing before it can ship: an
+automated `pg_dump` backup path (a controller configured with
+`STORE_BACKEND=postgres` and `BACKUP_DIR` refuses to start), and a recorded
+failover on Postgres that does not wait for a volume detach.
 
 Consequences specific to the choice:
 

@@ -55,6 +55,40 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:property
 
+  # The store contract over Postgres: the same suite `unit` runs on SQLite,
+  # against the backend ADR 0010 targets. `unit` skips the Postgres half when
+  # DATABASE_URL is unset, so this job is the only place the conditional
+  # transitions and the advisory writer lock are proved on a real server.
+  postgres-contract:
+    name: postgres contract
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pg
+          POSTGRES_DB: sandbox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sandbox"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:pg@127.0.0.1:5432/sandbox
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # The suite truncates every table, so it must point at this container and
+      # nothing else. No retry: a refused connection is a broken job, not flake.
+      - run: npm run test:store-contract
+
   # Short deterministic budget so PR CI stays fast. The longer soak runs are
   # documented in CONTRIBUTING.md; the nightly fault lane owns the soak.
   fuzz:

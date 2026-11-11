@@ -10,7 +10,7 @@ concrete next step.
 | --- | --- | --- | --- |
 | 1 | **No hardware attestation** | dev/Kata evidence is signed by a published key | out of scope for this repository; it needs TEE hardware and an independent verifier |
 | 2 | **Shared host kernel in dev mode** | container escape is possible for hostile code | require Kata minimum; validate before launch |
-| 3 | **SQLite single writer on a ReadWriteOnce volume** | one writer holds the lease and the standby opens the store `query_only`, so two reconcilers cannot diverge. A replacement pod still waits for the volume it cannot mount from another node, so what ships is single-node HA: 0.25s takeover on graceful release, 10.10s for a stale holder | Postgres behind the store port, which needs the ports to become asynchronous first ([ADR 0010](adr/0010-controller-ha-storage.md), #25) |
+| 3 | **SQLite single writer on a ReadWriteOnce volume** | one writer holds the lease and the standby opens the store `query_only`, so two reconcilers cannot diverge. A replacement pod still waits for the volume it cannot mount from another node, so what ships is single-node HA: 0.25s takeover on graceful release, 10.10s for a stale holder | The Postgres adapter behind the store ports is implemented and contract-tested against both backends (`STORE_BACKEND=postgres`, `DATABASE_URL`, [ADR 0010](adr/0010-controller-ha-storage.md), #25). Still missing before it can ship: the deployment default and its `pg_dump` backup path, and a run that proves failover without a volume detach |
 | 4 | **Relay is an in-memory registry per pod** | a restart loses pending ciphertext and sessions in flight; replicas hold disjoint sessions, addressed by deterministic shard affinity and enforced in the token, so N>1 no longer splits a session | Redis/NATS with per-session queues and TTLs (ciphertext only) if a relay restart must stop interrupting sessions |
 | 5 | **Settlement recovery needs a facilitator lookup** | the controller can now reconcile a settled-but-unentitled payment into a refundable ledger row, but only if the facilitator exposes `GET /settlements/:paymentKey`. Testnet's public facilitator does not, so that window still answers `409 reconciliation_pending` | use a facilitator with a settlement lookup or a webhook, and record the run that proves it |
 | 6 | **Real refunds have never run** | mock mode auto-refunds; a real mode records `REFUND_PENDING` and the refund worker sends it to an operator-configured webhook. Nothing in this repository has moved testnet funds, and the webhook contract is defined here rather than by a facilitator | a settlement-sandbox end-to-end run: settle, kill the controller, prove the refund executes. See [payment-ledger.md](payment-ledger.md) |
@@ -96,9 +96,13 @@ concrete next step.
 ## 3. Reliability / operations
 
 - Controller HA beyond one node. Leader election, the writer guard and the
-  measured failover are in place, but the SQLite file on a ReadWriteOnce volume
-  keeps a second replica `Pending`, so single-node HA is what ships
-  ([ADR 0010](adr/0010-controller-ha-storage.md)).
+  measured failover are in place, and the store now has a Postgres adapter with
+  the same invariants under `READ COMMITTED` (`STORE_BACKEND=postgres`), proved
+  by one contract suite run against both backends. What still ships is SQLite on
+  a ReadWriteOnce volume, so a second replica stays `Pending` and single-node HA
+  is the deployment ([ADR 0010](adr/0010-controller-ha-storage.md)). Remaining:
+  switch the manifest and its volume, add the `pg_dump` backup branch, and record
+  a failover that does not wait for a volume detach.
 - Persist relay state so a relay restart does not fail paid sessions (or fail and
   refund them cleanly).
 - Metrics: sessions created/expired/failed, provisioning latency, operation
