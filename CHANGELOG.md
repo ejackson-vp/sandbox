@@ -23,6 +23,22 @@ the container registry.
   by `make deploy`; see
   [deploy/kubernetes/kyverno](deploy/kubernetes/kyverno/README.md) and #30.
 
+- Durable per-payer and global create budgets in the controller (schema v14,
+  `payer_budgets`): creates and committed spend per fixed window, plus
+  concurrency counted from live sessions. Checked after the client commitment is
+  verified and before any capacity hold, intent claim or settlement; a rejection
+  is `429 budget_exhausted` with the scope, `Retry-After` and the remaining
+  budget. Spend is committed in the same transaction as the payment and ledger
+  rows, against the payer the facilitator verified, so a failure cannot lock a
+  payer out and a settlement cannot be invisible to the budget. Limits:
+  `BUDGET_WINDOW_MS`, `PAYER_CREATES_PER_WINDOW`, `PAYER_SPEND_PER_WINDOW`,
+  `PAYER_CONCURRENT_SESSIONS`, `GLOBAL_CREATES_PER_WINDOW`,
+  `GLOBAL_CONCURRENT_SESSIONS`. See
+  [docs/admission-control.md](docs/admission-control.md) and #48.
+- API metrics `sandbox_rate_limited_total{scope="payer_budget"|"global_budget"}`
+  and controller metric `sandbox_budget_rejections_total{scope}`; auth failures
+  gain `challenge_nonce_{missing,expired,reused,unknown}`.
+
 ### Changed
 
 - **Breaking:** the client commitment domain is `v2` and covers

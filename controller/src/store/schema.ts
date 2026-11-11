@@ -9,7 +9,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { NON_TERMINAL_STATE_SQL } from "./models.js";
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 /**
  * Due-time index. The due query filters on exactly the states in
@@ -72,6 +72,13 @@ const BASE_SCHEMA = `
     burned_at INTEGER
     );
     CREATE INDEX IF NOT EXISTS challenge_nonces_expires ON challenge_nonces(expires_at);
+    CREATE TABLE IF NOT EXISTS payer_budgets (
+    budget_key TEXT PRIMARY KEY,
+    window_start_ms INTEGER NOT NULL,
+    creates INTEGER NOT NULL DEFAULT 0,
+    spend TEXT NOT NULL DEFAULT '0',
+    updated_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     capability_hash TEXT NOT NULL,
@@ -155,6 +162,9 @@ const BASE_SCHEMA = `
     PRIMARY KEY (session_id, id)
     );
     CREATE INDEX IF NOT EXISTS sessions_state ON sessions(state);
+    -- Concurrency is counted from live sessions per verified payer. The ledger
+    -- keeps the checksummed address, so the lookup is on the lowercased form.
+    CREATE INDEX IF NOT EXISTS payment_ledger_payer ON payment_ledger(lower(payer));
     CREATE INDEX IF NOT EXISTS exec_requests_session ON exec_requests(session_id);
 ${DUE_INDEX}`;
 
@@ -226,6 +236,24 @@ function migrateV12toV13(db: DatabaseSync): void {
   `);
 }
 
+/**
+ * v13 -> v14: durable per-payer and global create budgets (#48). A new table and
+ * one expression index; no money row is read or rewritten. An existing payer
+ * starts with an empty window, which is the same state as a first create.
+ */
+function migrateV13toV14(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS payer_budgets (
+    budget_key TEXT PRIMARY KEY,
+    window_start_ms INTEGER NOT NULL,
+    creates INTEGER NOT NULL DEFAULT 0,
+    spend TEXT NOT NULL DEFAULT '0',
+    updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS payment_ledger_payer ON payment_ledger(lower(payer));
+  `);
+}
+
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = FULL;");
@@ -252,6 +280,7 @@ export function migrate(db: DatabaseSync): void {
       if (version < 11) migrateV10toV11(db);
       if (version < 12) migrateV11toV12(db);
       if (version < 13) migrateV12toV13(db);
+      if (version < 14) migrateV13toV14(db);
       // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

@@ -27,7 +27,13 @@ import type {
   SessionSpec,
 } from "@x402s/shared/protocol";
 import type { ApiConfig } from "../config.js";
-import { ControllerError, type CapacityDecision, type ControllerClient, type IntentCompletion } from "../controller-client.js";
+import {
+  ControllerError,
+  type BudgetDecision,
+  type CapacityDecision,
+  type ControllerClient,
+  type IntentCompletion,
+} from "../controller-client.js";
 import { createSchema } from "../schemas.js";
 import { RateLimiter, paymentPayerKey } from "../admission.js";
 import type { SettlementLookup } from "../settlement-lookup.js";
@@ -221,6 +227,39 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     if (burn.status !== "burned" && burn.status !== "replay") {
       recordAuthFailure(`challenge_nonce_${burn.status}`);
       await deps.payment402(res, requirement, `challenge_nonce_${burn.status}`);
+      return;
+    }
+
+    // Durable per-payer and global budget (#48), before any capacity hold, intent
+    // claim or settlement. The in-memory buckets above are the first line; this
+    // one survives a restart, and the global row cannot be influenced by a
+    // client-chosen field. `authorizer` is proven here: the commitment signature
+    // recovers to it, so the budget key is a key the caller controls.
+    let budget: BudgetDecision;
+    try {
+      budget = await deps.controller.reserveBudget(authorizer, requirement.amount);
+    } catch (err) {
+      log.error("budget_reservation_failed", { error: (err as Error).message });
+      res.status(503).json({
+        error: "admission_unavailable",
+        retryable: true,
+        message: "try again shortly; no payment was taken",
+      });
+      return;
+    }
+    if (!budget.ok) {
+      const globalScope = budget.scope.startsWith("global_");
+      recordRateLimited(globalScope ? "global_budget" : "payer_budget");
+      res.setHeader("Retry-After", String(budget.retryAfterSeconds));
+      res.status(429).json({
+        error: "budget_exhausted",
+        scope: budget.scope,
+        retryAfterSeconds: budget.retryAfterSeconds,
+        windowResetsAt: new Date(budget.windowResetsAt).toISOString(),
+        // What the payer has left, so a client can back off without guessing.
+        remaining: budget.remaining,
+        message: "this payer's create budget is exhausted; no payment was taken",
+      });
       return;
     }
 

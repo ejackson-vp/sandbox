@@ -52,6 +52,28 @@ export interface ChallengeNonce {
  */
 export type ChallengeBurnStatus = "burned" | "replay" | "expired" | "unknown" | "reused";
 
+/**
+ * Durable create-budget decision (#48). Mirrors the controller's
+ * `BudgetDecision`; the API does not import the controller workspace.
+ */
+export interface BudgetRemaining {
+  payerCreates: number | null;
+  payerSpend: string | null;
+  payerConcurrent: number | null;
+  globalCreates: number;
+  globalConcurrent: number;
+}
+
+export type BudgetDecision =
+  | { ok: true; remaining: BudgetRemaining; windowResetsAt: number }
+  | {
+      ok: false;
+      scope: string;
+      retryAfterSeconds: number;
+      remaining: BudgetRemaining;
+      windowResetsAt: number;
+    };
+
 export type CapacityDecision =
   | { admitted: true; nodeId: string; reservation: { nodeId: string } }
   | {
@@ -186,6 +208,21 @@ export class ControllerClient {
       method: "POST",
       body: JSON.stringify({ reason }),
     });
+  }
+
+  /* ---------------- durable budgets (#48) ---------------- */
+
+  /**
+   * Reserve one create for a payer (or globally) before any capacity hold. A
+   * rejection is a decided answer; a transport failure throws and the caller
+   * fails closed rather than settling without a budget check.
+   */
+  async reserveBudget(payer: string | null, amountAtomic: string): Promise<BudgetDecision> {
+    return this.call<BudgetDecision>(
+      "/internal/budgets/reserve",
+      { method: "POST", body: JSON.stringify({ ...(payer ? { payer } : {}), amount: amountAtomic }) },
+      5_000,
+    );
   }
 
   /* ---------------- challenge nonces (#47) ---------------- */

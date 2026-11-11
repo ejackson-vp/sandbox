@@ -25,7 +25,16 @@ export const AUTH_FAILURE_REASONS = [
 
 export type AuthFailureReason = (typeof AUTH_FAILURE_REASONS)[number];
 
-export const RATE_LIMIT_SCOPES = ["ip", "payer", "read", "internal", "relay"] as const;
+export const RATE_LIMIT_SCOPES = [
+  "ip",
+  "payer",
+  // Durable budget (#48): a payer window and the global window.
+  "payer_budget",
+  "global_budget",
+  "read",
+  "internal",
+  "relay",
+] as const;
 
 export type RateLimitScope = (typeof RATE_LIMIT_SCOPES)[number];
 

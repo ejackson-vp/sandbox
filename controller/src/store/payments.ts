@@ -17,11 +17,14 @@ import {
   type SessionRecord,
 } from "./models.js";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
+import type { BudgetRepository } from "./budgets.js";
 
 export class PaymentRepository {
   constructor(
     private readonly db: DatabaseSync,
     private readonly stmts: Record<string, StatementSync>,
+    private readonly budgets: BudgetRepository,
+    private readonly budgetWindowMs: number,
   ) {}
 
   /**
@@ -178,6 +181,15 @@ export class PaymentRepository {
       // has already changed it, so the stale owner cannot settle.
       const settled = this.stmts.settleIntent!.run(session.id, Date.now(), paymentKey, claimToken);
       if (settled.changes === 0) throw new PaymentClaimLostError(paymentKey);
+      // Spend is committed with the ledger row, to the *verified* payer, in this
+      // same transaction. A crash cannot leave a charge that the budget does not
+      // know about, and a failed settlement never accrues spend (#48).
+      this.budgets.recordSpendWithinTransaction(
+        payment.payer ?? "",
+        payment.amount,
+        Date.now(),
+        this.budgetWindowMs,
+      );
       this.db.exec("COMMIT");
       return { sessionId: session.id, created: true };
     } catch (err) {

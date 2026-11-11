@@ -16,6 +16,13 @@ export const intentClaimSchema = z.object({
   staleMs: z.number().int().min(1000).max(600_000).optional(),
 });
 
+/** Reserve one create against the durable budget (#48). */
+export const budgetReserveSchema = z.object({
+  /** The payer address the requester proved it controls; omitted for a global check. */
+  payer: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  amount: z.string().regex(/^\d{1,30}$/),
+});
+
 /** Burn one server-issued challenge nonce for one payment (#47). */
 export const burnChallengeNonceSchema = z.object({
   nonce: z.string().regex(/^cn_[0-9a-f]{32}$/),

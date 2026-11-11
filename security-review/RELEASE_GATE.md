@@ -25,8 +25,9 @@ Four deployment profiles are gated separately. "Unverified" is not "passed".
 | Kata guest→host isolation | **UNVERIFIED** | release gate added (`make security-isolation`); no run yet (#44) |
 | Cilium pod→pod / pod→API / metadata isolation | **UNVERIFIED** | packet-level suite wired into the release gate; no run yet (#44) |
 | Image vulnerability status | **UNVERIFIED** | no image built |
-| Multi-replica controller | NOT SUPPORTED | SQLite on a ReadWriteOnce volume; [ADR 0010](../docs/adr/0010-controller-ha-storage.md) targets Postgres behind the store port |
-| Capacity quotas per payer/IP | PARTIAL | admission exists; no durable per-payer budget |
+| Multi-replica controller | NOT SUPPORTED | SQLite on a ReadWriteOnce volume; [ADR 0010](../docs/adr/0010-controller-ha-storage.md) targets Postgres behind the store port, which needs async store ports first |
+| Capacity quotas per payer/IP | PASS | durable per-payer + global budget (#48), restart test |
+| Budget survives a controller restart | PASS | `tests/unit/payer-budget.test.ts` |
 
 ---
 
@@ -80,11 +81,12 @@ settlement, money changes hands automatically.
    least-privilege; CI supply chain is not gated.
 4. **Kata and Cilium are UNVERIFIED.** A public beta that runs hostile code
    cannot claim tenant isolation from `runc` or from unit tests.
-5. No durable per-payer capacity/abuse budget; only in-memory token buckets.
-6. **Incident response: written, not rehearsed.** Three runbooks and a tabletop
+5. **Incident response: written, not rehearsed.** Three runbooks and a tabletop
    script exist under `docs/runbooks/`. No exercise has been run, so the
    procedures are unverified and the gaps they will find are unknown
-   ([tabletop.md](../docs/runbooks/tabletop.md)).
+   ([tabletop.md](../docs/runbooks/tabletop.md)). The durable per-payer and
+   global create budget (#48) closed the quota half of this blocker; the
+   detection, containment and escalation half is what remains.
 
 ## 4. Unrestricted hostile multi-tenant production — **BLOCKED**
 
@@ -165,7 +167,7 @@ rather than leaving it undecided.
 | F-10 | End-to-end test in a non-production settlement sandbox: crash after settle → retry returns the entitlement or a refund is executed; ledger auditable |
 | F-15 | Actions pinned to SHAs, images by digest, job-scoped `permissions` |
 | Kata/Cilium | A release run whose `isolation` job is green, with `tested-images.json` naming the same control and guest digests that `promote` tags. `make security-isolation` reproduces it locally. A release cut with `ISOLATION_EVIDENCE=none` does not satisfy this row. |
-| Abuse | Durable per-payer quota with a test that survives a restart |
+| Abuse | ~~Durable per-payer quota with a test that survives a restart~~ met by #48 (`tests/unit/payer-budget.test.ts`). The remaining abuse gap is incident response: written but unrehearsed (blocker 5) |
 
 ## Appendix — point-in-time security assessment
 

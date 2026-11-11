@@ -66,6 +66,32 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       countActiveChallengeNonces: db.prepare(
         "SELECT COUNT(*) AS n FROM challenge_nonces WHERE expires_at > ?",
       ),
+      /* ---------------- durable budgets (#48) ---------------- */
+      insertBudgetRow: db.prepare(
+        "INSERT OR IGNORE INTO payer_budgets (budget_key, window_start_ms, creates, spend, updated_at) VALUES (?, ?, 0, '0', ?)",
+      ),
+      getBudget: db.prepare("SELECT * FROM payer_budgets WHERE budget_key = ?"),
+      /**
+       * Fixed-window roll, conditional on the window actually being expired so
+       * a concurrent reservation inside the window is never reset underneath it.
+       */
+      resetBudgetWindow: db.prepare(
+        `UPDATE payer_budgets SET window_start_ms=?, creates=0, spend='0', updated_at=?
+         WHERE budget_key=? AND window_start_ms <= ?`,
+      ),
+      bumpBudgetCreate: db.prepare(
+        "UPDATE payer_budgets SET creates=creates+1, updated_at=? WHERE budget_key=?",
+      ),
+      /** Exact decimal text: the amount may exceed a 64-bit integer. */
+      setBudgetSpend: db.prepare("UPDATE payer_budgets SET spend=?, updated_at=? WHERE budget_key=?"),
+      countLiveSessions: db.prepare(
+        `SELECT COUNT(*) AS n FROM sessions WHERE state IN (${NON_TERMINAL_STATE_SQL})`,
+      ),
+      countLiveSessionsForPayer: db.prepare(
+        `SELECT COUNT(*) AS n FROM sessions s
+         JOIN payment_ledger l ON l.session_id = s.id
+         WHERE lower(l.payer) = ? AND s.state IN (${NON_TERMINAL_STATE_SQL})`,
+      ),
       insertIntent: db.prepare(        `INSERT INTO payment_intents
            (payment_key, status, session_id, spec_hash, reason, claim_token, claim_expires_at, created_at, updated_at)
          VALUES (?, 'claimed', NULL, ?, NULL, ?, ?, ?, ?)`,

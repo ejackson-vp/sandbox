@@ -1,8 +1,7 @@
 /**
  * Single-use challenge nonces (#47, F-07).
  *
- * Two halves, both of them security properties rather than implementation
- * detail:
+ * Two halves, both security properties rather than implementation detail:
  *
  *  - the *store* must refuse a second burn, survive a restart, honour the TTL
  *    and stay bounded;
@@ -15,17 +14,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
-import { decodePaymentSignatureHeader } from "@x402/core/http";
-import { clientCommitmentMessage } from "../../shared/src/entries/crypto.js";
-import { MOCK_NETWORK, paymentKey } from "../../shared/src/entries/payment.js";
-import { TokenBucket } from "../../shared/src/entries/runtime.js";
-import { DEFAULT_TIERS, loadPlatformLimits } from "../../shared/src/entries/payment.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { Store } from "../../controller/src/store.js";
 import { ChallengeNonceCapacityError } from "../../controller/src/store/challenges.js";
-import { createSessionHandler } from "../../api/src/routes/create-session.js";
-import { createMockPayingClient } from "../helpers/x402.js";
+import { CHALLENGE_NONCE, postCreate } from "../helpers/create-route.js";
 
 const NONCE = `cn_${"a".repeat(32)}`;
 const OTHER = `cn_${"b".repeat(32)}`;
@@ -90,115 +82,41 @@ describe("challenge nonce store", () => {
   });
 });
 
-/* ------------------------------------------------------------------ */
-/* The create route refuses a nonce it cannot burn, before any money.  */
-/* ------------------------------------------------------------------ */
-
-const requirement = {
-  scheme: "exact",
-  network: MOCK_NETWORK,
-  asset: "mock:usdc",
-  amount: "50000",
-  payTo: "0x0000000000000000000000000000000000000402",
-  maxTimeoutSeconds: 300,
-  extra: {},
-};
-
-async function signedRequest(burnStatus: string) {
-  const account = privateKeyToAccount(generatePrivateKey());
-  const { client, http } = createMockPayingClient(account);
-  const payload = await client.createPaymentPayload({
-    x402Version: 2,
-    resource: { url: "https://sandbox.test/v1/sessions" },
-    accepts: [requirement],
-  } as never);
-  const header = http.encodePaymentSignatureHeader(payload)["PAYMENT-SIGNATURE"]!;
-  const key = paymentKey(decodePaymentSignatureHeader(header));
-
-  const clientPublicKey = "a".repeat(44);
-  const clientNonce = "b".repeat(44);
-  const challengeNonce = NONCE;
-  const clientSignature = await account.signMessage({
-    message: clientCommitmentMessage({ paymentKey: key, clientPublicKey, clientNonce, challengeNonce }),
-  });
-
-  const controller = {
-    preflightCapacity: vi.fn(async () => ({ admitted: true as const, reservationId: "r" })),
-    holdCapacity: vi.fn(async () => ({ admitted: true as const, nodeId: "n", reservation: { nodeId: "n" } })),
-    claimIntent: vi.fn(async () => ({ status: "claimed" as const, recovered: false, token: "t", expiresAt: 1 })),
-    burnChallengeNonce: vi.fn(async () => ({ status: burnStatus })),
-    // The replay case runs past the nonce into verification, which fails on the
-    // stubbed resource server; the release path must exist for it.
-    releaseCapacity: vi.fn(async () => undefined),
-    failIntent: vi.fn(async () => undefined),
-  };
-  const payment402 = vi.fn(async (res: { status: (code: number) => { json: (v: unknown) => void } }, _r: unknown, error: string) => {
-    res.status(402).json({ error });
-  });
-  const response = {
-    statusCode: 200,
-    body: undefined as unknown,
-    status(code: number) {
-      this.statusCode = code;
-      return this;
-    },
-    json(value: unknown) {
-      this.body = value;
-      return this;
-    },
-    setHeader() {
-      return this;
-    },
-    on() {
-      return this;
-    },
-  };
-  const request = {
-    body: { tier: "standard", clientPublicKey, clientNonce, challengeNonce, clientSignature },
-    ip: "127.0.0.1",
-    header: (name: string) => (name.toLowerCase() === "payment-signature" ? header : undefined),
-    on: () => undefined,
-  };
-  const handler = createSessionHandler({
-    config: {
-      tiers: DEFAULT_TIERS,
-      platformLimits: loadPlatformLimits({}),
-      network: MOCK_NETWORK,
-      paymentMode: "mock",
-      capabilityTtlSeconds: 60,
-      intentStaleMs: 30_000,
-    },
-    controller,
-    resourceServer: {},
-    settlementLookup: {},
-    requirementFor: async () => requirement,
-    payment402,
-    capabilityFor: () => "capability",
-    ipCreateLimiter: new TokenBucket(100, 100),
-    createLimiter: new TokenBucket(100, 100),
-  } as never);
-
-  await handler(request as never, response as never);
-  return { status: response.statusCode, body: response.body as { error?: string }, controller, payment402, key };
-}
-
 describe("create route with a spent challenge", () => {
-  it.each(["reused", "expired", "unknown"])("answers 402 for a %s nonce, before capacity or money", async (status) => {
-    const result = await signedRequest(status);
-    expect(result.status).toBe(402);
-    expect(result.body.error).toBe(`challenge_nonce_${status}`);
-    expect(result.controller.burnChallengeNonce).toHaveBeenCalledWith(NONCE, result.key);
-    // Nothing was held, claimed or settled.
-    expect(result.controller.holdCapacity).not.toHaveBeenCalled();
-    expect(result.controller.claimIntent).not.toHaveBeenCalled();
-  });
+  it.each(["reused", "expired", "unknown"])(
+    "answers 402 for a %s nonce, before capacity or money",
+    async (status) => {
+      const result = await postCreate(({ controller }) => {
+        controller.burnChallengeNonce.mockResolvedValue({ status });
+      });
+
+      expect(result.status).toBe(402);
+      expect(result.body.error).toBe(`challenge_nonce_${status}`);
+      expect(result.controller.burnChallengeNonce).toHaveBeenCalledWith(CHALLENGE_NONCE, result.paymentKey);
+      // Nothing was held, claimed, budgeted or settled.
+      expect(result.controller.holdCapacity).not.toHaveBeenCalled();
+      expect(result.controller.claimIntent).not.toHaveBeenCalled();
+      expect(result.controller.reserveBudget).not.toHaveBeenCalled();
+    },
+  );
 
   it("continues on a replay of the same payment", async () => {
-    const result = await signedRequest("replay");
+    const result = await postCreate(({ controller }) => {
+      controller.burnChallengeNonce.mockResolvedValue({ status: "replay" });
+    });
+
     expect(result.controller.holdCapacity).toHaveBeenCalled();
     expect(result.controller.claimIntent).toHaveBeenCalled();
-    // Past capacity the route continues to the intent, so it is no longer a 402
-    // from the nonce path.
-    expect(result.body.error).not.toBe("challenge_nonce_reused");
+    expect(result.controller.reserveBudget).toHaveBeenCalled();
+  });
+
+  it("answers 402 when a payment arrives without a challenge nonce", async () => {
+    const result = await postCreate(({ body }) => {
+      delete body.challengeNonce;
+    });
+
+    expect(result.status).toBe(402);
+    expect(result.body.error).toBe("challenge_nonce_required");
+    expect(result.controller.burnChallengeNonce).not.toHaveBeenCalled();
   });
 });

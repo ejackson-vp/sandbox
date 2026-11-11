@@ -2,9 +2,9 @@
 
 > Benchmark tooling and raw results live in the [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench) repository; paths below refer to that repo.
 
-Status: two-bucket admission and global capacity admission are implemented;
-the burst matrix and constrained-capacity results are measured on the local
-kind rig. Guest-image admission is a Kyverno policy shipped in
+Status: two-bucket admission, a durable per-payer and global create budget, and
+global capacity admission are implemented; the burst matrix and
+constrained-capacity results are measured on the local kind rig. Guest-image admission is a Kyverno policy shipped in
 [deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md), verified by
 a documented cluster check rather than by CI.
 
@@ -52,6 +52,70 @@ verified payer is recorded on the settled payment as before.
 
 The bench scripts raise both buckets for capacity runs and restore the
 ConfigMap defaults afterwards.
+
+## Durable per-payer and global budget
+
+The two token buckets live in the API process. A restart refills every bucket,
+and the per-payer key comes from a client-chosen field (F-09), so neither is a
+bound on a determined client. The controller therefore keeps a **durable fixed
+window** per payer and one **global** window in SQLite (`payer_budgets`, schema
+v14), checked before any capacity hold, intent claim or settlement:
+
+| Budget | Default | Key | Bounds |
+|---|---:|---|---|
+| per-payer creates | 60/window | proven wallet address | one payer's create rate across restarts |
+| per-payer spend | 50 USDC/window | proven wallet address | settled value per payer |
+| per-payer concurrency | 4 | proven wallet address | parallel live sessions |
+| global creates | 2000/window | constant `global` | total create attempts, whatever the `from` field says |
+| global concurrency | 200 | constant `global` | total live sessions |
+
+| Env | Default | Meaning |
+|---|---:|---|
+| `BUDGET_WINDOW_MS` | `3600000` | fixed window length (60 s to 24 h) |
+| `PAYER_CREATES_PER_WINDOW` | `60` | creates per payer per window |
+| `PAYER_SPEND_PER_WINDOW` | `50000000` | atomic units (USDC 6dp), exact decimal string |
+| `PAYER_CONCURRENT_SESSIONS` | `4` | 0 disables the check |
+| `GLOBAL_CREATES_PER_WINDOW` | `2000` | creates across all payers |
+| `GLOBAL_CONCURRENT_SESSIONS` | `200` | 0 disables the check |
+
+Three properties matter more than the numbers:
+
+- **The key is proven, not claimed.** The check runs after the client commitment
+  is verified against `authorization.from`, so the budget is keyed on a wallet
+  the caller demonstrated control of. An unproven create never reaches it.
+- **Creates are counted at admission; spend only when money moves.** A
+  reservation counts an attempt. Spend is written in the same SQLite transaction
+  as the payment and ledger rows (`completeEntitlement`), against the payer the
+  facilitator verified. A failed settlement therefore cannot lock a payer out,
+  and a settled payment cannot be invisible to the budget.
+- **Concurrency is counted from live rows**, not a counter, so a crash cannot
+  leak a slot.
+
+A rejection is `429` with the budget that refused, the seconds until the window
+resets and what is left:
+
+```json
+{
+  "error": "budget_exhausted",
+  "scope": "payer_create",
+  "retryAfterSeconds": 900,
+  "windowResetsAt": "2026-11-11T16:03:31.000Z",
+  "remaining": { "payerCreates": 0, "payerSpend": "50000000", "payerConcurrent": 4,
+                 "globalCreates": 1200, "globalConcurrent": 190 }
+}
+```
+
+`scope` is one of `payer_create`, `payer_spend`, `payer_concurrent`,
+`global_create`, `global_concurrent`. No payment is taken for a rejected create:
+the check runs before the intent is claimed and before settlement. If the budget
+store cannot be reached the API answers `503 admission_unavailable` (retryable)
+rather than admitting unaccounted work.
+
+This is a fixed window, not a sliding one: a client can spend the whole window in
+one burst at a boundary. The in-memory bucket is what smooths that, which is why
+it stays in front. Metrics: `sandbox_budget_rejections_total{scope}` in the
+controller, `sandbox_rate_limited_total{scope="payer_budget"|"global_budget"}` in
+the API.
 
 ## Measured burst (pool = 8, all buckets raised)
 
@@ -223,9 +287,10 @@ controller-side refusal.
 
 - **Capacity wait queue.** A retryable rejection is immediate; clients retry
   themselves. A bounded wait queue is the next experiment.
-- **Distributed buckets.** The API is a single replica and the buckets are
-  in-memory. Multiple replicas would each allow a full bucket; a shared store or
-  consistent hashing is required before scaling the API out.
+- **Distributed in-memory buckets.** The API is a single replica and the token
+  buckets are in-memory, so multiple replicas would each allow a full burst. The
+  durable budget behind them is shared (it lives in the controller's database),
+  so the aggregate ceiling holds; only the burst smoothing is per replica.
 - **Per-tier/per-capability limits.** All sessions share one payer bucket.
 - **Queueing.** Rejecting with 429 is the current behavior; a bounded queue with
   an estimated wait would be friendlier for bursty legitimate clients.

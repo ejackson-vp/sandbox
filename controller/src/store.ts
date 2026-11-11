@@ -30,6 +30,7 @@ import { checkStoreHealth, type StoreHealth } from "./store/health.js";
 import { prepareStatements } from "./store/statements.js";
 import { PaymentRepository } from "./store/payments.js";
 import { ChallengeNonceRepository, type ChallengeBurnResult } from "./store/challenges.js";
+import { BudgetRepository, type BudgetDecision, type BudgetLimits } from "./store/budgets.js";
 import { cadenceFor } from "./reconcile-cadence.js";
 import { finalStateForReason, SOURCE_STATES } from "@x402s/shared/protocol";
 import { metrics } from "@x402s/shared/runtime";
@@ -93,6 +94,7 @@ export class Store {
   readonly reservations: ReservationStore;
   readonly payments: PaymentRepository;
   readonly challenges: ChallengeNonceRepository;
+  readonly budgets: BudgetRepository;
   /** Path of the main database file (`:memory:` in tests). */
   readonly path: string;
   /**
@@ -102,9 +104,16 @@ export class Store {
    * covered by one guard and a new statement cannot forget to check it.
    */
   private writesBlocked = false;
+  private readonly budgetWindowMs: number;
 
-  constructor(path: string) {
+  /**
+   * `budgetWindowMs` is the fixed window for the durable create budget. It is a
+   * storage concern because the spend commit happens inside the settlement
+   * transaction; the default matches the controller's own default.
+   */
+  constructor(path: string, opts: { budgetWindowMs?: number } = {}) {
     this.path = path;
+    this.budgetWindowMs = opts.budgetWindowMs ?? 3_600_000;
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA busy_timeout = 5000;");
     for (let attempt = 0; ; attempt += 1) {
@@ -124,7 +133,8 @@ export class Store {
     this.reservations = new ReservationRepository(this.db);
 
     this.stmts = prepareStatements(this.db);
-    this.payments = new PaymentRepository(this.db, this.stmts);
+    this.budgets = new BudgetRepository(this.db, this.stmts);
+    this.payments = new PaymentRepository(this.db, this.stmts, this.budgets, this.budgetWindowMs);
     this.challenges = new ChallengeNonceRepository(this.db, this.stmts);
   }
 
@@ -225,6 +235,17 @@ export class Store {
   /** Drop expired nonces. Called from housekeeping so the table stays bounded. */
   pruneChallengeNonces(): number {
     return this.challenges.prune(Date.now());
+  }
+
+  /* ---------------- durable budgets (#48) ---------------- */
+
+  /**
+   * Reserve one create against the global and (optionally) per-payer budget.
+   * See BudgetRepository: all-or-nothing, one transaction, no spend until the
+   * ledger row is written.
+   */
+  reserveBudgets(payer: string | null, amountAtomic: string, limits: BudgetLimits): BudgetDecision {
+    return this.budgets.reserve(payer, amountAtomic, limits, Date.now());
   }
 
   /* ---------------- sessions ---------------- */

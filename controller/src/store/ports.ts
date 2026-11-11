@@ -11,6 +11,7 @@ import type {
 } from "./models.js";
 import type { ReservationStore } from "../capacity/reservation-store.js";
 import type { ChallengeBurnResult } from "./challenges.js";
+import type { BudgetDecision, BudgetLimits } from "./budgets.js";
 import type { StoreHealth } from "./health.js";
 
 /**
@@ -151,6 +152,8 @@ export interface ControlApiStore {
   /** Single-use challenge nonce (#47): mint, burn, and never resurrect. */
   issueChallengeNonce(nonce: string, ttlMs: number, maxActive: number): { nonce: string; expiresAt: number };
   burnChallengeNonce(nonce: string, paymentKey: string): ChallengeBurnResult;
+  /** Durable per-payer and global create budget (#48). */
+  reserveBudgets(payer: string | null, amountAtomic: string, limits: BudgetLimits): BudgetDecision;
   completeEntitlement(
     paymentKey: string,
     claimToken: string,

@@ -206,6 +206,30 @@ export interface ControllerConfig {
   challengeNonceTtlMs: number;
   /** Hard cap on unburned, unexpired nonces; 0 disables the cap. */
   challengeNonceMaxActive: number;
+  /** Fixed window for the durable create budget (#48). */
+  budgetWindowMs: number;
+  /** Creates one payer may attempt per window, durable across restarts. */
+  payerCreatesPerWindow: number;
+  /** Atomic units (USDC 6dp) one verified payer may settle per window. */
+  payerSpendPerWindow: string;
+  /** Concurrent non-terminal sessions per payer; 0 disables the check. */
+  payerConcurrentSessions: number;
+  /** Creates across all payers per window; independent of any client field. */
+  globalCreatesPerWindow: number;
+  /** Concurrent non-terminal sessions cluster-wide; 0 disables the check. */
+  globalConcurrentSessions: number;
+}
+
+/**
+ * A non-negative decimal amount in atomic units, kept as a string so it never
+ * loses precision through a JS number (USDC 6dp, but tiers are configurable).
+ */
+function atomicAmount(raw: string | undefined, fallback: string): string {
+  const value = (raw ?? fallback).trim();
+  if (!/^\d{1,30}$/.test(value)) {
+    throw new Error(`expected a non-negative decimal amount in atomic units, got ${JSON.stringify(value)}`);
+  }
+  return value;
 }
 
 /**
@@ -464,6 +488,16 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     // captured challenge is worthless by the time a log is read.
     challengeNonceTtlMs: int(env.CHALLENGE_NONCE_TTL_MS, 180_000, 10_000, 900_000),
     challengeNonceMaxActive: int(env.CHALLENGE_NONCE_MAX_ACTIVE, 20_000, 0, 1_000_000),
+    // The durable budget is the backstop behind the in-memory buckets, so its
+    // defaults are looser than CREATE_RATE_BURST (30/1s): roughly two creates a
+    // minute sustained per payer, and a global ceiling that a rotating `from`
+    // cannot escape.
+    budgetWindowMs: int(env.BUDGET_WINDOW_MS, 3_600_000, 60_000, 86_400_000),
+    payerCreatesPerWindow: int(env.PAYER_CREATES_PER_WINDOW, 60, 1, 1_000_000),
+    payerSpendPerWindow: atomicAmount(env.PAYER_SPEND_PER_WINDOW, "50000000"),
+    payerConcurrentSessions: int(env.PAYER_CONCURRENT_SESSIONS, 4, 0, 1_000),
+    globalCreatesPerWindow: int(env.GLOBAL_CREATES_PER_WINDOW, 2_000, 1, 10_000_000),
+    globalConcurrentSessions: int(env.GLOBAL_CONCURRENT_SESSIONS, 200, 0, 100_000),
     capacityEnabled: bool(env.CAPACITY_ENABLED, true),
     capacityAccounting: (() => {
       const mode = env.CAPACITY_ACCOUNTING ?? "baseline";

@@ -172,8 +172,10 @@ concrete next step.
   ```
 
 - Before mainnet: production facilitator, pinned network id, settlement
-  reconciliation, refunds for failed provisioning, per-payer spend caps,
-  and a documented incident path for double-charge disputes.
+  reconciliation, refunds for failed provisioning, and a documented incident
+  path for double-charge disputes. Durable per-payer and global spend/create
+  budgets are implemented (#48, schema v14); the numbers still need to be
+  sized against real traffic.
 - Mainnet is rejected at startup (`api/src/config.ts`).
 
 ## 6. Isolated target (Kata)

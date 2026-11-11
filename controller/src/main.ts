@@ -50,6 +50,7 @@ async function main(): Promise<void> {
   metrics.counter("sandbox_sessions_created_total", "Entitlements created");
   metrics.counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED");
   metrics.counter("sandbox_refunds_total", "Payment refund outcomes");
+  metrics.counter("sandbox_budget_rejections_total", "Create-budget rejections by scope");
   metrics.counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason");
   metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE");
   registerSqliteMetrics(metrics);
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
 
   // controller (or "all": controller + relay + proxy in one process)
   mkdirSync(dirname(cfg.dbPath), { recursive: true });
-  const store = new Store(cfg.dbPath);
+  const store = new Store(cfg.dbPath, { budgetWindowMs: cfg.budgetWindowMs });
   collectors.push(() => collectSqliteMetrics(store));
   // One writer, still: a second replica is a standby, not a second scheduler.
   // Block this connection's writes until the process actually holds the role,
