@@ -197,9 +197,12 @@ describe("no secret leaves the process", () => {
       capabilitySecret: NEW_SECRET,
       capabilitySecretPrevious: OLD_SECRET,
       adminTokenPrevious: "a".repeat(32),
+      // The resolved ring is the shape a handler would actually hold.
+      capabilityKeys: overlap,
     });
     const emitted = lines.join("");
     expect(emitted).toContain("[redacted]");
+    expect(emitted).toContain("k2");
     expect(emitted).not.toContain(NEW_SECRET);
     expect(emitted).not.toContain(OLD_SECRET);
   });
