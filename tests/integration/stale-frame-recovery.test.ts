@@ -17,7 +17,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sealJsonTo } from "@x402s/shared";
+import { sealJsonTo } from "@x402s/shared/crypto";
 import { OperationFence } from "../../controller/src/operation-fence.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import {

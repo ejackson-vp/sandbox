@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WarmClaim } from "@x402s/shared";
+import type { WarmClaim } from "@x402s/shared/protocol";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
 import type { Provisioner, WarmPodInfo } from "../../controller/src/k8s.js";

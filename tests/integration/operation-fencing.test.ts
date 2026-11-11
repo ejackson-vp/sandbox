@@ -13,7 +13,7 @@ import { mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openSealedJson, sealJsonTo } from "@x402s/shared";
+import { openSealedJson, sealJsonTo } from "@x402s/shared/crypto";
 import { createControlApi } from "../../controller/src/control-api.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { OperationFence } from "../../controller/src/operation-fence.js";

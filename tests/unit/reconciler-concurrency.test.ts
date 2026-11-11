@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 // The reconciler imports the built workspace package, so the test must read the
 // same instance to assert on exported metrics. CI builds before running tests.
-import { metrics } from "@x402s/shared";
+import { metrics } from "@x402s/shared/runtime";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import type { Provisioner } from "../../controller/src/k8s.js";

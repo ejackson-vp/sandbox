@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { OperationFence } from "../../controller/src/operation-fence.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
-import type { RelaySessionState } from "@x402s/shared";
+import type { RelaySessionState } from "@x402s/shared/protocol";
 
 interface Fenced {
   id: string;
