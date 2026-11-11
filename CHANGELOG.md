@@ -135,12 +135,14 @@ the container registry.
 - CodeQL analyses every branch push, not just `main`, so a commit that lands
   inside a multi-commit push still has its own analysis (the OpenSSF `SAST`
   check reads that).
-- **Breaking:** the client commitment domain is `v2` and covers
-  `challengeNonce`. `POST /v1/sessions` now requires `challengeNonce` and a
-  signature over it on any paid request; a request without one gets a 402 with a
-  fresh challenge instead of a capability. The SDK is updated in the same
-  release and its cached-challenge fast path is removed, so every create takes
-  the 402 round trip (+1 RTT). No external clients exist yet.
+- **Breaking (SDK 0.3.0):** the client commitment is domain
+  `x402-sandbox/client-commitment/v2`, which covers `challengeNonce`, and
+  `challengeNonce` is now required on any paid `POST /v1/sessions`. A v1 client
+  (no `challengeNonce`, signature over the v1 message) receives a `402` with a
+  fresh challenge instead of a capability, so it fails closed rather than being
+  served on an unproven freshness value. `@x402s/sdk` 0.3.0 signs v2 and drops
+  the cached-challenge fast path, so every create takes the 402 round trip
+  (+1 RTT). No external clients exist yet; the SDK is unpublished.
 - The SDK retries a rejected challenge with the same payment payload and a new
   signature, so a burned/expired challenge recovers the same entitlement instead
   of paying twice.

@@ -86,7 +86,16 @@ There is no attestation opt-in flag: every mode is non-hardware-backed, and
 
 ## SDK
 
-`@x402s/sdk` exposes `SandboxClient`:
+`@x402s/sdk` exposes `SandboxClient`.
+
+**0.3.0 is a breaking release.** The client commitment moved to domain
+`x402-sandbox/client-commitment/v2`, which covers the server-issued
+`challengeNonce` from the 402. `challengeNonce` is required on any paid create, so
+a client built against 0.2.x gets a `402` with a fresh challenge instead of a
+capability. The SDK no longer caches a challenge (a single-use nonce makes a
+cached one unusable), so every create takes the 402 round trip, and a rejected
+challenge is retried with the same payment payload so a settled payment recovers
+its entitlement instead of being charged twice.
 
 ```ts
 import { SandboxClient, FileSessionStore } from "@x402s/sdk";

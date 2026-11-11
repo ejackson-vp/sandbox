@@ -35,6 +35,14 @@ signature. Because the payment key does not change, that retry recovers the
 existing entitlement rather than paying twice. There is no cached-challenge fast
 path: each create takes the 402 round trip.
 
+**Version note (client commitment v2).** The commitment is domain
+`x402-sandbox/client-commitment/v2` and `challengeNonce` is required on any paid
+create. A v1 client, which sends no `challengeNonce` and signs the old message,
+gets a `402` with a fresh challenge instead of a capability: the check fails
+closed and never returns an entitlement for an unproven freshness value. There is
+no compatibility mode. `@x402s/sdk` 0.3.0 is the first SDK release that speaks
+v2.
+
 The price is bound to the requested tier/limits (`amount` differs per tier), and
 the payment is bound to a `specHash` recorded in a durable intent. A retried
 request with the same payment returns the **same session** and the same capability
