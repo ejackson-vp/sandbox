@@ -62,7 +62,9 @@ export class SandboxClient {
    * download requested files, and always destroy the session.
    *
    * `files` keys and `returnFiles` entries are workspace-relative paths under
-   * `/workspace`. Only the `"base"` runtime is available.
+   * `/workspace`. `runtime` selects the guest profile: `base` (default),
+   * `python` or `node`. A profile the controller does not run fails at create
+   * with `unsupported_runtime` before any capacity is held.
    */
   run(opts: RunOptions): Promise<RunResult> {
     return runOnce(this, opts);

@@ -1,0 +1,507 @@
+name: release-profiles
+
+# Language profile images ship from the same tag as control/guest, from their
+# own workflow. release.yml owns the control/guest chain and its ordering; this
+# file must not be able to change it, and a profile rebuild must not have to
+# touch it. Both workflows trigger on the same `v*` push and build the same
+# commit.
+#
+# The published tags are `<version>-python` and `<version>-node` in the existing
+# public `-guest` package: a profile is a guest build with a different runtime
+# tree, so it belongs beside the guest image rather than in a new package. No
+# `latest`, no `major.minor`, and an existing `<version>-<profile>` tag is never
+# moved.
+#
+# Staging is the same shape as release.yml: `build` pushes only a run-scoped
+# `staging-*` tag, `digest` resolves the immutable index digest, `scan` gates
+# that exact digest, and `promote` is the only job allowed to create a release
+# tag. A failed scan leaves no pullable `<version>-<profile>` behind.
+# See docs/release-process.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+# A re-run must not cancel a release that is already promoting.
+concurrency:
+  group: release-profiles-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Run-scoped, and suffixed per profile so the two staging images cannot
+  # collide. Never a release name: nothing should deploy from `staging-*`.
+  STAGING_TAG: staging-${{ github.run_id }}-${{ github.sha }}
+  # The profiles are published into the existing public guest package.
+  IMAGE: ghcr.io/${{ github.repository }}-guest
+  # release.yml's control image. Profile tags only appear once that package has
+  # the release tag, so a red control/guest release cannot leave profile images.
+  CONTROL_IMAGE: ghcr.io/${{ github.repository }}-control
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [python, node]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The runtime base image is pinned in one file that
+      # `guest/build-profiles.sh` also reads, so a local rebuild and the release
+      # attestation are the same build inputs. check-profiles.sh validates the
+      # whole pin file and fails on a missing or floating pin before any build.
+      - name: Pinned runtime image
+        id: runtime
+        run: |
+          set -euo pipefail
+          image=$(./guest/check-profiles.sh --print-runtime "${{ matrix.profile }}")
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE }}
+          # One tag, and it is not a release name. Promotion adds the rest.
+          tags: |
+            type=raw,value=${{ env.STAGING_TAG }}-${{ matrix.profile }}
+
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: guest
+          file: guest/Dockerfile.profile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=guest-${{ matrix.profile }}
+          cache-to: type=gha,mode=max,scope=guest-${{ matrix.profile }}
+          # Exactly the inputs `guest/build-profiles.sh` passes. The pins carry
+          # the digest, so the base runtime cannot drift between builds.
+          build-args: |
+            PROFILE=${{ matrix.profile }}
+            RUNTIME_IMAGE=${{ steps.runtime.outputs.image }}
+          # Same attestations as the control and guest images: an SBOM and
+          # build provenance travel with the index.
+          sbom: true
+          provenance: true
+
+      - name: staging digest
+        run: |
+          echo "${{ matrix.profile }}:"
+          echo "  ${{ env.IMAGE }}:${{ env.STAGING_TAG }}-${{ matrix.profile }}"
+          echo "  digest ${{ steps.build.outputs.digest }}"
+
+  # Resolve each pushed index digest once and hand it to `attest`, `scan` and
+  # `promote`. Everything downstream addresses the image by digest, so moving a
+  # tag cannot redirect the scan away from the image that gets promoted.
+  digest:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      python: ${{ steps.resolve.outputs.python }}
+      node: ${{ steps.resolve.outputs.node }}
+    steps:
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: resolve
+        run: |
+          set -euo pipefail
+          for profile in python node; do
+            ref="${IMAGE}:${STAGING_TAG}-${profile}"
+            digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')
+            case "$digest" in
+              sha256:*) ;;
+              *) echo "unexpected digest for $ref: $digest" >&2; exit 1 ;;
+            esac
+            echo "${profile}=${digest}" >> "$GITHUB_OUTPUT"
+          done
+
+  # Provenance for the exact digests that get scanned and promoted. Keyless
+  # (workflow OIDC), same shape as release.yml: the attestation binds the image
+  # digest to this repository, commit and workflow.
+  attest:
+    needs: digest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [python, node]
+    steps:
+      - id: digest
+        env:
+          DIGESTS: ${{ toJSON(needs.digest.outputs) }}
+        run: |
+          set -euo pipefail
+          digest=$(jq -r --arg p "${{ matrix.profile }}" '.[$p]' <<<"$DIGESTS")
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "no digest for ${{ matrix.profile }}: $digest" >&2; exit 1 ;;
+          esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # `push-to-registry` reads the registry credentials from the Docker
+      # config; it does not use the GitHub token on its own.
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          # All three images live in the `-guest` package, so the subject is the
+          # package plus the digest, not a tag.
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+
+      - name: Stage release assets
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          cp "$BUNDLE" "assets/sandbox-guest-${{ matrix.profile }}.sigstore.json"
+          jq -c '.dsseEnvelope.payload | @base64d | fromjson' "$BUNDLE" \
+            > "assets/sandbox-guest-${{ matrix.profile }}.intoto.jsonl"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: profile-attestations-${{ matrix.profile }}
+          path: assets/
+          retention-days: 14
+
+  # Same gate as the control/guest images: fixable CRITICAL/HIGH fails, results
+  # land in the Security tab. The release tags do not exist yet, so a failure
+  # here cannot leave a pullable profile tag.
+  scan:
+    needs: digest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [python, node]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: digest
+        env:
+          DIGESTS: ${{ toJSON(needs.digest.outputs) }}
+        run: |
+          set -euo pipefail
+          digest=$(jq -r --arg p "${{ matrix.profile }}" '.[$p]' <<<"$DIGESTS")
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "no digest for ${{ matrix.profile }}: $digest" >&2; exit 1 ;;
+          esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Scan ${{ matrix.profile }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.digest.outputs.digest }}
+          format: sarif
+          output: trivy-guest-${{ matrix.profile }}.sarif
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          limit-severities-for-sarif: true
+          exit-code: "1"
+
+      - name: Upload ${{ matrix.profile }} results
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: trivy-guest-${{ matrix.profile }}.sarif
+          category: trivy-guest-${{ matrix.profile }}
+
+  # The only job allowed to create profile tags. `imagetools create` retags the
+  # scanned index digest in place, so the multi-arch index and its
+  # SBOM/provenance attestations are preserved, and no image is rebuilt.
+  promote:
+    name: promote profile tags
+    needs: [digest, scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Read-only look at release.yml's run, to fail fast instead of waiting out
+      # the gate below when that run is already red.
+      actions: read
+    steps:
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for the control/guest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+
+          # A profile image is part of the release for this tag, not a separate
+          # artifact. release.yml is the only writer of release tags and it
+          # promotes after the full test and scan gate, so wait for its
+          # `<version>` tag: if the release is red, nothing here publishes. This
+          # is what keeps a failing test suite from leaving `<version>-python`
+          # behind for a version that was never released.
+          released=false
+          for attempt in $(seq 1 60); do
+            if docker buildx imagetools inspect "${CONTROL_IMAGE}:${version}" >/dev/null 2>&1; then
+              released=true
+              break
+            fi
+            if [ $((attempt % 4)) -eq 0 ]; then
+              state=$(gh run list --workflow release.yml --commit "$GITHUB_SHA" \
+                --limit 1 --json status,conclusion \
+                --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)
+              status="${state%% *}"
+              conclusion="${state#* }"
+              if [ "$status" = "completed" ] && [ "$conclusion" != "success" ]; then
+                echo "release run for ${GITHUB_SHA} finished ${conclusion}; refusing to publish profile images" >&2
+                exit 1
+              fi
+            fi
+            sleep 30
+          done
+
+          if [ "$released" != true ]; then
+            echo "${CONTROL_IMAGE}:${version} never appeared; refusing to publish profile images" >&2
+            exit 1
+          fi
+          echo "${CONTROL_IMAGE}:${version} exists; the release gate passed"
+
+      - name: Apply <version>-<profile>
+        env:
+          DIGESTS: ${{ toJSON(needs.digest.outputs) }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          core="${version%%[-+]*}"
+          if ! [[ "$core" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "refusing to promote non-semver ref: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+          for profile in python node; do
+            digest=$(jq -r --arg p "$profile" '.[$p]' <<<"$DIGESTS")
+            case "$digest" in
+              sha256:*) ;;
+              *) echo "no digest for ${profile}: ${digest}" >&2; exit 1 ;;
+            esac
+
+            tag="${version}-${profile}"
+            ref="${IMAGE}:${tag}"
+
+            # A release tag is append-only. Re-running the same tag is a no-op
+            # when it already points at the scanned digest; a tag that points
+            # anywhere else is a hand-built or older image and must not be
+            # replaced, because consumers pin these tags.
+            if existing=$(docker buildx imagetools inspect "$ref" \
+                --format '{{.Manifest.Digest}}' 2>/dev/null); then
+              if [ "$existing" != "$digest" ]; then
+                echo "refusing to move ${ref}: ${existing} != ${digest}" >&2
+                exit 1
+              fi
+              echo "${ref} already points at ${digest}; leaving it"
+              continue
+            fi
+
+            echo "promoting ${IMAGE}@${digest} as ${ref}"
+            docker buildx imagetools create --tag "$ref" "${IMAGE}@${digest}"
+
+            got=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')
+            if [ "$got" != "$digest" ]; then
+              echo "promotion mismatch for ${ref}: ${got} != ${digest}" >&2
+              exit 1
+            fi
+          done
+
+  # Digests are recorded in three places so an operator can find them without
+  # scraping logs: this run's summary, the `profile-images.json` asset, and the
+  # GitHub Release body. The Release body is owned by release.yml's `release`
+  # job, so this job waits for it instead of racing it.
+  record:
+    name: record profile digests
+    needs: [digest, attest, promote]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: profile-attestations-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Write profile-images.json
+        env:
+          DIGESTS: ${{ toJSON(needs.digest.outputs) }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          jq -n \
+            --arg version "$version" \
+            --arg image "${IMAGE}" \
+            --argjson digests "$DIGESTS" \
+            '{
+              version: $version,
+              profiles: ($digests | to_entries | map(
+                {key: .key,
+                 value: {image: $image, tag: "\($version)-\(.key)", digest: .value}}
+              ) | from_entries)
+            }' > release-assets/profile-images.json
+
+      - name: Summary
+        env:
+          DIGESTS: ${{ toJSON(needs.digest.outputs) }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          {
+            echo "## Profile images ${GITHUB_REF_NAME}"
+            echo
+            echo "| Profile | Tag | Digest |"
+            echo "| --- | --- | --- |"
+            for profile in python node; do
+              digest=$(jq -r --arg p "$profile" '.[$p]' <<<"$DIGESTS")
+              echo "| ${profile} | \`${IMAGE}:${version}-${profile}\` | \`${digest}\` |"
+            done
+            echo
+            echo "Point \`RUNTIME_PROFILES\` at the tag and digest from this table;"
+            echo "see docs/release-process.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: profile-images
+          path: release-assets/
+          retention-days: 14
+
+      - name: Attach to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          DIGESTS: ${{ toJSON(needs.digest.outputs) }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+
+          # release.yml's `release` job creates the entry for this tag and owns
+          # its body. Appending here without waiting would race it: both writes
+          # are read-modify-write, so one section would be lost. Wait for the
+          # `## Images` section it always writes, and stop early when that run
+          # has finished without producing a release (a red control/guest
+          # release), leaving the digests in the summary and artifact.
+          found=false
+          body=""
+          for attempt in $(seq 1 80); do
+            body=$(gh release view "$TAG" --json body --jq .body 2>/dev/null || true)
+            case "$body" in
+              *"## Images"*) found=true; break ;;
+            esac
+            if [ $((attempt % 8)) -eq 0 ]; then
+              status=$(gh run list --workflow release.yml --commit "$GITHUB_SHA" \
+                --limit 1 --json status --jq '.[0].status // empty' || true)
+              if [ "$status" = "completed" ]; then break; fi
+            fi
+            sleep 15
+          done
+
+          if [ "$found" != true ]; then
+            echo "::notice title=Profile digests::release.yml published no release for ${TAG}; profile digests are in this run's summary and the profile-images artifact" >&2
+            exit 0
+          fi
+
+          gh release upload "$TAG" release-assets/* --clobber
+
+          # Plain printf rather than heredocs: a heredoc terminator cannot sit
+          # at column 0 inside a YAML block scalar. Backticks are escaped so
+          # they stay literal markdown.
+          section=$(mktemp)
+          {
+            echo
+            echo "## Profile images"
+            echo
+            printf '%s\n' \
+              "Language profiles for \`${version}\`, published to the same package as the guest" \
+              "image (multi-arch \`linux/amd64\` and \`linux/arm64\`):"
+            echo
+            for profile in python node; do
+              digest=$(jq -r --arg p "$profile" '.[$p]' <<<"$DIGESTS")
+              printf '%s\n' "- \`${IMAGE}:${version}-${profile}\` (\`${digest}\`)"
+            done
+            echo
+            printf '%s\n' \
+              "Each was built from \`guest/Dockerfile.profile\` at the release commit with the" \
+              "pinned runtime image in \`guest/profiles/runtime-images.conf\`, scanned with the" \
+              "same Trivy policy as the guest image, and carries an SBOM and SLSA build" \
+              "provenance. These tags are created only after the scan passes, and an existing" \
+              "\`<version>-<profile>\` tag is never moved." \
+              "" \
+              "\`profile-images.json\` in the release assets is the same list for scripted" \
+              "updates of \`RUNTIME_PROFILES\`; \`sandbox-guest-<profile>.sigstore.json\` is the" \
+              "provenance bundle for each profile." \
+              "" \
+              '```bash' \
+              "gh attestation verify oci://${IMAGE}:${version}-python \\" \
+              "  --repo ${GITHUB_REPOSITORY}" \
+              '```' \
+              "" \
+              "CVE results for these tags are in the Security tab (\`trivy-guest-python\`," \
+              "\`trivy-guest-node\`). See \`docs/release-process.md\`."
+          } > "$section"
+
+          full=$(mktemp)
+          {
+            printf '%s\n' "$body"
+            cat "$section"
+          } > "$full"
+          gh release edit "$TAG" --notes-file "$full"
+
+          echo "::notice title=Profile digests::${TAG} release body updated with profile tags and digests"
