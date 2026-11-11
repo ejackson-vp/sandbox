@@ -4,15 +4,14 @@
  * There is no path to mainnet: a mainnet network id is rejected at startup even
  * if every other flag is set. Testnet is opt-in and documented.
  */
+import { envBool as bool, envInt as int } from "@x402s/shared/env";
 import {
   MOCK_NETWORK,
   loadPlatformLimits,
   loadTiers,
   type PlatformLimits,
   type TierTable,
-  envBool as bool,
-  envInt as int,
-} from "@x402s/shared";
+} from "@x402s/shared/payment";
 
 export type PaymentMode = "mock" | "testnet";
 

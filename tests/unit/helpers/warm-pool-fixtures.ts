@@ -13,7 +13,7 @@ import type { ReconcilerContext } from "../../../controller/src/reconciler-conte
 import type { Snapshotter } from "../../../controller/src/snapshotter.js";
 import type { SessionRecord } from "../../../controller/src/store/models.js";
 import type { Store } from "../../../controller/src/store.js";
-import type { WarmClaim } from "@x402s/shared";
+import type { WarmClaim } from "@x402s/shared/protocol";
 import { WarmPoolManager } from "../../../controller/src/warm-pool-manager.js";
 
 export const digestBase = `sha256:${"a".repeat(64)}`;

@@ -2,7 +2,7 @@
  * Public SDK types and errors. Kept separate from the client implementation so
  * modules can depend on the contract without importing the facade.
  */
-import type { SessionStatus, SessionTier } from "@x402s/shared";
+import type { SessionStatus, SessionTier } from "@x402s/shared/protocol";
 import type { Payer, PaymentMode } from "./payment.js";
 import type { FileSessionStore } from "./session-store.js";
 

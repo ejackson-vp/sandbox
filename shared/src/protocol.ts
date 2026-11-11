@@ -6,7 +6,8 @@
  * `envelope` field is an opaque base64 libsodium sealed box. Commands, file
  * contents, stdout and stderr only ever exist inside those envelopes.
  *
- * The contract is split by concept; import from `@x402s/shared` as before.
+ * The contract is split by concept; import it from `@x402s/shared/protocol`
+ * (or the legacy `@x402s/shared` barrel), never from a single concept file.
  */
 export * from "./protocol/lifecycle.js";
 export * from "./protocol/session.js";

@@ -2,7 +2,7 @@
  * Mock facilitator entrypoint (dev/test only). Never expose publicly.
  */
 import { createMockFacilitator } from "./mock-facilitator.js";
-import { log } from "@x402s/shared";
+import { log } from "@x402s/shared/runtime";
 
 async function main(): Promise<void> {
   const port = Number(process.env.PORT ?? 3002);

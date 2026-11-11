@@ -32,6 +32,12 @@ the container registry.
   it, applies the manifest environment to exec and long-running services, and
   reports the profile name and version in attestation. `guest/Dockerfile.profile`
   and `guest/profiles/{python,node}.json` build the two language images.
+- Controller leader election ([ADR 0009](docs/adr/0009-leader-election.md)). A
+  replica holds a `coordination.k8s.io/v1` Lease before it reconciles or reports
+  ready, so a second replica is a standby that can take over instead of a second
+  scheduler over the same rows. A standby's store connection refuses writes.
+  Failover, not throughput: the writer is still one process, and the SQLite
+  volume is still ReadWriteOnce.
 
 ### Changed
 

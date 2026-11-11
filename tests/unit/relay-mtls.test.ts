@@ -15,7 +15,7 @@ import WebSocket from "ws";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
 import { sha256Hex } from "../../controller/src/tokens.js";
-import type { WarmClaim } from "@x402s/shared";
+import type { WarmClaim } from "@x402s/shared/protocol";
 import { makeTestPki, type TestPki } from "../helpers/tls.js";
 
 const ADMIN = "relay-admin-token-0123456789";

@@ -17,7 +17,7 @@ import type {
   OperationError,
   TransferOperation,
   TransferResult,
-} from "@x402s/shared";
+} from "@x402s/shared/protocol";
 import type { ClientRuntime } from "./runtime.js";
 import { SandboxError } from "./types.js";
 import type { ExecOptions, FilePutOptions, SessionHandle } from "./types.js";

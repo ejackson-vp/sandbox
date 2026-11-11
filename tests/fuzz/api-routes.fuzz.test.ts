@@ -12,7 +12,7 @@ import express from "express";
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fuzzSeed } from "./seeds.js";
-import { sha256Hex } from "@x402s/shared";
+import { sha256Hex } from "@x402s/shared/crypto";
 import { createSessionsRouter } from "../../api/src/routes/sessions.js";
 import type { ApiConfig } from "../../api/src/config.js";
 import type { ControllerClient, SessionView } from "../../api/src/controller-client.js";

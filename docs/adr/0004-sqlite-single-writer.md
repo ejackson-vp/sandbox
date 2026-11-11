@@ -24,7 +24,8 @@ restart the reconciler lists live pods and relay state and repairs the database.
 
 - Atomic payment-to-entitlement without a distributed transaction.
 - A single controller replica is a hard ceiling. That is acceptable now and is a
-  deliberate limit, not an oversight.
+  deliberate limit, not an oversight. (0009 adds a standby that can take over;
+  the writer is still one process.)
 - SQLite on a volume is a durability dependency. Losing the volume loses session
   state; pods are then reaped as orphans.
 - Schema changes are isolated behind migrations so a Postgres adapter can replace

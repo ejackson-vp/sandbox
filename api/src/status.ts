@@ -1,12 +1,12 @@
 /**
  * Wire mapping: controller session view -> public SessionStatus/CreateResponse.
  */
-import {
-  formatUsd,
-  type CreateSessionResponse,
-  type SessionLimits,
-  type SessionStatus,
-} from "@x402s/shared";
+import { formatUsd } from "@x402s/shared/payment";
+import type {
+  CreateSessionResponse,
+  SessionLimits,
+  SessionStatus,
+} from "@x402s/shared/protocol";
 import type { SessionView } from "./controller-client.js";
 
 export function toStatus(s: SessionView): SessionStatus {

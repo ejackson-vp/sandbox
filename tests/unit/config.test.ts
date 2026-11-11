@@ -207,3 +207,38 @@ describe("production config guards", () => {
     ).toThrow(/GUEST_IMAGE_DIGEST/);
   });
 });
+
+describe("leader election config", () => {
+  const cluster = {
+    ...TOKENS,
+    EXECUTION_MODE: "dev",
+    ALLOW_INSECURE_DEV: "true",
+    KUBERNETES_ENABLED: "true",
+    GUEST_IMAGE_DIGEST: PINNED,
+  };
+
+  it("elects a leader in a cluster and takes its identity from the pod name", () => {
+    const cfg = loadControllerConfig({ ...cluster, POD_NAME: "controller-abc-1" });
+    expect(cfg.leaderElection).toBe(true);
+    expect(cfg.leaderIdentity).toBe("controller-abc-1");
+    expect(cfg.leaderLeaseName).toBe("controller-leader");
+  });
+
+  it("honours LEADER_ELECTION=off as the escape hatch", () => {
+    const cfg = loadControllerConfig({ ...cluster, LEADER_ELECTION: "off" });
+    expect(cfg.leaderElection).toBe(false);
+  });
+
+  it("never elects without an API server to hold the lease", () => {
+    // Solo is the only correct answer: there is no Lease object to win.
+    const cfg = loadControllerConfig({ ...dev, LEADER_ELECTION: "on" });
+    expect(cfg.kubeEnabled).toBe(false);
+    expect(cfg.leaderElection).toBe(false);
+  });
+
+  it("falls back to the host name when POD_NAME is absent", () => {
+    const cfg = loadControllerConfig({ ...cluster });
+    expect(cfg.leaderIdentity.length).toBeGreaterThan(0);
+    expect(cfg.leaderIdentity).not.toBe("controller-abc-1");
+  });
+});

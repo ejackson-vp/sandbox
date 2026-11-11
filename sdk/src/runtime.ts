@@ -9,9 +9,8 @@ import {
   sealJsonTo,
   toBase64,
   verifyAttestation,
-  type GuestResult,
-  type SessionStatus,
-} from "@x402s/shared";
+} from "@x402s/shared/crypto";
+import type { GuestResult, SessionStatus } from "@x402s/shared/protocol";
 import { createPayer, type Payer } from "./payment.js";
 import type { FileSessionStore } from "./session-store.js";
 import {

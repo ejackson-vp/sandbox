@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import {
   loadPlatformLimits,
   loadTiers,
@@ -83,6 +84,16 @@ export interface ControllerConfig {
   executionMode: "dev" | "kata";
   allowInsecureDev: boolean;
   kubeEnabled: boolean;
+  /**
+   * Hold the single-writer role through a Kubernetes Lease instead of assuming
+   * it. On by default whenever Kubernetes is enabled; `LEADER_ELECTION=off` is
+   * the escape hatch (docs/adr/0009).
+   */
+  leaderElection: boolean;
+  /** Lease holder identity: POD_NAME, falling back to the host name. */
+  leaderIdentity: string;
+  /** Lease object name, created in `controlNamespace`. */
+  leaderLeaseName: string;
   relayEnabled: boolean;
   proxyEnabled: boolean;
   relayBaseUrl: string;
@@ -294,6 +305,9 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   // Parsed before parseExecution because a real cluster deployment must pin the
   // guest image by digest independently of the payment/attestation dev switch.
   const kubeEnabled = bool(env.KUBERNETES_ENABLED, true);
+  // Leader election needs an API server to hold the Lease. Without one this
+  // process is the only writer by construction, so it runs solo.
+  const leaderElection = kubeEnabled && bool(env.LEADER_ELECTION, true);
   const execution = parseExecution(env, kubeEnabled, role);
   const adminToken = env.ADMIN_TOKEN ?? "";
   if (["controller", "all"].includes(role) && adminToken.length < 16) {
@@ -368,6 +382,9 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     ...execution,
     runtimeProfiles,
     kubeEnabled,
+    leaderElection,
+    leaderIdentity: env.POD_NAME?.trim() || hostname(),
+    leaderLeaseName: env.LEADER_LEASE_NAME ?? "controller-leader",
     relayEnabled: bool(env.RELAY_ENABLED, role === "all" || role === "relay"),
     proxyEnabled: bool(env.PROXY_ENABLED, role === "all" || role === "proxy"),
     relayBaseUrl: env.RELAY_URL ?? "http://127.0.0.1:8443",

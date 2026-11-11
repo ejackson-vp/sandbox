@@ -28,7 +28,7 @@ import type {
   WsReadResult,
   WsSendOperation,
   WsSendResult,
-} from "@x402s/shared";
+} from "@x402s/shared/protocol";
 import type { ClientRuntime } from "./runtime.js";
 import { sleep } from "./runtime.js";
 import {

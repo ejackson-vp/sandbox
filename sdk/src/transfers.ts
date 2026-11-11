@@ -12,7 +12,7 @@ import type {
   TransferOperation,
   TransferResult,
   OperationError,
-} from "@x402s/shared";
+} from "@x402s/shared/protocol";
 import type { OperationService } from "./operations.js";
 import { SandboxError, type SessionHandle } from "./types.js";
 

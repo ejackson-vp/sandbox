@@ -21,6 +21,7 @@ import { RelayClient } from "../../controller/src/relay-client.js";
 import { NullProvisioner } from "../../controller/src/k8s-null.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
 import { Store } from "../../controller/src/store.js";
+import { SoloLeadership } from "../../controller/src/leadership.js";
 import { checkStoreHealth } from "../../controller/src/store/health.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
 
@@ -82,7 +83,13 @@ interface Harness {
   closeStore(): void;
 }
 
-async function startController(opts: { relayUrl?: string; provisioner?: Provisioner } = {}): Promise<Harness> {
+async function startController(
+  opts: {
+    relayUrl?: string;
+    provisioner?: Provisioner;
+    leadership?: Pick<Leadership, "isLeader" | "onChange">;
+  } = {},
+): Promise<Harness> {
   const store = new Store(join(tempDir(), "controller.db"));
   let relayUrl = opts.relayUrl;
   if (!relayUrl) {
@@ -98,6 +105,7 @@ async function startController(opts: { relayUrl?: string; provisioner?: Provisio
     store,
     relay,
     provisioner,
+    ...(opts.leadership ? { leadership: opts.leadership } : {}),
     // These tests never reach the capacity routes.
     capacity: {} as CapacityService,
   });
@@ -130,6 +138,31 @@ describe("controller readiness", () => {
     const live = await get(harness.base, "/internal/healthz");
     expect(live.status).toBe(200);
     expect(live.body).toEqual({ ok: true });
+  });
+
+  it("reports a leadership standby not ready and follows the handover immediately", async () => {
+    const leadership = new SoloLeadership("controller-0");
+    const harness = await startController({ leadership });
+    await leadership.start();
+
+    const leader = await get(harness.base, "/internal/readyz");
+    expect(leader.status).toBe(200);
+    expect(leader.body).toMatchObject({ ok: true, components: { leadership: { ok: true } } });
+
+    // The Service routes on readiness, so a stale 200 would keep this replica in
+    // rotation after it stopped being the writer. The cache is invalidated on
+    // the transition, which is what makes this assertion pass without waiting.
+    await leadership.stop();
+    harness.store.setWritesBlocked(true);
+    const standby = await get(harness.base, "/internal/readyz");
+    expect(standby.status).toBe(503);
+    expect(standby.body).toMatchObject({
+      ok: false,
+      components: {
+        leadership: { ok: false, reason: "not_leader" },
+        store: { ok: false, reason: "read_only" },
+      },
+    });
   });
 
   it("returns 503 naming the store when the database is closed, but liveness stays up", async () => {

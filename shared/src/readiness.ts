@@ -52,6 +52,17 @@ export class ReadinessCache {
     return this.inflight;
   }
 
+  /**
+   * Drop the cached pass, so the next probe sees the change immediately.
+   *
+   * Used when leadership moves: a stale positive report would keep a standby in
+   * the Service for up to the TTL after it stopped being the writer, and a stale
+   * negative one would keep the new leader out.
+   */
+  invalidate(): void {
+    this.cached = null;
+  }
+
   private async probe(): Promise<ReadinessReport> {
     const names = Object.keys(this.checks);
     const results = await Promise.all(

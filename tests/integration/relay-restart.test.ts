@@ -27,7 +27,7 @@ import {
   generateBoxKeyPair,
   generateNonce,
   toBase64,
-} from "@x402s/shared";
+} from "@x402s/shared/crypto";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { CapacityService } from "../../controller/src/capacity/service.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";

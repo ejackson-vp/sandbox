@@ -92,6 +92,13 @@ export class Store {
   readonly payments: PaymentRepository;
   /** Path of the main database file (`:memory:` in tests). */
   readonly path: string;
+  /**
+   * True while this process is a standby for the single-writer role. Backed by
+   * SQLite's own `query_only` switch rather than a flag checked per method, so
+   * every path below, the payment repository and the reservation repository are
+   * covered by one guard and a new statement cannot forget to check it.
+   */
+  private writesBlocked = false;
 
   constructor(path: string) {
     this.path = path;
@@ -122,11 +129,34 @@ export class Store {
   }
 
   /**
+   * Refuse writes on this connection unless this process holds the writer role.
+   *
+   * A follower shares one SQLite file with the leader (see the RWO volume note
+   * in docs/adr/0009), so a write that slipped past the scheduler would be a
+   * second writer, not a harmless no-op. Turning it into an error keeps the
+   * failure loud and local: the reconciler logs it, the control API returns
+   * 500, and no row diverges.
+   *
+   * `query_only` only affects writes, so a standby can still serve reads,
+   * backups and the readiness probe while it waits for the lease.
+   */
+  setWritesBlocked(blocked: boolean): void {
+    if (blocked === this.writesBlocked) return;
+    this.db.exec(`PRAGMA query_only = ${blocked ? "ON" : "OFF"}`);
+    this.writesBlocked = blocked;
+  }
+
+  /** True when this connection is deliberately read-only (a leadership standby). */
+  get writesAreBlocked(): boolean {
+    return this.writesBlocked;
+  }
+
+  /**
    * Readiness probe: schema is current and the database accepts a write.
    * Runs on the store connection so it sees exactly what the reconciler sees.
    */
   healthCheck(): StoreHealth {
-    return checkStoreHealth(this.db);
+    return checkStoreHealth(this.db, { writable: !this.writesBlocked });
   }
 
   /**

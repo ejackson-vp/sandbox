@@ -9,29 +9,35 @@ import { verifyMessage } from "viem";
 import type { x402ResourceServer } from "@x402/core/server";
 import type { PaymentRequirements } from "@x402/core/types";
 import {
-  LATENCY_BUCKETS,
-  PAYMENT_VERSION,
-  formatUsd,
-  metrics,
   clientCommitmentMessage,
   paymentAuthorizer,
-  paymentKey,
-  recordAuthFailure,
-  recordRateLimited,
-  resolveSessionSpec,
   sha256Hex,
+} from "@x402s/shared/crypto";
+import {
+  PAYMENT_VERSION,
+  formatUsd,
+  paymentKey,
+  resolveSessionSpec,
   specHash,
-  type CreateSessionResponse,
-  type CreateSessionRequest,
-  type SessionSpec,
-} from "@x402s/shared";
+} from "@x402s/shared/payment";
+import type {
+  CreateSessionResponse,
+  CreateSessionRequest,
+  SessionSpec,
+} from "@x402s/shared/protocol";
 import type { ApiConfig } from "../config.js";
 import { ControllerError, type CapacityDecision, type ControllerClient, type IntentCompletion } from "../controller-client.js";
 import { createSchema } from "../schemas.js";
 import { RateLimiter, paymentPayerKey } from "../admission.js";
 import type { SettlementLookup } from "../settlement-lookup.js";
 import { createResponseFrom } from "../status.js";
-import { log } from "@x402s/shared";
+import {
+  LATENCY_BUCKETS,
+  log,
+  metrics,
+  recordAuthFailure,
+  recordRateLimited,
+} from "@x402s/shared/runtime";
 
 export interface CreateSessionDeps {
   config: ApiConfig;

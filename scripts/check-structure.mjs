@@ -6,7 +6,7 @@
  * docs/architecture-principles.md.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 // Ratchet: 550 is the target. Temporarily 650 because three controller modules
@@ -46,4 +46,161 @@ if (offenders.length > 0) {
   process.exit(1);
 }
 
-console.log(`structure ok: every module is <= ${MAX_LINES} lines`);
+/**
+ * Shared layering guard.
+ *
+ * `@x402s/shared` used to be a single barrel, so importing a wire type also
+ * evaluated `crypto.ts` (node:crypto + libsodium-wrappers) and the metrics
+ * listeners (node:http, node:perf_hooks). The subpath entry points in
+ * `shared/src/entries/` fix that only as long as the graph stays layered:
+ * anything a pure module imports is what a pure consumer pays for.
+ *
+ * Order matters. A module may import the layers below it and no further:
+ *
+ *   0 pure     types, decisions, env parsing. No I/O, no node builtins.
+ *   1 crypto   node:crypto, libsodium-wrappers.
+ *   2 payment  x402 schemes and the tier table on top of crypto.
+ *   3 runtime  listeners, metrics, logs, rate limits.
+ *
+ * Two edges are forbidden even though the order would allow them: runtime must
+ * not reach crypto or payment. A process that only serves metrics or writes
+ * logs should not load libsodium, which is the same reason the subpaths exist.
+ *
+ * `index.ts` and `entries/*` are aggregators and may import any layer.
+ */
+const SHARED = "shared/src";
+const SHARED_LAYERS = [
+  {
+    name: "pure",
+    pure: true,
+    match: (rel) =>
+      ["fp.ts", "protocol.ts", "env.ts", "ip.ts", "dev-attestation.ts", "runtimes.ts"].includes(rel) ||
+      rel.startsWith("protocol/") ||
+      rel.startsWith("domain/"),
+  },
+  {
+    name: "crypto",
+    match: (rel) => ["crypto.ts", "commitment.ts", "attestation.ts"].includes(rel),
+  },
+  {
+    name: "payment",
+    match: (rel) => ["payment.ts", "tiers.ts"].includes(rel),
+  },
+  {
+    name: "runtime",
+    match: (rel) =>
+      [
+        "log.ts",
+        "metrics.ts",
+        "metrics-http.ts",
+        "http-metrics.ts",
+        "runtime-metrics.ts",
+        "request-metrics.ts",
+        "rate-limit.ts",
+        "readiness.ts",
+      ].includes(rel),
+  },
+];
+
+const isAggregator = (rel) => rel === "index.ts" || rel.startsWith("entries/");
+
+/** Layer edges that the linear order allows but that must not exist. */
+const FORBIDDEN_EDGES = new Set(["runtime->crypto", "runtime->payment"]);
+
+function sharedModules() {
+  return [...files(join(ROOT, SHARED))]
+    .filter((path) => path.endsWith(".ts"))
+    .map((path) => relative(join(ROOT, SHARED), path).replaceAll("\\", "/"))
+    .sort();
+}
+
+function layerOf(rel) {
+  const index = SHARED_LAYERS.findIndex((layer) => layer.match(rel));
+  return index === -1 ? null : index;
+}
+
+/** Every module specifier in the file: static imports, re-exports, dynamic. */
+function importsOf(path) {
+  const text = readFileSync(path, "utf8");
+  const found = new Set();
+  for (const re of [
+    /(?:^|\n)\s*(?:import|export)\s+(?:type\s+)?[^;]*?from\s*["']([^"']+)["']/gs,
+    /(?:^|\n)\s*import\s*["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+  ]) {
+    for (const match of text.matchAll(re)) found.add(match[1]);
+  }
+  return [...found];
+}
+
+/** Resolve a relative specifier to a module path relative to `shared/src`. */
+function resolveSpecifier(fromRel, specifier) {
+  const target = posix.normalize(posix.join(posix.dirname(fromRel), specifier));
+  return target.replace(/\.js$/, ".ts");
+}
+
+const modules = sharedModules();
+const unclassified = modules.filter((rel) => !isAggregator(rel) && layerOf(rel) === null);
+const layeringOffenders = [];
+
+for (const rel of modules) {
+  if (isAggregator(rel)) continue;
+  const index = layerOf(rel);
+  if (index === null) continue; // reported as unclassified below
+  const layer = SHARED_LAYERS[index];
+  const pure = layer.pure === true;
+  for (const specifier of importsOf(join(ROOT, SHARED, rel))) {
+    if (!specifier.startsWith(".")) {
+      // A pure module must not reach node builtins or a package: that is the
+      // whole point of the pure layer, and it is what keeps ./protocol free.
+      if (pure) layeringOffenders.push(`${rel} imports "${specifier}"`);
+      continue;
+    }
+    const target = resolveSpecifier(rel, specifier);
+    const targetIndex = layerOf(target);
+    if (targetIndex === null) continue;
+    const targetLayer = SHARED_LAYERS[targetIndex];
+    if (targetIndex > index || FORBIDDEN_EDGES.has(`${layer.name}->${targetLayer.name}`)) {
+      layeringOffenders.push(
+        `${rel} (${layer.name}) imports ${target} (${targetLayer.name})`,
+      );
+    }
+  }
+}
+
+// The root barrel is the compatibility surface. It must keep re-exporting every
+// module, directly or through `protocol.ts`, or a consumer still on the barrel
+// loses an export without a compile error somewhere else.
+function exportedClosure(rel, seen = new Set()) {
+  if (seen.has(rel)) return seen;
+  seen.add(rel);
+  for (const specifier of importsOf(join(ROOT, SHARED, rel))) {
+    if (!specifier.startsWith(".")) continue;
+    const target = resolveSpecifier(rel, specifier);
+    if (modules.includes(target)) exportedClosure(target, seen);
+  }
+  return seen;
+}
+
+const barrel = exportedClosure("index.ts");
+const unexported = modules.filter((rel) => !isAggregator(rel) && !barrel.has(rel));
+
+if (unclassified.length > 0) {
+  console.error("shared/src modules with no layer (add them to SHARED_LAYERS):");
+  for (const rel of unclassified) console.error(`  ${rel}`);
+}
+if (unexported.length > 0) {
+  console.error("shared/src modules not re-exported from index.ts:");
+  for (const rel of unexported) console.error(`  ${rel}`);
+}
+if (layeringOffenders.length > 0) {
+  console.error("shared/src layering violations (see the guard above):");
+  for (const line of layeringOffenders) console.error(`  ${line}`);
+}
+if (unclassified.length + unexported.length + layeringOffenders.length > 0) {
+  process.exit(1);
+}
+
+console.log(
+  `structure ok: every module is <= ${MAX_LINES} lines; ${modules.length} shared modules layered, barrel complete`,
+);

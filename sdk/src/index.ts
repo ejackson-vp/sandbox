@@ -11,11 +11,11 @@ export type {
   FilePutResult,
   FileStatResult,
   OperationError,
-  RuntimeName,
   SessionLimits,
   SessionStatus,
   SessionTier,
-} from "@x402s/shared";
-export { DEFAULT_RUNTIME, isSupportedRuntime, SUPPORTED_RUNTIMES } from "@x402s/shared";
+} from "@x402s/shared/protocol";
+export type { RuntimeName } from "@x402s/shared/runtimes";
+export { DEFAULT_RUNTIME, isSupportedRuntime, SUPPORTED_RUNTIMES } from "@x402s/shared/runtimes";
 export * from "./sandbox.js";
 export * from "./transfers.js";

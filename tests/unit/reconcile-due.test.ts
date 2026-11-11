@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { metrics } from "@x402s/shared";
+import { metrics } from "@x402s/shared/runtime";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import { cadenceFor, DEFAULT_REDUE_INTERVAL_MS } from "../../controller/src/reconcile-cadence.js";

@@ -1,3 +1,19 @@
+/**
+ * Compatibility barrel: re-exports every shared module, as it always has.
+ *
+ * Prefer a subpath instead, so a consumer only loads what it uses:
+ *   ./protocol  wire types + the pure session table (no I/O, no node builtins)
+ *   ./domain    the lifecycle decision core
+ *   ./crypto    sealing, hashing, commitments, attestation
+ *   ./payment   x402 schemes, price parsing, tier table
+ *   ./runtime   logging, metrics, rate limiting, readiness
+ *   ./env       fail-closed environment parsing
+ *   ./ip        egress-proxy address classification
+ *
+ * This file stays complete on purpose: the controller still imports it, and the
+ * migration there lands separately. Do not add modules here and call it done;
+ * add them to the narrow entry under `src/entries/` as well.
+ */
 export * from "./env.js";
 export * from "./protocol.js";
 export * from "./fp.js";
