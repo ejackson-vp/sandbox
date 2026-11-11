@@ -23,7 +23,7 @@ import {
   type SessionEvent,
   type SessionSnapshot,
   type SessionState,
-} from "../../shared/src/index.js";
+} from "../../shared/src/entries/protocol.js";
 import {
   EFFECT_VARIANTS,
   EffectContextError,

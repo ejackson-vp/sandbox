@@ -37,7 +37,7 @@ import type { Provisioner } from "../controller/src/k8s.js";
 import type { RelayClient } from "../controller/src/relay-client.js";
 import type { Reconciler } from "../controller/src/reconciler.js";
 import type { SessionRecord, SessionState, Store } from "../controller/src/store.js";
-import type { RelaySessionState } from "../shared/src/index.js";
+import type { RelaySessionState } from "../shared/src/entries/protocol.js";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 

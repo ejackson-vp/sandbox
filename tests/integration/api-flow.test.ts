@@ -11,7 +11,10 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodePaymentSignatureHeader } from "@x402/core/http";
-import { createMockFacilitator, type MockFacilitatorHandle } from "../../api/src/mock-facilitator.js";
+import {
+  createMockFacilitator,
+  type MockFacilitatorHandle,
+} from "../../api/src/mock-facilitator.js";
 import { createApp } from "../../api/src/server.js";
 import { loadConfig } from "../../api/src/config.js";
 import { ControllerClient, ControllerError } from "../../api/src/controller-client.js";
@@ -31,12 +34,17 @@ import {
   fromBase64,
   generateBoxKeyPair,
   generateNonce,
-  paymentKey,
   toBase64,
-  type SessionStatus,
-} from "../../shared/src/index.js";
+} from "../../shared/src/entries/crypto.js";
+import { paymentKey } from "../../shared/src/entries/payment.js";
+import { type SessionStatus } from "../../shared/src/entries/protocol.js";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { SandboxClient, FileSessionStore, SandboxError, type SessionHandle } from "../../sdk/src/index.js";
+import {
+  SandboxClient,
+  FileSessionStore,
+  SandboxError,
+  type SessionHandle,
+} from "../../sdk/src/index.js";
 import { createSessionPayment, requestChallenge } from "../helpers/x402.js";
 import { makeTar } from "../helpers/tar.js";
 import { testPort } from "./ports.js";

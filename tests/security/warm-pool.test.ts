@@ -11,7 +11,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionStatus } from "../../shared/src/index.js";
+import type { SessionStatus } from "../../shared/src/entries/protocol.js";
 import { SandboxClient, FileSessionStore, type SessionHandle } from "../../sdk/src/index.js";
 import { clusterAvailable, kubectl, kubectlTry } from "./kubectl.js";
 

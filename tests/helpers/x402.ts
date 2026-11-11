@@ -1,7 +1,12 @@
 /** Shared test helpers for the x402 payment handshake. */
 import { x402Client } from "@x402/core/client";
 import { x402HTTPClient } from "@x402/core/client";
-import { MOCK_NETWORK, MockExactClientScheme, clientCommitmentMessage, paymentKey } from "../../shared/src/index.js";
+import {
+  MOCK_NETWORK,
+  MockExactClientScheme,
+  paymentKey,
+} from "../../shared/src/entries/payment.js";
+import { clientCommitmentMessage } from "../../shared/src/entries/crypto.js";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 export function createMockPayingClient(account = privateKeyToAccount(generatePrivateKey())) {

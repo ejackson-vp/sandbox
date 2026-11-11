@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { WebSocket } from "ws";
-import { MetricsRegistry, startMetricsServer } from "../../shared/src/index.js";
+import { MetricsRegistry, startMetricsServer } from "../../shared/src/entries/runtime.js";
 import { RelayRegistry } from "../../controller/src/relay/registry.js";
 import { collectRelayMetrics } from "../../controller/src/relay/metrics.js";
 import {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TIERS, loadPlatformLimits, resolveSessionSpec } from "../../shared/src/index.js";
+import {
+  DEFAULT_TIERS,
+  loadPlatformLimits,
+  resolveSessionSpec,
+} from "../../shared/src/entries/payment.js";
 
 const limits = loadPlatformLimits({});
 

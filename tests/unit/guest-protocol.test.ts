@@ -9,15 +9,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPrivateKey, sign } from "node:crypto";
 import type { WebSocket } from "ws";
+import { canonicalEvidenceBytes, DEV_ATTESTATION_KEY_ID } from "../../shared/src/entries/crypto.js";
 import {
-  canonicalEvidenceBytes,
-  DEV_ATTESTATION_KEY_ID,
   GUEST_PROTOCOL_VERSION,
-  MetricsRegistry,
   MIN_SUPPORTED_GUEST_PROTOCOL_VERSION,
   supportsGuestProtocolVersion,
   type AttestationEnvelope,
-} from "../../shared/src/index.js";
+} from "../../shared/src/entries/protocol.js";
+import { MetricsRegistry } from "../../shared/src/entries/runtime.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import { RelayRegistry } from "../../controller/src/relay/registry.js";

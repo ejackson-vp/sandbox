@@ -22,7 +22,7 @@ import {
   type PaymentRecord,
   type SessionRecord,
 } from "../../controller/src/store.js";
-import type { SessionLimits } from "../../shared/src/index.js";
+import type { SessionLimits } from "../../shared/src/entries/protocol.js";
 
 const ADMIN = "unit-admin-token-0123456789";
 

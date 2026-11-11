@@ -7,10 +7,10 @@
 import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MOCK_ASSET, MOCK_NETWORK } from "../../shared/src/payment.js";
-import type { ControllerSessionView } from "../../shared/src/index.js";
+import type { ControllerSessionView } from "../../shared/src/entries/protocol.js";
 import { createResponseFrom, toStatus } from "../../api/src/status.js";
 import { SandboxClient } from "../../sdk/src/index.js";
-import type { CreateSessionResponse, SessionStatus } from "../../shared/src/index.js";
+import type { CreateSessionResponse, SessionStatus } from "../../shared/src/entries/protocol.js";
 
 const requirement = {
   scheme: "exact",

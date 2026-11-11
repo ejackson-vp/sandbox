@@ -4,17 +4,16 @@
  */
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { canonicalJson } from "../../shared/src/entries/crypto.js";
 import {
-  canonicalJson,
   specHash,
   DEFAULT_TIERS,
-  formatUsd,
   loadPlatformLimits,
   loadTiers,
-  parseUsdPrice,
   resolveSessionSpec,
-  type CreateSessionRequest,
-} from "../../shared/src/index.js";
+} from "../../shared/src/entries/payment.js";
+import { formatUsd, parseUsdPrice } from "../../shared/src/entries/money.js";
+import { type CreateSessionRequest } from "../../shared/src/entries/protocol.js";
 
 const limits = loadPlatformLimits({});
 const tiers = DEFAULT_TIERS;

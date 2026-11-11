@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionLimits } from "../../shared/src/index.js";
+import type { SessionLimits } from "../../shared/src/entries/protocol.js";
 import { Store, type PaymentRecord, type SessionRecord } from "../../controller/src/store.js";
 
 const limits: SessionLimits = {

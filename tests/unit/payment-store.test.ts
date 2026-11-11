@@ -9,19 +9,21 @@ import {
   MockExactFacilitatorScheme,
   MOCK_NETWORK,
   DEFAULT_TIERS,
-  formatUsd,
   loadPlatformLimits,
-  parseUsdPrice,
   paymentKey,
   resolveSessionSpec,
   specHash,
   type MockNonceStore,
-  type PaymentPayload,
-  type PaymentRequirements,
-  type SessionLimits,
-  type SessionSpec,
-} from "../../shared/src/index.js";
-import { Store, PaymentClaimLostError, type PaymentRecord, type SessionRecord } from "../../controller/src/store.js";
+} from "../../shared/src/entries/payment.js";
+import { formatUsd, parseUsdPrice } from "../../shared/src/entries/money.js";
+import { type SessionLimits, type SessionSpec } from "../../shared/src/entries/protocol.js";
+import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
+import {
+  Store,
+  PaymentClaimLostError,
+  type PaymentRecord,
+  type SessionRecord,
+} from "../../controller/src/store.js";
 import { RefundService } from "../../controller/src/refunds.js";
 import { mintProxyToken, verifyProxyToken, newOpaqueToken } from "../../controller/src/tokens.js";
 import { extractProxyToken, parseAuthority } from "../../controller/src/egress-proxy.js";

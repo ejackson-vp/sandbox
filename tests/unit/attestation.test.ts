@@ -11,9 +11,9 @@ import {
   DEV_ATTESTATION_KEY_ID,
   DEV_ATTESTATION_PUBLIC_KEY,
   verifyAttestation,
-  type AttestationEnvelope,
   type AttestationPolicy,
-} from "../../shared/src/index.js";
+} from "../../shared/src/entries/crypto.js";
+import { type AttestationEnvelope } from "../../shared/src/entries/protocol.js";
 
 const SEED_B64 = "qSgP+dPwGhb/58O0ZD/dSqCMovhhWNIQbT3MeTD35WY=";
 const PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");

@@ -11,7 +11,7 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { canonicalJson } from "../../shared/src/index.js";
+import { canonicalJson } from "../../shared/src/entries/crypto.js";
 
 interface Vector {
   name: string;

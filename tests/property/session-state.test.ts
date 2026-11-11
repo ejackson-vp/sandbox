@@ -12,7 +12,7 @@ import {
   remainingSeconds,
   suspendedExpired,
   transition,
-} from "../../shared/src/index.js";
+} from "../../shared/src/entries/protocol.js";
 
 const STATES: SessionState[] = [
   "CREATED",

@@ -6,14 +6,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_RUNTIME,
-  DEFAULT_TIERS,
   SUPPORTED_RUNTIMES,
-  TokenBucket,
-  loadPlatformLimits,
   resolveRuntime,
+} from "../../shared/src/entries/runtimes.js";
+import {
+  DEFAULT_TIERS,
+  loadPlatformLimits,
   resolveSessionSpec,
   specHash,
-} from "../../shared/src/index.js";
+} from "../../shared/src/entries/payment.js";
+import { TokenBucket } from "../../shared/src/entries/runtime.js";
 import { createSessionHandler } from "../../api/src/routes/create-session.js";
 
 const limits = loadPlatformLimits({});

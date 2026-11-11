@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionStatus } from "../../shared/src/index.js";
+import type { SessionStatus } from "../../shared/src/entries/protocol.js";
 import { SandboxClient, FileSessionStore } from "../../sdk/src/index.js";
 import { createSessionPayment } from "../helpers/x402.js";
 import { clusterAvailable, deleteQuietly, kubectl, kubectlJson, kubectlTry } from "./kubectl.js";
@@ -309,7 +309,7 @@ describe.skipIf(!available)("workload hardening (real cluster)", () => {
   }, 180_000);
 
   it("rejects a replayed payment against the live cluster", async () => {
-    const keys = await import("../../shared/src/index.js").then(async (m) => {
+    const keys = await import("../../shared/src/entries/crypto.js").then(async (m) => {
       const kp = await m.generateBoxKeyPair();
       return { clientPublicKey: m.toBase64(kp.publicKey), clientNonce: m.toBase64(await m.generateNonce()) };
     });

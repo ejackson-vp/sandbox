@@ -15,10 +15,12 @@ import {
   sealJsonTo,
   toBase64,
   verifyAttestation,
+} from "../../shared/src/entries/crypto.js";
+import {
   type AttestationEnvelope,
   type GuestRequest,
   type GuestResult,
-} from "../../shared/src/index.js";
+} from "../../shared/src/entries/protocol.js";
 import { createRelay, type RelayServer, type RelayTlsOptions } from "../../controller/src/relay.js";
 import { RelayClient, type RelayClientTlsOptions } from "../../controller/src/relay-client.js";
 

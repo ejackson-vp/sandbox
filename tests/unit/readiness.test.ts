@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { ReadinessCache } from "../../shared/src/index.js";
+import { ReadinessCache } from "../../shared/src/entries/runtime.js";
 import { createControlApi } from "../../controller/src/control-api.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";

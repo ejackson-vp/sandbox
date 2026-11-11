@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalJson,
-  classifyAddress,
   generateBoxKeyPair,
   generateNonce,
   openSealedJson,
-  parseCidrList,
   sealJsonTo,
   toBase64,
-} from "../../shared/src/index.js";
+} from "../../shared/src/entries/crypto.js";
+import { classifyAddress, parseCidrList } from "../../shared/src/entries/ip.js";
 
 describe("sealed-box confidentiality", () => {
   it("round-trips a payload between independent key pairs", async () => {
