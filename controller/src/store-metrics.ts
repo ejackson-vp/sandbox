@@ -2,7 +2,7 @@
  * SQLite scrape-time gauges. Refreshed on scrape instead of on a timer so the
  * number matches the file the scraper just asked about.
  */
-import { metrics, type MetricsRegistry } from "@x402s/shared";
+import { metrics, type MetricsRegistry } from "@x402s/shared/runtime";
 import type { MetricsStore } from "./store/ports.js";
 
 export function registerSqliteMetrics(registry: MetricsRegistry = metrics): void {

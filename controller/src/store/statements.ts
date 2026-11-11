@@ -1,5 +1,5 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
-import { SOURCE_STATES } from "@x402s/shared";
+import { SOURCE_STATES } from "@x402s/shared/protocol";
 import { NON_TERMINAL_STATE_SQL, SESSION_COLUMNS } from "./models.js";
 
 const statesIn = (event: keyof typeof SOURCE_STATES): string =>

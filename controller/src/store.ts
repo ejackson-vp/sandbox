@@ -30,7 +30,8 @@ import { checkStoreHealth, type StoreHealth } from "./store/health.js";
 import { prepareStatements } from "./store/statements.js";
 import { PaymentRepository } from "./store/payments.js";
 import { cadenceFor } from "./reconcile-cadence.js";
-import { finalStateForReason, metrics, SOURCE_STATES } from "@x402s/shared";
+import { finalStateForReason, SOURCE_STATES } from "@x402s/shared/protocol";
+import { metrics } from "@x402s/shared/runtime";
 
 import { ReservationRepository } from "./capacity/reservations.js";
 import type { ReservationStore } from "./capacity/reservation-store.js";

@@ -2,7 +2,7 @@
  * Persistence models and row mappers. Kept independent of SQLite so the
  * controller and tests can share the shapes.
  */
-import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared";
+import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared/protocol";
 
 export type { SessionState };
 
