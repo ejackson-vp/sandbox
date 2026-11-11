@@ -357,10 +357,11 @@ session ids or exception text are returned.
 | --- | --- | --- |
 | 400 | `invalid_request`, `tier_duration_mismatch`, `invalid_duration`, `unsupported_runtime`, `plaintext_not_accepted` | bad input |
 | 401 | `capability_required` | missing capability |
-| 402 | `payment_required`, `payment_invalid:*`, `payment_settlement_rejected:*` | payment problem |
+| 402 | `payment_required`, `payment_invalid:*`, `payment_settlement_rejected:*`, `challenge_nonce_required`, `challenge_nonce_reused`, `challenge_nonce_expired`, `challenge_nonce_unknown` | payment problem, or a spent challenge (retry with the same payment and the fresh challenge) |
 | 404 | `session_not_found` | wrong capability or unknown session |
-| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `outcome_unknown`, `session_not_usable`, `session_suspended`, `resume_unavailable` | conflict; resume first / checkpoint node unavailable / old operation fenced |
+| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `outcome_unknown`, `session_not_usable`, `session_suspended`, `resume_unavailable`, `duplicate_session` | conflict; resume first / checkpoint node unavailable / old operation fenced / this client key already paid for a session (the new payment is refunded) |
 | 410 | `lease_expired`, `capability_expired`, `result_expired` | gone |
 | 413 | `payload_too_large` | envelope too big |
-| 429 | `rate_limited` (`scope: payer` or `ip`) | slow down; honour `Retry-After` |
+| 429 | `rate_limited` (`scope: payer` or `ip`), `budget_exhausted` (`scope`, `remaining`, `retryAfterSeconds`) | slow down; honour `Retry-After` |
+| 503 | `admission_unavailable`, `challenge_unavailable`, `capacity_unavailable` (retryable) | try again; no payment was taken |
 | 503 | `control_plane_unavailable`, `provisioning_unavailable` | transient |

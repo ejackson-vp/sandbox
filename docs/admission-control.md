@@ -106,7 +106,8 @@ resets and what is left:
 ```
 
 `scope` is one of `payer_create`, `payer_spend`, `payer_concurrent`,
-`global_create`, `global_concurrent`. No payment is taken for a rejected create:
+`global_create`, `global_concurrent`. A `null` concurrency value means that
+dimension is unlimited (its limit is `0`). No payment is taken for a rejected create:
 the check runs before the intent is claimed and before settlement. If the budget
 store cannot be reached the API answers `503 admission_unavailable` (retryable)
 rather than admitting unaccounted work.

@@ -54,11 +54,12 @@ export interface BudgetRemaining {
   payerCreates: number | null;
   /** Atomic units left to spend in the window. */
   payerSpend: string | null;
-  /** Concurrent sessions this payer may still open. */
+  /** Concurrent sessions this payer may still open; null = unlimited. */
   payerConcurrent: number | null;
   /** Creates left globally in the window. */
   globalCreates: number;
-  globalConcurrent: number;
+  /** Concurrent sessions cluster-wide; null = unlimited. */
+  globalConcurrent: number | null;
 }
 
 export type BudgetDecision =
@@ -110,7 +111,8 @@ export class BudgetRepository {
         payerSpend: null,
         payerConcurrent: null,
         globalCreates: Math.max(0, limits.globalCreates - global.creates),
-        globalConcurrent: Math.max(0, limits.globalConcurrent - globalLive),
+        globalConcurrent:
+          limits.globalConcurrent > 0 ? Math.max(0, limits.globalConcurrent - globalLive) : null,
       };
       if (global.creates >= limits.globalCreates) {
         this.db.exec("COMMIT");
@@ -133,7 +135,8 @@ export class BudgetRepository {
           ...globalBase,
           payerCreates: Math.max(0, limits.payerCreates - payerRow.creates),
           payerSpend: (BigInt(limits.payerSpend) - payerRow.spend).toString(),
-          payerConcurrent: Math.max(0, limits.payerConcurrent - payerLive),
+          payerConcurrent:
+            limits.payerConcurrent > 0 ? Math.max(0, limits.payerConcurrent - payerLive) : null,
         };
         if (payerRow.creates >= limits.payerCreates) {
           this.db.exec("COMMIT");
@@ -160,9 +163,13 @@ export class BudgetRepository {
         remaining: {
           payerCreates: payerRow ? Math.max(0, limits.payerCreates - payerRow.creates - 1) : null,
           payerSpend: payerRow ? (BigInt(limits.payerSpend) - payerRow.spend).toString() : null,
-          payerConcurrent: payerRow ? Math.max(0, limits.payerConcurrent - payerLive) : null,
+          payerConcurrent:
+            payerRow && limits.payerConcurrent > 0
+              ? Math.max(0, limits.payerConcurrent - payerLive)
+              : null,
           globalCreates: Math.max(0, limits.globalCreates - global.creates - 1),
-          globalConcurrent: Math.max(0, limits.globalConcurrent - globalLive),
+          globalConcurrent:
+            limits.globalConcurrent > 0 ? Math.max(0, limits.globalConcurrent - globalLive) : null,
         },
       };
     } catch (err) {

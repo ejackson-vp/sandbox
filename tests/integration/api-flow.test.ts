@@ -163,6 +163,12 @@ beforeAll(async () => {
     RECONCILE_INTERVAL_MS: "100",
     RELAY_RESPONSE_WAIT_MS: "30000",
     ALLOW_CUSTOM_DURATIONS: "true",
+    // The durable create budget (#48) is a production ceiling; this suite uses
+    // one ephemeral payer for dozens of sequential creates, so give it headroom
+    // rather than tuning the test around the default window.
+    PAYER_CREATES_PER_WINDOW: "1000",
+    PAYER_CONCURRENT_SESSIONS: "0",
+    GLOBAL_CREATES_PER_WINDOW: "10000",
   });
 
   provisioner = new LocalProvisioner({

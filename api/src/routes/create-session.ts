@@ -224,7 +224,19 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     // `replay` is the same payment retrying (the documented crash-recovery
     // path) and continues; every other non-ok answer ends the request with a
     // fresh challenge, so the client can re-sign for the same payment.
-    const burn = await deps.controller.burnChallengeNonce(challengeNonce, key);
+    let burn: { status: "burned" | "replay" | "expired" | "unknown" | "reused" };
+    try {
+      burn = await deps.controller.burnChallengeNonce(challengeNonce, key);
+    } catch (err) {
+      // Fail closed: an unproven freshness value must not buy an entitlement.
+      log.error("challenge_nonce_burn_failed", { error: (err as Error).message });
+      res.status(503).json({
+        error: "challenge_unavailable",
+        retryable: true,
+        message: "try again shortly; no payment was taken",
+      });
+      return;
+    }
     if (burn.status !== "burned" && burn.status !== "replay") {
       recordAuthFailure(`challenge_nonce_${burn.status}`);
       await deps.payment402(res, requirement, `challenge_nonce_${burn.status}`);

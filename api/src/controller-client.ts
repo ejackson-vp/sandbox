@@ -59,9 +59,10 @@ export type ChallengeBurnStatus = "burned" | "replay" | "expired" | "unknown" | 
 export interface BudgetRemaining {
   payerCreates: number | null;
   payerSpend: string | null;
+  /** null means unlimited (the corresponding limit is 0). */
   payerConcurrent: number | null;
   globalCreates: number;
-  globalConcurrent: number;
+  globalConcurrent: number | null;
 }
 
 export type BudgetDecision =

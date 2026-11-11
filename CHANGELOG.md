@@ -55,19 +55,6 @@ the container registry.
   (`duplicate_client_nonce`) and refused with `409 duplicate_session`.
 - Metrics: `sandbox_refund_worker_total{result}`, `sandbox_refunds_pending`,
   `sandbox_settlement_recovery_total{result}`.
-
-### Changed
-
-- **Breaking:** the client commitment domain is `v2` and covers
-  `challengeNonce`. `POST /v1/sessions` now requires `challengeNonce` and a
-  signature over it on any paid request; a request without one gets a 402 with a
-  fresh challenge instead of a capability. The SDK is updated in the same
-  release and its cached-challenge fast path is removed, so every create takes
-  the 402 round trip (+1 RTT). No external clients exist yet.
-- The SDK retries a rejected challenge with the same payment payload and a new
-  signature, so a burned/expired challenge recovers the same entitlement instead
-  of paying twice.
-
 - `runtime` is part of the create request, the immutable session spec and its
   hash, the session row (schema v12, `base` for existing rows), the controller
   view and the status/create responses. Profiles are `base`, `python` and
@@ -148,6 +135,15 @@ the container registry.
 - CodeQL analyses every branch push, not just `main`, so a commit that lands
   inside a multi-commit push still has its own analysis (the OpenSSF `SAST`
   check reads that).
+- **Breaking:** the client commitment domain is `v2` and covers
+  `challengeNonce`. `POST /v1/sessions` now requires `challengeNonce` and a
+  signature over it on any paid request; a request without one gets a 402 with a
+  fresh challenge instead of a capability. The SDK is updated in the same
+  release and its cached-challenge fast path is removed, so every create takes
+  the 402 round trip (+1 RTT). No external clients exist yet.
+- The SDK retries a rejected challenge with the same payment payload and a new
+  signature, so a burned/expired challenge recovers the same entitlement instead
+  of paying twice.
 - Provisioning is table-driven end to end. `PAID -> PROVISIONING` and
   `SUSPENDED -> RESUMING` now execute the effect list their transition returns
   through the controller's effect interpreter, so `register_relay`,
