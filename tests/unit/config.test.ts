@@ -242,3 +242,45 @@ describe("leader election config", () => {
     expect(cfg.leaderIdentity).not.toBe("controller-abc-1");
   });
 });
+
+describe("store backend selection", () => {
+  it("defaults to SQLite with no database URL", () => {
+    const cfg = loadControllerConfig({ ...dev });
+    expect(cfg.storeBackend).toBe("sqlite");
+    expect(cfg.databaseUrl).toBeNull();
+  });
+
+  it("fails closed when postgres is selected without a URL", () => {
+    expect(() => loadControllerConfig({ ...dev, STORE_BACKEND: "postgres" })).toThrow(
+      /DATABASE_URL/,
+    );
+  });
+
+  it("rejects an unknown backend instead of guessing", () => {
+    expect(() =>
+      loadControllerConfig({ ...dev, STORE_BACKEND: "dynamodb", DATABASE_URL: "postgres://x/y" }),
+    ).toThrow(/STORE_BACKEND/);
+  });
+
+  it("accepts postgres with a URL", () => {
+    const cfg = loadControllerConfig({
+      ...dev,
+      STORE_BACKEND: "postgres",
+      DATABASE_URL: "postgres://user:pw@db:5432/sandbox",
+    });
+    expect(cfg.storeBackend).toBe("postgres");
+    expect(cfg.databaseUrl).toBe("postgres://user:pw@db:5432/sandbox");
+  });
+
+  it("refuses the SQLite backup path with a postgres store", () => {
+    expect(() =>
+      loadControllerConfig({
+        ...dev,
+        STORE_BACKEND: "postgres",
+        DATABASE_URL: "postgres://user:pw@db:5432/sandbox",
+        BACKUP_DIR: "/backup",
+        BACKUP_ENCRYPTION_KEY: "a".repeat(43),
+      }),
+    ).toThrow(/BACKUP_DIR/);
+  });
+});

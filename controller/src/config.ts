@@ -14,6 +14,7 @@ import type { RelayTlsOptions } from "./relay.js";
 import { mintProxyToken } from "./tokens.js";
 import { shardClaim } from "./data-plane-shard.js";
 import { parseBackupKey } from "./backup-key.js";
+import { parseStoreSelection } from "./store-selection.js";
 import {
   assertDigestAllowed,
   DEFAULT_GUEST_IMAGE,
@@ -68,6 +69,10 @@ export interface ControllerConfig {
   controllerUrl: string;
   proxyTokenSecret: string;
   dbPath: string;
+  /** Which adapter backs the store ports: `sqlite` (default) or `postgres` (ADR 0010). */
+  storeBackend: "sqlite" | "postgres";
+  /** Required when `storeBackend` is postgres; parsed by `parseStoreSelection`. */
+  databaseUrl: string | null;
   /** Empty disables scheduled backups. */
   backupDir: string;
   backupIntervalMs: number;
@@ -434,6 +439,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     ...tokens,
     controllerUrl: env.CONTROLLER_URL ?? "http://127.0.0.1:3001",
     dbPath: env.DB_PATH ?? "/data/controller.db",
+    ...parseStoreSelection(env, backupDir),
     backupDir,
     backupIntervalMs: int(env.BACKUP_INTERVAL_MS, 21_600_000, 60_000, 604_800_000),
     backupRetention: int(env.BACKUP_RETENTION, 14, 1, 365),

@@ -11,7 +11,8 @@ import type { Server } from "node:http";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadControllerConfig, makeProvisioner, makeRelayClient, type ControllerConfig } from "./config.js";
-import { Store } from "./store.js";
+import { openStore } from "./store-backend.js";
+import type { StoreBackend } from "./store/backend.js";
 import { createControlApi } from "./control-api.js";
 import { createRelay, notifyControllerReady, type RelayServer } from "./relay.js";
 import { createEgressProxy } from "./egress-proxy.js";
@@ -126,20 +127,19 @@ async function main(): Promise<void> {
   }
 
   // controller (or "all": controller + relay + proxy in one process)
-  mkdirSync(dirname(cfg.dbPath), { recursive: true });
-  const store = new Store(cfg.dbPath, { budgetWindowMs: cfg.budgetWindowMs });
-  collectors.push(() => collectSqliteMetrics(store));
   // One writer, still: a second replica is a standby, not a second scheduler.
-  // Block this connection's writes until the process actually holds the role,
-  // so a follower can neither recover a crashed leader's work nor reconcile on
-  // its own (docs/adr/0009).
+  // The election is decided before the store opens so a standby never takes the
+  // writer lock or migrates the schema (docs/adr/0009, docs/adr/0010).
   const leadership: Leadership = cfg.leaderElection
     ? makeLeaseLeadership(cfg)
     : new SoloLeadership(cfg.leaderIdentity);
-  store.setWritesBlocked(!leadership.isLeader());
+  if (cfg.storeBackend === "sqlite") mkdirSync(dirname(cfg.dbPath), { recursive: true });
+  const store: StoreBackend = await openStore(cfg, { writer: leadership.isLeader() });
+  if (cfg.storeBackend === "sqlite") collectors.push(() => collectSqliteMetrics(store));
   log.info("leadership_mode", {
     mode: leadership.mode,
     identity: leadership.identity,
+    storeBackend: cfg.storeBackend,
     reason: cfg.leaderElection ? "kubernetes_lease" : cfg.kubeEnabled ? "leader_election_off" : "kubernetes_disabled",
   });
 
@@ -246,7 +246,9 @@ async function main(): Promise<void> {
   bindLeadership(leadership, {
     acquire: async () => {
       // The lease is ours: writes first, because recovery is itself a write.
-      store.setWritesBlocked(false);
+      // On Postgres this is where the advisory writer lock is taken, so a lock
+      // held by a stale process fails here rather than on the first request.
+      await store.setWritesBlocked(false);
       const recovered = await store.recoverInterruptedOperations();
       if (recovered.requests > 0 || recovered.sessions > 0) {
         log.warn("sandbox_operations_recovered", recovered);
@@ -261,9 +263,12 @@ async function main(): Promise<void> {
     start: () => reconciler.start(),
     stop: () => reconciler.stop(),
     release: () => {
-      // The guard closes after the scheduler stopped, so a pass still in flight
-      // fails on the store instead of writing after the lease moved.
-      store.setWritesBlocked(true);
+      // The guard closes synchronously inside the adapter, even when the unlock
+      // is an async round trip, so the next write is refused before this returns.
+      // Awaiting here would only delay handing the lease over.
+      void Promise.resolve(store.setWritesBlocked(true)).catch((err: unknown) => {
+        log.error("store_write_guard_failed", { error: (err as Error).message });
+      });
       log.warn("leadership_released", { mode: leadership.mode, identity: leadership.identity });
     },
   });
@@ -271,13 +276,13 @@ async function main(): Promise<void> {
   installShutdown(async () => {
     // Order: stop scheduling, refuse writes, then hand the lease over.
     reconciler.stop();
-    store.setWritesBlocked(true);
+    await store.setWritesBlocked(true);
     await leadership.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     if (tlsServer) await new Promise<void>((resolve) => tlsServer!.close(() => resolve()));
     for (const fn of shutdown) await fn();
     closeMetrics();
-    store.close();
+    await store.close();
   });
 
   await leadership.start();
