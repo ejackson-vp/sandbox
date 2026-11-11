@@ -100,14 +100,14 @@ function sessionRecord(id: string, key: string): SessionRecord {
   };
 }
 
-function seedReadySession(store: Store, sessionId: string): void {
+async function seedReadySession(store: Store, sessionId: string): Promise<void> {
   const key = "e".repeat(64);
-  const claim = store.claimPaymentIntent(key, "stale-frame-spec", 30_000);
+  const claim = await store.claimPaymentIntent(key, "stale-frame-spec", 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
-  store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(sessionId, key));
-  store.setProvisioning(sessionId, "pod-stale-frame");
-  store.setRelayToken(sessionId, "relay-hash");
-  store.setReady(sessionId, Date.now(), Date.now() + 120_000, "{}", "guestpk");
+  await store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(sessionId, key));
+  await store.setProvisioning(sessionId, "pod-stale-frame");
+  await store.setRelayToken(sessionId, "relay-hash");
+  await store.setReady(sessionId, Date.now(), Date.now() + 120_000, "{}", "guestpk");
 }
 
 async function waitFor(
@@ -137,13 +137,13 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       const relay = guest.relayClient;
       const sessionId = guest.sessionId;
       store = new Store(dbPath);
-      seedReadySession(store, sessionId);
+      await seedReadySession(store, sessionId);
 
       // The guest has connected and published its own (empty) execution state.
       await waitFor(relay, sessionId, (state) => state.statusAt !== undefined, "guest status");
 
       const oldRequestId = "stale-frame-old-request";
-      expect(store.claimOperation(sessionId, oldRequestId, "exec")).toMatchObject({ ok: true, epoch: 1 });
+      expect(await store.claimOperation(sessionId, oldRequestId, "exec")).toMatchObject({ ok: true, epoch: 1 });
 
       const envelope = await sealJsonTo(guest.guestKey!, {
         v: 2,
@@ -166,9 +166,9 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       // (frozen) guest survive, exactly like a controller Deployment restart.
       store.close();
       store = new Store(dbPath);
-      expect(store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
-      expect(store.getSession(sessionId)).toMatchObject({ activeRequestId: oldRequestId, execEpoch: 2 });
-      expect(store.getExecRequest(sessionId, oldRequestId)).toMatchObject({
+      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+      expect(await store.getSession(sessionId)).toMatchObject({ activeRequestId: oldRequestId, execEpoch: 2 });
+      expect(await store.getExecRequest(sessionId, oldRequestId)).toMatchObject({
         state: "outcome_unknown",
         epoch: 1,
       });
@@ -183,7 +183,7 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
         pending: 0,
         epochFloor: 2,
       });
-      expect(store.getSession(sessionId)?.activeRequestId).toBeNull();
+      expect((await store.getSession(sessionId))?.activeRequestId).toBeNull();
 
       // Let the guest run. The withdrawn frame must have been discarded: the
       // command would have written the marker if the guest had read it.
@@ -201,8 +201,8 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       // The gate is free and the next operation is claimed under epoch 2. No
       // new command can overlap the withdrawn one.
       const newRequestId = "stale-frame-new-request";
-      expect(store.claimOperation(sessionId, newRequestId, "exec")).toMatchObject({ ok: true, epoch: 2 });
-      store.finishOperation(sessionId, newRequestId, "abandoned");
+      expect(await store.claimOperation(sessionId, newRequestId, "exec")).toMatchObject({ ok: true, epoch: 2 });
+      await store.finishOperation(sessionId, newRequestId, "abandoned");
     } finally {
       try {
         guest.resume();
@@ -226,10 +226,10 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       const relay = guest.relayClient;
       const sessionId = guest.sessionId;
       store = new Store(dbPath);
-      seedReadySession(store, sessionId);
+      await seedReadySession(store, sessionId);
 
       const oldRequestId = "stale-frame-idle-old";
-      expect(store.claimOperation(sessionId, oldRequestId, "exec")).toMatchObject({ ok: true, epoch: 1 });
+      expect(await store.claimOperation(sessionId, oldRequestId, "exec")).toMatchObject({ ok: true, epoch: 1 });
 
       // The guest goes away before the controller restarts. The frame was never
       // forwarded (the controller died between the claim and the relay call).
@@ -238,18 +238,18 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
 
       store.close();
       store = new Store(dbPath);
-      expect(store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
 
       const fence = new OperationFence(store, relay);
       expect(await fence.reconcile()).toEqual({ cleared: 1, held: 0, errors: 0 });
-      expect(store.getSession(sessionId)?.activeRequestId).toBeNull();
-      expect(store.getSession(sessionId)?.execEpoch).toBe(2);
+      expect((await store.getSession(sessionId))?.activeRequestId).toBeNull();
+      expect((await store.getSession(sessionId))?.execEpoch).toBe(2);
 
-      expect(store.claimOperation(sessionId, "stale-frame-idle-new", "exec")).toMatchObject({
+      expect(await store.claimOperation(sessionId, "stale-frame-idle-new", "exec")).toMatchObject({
         ok: true,
         epoch: 2,
       });
-      store.finishOperation(sessionId, "stale-frame-idle-new", "abandoned");
+      await store.finishOperation(sessionId, "stale-frame-idle-new", "abandoned");
     } finally {
       store?.close();
       await guest.stop().catch(() => undefined);

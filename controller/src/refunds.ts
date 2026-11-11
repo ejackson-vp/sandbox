@@ -21,24 +21,24 @@ export class RefundService {
   constructor(private readonly store: RefundStore) {}
 
   /** Repair a crash between finalisation and the refund write. */
-  reconcile(): void {
-    for (const ledger of this.store.listUnrefundedTerminalBeforeReady()) {
-      const session = this.store.getSession(ledger.sessionId);
-      if (session) this.refund(session, session.state);
+  async reconcile(): Promise<void> {
+    for (const ledger of await this.store.listUnrefundedTerminalBeforeReady()) {
+      const session = await this.store.getSession(ledger.sessionId);
+      if (session) await this.refund(session, session.state);
     }
     // Payments with no session at all: settlement recovery or a duplicate
     // charge that was interrupted between the ledger write and the policy.
-    for (const ledger of this.store.listUnclaimedSettled()) {
-      this.applyPolicy(ledger, ledger.reason ?? "settled_without_entitlement");
+    for (const ledger of await this.store.listUnclaimedSettled()) {
+      await this.applyPolicy(ledger, ledger.reason ?? "settled_without_entitlement");
     }
   }
 
-  refund(session: SessionRecord, finalState: SessionState): RefundOutcome {
+  async refund(session: SessionRecord, finalState: SessionState): Promise<RefundOutcome> {
     if (session.readyAt !== null) return "not_applicable";
     if (finalState !== "FAILED" && finalState !== "EXPIRED" && finalState !== "DESTROYED") {
       return "not_applicable";
     }
-    const ledger = this.store.getLedgerBySession(session.id);
+    const ledger = await this.store.getLedgerBySession(session.id);
     if (!ledger || ledger.status !== "SETTLED") return "not_applicable";
 
     const reason = `no_service_delivered:${session.terminationReason ?? finalState}`.slice(0, 500);
@@ -53,13 +53,13 @@ export class RefundService {
    * `not_applicable` when the row moved on (already refunded, already pending),
    * which is what makes this safe to call from more than one path.
    */
-  applyPolicy(ledger: PaymentLedgerRecord, reason: string): RefundOutcome {
+  async applyPolicy(ledger: PaymentLedgerRecord, reason: string): Promise<RefundOutcome> {
     const bounded = reason.slice(0, 500);
     if (ledger.status !== "SETTLED") return "not_applicable";
 
     if (ledger.mode === "mock") {
       const transaction = `mock:refund:${ledger.paymentKey.slice(0, 12)}:${Date.now().toString(36)}`;
-      const changed = this.store.markRefunded(ledger.paymentKey, transaction, bounded);
+      const changed = await this.store.markRefunded(ledger.paymentKey, transaction, bounded);
       if (!changed) return "not_applicable";
       metrics.counter("sandbox_refunds_total", "Payment refund outcomes").inc({ mode: "mock", result: "refunded" });
       log.info("payment_refunded", {
@@ -71,7 +71,7 @@ export class RefundService {
       return "refunded";
     }
 
-    const changed = this.store.markRefundPending(ledger.paymentKey, bounded);
+    const changed = await this.store.markRefundPending(ledger.paymentKey, bounded);
     if (!changed) return "not_applicable";
     metrics.counter("sandbox_refunds_total", "Payment refund outcomes").inc({ mode: ledger.mode, result: "pending" });
     log.warn("payment_refund_pending", {

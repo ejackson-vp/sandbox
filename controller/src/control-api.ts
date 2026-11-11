@@ -47,8 +47,8 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   });
 
   const readinessChecks: Record<string, ComponentCheck> = {
-    store: () => {
-      const health = deps.store.healthCheck();
+    store: async () => {
+      const health = await deps.store.healthCheck();
       return health.ok ? { ok: true } : { ok: false, reason: health.reason };
     },
     relay: async () => {

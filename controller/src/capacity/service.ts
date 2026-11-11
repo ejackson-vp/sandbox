@@ -120,7 +120,7 @@ export class CapacityService {
     if (unavailable) return unavailable;
     const started = Date.now();
     const snapshot = await this.builder.snapshotWithWarm();
-    const admission = this.reservations.admit(
+    const admission = await this.reservations.admit(
       snapshot,
       requestForLimits(spec.limits, spec.baseline),
       { paymentKey, specHash, ttlMs: this.deps.cfg.capacityHoldTtlMs },
@@ -156,7 +156,7 @@ export class CapacityService {
   ): Promise<ReservationAdmission> {
     const started = Date.now();
     const snapshot = await this.builder.snapshotWithWarm();
-    const admission = this.reservations.attachToSession(
+    const admission = await this.reservations.attachToSession(
       snapshot,
       requestForLimits(spec.limits, spec.baseline),
       paymentKey,
@@ -175,74 +175,87 @@ export class CapacityService {
     if (this.deps.cfg.pinCheckpointNode && session.nodeName) {
       request.requiredNodeId = session.nodeName;
     }
-    const existing = this.reservations.getBySession(session.id);
-    const admission = !existing || existing.state === "RELEASED"
-      ? this.reservations.attachToSession(snapshot, request, session.paymentKey, session.id, "")
-      : this.reservations.resume(snapshot, request, session.id);
+    const existing = await this.reservations.getBySession(session.id);
+    const admission =
+      !existing || existing.state === "RELEASED"
+        ? await this.reservations.attachToSession(
+            snapshot,
+            request,
+            session.paymentKey,
+            session.id,
+            "",
+          )
+        : await this.reservations.resume(snapshot, request, session.id);
     this.observe(admission, Date.now() - started);
     this.publishGauges(snapshot);
     return admission;
   }
 
-  releasePayment(paymentKey: string): boolean {
+  releasePayment(paymentKey: string): Promise<boolean> {
     return this.reservations.releasePayment(paymentKey);
   }
 
-  suspend(sessionId: string): boolean {
+  suspend(sessionId: string): Promise<boolean> {
     return this.reservations.suspendSession(sessionId);
   }
 
   /** Reassert compute allocation after a resume that raced the reaper. */
-  reassertAllocated(sessionId: string): boolean {
+  reassertAllocated(sessionId: string): Promise<boolean> {
     return this.reservations.reassertAllocated(sessionId);
   }
 
-  beginRelease(sessionId: string, podName: string | null): boolean {
+  beginRelease(sessionId: string, podName: string | null): Promise<boolean> {
     if (!podName) return this.reservations.releaseSession(sessionId);
     return this.reservations.beginRelease(sessionId, podName);
   }
 
-  releaseSession(sessionId: string): boolean {
+  releaseSession(sessionId: string): Promise<boolean> {
     return this.reservations.releaseSession(sessionId);
   }
 
-  getReservation(sessionId: string): ReservationRecord | null {
+  getReservation(sessionId: string): Promise<ReservationRecord | null> {
     return this.reservations.getBySession(sessionId);
   }
 
-  updatePod(sessionId: string, podName: string): void {
-    this.reservations.updatePod(sessionId, podName);
+  updatePod(sessionId: string, podName: string): Promise<void> {
+    return this.reservations.updatePod(sessionId, podName);
   }
 
-  pinSessionNode(sessionId: string, nodeId: string): boolean {
+  pinSessionNode(sessionId: string, nodeId: string): Promise<boolean> {
     return this.reservations.pinNode(sessionId, nodeId);
   }
 
   async reap(): Promise<void> {
     const now = Date.now();
-    const expired = this.reservations.reapExpiredHolds(now);
+    const expired = await this.reservations.reapExpiredHolds(now);
     if (expired > 0) {
       metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "expired_hold" }, expired);
     }
-    for (const reservation of this.reservations.listActive()) {
+    // Each iteration now awaits, so a reservation can move between the read of
+    // the snapshot and the write below. The write is still the model's answer
+    // for the state it saw, and the one case that matters is already covered:
+    // a resume that this loop re-suspends is reasserted by the resume path
+    // (`Provisioning.startResumePod` calls `reassertAllocated` after its guarded
+    // write, precisely because the reaper can win this race).
+    for (const reservation of await this.reservations.listActive()) {
       if (!reservation.sessionId) continue;
-      const session = this.deps.store.getSession(reservation.sessionId);
+      const session = await this.deps.store.getSession(reservation.sessionId);
       if (!session) continue;
       if (["EXPIRED", "FAILED", "DESTROYED"].includes(session.state) && reservation.state !== "RELEASING") {
         if (reservation.podName) {
-          this.reservations.beginRelease(reservation.sessionId, reservation.podName);
+          await this.reservations.beginRelease(reservation.sessionId, reservation.podName);
         } else {
-          this.reservations.releaseSession(reservation.sessionId);
+          await this.reservations.releaseSession(reservation.sessionId);
         }
         metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "terminal_session" });
       } else if (session.state === "SUSPENDED" && reservation.state === "ALLOCATED") {
-        this.reservations.suspendSession(reservation.sessionId);
+        await this.reservations.suspendSession(reservation.sessionId);
         metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "suspended_session" });
       }
     }
-    for (const reservation of this.reservations.listReleasing()) {
+    for (const reservation of await this.reservations.listReleasing()) {
       if (!reservation.podName) {
-        this.reservations.confirmRelease(reservation.sessionId ?? "");
+        await this.reservations.confirmRelease(reservation.sessionId ?? "");
         continue;
       }
       const pod = await this.deps.provisioner.getPod(reservation.podName).catch(() => null);
@@ -250,7 +263,7 @@ export class CapacityService {
       // still exists until Kubernetes deletes it, so freeing capacity here
       // would hide a persistent deletion failure.
       if (!pod) {
-        this.reservations.confirmRelease(reservation.sessionId ?? "");
+        await this.reservations.confirmRelease(reservation.sessionId ?? "");
         metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "released_pod_gone" });
       } else if (now - reservation.updatedAt > 60_000) {
         metrics.counter("sandbox_reservation_leaks_detected_total", "Reservations stuck in RELEASING").inc();

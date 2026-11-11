@@ -24,8 +24,23 @@ import type { StoreHealth } from "./health.js";
  * interface it declared.
  *
  * The direction matters: a port may not depend on the adapter. Adding a method
- * to `Store` therefore cannot widen any consumer's dependency, and replacing the
- * SQLite adapter with Postgres only has to satisfy these interfaces.
+ * to `Store` therefore cannot widen any consumer's dependency. Satisfying these
+ * interfaces is necessary but not sufficient for a replacement adapter: ADR
+ * 0010 also requires it to keep the guarded-transition and uniqueness
+ * guarantees the SQLite adapter gets from one serialised connection.
+ *
+ * **Every method returns a `Promise`, and that is what makes a Postgres adapter
+ * possible.** `node:sqlite` is synchronous, so the first adapter could return
+ * values directly. No network client can, so the ports are `Promise`-returning
+ * and the SQLite adapter satisfies them with `async` methods that return the
+ * same values without an internal `await`. The async shape is the contract; the
+ * SQLite implementation is still one synchronous call per method.
+ *
+ * A consequence callers must respect: a store call is an interleaving point. Two
+ * calls that used to be adjacent now have a tick between them, so a read
+ * followed by a write is not a transaction. Where the answer must be decided
+ * atomically, the adapter owns it inside one statement or one transaction
+ * (guarded `UPDATE ... WHERE state = ...`, `BEGIN IMMEDIATE`), never the caller.
  *
  * Drift is caught for free: every port is exercised by a real call site that
  * passes a `Store` (the reconciler, the control API entrypoint and the metrics
@@ -42,110 +57,110 @@ import type { StoreHealth } from "./health.js";
  * before the table became the runtime, so a lost race still refuses.
  */
 export interface EffectStore {
-  clearPod(id: string): void;
-  clearWorkspacePvc(id: string): void;
-  finalizeTermination(id: string): SessionState | null;
-  markRelayPurged(id: string): void;
-  markSuspended(id: string, suspendedAt: number): boolean;
-  markSuspending(id: string): boolean;
+  clearPod(id: string): Promise<void>;
+  clearWorkspacePvc(id: string): Promise<void>;
+  finalizeTermination(id: string): Promise<SessionState | null>;
+  markRelayPurged(id: string): Promise<void>;
+  markSuspended(id: string, suspendedAt: number): Promise<boolean>;
+  markSuspending(id: string): Promise<boolean>;
   setReady(
     id: string,
     readyAt: number,
     leaseExpiresAt: number,
     attestationJson: string,
     guestPublicKey: string,
-  ): boolean;
+  ): Promise<boolean>;
 }
 
 export interface ProvisioningStore {
-  listNonTerminal(): SessionRecord[];
+  listNonTerminal(): Promise<SessionRecord[]>;
   /** Guarded write that names the resumed pod; false when the row moved on. */
-  markResuming(id: string, podName: string): boolean;
-  mergeTimings(id: string, patch: Record<string, number | undefined>): void;
+  markResuming(id: string, podName: string): Promise<boolean>;
+  mergeTimings(id: string, patch: Record<string, number | undefined>): Promise<void>;
   requestTermination(
     id: string,
     reason: string,
     failure?: { code: string; message: string },
-  ): boolean;
-  setNodeName(id: string, nodeName: string): void;
-  setProvisioning(id: string, podName: string): boolean;
-  setProvisioningPod(id: string, podName: string): boolean;
+  ): Promise<boolean>;
+  setNodeName(id: string, nodeName: string): Promise<void>;
+  setProvisioning(id: string, podName: string): Promise<boolean>;
+  setProvisioningPod(id: string, podName: string): Promise<boolean>;
   setReady(
     id: string,
     readyAt: number,
     leaseExpiresAt: number,
     attestationJson: string,
     guestPublicKey: string,
-  ): boolean;
-  setRelayToken(id: string, tokenHash: string): void;
-  setWorkspacePvc(id: string, pvcName: string): void;
+  ): Promise<boolean>;
+  setRelayToken(id: string, tokenHash: string): Promise<void>;
+  setWorkspacePvc(id: string, pvcName: string): Promise<void>;
 }
 
 export interface WarmPoolStore {
-  mergeTimings(id: string, patch: Record<string, number | undefined>): void;
-  setProvisioning(id: string, podName: string): boolean;
-  setRelayToken(id: string, tokenHash: string): void;
+  mergeTimings(id: string, patch: Record<string, number | undefined>): Promise<void>;
+  setProvisioning(id: string, podName: string): Promise<boolean>;
+  setRelayToken(id: string, tokenHash: string): Promise<void>;
 }
 
 export interface TerminationStore {
-  clearPod(id: string): void;
-  clearWorkspacePvc(id: string): void;
-  finalizeTermination(id: string): SessionState | null;
-  getSession(id: string): SessionRecord | null;
-  markRelayPurged(id: string): void;
-  mergeTimings(id: string, patch: Record<string, number | undefined>): void;
+  clearPod(id: string): Promise<void>;
+  clearWorkspacePvc(id: string): Promise<void>;
+  finalizeTermination(id: string): Promise<SessionState | null>;
+  getSession(id: string): Promise<SessionRecord | null>;
+  markRelayPurged(id: string): Promise<void>;
+  mergeTimings(id: string, patch: Record<string, number | undefined>): Promise<void>;
   requestTermination(
     id: string,
     reason: string,
     failure?: { code: string; message: string },
-  ): boolean;
+  ): Promise<boolean>;
   // RefundService shares this store.
-  getLedgerBySession(sessionId: string): PaymentLedgerRecord | null;
-  listUnclaimedSettled(): PaymentLedgerRecord[];
-  listUnrefundedTerminalBeforeReady(): PaymentLedgerRecord[];
-  markRefundPending(paymentKey: string, reason: string): boolean;
-  markRefunded(paymentKey: string, transaction: string, reason: string): boolean;
+  getLedgerBySession(sessionId: string): Promise<PaymentLedgerRecord | null>;
+  listUnclaimedSettled(): Promise<PaymentLedgerRecord[]>;
+  listUnrefundedTerminalBeforeReady(): Promise<PaymentLedgerRecord[]>;
+  markRefundPending(paymentKey: string, reason: string): Promise<boolean>;
+  markRefunded(paymentKey: string, transaction: string, reason: string): Promise<boolean>;
 }
 
 export interface LifecycleStore {
-  clearPod(id: string): void;
-  clearWorkspacePvc(id: string): void;
-  getSession(id: string): SessionRecord | null;
-  listNonTerminal(): SessionRecord[];
-  listTerminalWithPvc(): SessionRecord[];
-  markRelayPurged(id: string): void;
-  markSuspended(id: string, suspendedAt: number): boolean;
-  markSuspending(id: string): boolean;
+  clearPod(id: string): Promise<void>;
+  clearWorkspacePvc(id: string): Promise<void>;
+  getSession(id: string): Promise<SessionRecord | null>;
+  listNonTerminal(): Promise<SessionRecord[]>;
+  listTerminalWithPvc(): Promise<SessionRecord[]>;
+  markRelayPurged(id: string): Promise<void>;
+  markSuspended(id: string, suspendedAt: number): Promise<boolean>;
+  markSuspending(id: string): Promise<boolean>;
   requestTermination(
     id: string,
     reason: string,
     failure?: { code: string; message: string },
-  ): boolean;
-  setNodeName(id: string, nodeName: string): void;
+  ): Promise<boolean>;
+  setNodeName(id: string, nodeName: string): Promise<void>;
 }
 
 export interface RefundStore {
-  getLedgerBySession(sessionId: string): PaymentLedgerRecord | null;
-  getSession(id: string): SessionRecord | null;
+  getLedgerBySession(sessionId: string): Promise<PaymentLedgerRecord | null>;
+  getSession(id: string): Promise<SessionRecord | null>;
   /** Settled rows with no session: unentitled or duplicate charges (#31). */
-  listUnclaimedSettled(): PaymentLedgerRecord[];
-  listUnrefundedTerminalBeforeReady(): PaymentLedgerRecord[];
-  markRefundPending(paymentKey: string, reason: string): boolean;
-  markRefunded(paymentKey: string, transaction: string, reason: string): boolean;
+  listUnclaimedSettled(): Promise<PaymentLedgerRecord[]>;
+  listUnrefundedTerminalBeforeReady(): Promise<PaymentLedgerRecord[]>;
+  markRefundPending(paymentKey: string, reason: string): Promise<boolean>;
+  markRefunded(paymentKey: string, transaction: string, reason: string): Promise<boolean>;
 }
 
 /** Automated refund execution (#31). */
 export interface RefundWorkerStore {
-  countLedgerByStatus(status: LedgerStatus): number;
-  listRefundPendingDue(nowMs: number, limit: number): PaymentLedgerRecord[];
-  markRefunded(paymentKey: string, transaction: string, reason: string): boolean;
-  recordRefundAttempt(paymentKey: string, error: string, nextAttemptAt: number): boolean;
+  countLedgerByStatus(status: LedgerStatus): Promise<number>;
+  listRefundPendingDue(nowMs: number, limit: number): Promise<PaymentLedgerRecord[]>;
+  markRefunded(paymentKey: string, transaction: string, reason: string): Promise<boolean>;
+  recordRefundAttempt(paymentKey: string, error: string, nextAttemptAt: number): Promise<boolean>;
 }
 
 /** Settlement recovery for the settle-then-crash window (#31). */
 export interface SettlementRecoveryStore {
-  getLedgerByNonce(settlementNonce: string): PaymentLedgerRecord | null;
-  getLedgerByPayment(paymentKey: string): PaymentLedgerRecord | null;
+  getLedgerByNonce(settlementNonce: string): Promise<PaymentLedgerRecord | null>;
+  getLedgerByPayment(paymentKey: string): Promise<PaymentLedgerRecord | null>;
   insertUnclaimedLedger(entry: {
     paymentKey: string;
     sessionId: string;
@@ -158,88 +173,96 @@ export interface SettlementRecoveryStore {
     reason: string;
     refundTransaction?: string | null;
     settlementNonce: string | null;
-  }): boolean;
-  listStaleClaimedIntents(olderThan: number, limit: number): PaymentIntentRecord[];
+  }): Promise<boolean>;
+  listStaleClaimedIntents(olderThan: number, limit: number): Promise<PaymentIntentRecord[]>;
 }
 
 export interface SessionViewStore {
-  getPayment(key: string): PaymentRecord | null;
-  getSession(id: string): SessionRecord | null;
+  getPayment(key: string): Promise<PaymentRecord | null>;
+  getSession(id: string): Promise<SessionRecord | null>;
 }
 
 export interface CapacityStore {
-  getSession(id: string): SessionRecord | null;
+  getSession(id: string): Promise<SessionRecord | null>;
   reservations: ReservationStore;
 }
 
 /** Everything the control API's payment and session routes touch. */
 export interface ControlApiStore {
-  claimOperation(sessionId: string, requestId: string, op: string): ClaimOperationResult;
+  claimOperation(sessionId: string, requestId: string, op: string): Promise<ClaimOperationResult>;
   claimPaymentIntent(
     paymentKey: string,
     specHashValue: string,
     staleMs: number,
     requirementsJson?: string | null,
-  ): IntentClaimResult;
+  ): Promise<IntentClaimResult>;
   /** Single-use challenge nonce (#47): mint, burn, and never resurrect. */
-  issueChallengeNonce(nonce: string, ttlMs: number, maxActive: number): { nonce: string; expiresAt: number };
-  burnChallengeNonce(nonce: string, paymentKey: string): ChallengeBurnResult;
+  issueChallengeNonce(
+    nonce: string,
+    ttlMs: number,
+    maxActive: number,
+  ): Promise<{ nonce: string; expiresAt: number }>;
+  burnChallengeNonce(nonce: string, paymentKey: string): Promise<ChallengeBurnResult>;
   /** Durable per-payer and global create budget (#48). */
-  reserveBudgets(payer: string | null, amountAtomic: string, limits: BudgetLimits): BudgetDecision;
+  reserveBudgets(
+    payer: string | null,
+    amountAtomic: string,
+    limits: BudgetLimits,
+  ): Promise<BudgetDecision>;
   completeEntitlement(
     paymentKey: string,
     claimToken: string,
     payment: PaymentRecord,
     session: SessionRecord,
-  ): { sessionId: string; created: boolean };
-  failPaymentIntent(paymentKey: string, reason: string): void;
+  ): Promise<{ sessionId: string; created: boolean }>;
+  failPaymentIntent(paymentKey: string, reason: string): Promise<void>;
   finishOperation(
     sessionId: string,
     requestId: string,
     outcome: "done" | "error" | "abandoned",
-  ): void;
-  getExecRequest(sessionId: string, requestId: string): ExecRequestRecord | null;
-  getLedgerByNonce(settlementNonce: string): PaymentLedgerRecord | null;
-  getLedgerByPayment(paymentKey: string): PaymentLedgerRecord | null;
-  getPayment(key: string): PaymentRecord | null;
-  getPaymentIntent(paymentKey: string): PaymentIntentRecord | null;
-  getSession(id: string): SessionRecord | null;
-  healthCheck(): StoreHealth;
-  listLedgerByStatus(status: LedgerStatus): PaymentLedgerRecord[];
-  markRefunded(paymentKey: string, transaction: string, reason: string): boolean;
-  mergeTimings(id: string, patch: Record<string, number | undefined>): void;
-  requestDestroy(id: string): void;
+  ): Promise<void>;
+  getExecRequest(sessionId: string, requestId: string): Promise<ExecRequestRecord | null>;
+  getLedgerByNonce(settlementNonce: string): Promise<PaymentLedgerRecord | null>;
+  getLedgerByPayment(paymentKey: string): Promise<PaymentLedgerRecord | null>;
+  getPayment(key: string): Promise<PaymentRecord | null>;
+  getPaymentIntent(paymentKey: string): Promise<PaymentIntentRecord | null>;
+  getSession(id: string): Promise<SessionRecord | null>;
+  healthCheck(): Promise<StoreHealth>;
+  listLedgerByStatus(status: LedgerStatus): Promise<PaymentLedgerRecord[]>;
+  markRefunded(paymentKey: string, transaction: string, reason: string): Promise<boolean>;
+  mergeTimings(id: string, patch: Record<string, number | undefined>): Promise<void>;
+  requestDestroy(id: string): Promise<void>;
   requestTermination(
     id: string,
     reason: string,
     failure?: { code: string; message: string },
-  ): boolean;
-  touchActivity(id: string): void;
+  ): Promise<boolean>;
+  touchActivity(id: string): Promise<void>;
 }
 
 /** Restart-recovery fence: the operations the fence needs and nothing else. */
 export interface FenceStore {
-  clearFencedGate(sessionId: string, requestId: string, epoch: number): boolean;
-  listFencedSessions(): SessionRecord[];
+  clearFencedGate(sessionId: string, requestId: string, epoch: number): Promise<boolean>;
+  listFencedSessions(): Promise<SessionRecord[]>;
 }
 
 /** Scrape-time SQLite collector. */
 export interface MetricsStore {
-  stats(): { sizeBytes: number; walBytes: number };
+  stats(): Promise<{ sizeBytes: number; walBytes: number }>;
 }
 
 /** The reconcile scheduler's own view: due selection plus the cleanup sweep. */
 export interface SchedulerStore {
   backupTo(path: string): Promise<void>;
-  clearPod(id: string): void;
-  countDue(nowMs: number): number;
-  countLiveByState(): Partial<Record<SessionState, number>>;
-  getSession(id: string): SessionRecord | null;
-  listDue(nowMs: number, limit: number): SessionRecord[];
-  listTerminalWithPod(): SessionRecord[];
+  clearPod(id: string): Promise<void>;
+  countDue(nowMs: number): Promise<number>;
+  countLiveByState(): Promise<Partial<Record<SessionState, number>>>;
+  getSession(id: string): Promise<SessionRecord | null>;
+  listDue(nowMs: number, limit: number): Promise<SessionRecord[]>;
+  listTerminalWithPod(): Promise<SessionRecord[]>;
   /** Drop expired single-use challenge nonces (#47). */
-  pruneChallengeNonces(): number;
-  rearmDue(id: string, atMs: number, nowMs: number): boolean;
+  pruneChallengeNonces(): Promise<number>;
+  rearmDue(id: string, atMs: number, nowMs: number): Promise<boolean>;
 }
 
 /**

@@ -59,14 +59,17 @@ async function main(): Promise<void> {
   // config can target API, controller and relay on the same port.
   const runtime = registerRuntimeMetrics();
   registerBuildInfo();
-  const collectors: Array<() => void> = [() => runtime.collect()];
+  const collectors: Array<() => void | Promise<void>> = [() => runtime.collect()];
   let metricsServer: Server | undefined;
   if (cfg.metricsPort > 0) {
     metricsServer = await startMetricsServer({
       port: cfg.metricsPort,
       host: cfg.metricsHost,
-      onScrape: () => {
-        for (const collect of collectors) collect();
+      onScrape: async () => {
+        // Awaited one at a time: the SQLite gauges are read from the database
+        // file, and the scrape that reported them should be the scrape they
+        // were measured for.
+        for (const collect of collectors) await collect();
       },
     });
     log.info("metrics_listening", { port: cfg.metricsPort, host: cfg.metricsHost, role: cfg.role });
@@ -241,10 +244,10 @@ async function main(): Promise<void> {
   resume = (id) => reconciler.resumeSession(id);
 
   bindLeadership(leadership, {
-    acquire: () => {
+    acquire: async () => {
       // The lease is ours: writes first, because recovery is itself a write.
       store.setWritesBlocked(false);
-      const recovered = store.recoverInterruptedOperations();
+      const recovered = await store.recoverInterruptedOperations();
       if (recovered.requests > 0 || recovered.sessions > 0) {
         log.warn("sandbox_operations_recovered", recovered);
       }

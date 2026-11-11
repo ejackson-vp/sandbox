@@ -351,7 +351,9 @@ describe("lease leadership", () => {
 
     const acquired: string[] = [];
     bindLeadership(lease, {
-      acquire: () => acquired.push("acquire"),
+      acquire: () => {
+        acquired.push("acquire");
+      },
       start: () => acquired.push("start"),
       stop: () => acquired.push("stop"),
       release: () => acquired.push("release"),
@@ -394,5 +396,58 @@ describe("leadership hooks", () => {
     await leadership.stop();
     expect(order).toEqual(["acquire", "start", "stop", "release"]);
     expect(writesAllowed).toBe(false);
+  });
+
+  it("starts the loop only after an asynchronous acquire settles", async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const recovering = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const leadership: Leadership = new SoloLeadership("local");
+    bindLeadership(leadership, {
+      acquire: async () => {
+        order.push("acquire:start");
+        await recovering;
+        order.push("acquire:done");
+      },
+      start: () => order.push("start"),
+      stop: () => order.push("stop"),
+      release: () => order.push("release"),
+    });
+
+    await leadership.start();
+    // Recovery is a store write now, so the loop waits for it: a pass must not
+    // see rows the recovery is about to fence.
+    expect(order).toEqual(["acquire:start"]);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["acquire:start", "acquire:done", "start"]);
+  });
+
+  it("does not start the loop when the role is lost during an asynchronous acquire", async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const recovering = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const leadership: Leadership = new SoloLeadership("local");
+    bindLeadership(leadership, {
+      acquire: () => recovering,
+      start: () => order.push("start"),
+      stop: () => order.push("stop"),
+      release: () => order.push("release"),
+    });
+
+    await leadership.start();
+    await leadership.stop();
+    expect(order).toEqual(["stop", "release"]);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["stop", "release"]);
   });
 });

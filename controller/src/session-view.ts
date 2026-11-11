@@ -9,10 +9,13 @@ import {
 import { snapshotOf } from "./session-snapshot.js";
 import type { SessionViewStore } from "./store/ports.js";
 
-export function describeSession(store: SessionViewStore, id: string): ControllerSessionView | null {
-  const session = store.getSession(id);
+export async function describeSession(
+  store: SessionViewStore,
+  id: string,
+): Promise<ControllerSessionView | null> {
+  const session = await store.getSession(id);
   if (!session) return null;
-  const payment = store.getPayment(session.paymentKey);
+  const payment = await store.getPayment(session.paymentKey);
   const now = Date.now();
   const remainingSeconds = remainingLeaseSeconds(snapshotOf(session), now);
   return {

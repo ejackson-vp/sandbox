@@ -268,22 +268,22 @@ export async function executeEffect(
         );
       }
       const { readyAt, leaseExpiresAt, attestationJson, guestPublicKey } = ctx.ready;
-      if (!ctx.store.setReady(id, readyAt, leaseExpiresAt, attestationJson, guestPublicKey)) {
+      if (!(await ctx.store.setReady(id, readyAt, leaseExpiresAt, attestationJson, guestPublicKey))) {
         return refused(effect);
       }
       return OK;
     }
 
     case "persist_suspending":
-      if (!ctx.store.markSuspending(id)) return refused(effect);
+      if (!(await ctx.store.markSuspending(id))) return refused(effect);
       return OK;
 
     case "persist_suspended":
-      if (!ctx.store.markSuspended(id, ctx.now())) return refused(effect);
+      if (!(await ctx.store.markSuspended(id, ctx.now()))) return refused(effect);
       return OK;
 
     case "finalize": {
-      const final = ctx.store.finalizeTermination(id);
+      const final = await ctx.store.finalizeTermination(id);
       if (!final) return refused(effect);
       // Both sides derive the state from the termination reason; a mismatch
       // means one of them moved, and the written value is the truth.
@@ -326,14 +326,14 @@ export async function executeEffect(
           });
         }
       }
-      ctx.store.clearPod(id);
+      await ctx.store.clearPod(id);
       return OK;
     }
 
     case "purge_relay": {
       try {
         await ctx.relay.purge(id);
-        ctx.store.markRelayPurged(id);
+        await ctx.store.markRelayPurged(id);
       } catch (err) {
         log.warn("relay_purge_failed", { sessionId: id, error: (err as Error).message });
       }
@@ -357,7 +357,7 @@ export async function executeEffect(
       if (!pvc) return OK;
       try {
         await ctx.provisioner.deleteWorkspacePvc(pvc);
-        ctx.store.clearWorkspacePvc(id);
+        await ctx.store.clearWorkspacePvc(id);
       } catch (err) {
         log.warn("workspace_pvc_delete_failed", {
           sessionId: id,

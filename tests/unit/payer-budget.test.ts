@@ -74,11 +74,16 @@ function payment(key: string, payer: string, amount = "50000"): PaymentRecord {
 }
 
 /** A PAID row with a ledger entry, i.e. a live session owned by `payer`. */
-function seedLiveSession(store: Store, id: string, payer: string, amount = "50000"): void {
+async function seedLiveSession(
+  store: Store,
+  id: string,
+  payer: string,
+  amount = "50000",
+): Promise<void> {
   const key = `key-${id}`;
-  const claim = store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+  const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
-  store.completeEntitlement(key, claim.token, payment(key, payer, amount), {
+  await store.completeEntitlement(key, claim.token, payment(key, payer, amount), {
     id,
     capabilityHash: "a".repeat(64),
     capabilityExpiresAt: NOW + 3_600_000,
@@ -124,38 +129,38 @@ function seedLiveSession(store: Store, id: string, payer: string, amount = "5000
 }
 
 describe("durable create budget", () => {
-  it("caps creates per payer per window and reports what is left", () => {
+  it("caps creates per payer per window and reports what is left", async () => {
     const { store } = freshStore();
     const limits = { ...LIMITS, payerCreates: 2 };
 
-    expect(store.reserveBudgets(PAYER, "50000", limits).ok).toBe(true);
-    expect(store.reserveBudgets(PAYER, "50000", limits).ok).toBe(true);
-    const rejected = store.reserveBudgets(PAYER, "50000", limits);
+    expect((await store.reserveBudgets(PAYER, "50000", limits)).ok).toBe(true);
+    expect((await store.reserveBudgets(PAYER, "50000", limits)).ok).toBe(true);
+    const rejected = await store.reserveBudgets(PAYER, "50000", limits);
     expect(rejected.ok).toBe(false);
     if (rejected.ok) throw new Error("expected rejection");
     expect(rejected.scope).toBe("payer_create");
     expect(rejected.remaining.payerCreates).toBe(0);
     expect(rejected.retryAfterSeconds).toBeGreaterThan(0);
     // A different payer is unaffected.
-    expect(store.reserveBudgets(OTHER_PAYER, "50000", limits).ok).toBe(true);
+    expect((await store.reserveBudgets(OTHER_PAYER, "50000", limits)).ok).toBe(true);
   });
 
-  it("keeps the window across a restart", () => {
+  it("keeps the window across a restart", async () => {
     const { store, path } = freshStore();
     const limits = { ...LIMITS, payerCreates: 2 };
-    store.reserveBudgets(PAYER, "50000", limits);
-    store.reserveBudgets(PAYER, "50000", limits);
+    await store.reserveBudgets(PAYER, "50000", limits);
+    await store.reserveBudgets(PAYER, "50000", limits);
     store.close();
 
     const reopened = new Store(path);
-    const rejected = reopened.reserveBudgets(PAYER, "50000", limits);
+    const rejected = await reopened.reserveBudgets(PAYER, "50000", limits);
     expect(rejected.ok).toBe(false);
     if (rejected.ok) throw new Error("expected rejection");
     expect(rejected.scope).toBe("payer_create");
     reopened.close();
   });
 
-  it("rolls the window when it expires", () => {
+  it("rolls the window when it expires", async () => {
     const { store } = freshStore();
     const limits = { ...LIMITS, payerCreates: 1, windowMs: 1_000 };
     const now = NOW;
@@ -164,71 +169,71 @@ describe("durable create budget", () => {
     expect(store.budgets.reserve(PAYER, "0", limits, now + 1_001).ok).toBe(true);
   });
 
-  it("commits spend in the settlement transaction and refuses over-budget payers", () => {
+  it("commits spend in the settlement transaction and refuses over-budget payers", async () => {
     const { store } = freshStore();
     const limits = { ...LIMITS, payerCreates: 100, payerSpend: "1000000" };
 
     // A settled payment commits 400000 to the verified payer.
-    seedLiveSession(store, "sbx_spend_1", PAYER, "400000");
+    await seedLiveSession(store, "sbx_spend_1", PAYER, "400000");
     // 400000 committed + 700000 requested > 1000000.
-    const rejected = store.reserveBudgets(PAYER, "700000", limits);
+    const rejected = await store.reserveBudgets(PAYER, "700000", limits);
     expect(rejected.ok).toBe(false);
     if (rejected.ok) throw new Error("expected rejection");
     expect(rejected.scope).toBe("payer_spend");
     expect(rejected.remaining.payerSpend).toBe("600000");
     // Exactly the remainder is admitted.
-    expect(store.reserveBudgets(PAYER, "600000", limits).ok).toBe(true);
+    expect((await store.reserveBudgets(PAYER, "600000", limits)).ok).toBe(true);
   });
 
-  it("does not count spend for a payment that never settled", () => {
+  it("does not count spend for a payment that never settled", async () => {
     const { store } = freshStore();
     const limits = { ...LIMITS, payerCreates: 100, payerSpend: "100000" };
-    expect(store.reserveBudgets(PAYER, "100000", limits).ok).toBe(true);
+    expect((await store.reserveBudgets(PAYER, "100000", limits)).ok).toBe(true);
     // The create was reserved but nothing settled, so the payer can still spend
     // up to the limit.
-    expect(store.reserveBudgets(PAYER, "100000", limits).ok).toBe(true);
+    expect((await store.reserveBudgets(PAYER, "100000", limits)).ok).toBe(true);
   });
 
-  it("counts concurrency from live sessions", () => {
+  it("counts concurrency from live sessions", async () => {
     const { store } = freshStore();
     const limits = { ...LIMITS, payerCreates: 100, payerConcurrent: 1 };
-    seedLiveSession(store, "sbx_live_1", PAYER);
+    await seedLiveSession(store, "sbx_live_1", PAYER);
 
-    const rejected = store.reserveBudgets(PAYER, "0", limits);
+    const rejected = await store.reserveBudgets(PAYER, "0", limits);
     expect(rejected.ok).toBe(false);
     if (rejected.ok) throw new Error("expected rejection");
     expect(rejected.scope).toBe("payer_concurrent");
     expect(rejected.remaining.payerConcurrent).toBe(0);
     // The same payer's terminal session would not count, and another payer is
     // unaffected right now.
-    expect(store.reserveBudgets(OTHER_PAYER, "0", limits).ok).toBe(true);
+    expect((await store.reserveBudgets(OTHER_PAYER, "0", limits)).ok).toBe(true);
   });
 
-  it("bounds the global budget independently of the payer key", () => {
+  it("bounds the global budget independently of the payer key", async () => {
     const { store } = freshStore();
     const limits = { ...LIMITS, payerCreates: 100, globalCreates: 2 };
-    expect(store.reserveBudgets(PAYER, "0", limits).ok).toBe(true);
-    expect(store.reserveBudgets(OTHER_PAYER, "0", limits).ok).toBe(true);
+    expect((await store.reserveBudgets(PAYER, "0", limits)).ok).toBe(true);
+    expect((await store.reserveBudgets(OTHER_PAYER, "0", limits)).ok).toBe(true);
     // A third, never-seen address still hits the global cap: rotating `from`
     // buys a fresh payer row, not a fresh global row.
-    const rejected = store.reserveBudgets("0x00000000000000000000000000000000000000cc", "0", limits);
+    const rejected = await store.reserveBudgets("0x00000000000000000000000000000000000000cc", "0", limits);
     expect(rejected.ok).toBe(false);
     if (rejected.ok) throw new Error("expected rejection");
     expect(rejected.scope).toBe("global_create");
   });
 
-  it("does not consume global budget when the payer budget refuses", () => {
+  it("does not consume global budget when the payer budget refuses", async () => {
     const { store } = freshStore();
     const limits = { ...LIMITS, payerCreates: 1, globalCreates: 10 };
-    expect(store.reserveBudgets(PAYER, "0", limits).ok).toBe(true);
+    expect((await store.reserveBudgets(PAYER, "0", limits)).ok).toBe(true);
 
-    const refused = store.reserveBudgets(PAYER, "0", limits);
+    const refused = await store.reserveBudgets(PAYER, "0", limits);
     expect(refused.ok).toBe(false);
     if (refused.ok) throw new Error("expected rejection");
     // 10 - 1 reserved so far; the refused attempt consumed nothing.
     expect(refused.remaining.globalCreates).toBe(9);
 
-    const next = store.reserveBudgets(OTHER_PAYER, "0", limits);
+    const next = await store.reserveBudgets(OTHER_PAYER, "0", limits);
     expect(next.ok).toBe(true);
     if (!next.ok) throw new Error("expected admission");
     // Two successful reservations in a budget of 10.

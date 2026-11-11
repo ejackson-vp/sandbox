@@ -104,22 +104,28 @@ function recordingRuntime(opts: { guard?: boolean } = {}) {
   const guard = opts.guard ?? true;
   const runtime: EffectRuntime = {
     store: {
-      clearPod: () => calls.push("clearPod"),
-      clearWorkspacePvc: () => calls.push("clearWorkspacePvc"),
-      finalizeTermination: () => {
+      clearPod: async () => {
+        calls.push("clearPod");
+      },
+      clearWorkspacePvc: async () => {
+        calls.push("clearWorkspacePvc");
+      },
+      finalizeTermination: async () => {
         calls.push("finalizeTermination");
         return guard ? "DESTROYED" : null;
       },
-      markRelayPurged: () => calls.push("markRelayPurged"),
-      markSuspended: () => {
+      markRelayPurged: async () => {
+        calls.push("markRelayPurged");
+      },
+      markSuspended: async () => {
         calls.push("markSuspended");
         return guard;
       },
-      markSuspending: () => {
+      markSuspending: async () => {
         calls.push("markSuspending");
         return guard;
       },
-      setReady: () => {
+      setReady: async () => {
         calls.push("setReady");
         return guard;
       },

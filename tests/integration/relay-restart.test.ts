@@ -150,7 +150,7 @@ async function waitFor(
 ): Promise<SessionRecord> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const session = store.getSession(sessionId);
+    const session = await store.getSession(sessionId);
     if (session && predicate(session)) return session;
     if (Date.now() >= deadline) {
       throw new Error(`timed out; last session ${JSON.stringify(session)}`);
@@ -236,9 +236,9 @@ async function scenario(mode: "ready" | "refund"): Promise<Scenario> {
   const nonce = toBase64(await generateNonce());
   const sessionId = `sbx_relay_restart_${mode}_${Date.now().toString(36)}`;
   const paymentKey = `${mode}`.padEnd(64, "0");
-  const claim = store.claimPaymentIntent(paymentKey, `relay-restart-${mode}`, 30_000);
+  const claim = await store.claimPaymentIntent(paymentKey, `relay-restart-${mode}`, 30_000);
   if (claim.status !== "claimed") throw new Error(`could not claim ${paymentKey}: ${claim.status}`);
-  store.completeEntitlement(
+  await store.completeEntitlement(
     paymentKey,
     claim.token,
     paymentRecord(paymentKey),
@@ -282,9 +282,9 @@ async function freePort(): Promise<number> {
   });
 }
 
-function assertNotChargedPodTerminated(store: Store, sessionId: string): void {
-  const session = store.getSession(sessionId);
-  const ledger = store.getLedgerBySession(sessionId);
+async function assertNotChargedPodTerminated(store: Store, sessionId: string): Promise<void> {
+  const session = await store.getSession(sessionId);
+  const ledger = await store.getLedgerBySession(sessionId);
   const chargedPodTerminated =
     session?.failureCode === "pod_terminated" && ledger?.status === "SETTLED";
   expect(chargedPodTerminated).toBe(false);
@@ -339,7 +339,7 @@ describe("relay restart during a paid create", () => {
       expect(result.stdout.trim()).toBe("relay-restart-ok");
     }
 
-    expect(run.store.getLedgerBySession(run.sessionId)?.status).toBe("SETTLED");
+    expect((await run.store.getLedgerBySession(run.sessionId))?.status).toBe("SETTLED");
     assertNotChargedPodTerminated(run.store, run.sessionId);
   }, 60_000);
 
@@ -357,7 +357,7 @@ describe("relay restart during a paid create", () => {
     expect(failed.failureCode).toBe("provisioning_timeout");
     expect(failed.readyAt).toBeNull();
 
-    const ledger = run.store.getLedgerBySession(run.sessionId);
+    const ledger = await run.store.getLedgerBySession(run.sessionId);
     expect(ledger?.status).toBe("REFUNDED");
     assertNotChargedPodTerminated(run.store, run.sessionId);
   }, 90_000);

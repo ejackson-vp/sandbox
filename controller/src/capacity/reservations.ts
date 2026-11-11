@@ -180,7 +180,7 @@ export class ReservationRepository implements ReservationStore {
     return this.activeRows().map(mapRow);
   }
 
-  listActive(): ReservationRecord[] {
+  async listActive(): Promise<ReservationRecord[]> {
     return this.active();
   }
 
@@ -314,11 +314,11 @@ export class ReservationRepository implements ReservationStore {
   }
 
   /** Atomically admit and persist. */
-  admit(
+  async admit(
     snapshot: CapacitySnapshot,
     request: SandboxResourceRequest,
     opts: AdmitOptions = {},
-  ): ReservationAdmission {
+  ): Promise<ReservationAdmission> {
     return this.tx(() => {
       const existing = this.findExisting(opts);
       return this.admitWithin(snapshot, request, opts, existing);
@@ -330,13 +330,13 @@ export class ReservationRepository implements ReservationStore {
    * missing (crash/recovery), admit the session directly in the same
    * transaction rather than trusting an in-memory counter.
    */
-  attachToSession(
+  async attachToSession(
     snapshot: CapacitySnapshot,
     request: SandboxResourceRequest,
     paymentKey: string,
     sessionId: string,
     specHash: string,
-  ): ReservationAdmission {
+  ): Promise<ReservationAdmission> {
     return this.tx(() => {
       const existing =
         (this.stmts.getByPayment!.get(paymentKey) as ReservationRow | undefined) ??
@@ -368,11 +368,11 @@ export class ReservationRepository implements ReservationStore {
   }
 
   /** Resume: re-acquire compute on the checkpoint's node, or fail closed. */
-  resume(
+  async resume(
     snapshot: CapacitySnapshot,
     request: SandboxResourceRequest,
     sessionId: string,
-  ): ReservationAdmission {
+  ): Promise<ReservationAdmission> {
     return this.tx(() => {
       const row = this.stmts.getBySession!.get(sessionId) as ReservationRow | undefined;
       if (!row) {
@@ -409,56 +409,56 @@ export class ReservationRepository implements ReservationStore {
     });
   }
 
-  releasePayment(paymentKey: string): boolean {
+  async releasePayment(paymentKey: string): Promise<boolean> {
     return this.stmts.releasePayment!.run(Date.now(), paymentKey).changes > 0;
   }
 
-  suspendSession(sessionId: string): boolean {
+  async suspendSession(sessionId: string): Promise<boolean> {
     return this.stmts.suspend!.run(Date.now(), sessionId).changes > 0;
   }
 
   /** Resume was already admitted; undo a concurrent re-suspend of the row. */
-  reassertAllocated(sessionId: string): boolean {
+  async reassertAllocated(sessionId: string): Promise<boolean> {
     return this.stmts.reassertAllocated!.run(Date.now(), sessionId).changes > 0;
   }
 
-  beginRelease(sessionId: string, podName: string | null): boolean {
+  async beginRelease(sessionId: string, podName: string | null): Promise<boolean> {
     return this.stmts.beginRelease!.run(podName, Date.now(), sessionId).changes > 0;
   }
 
-  confirmRelease(sessionId: string): boolean {
+  async confirmRelease(sessionId: string): Promise<boolean> {
     return this.stmts.confirmRelease!.run(Date.now(), sessionId).changes > 0;
   }
 
-  releaseSession(sessionId: string): boolean {
+  async releaseSession(sessionId: string): Promise<boolean> {
     return this.stmts.releaseSession!.run(Date.now(), sessionId).changes > 0;
   }
 
-  updatePod(sessionId: string, podName: string | null): void {
+  async updatePod(sessionId: string, podName: string | null): Promise<void> {
     this.stmts.updatePod!.run(podName, Date.now(), sessionId);
   }
 
   /** Reconcile a planning decision with the node Kubernetes actually chose. */
-  pinNode(sessionId: string, nodeId: string): boolean {
+  async pinNode(sessionId: string, nodeId: string): Promise<boolean> {
     return this.stmts.setNode!.run(nodeId, Date.now(), sessionId).changes > 0;
   }
 
-  listReleasing(): ReservationRecord[] {
+  async listReleasing(): Promise<ReservationRecord[]> {
     return (this.stmts.listReleasing!.all() as unknown as ReservationRow[]).map(mapRow);
   }
 
-  getBySession(sessionId: string): ReservationRecord | null {
+  async getBySession(sessionId: string): Promise<ReservationRecord | null> {
     const row = this.stmts.getBySession!.get(sessionId) as ReservationRow | undefined;
     return row ? mapRow(row) : null;
   }
 
-  getByPayment(paymentKey: string): ReservationRecord | null {
+  async getByPayment(paymentKey: string): Promise<ReservationRecord | null> {
     const row = this.stmts.getByPayment!.get(paymentKey) as ReservationRow | undefined;
     return row ? mapRow(row) : null;
   }
 
   /** Expire unused provisional holds; called by housekeeping. */
-  reapExpiredHolds(now: number): number {
+  async reapExpiredHolds(now: number): Promise<number> {
     return Number(this.stmts.expireHolds!.run(now, now).changes ?? 0);
   }
 

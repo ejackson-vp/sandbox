@@ -646,7 +646,7 @@ describe("session execution", () => {
 
     const destroyed = await client.destroy(handle);
     expect(destroyed?.state).toBe("DESTROYED");
-    expect(store.getSession(handle.sessionId)?.podName).toBeNull();
+    expect((await store.getSession(handle.sessionId))?.podName).toBeNull();
   }, 90_000);
 
   it("runs one-shot: uploads, collects returns, and destroys the session", async () => {
@@ -666,7 +666,7 @@ describe("session execution", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("done");
     expect(Buffer.from(result.files["out/upper.txt"]!).toString()).toBe("HELLO\n");
-    expect(store.getSession(result.sessionId)?.state).toBe("DESTROYED");
+    expect((await store.getSession(result.sessionId))?.state).toBe("DESTROYED");
   }, 90_000);
 
   it("uploads, lists, stats, downloads files and round-trips archives", async () => {
@@ -1002,7 +1002,7 @@ describe("lifecycle races", () => {
   async function waitForDestroyRequested(sessionId: string): Promise<void> {
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
-      if (store.getSession(sessionId)?.destroyRequested === 1) return;
+      if ((await store.getSession(sessionId))?.destroyRequested === 1) return;
       await sleep(50);
     }
     throw new Error("destroy request was not recorded");
@@ -1011,11 +1011,11 @@ describe("lifecycle races", () => {
   it("destroys a suspended session instead of orphaning it", async () => {
     const handle = await suspendableSession();
     await client.suspend(handle);
-    expect(store.getSession(handle.sessionId)?.state).toBe("SUSPENDED");
+    expect((await store.getSession(handle.sessionId))?.state).toBe("SUSPENDED");
 
     const destroyed = await client.destroy(handle, 20_000);
     expect(destroyed?.state).toBe("DESTROYED");
-    const row = store.getSession(handle.sessionId);
+    const row = await store.getSession(handle.sessionId);
     expect(row?.state).toBe("DESTROYED");
     expect(row?.workspacePvc).toBeNull();
     await expectNoPods(handle.sessionId);
@@ -1027,11 +1027,11 @@ describe("lifecycle races", () => {
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
     expect((rejected?.reason as SandboxError).code).toBe("not_suspendable");
-    expect(store.getSession(handle.sessionId)?.state).toBe("SUSPENDED");
+    expect((await store.getSession(handle.sessionId))?.state).toBe("SUSPENDED");
     await expectNoPods(handle.sessionId);
 
     await client.destroy(handle, 20_000);
-    expect(store.getSession(handle.sessionId)?.state).toBe("DESTROYED");
+    expect((await store.getSession(handle.sessionId))?.state).toBe("DESTROYED");
   }, 60_000);
 
   it("lets destroy win while a suspend is between SUSPENDING and SUSPENDED", async () => {
@@ -1064,7 +1064,7 @@ describe("lifecycle races", () => {
     }
 
     expect(destroyed?.state).toBe("DESTROYED");
-    expect(store.getSession(handle.sessionId)?.state).toBe("DESTROYED");
+    expect((await store.getSession(handle.sessionId))?.state).toBe("DESTROYED");
     await expectNoPods(handle.sessionId);
   }, 60_000);
 
@@ -1102,7 +1102,7 @@ describe("lifecycle races", () => {
     }
 
     expect(destroyed?.state).toBe("DESTROYED");
-    expect(store.getSession(handle.sessionId)?.state).toBe("DESTROYED");
+    expect((await store.getSession(handle.sessionId))?.state).toBe("DESTROYED");
     await expectNoPods(handle.sessionId);
   }, 60_000);
 
@@ -1113,7 +1113,7 @@ describe("lifecycle races", () => {
       client.destroy(handle, 20_000),
     ]);
     expect(results.some((result) => result.status === "fulfilled")).toBe(true);
-    expect(store.getSession(handle.sessionId)?.state).toBe("DESTROYED");
+    expect((await store.getSession(handle.sessionId))?.state).toBe("DESTROYED");
     await expectNoPods(handle.sessionId);
   }, 60_000);
 });
@@ -1126,8 +1126,8 @@ describe("payment ledger and refunds", () => {
     };
     try {
       const handle = await client.createSession({ tier: "custom", durationSeconds: 60 });
-      expect(store.getLedgerBySession(handle.sessionId)?.status).toBe("SETTLED");
-      store.requestTermination(handle.sessionId, "failure:simulated_provisioning");
+      expect((await store.getLedgerBySession(handle.sessionId))?.status).toBe("SETTLED");
+      await store.requestTermination(handle.sessionId, "failure:simulated_provisioning");
       reconciler.wake();
       const terminal = await pollStatus(
         handle,
@@ -1135,7 +1135,7 @@ describe("payment ledger and refunds", () => {
         15_000,
       );
       expect(terminal.state).toBe("FAILED");
-      const ledger = store.getLedgerBySession(handle.sessionId);
+      const ledger = await store.getLedgerBySession(handle.sessionId);
       expect(ledger).toMatchObject({
         status: "REFUNDED",
         sessionId: handle.sessionId,
@@ -1151,7 +1151,7 @@ describe("payment ledger and refunds", () => {
     await client.waitForReady(handle);
     const destroyed = await client.destroy(handle, 30_000);
     expect(destroyed?.state).toBe("DESTROYED");
-    expect(store.getLedgerBySession(handle.sessionId)?.status).toBe("SETTLED");
+    expect((await store.getLedgerBySession(handle.sessionId))?.status).toBe("SETTLED");
   }, 60_000);
 });
 
@@ -1183,7 +1183,7 @@ describe("control-plane failure recovery", () => {
       await client.destroy(handle);
       let state = "";
       for (let i = 0; i < 30; i += 1) {
-        state = store.reservations.getBySession(handle.sessionId)?.state ?? "gone";
+        state = (await store.reservations.getBySession(handle.sessionId))?.state ?? "gone";
         if (state === "RELEASING") break;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
@@ -1193,7 +1193,7 @@ describe("control-plane failure recovery", () => {
     }
     let finalState = "";
     for (let i = 0; i < 40; i += 1) {
-      finalState = store.reservations.getBySession(handle.sessionId)?.state ?? "gone";
+      finalState = (await store.reservations.getBySession(handle.sessionId))?.state ?? "gone";
       if (finalState === "RELEASED" || finalState === "gone") break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -1202,7 +1202,7 @@ describe("control-plane failure recovery", () => {
 });
 
 describe("configuration guards", () => {
-  it("refuses mainnet", () => {
+  it("refuses mainnet", async () => {
     expect(() =>
       loadConfig({
         PAYMENT_MODE: "testnet",
@@ -1213,7 +1213,7 @@ describe("configuration guards", () => {
     ).toThrow(/mainnet/i);
   });
 
-  it("refuses mock payments without the explicit dev acknowledgement", () => {
+  it("refuses mock payments without the explicit dev acknowledgement", async () => {
     expect(() =>
       loadConfig({ PAYMENT_MODE: "mock", ALLOW_INSECURE_DEV: "false", CAPABILITY_SECRET: "capability-secret-0123456789" }),
     ).toThrow(/insecure/i);

@@ -104,9 +104,9 @@ export class PodCreation {
       .then((pods) => pods.find((pod) => pod.sessionId === session.id && pod.phase !== "Failed" && pod.phase !== "Succeeded"))
       .catch(() => undefined);
     if (!existingPod) return false;
-    if (this.ctx.store.setProvisioning(session.id, existingPod.name)) {
-      this.ctx.capacity.updatePod(session.id, existingPod.name);
-      this.ctx.store.mergeTimings(session.id, {
+    if (await this.ctx.store.setProvisioning(session.id, existingPod.name)) {
+      await this.ctx.capacity.updatePod(session.id, existingPod.name);
+      await this.ctx.store.mergeTimings(session.id, {
         podRequestedAt: this.ctx.now(),
         podCreateCallMs: 0,
       });
@@ -146,10 +146,10 @@ export class PodCreation {
       ...(session.workspacePvc ? { workspacePvc: session.workspacePvc } : {}),
       ...(session.state === "RESUMING" ? { resume: true } : {}),
     });
-    if (!this.ctx.store.setProvisioningPod(session.id, created.podName)) return false;
-    this.ctx.capacity.updatePod(session.id, created.podName);
+    if (!(await this.ctx.store.setProvisioningPod(session.id, created.podName))) return false;
+    await this.ctx.capacity.updatePod(session.id, created.podName);
     this.relayGeneration.set(session.id, created.relayGeneration);
-    this.ctx.store.mergeTimings(session.id, {
+    await this.ctx.store.mergeTimings(session.id, {
       reprovisionCount: Number(timings.reprovisionCount ?? 0) + 1,
     });
     log.warn("sandbox_pod_reprovisioned", {
@@ -186,7 +186,7 @@ export class PodCreation {
         error: err.message,
       }),
     });
-    this.ctx.store.setRelayToken(session.id, tokenHash);
+    await this.ctx.store.setRelayToken(session.id, tokenHash);
     return { guestToken, tokenHash, generation: registration.generation };
   }
 
@@ -206,7 +206,7 @@ export class PodCreation {
       registration?: RelayRegistration;
     } = {},
   ): Promise<{ podName: string; createStarted: number; relayGeneration: string }> {
-    this.ctx.store.mergeTimings(session.id, {
+    await this.ctx.store.mergeTimings(session.id, {
       provisionStartAt: Date.now(),
       podRequestedAt: Date.now(),
     });

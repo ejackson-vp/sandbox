@@ -155,7 +155,7 @@ export class WarmPool {
       this.count("miss_error");
       return "miss_error";
     }
-    this.ctx.store.setRelayToken(session.id, tokenHash);
+    await this.ctx.store.setRelayToken(session.id, tokenHash);
     const warmRegisterMs = this.ctx.now() - registerStarted;
 
     // As in the cold path, registration may have waited through a relay
@@ -227,7 +227,7 @@ export class WarmPool {
       return "miss_error";
     }
 
-    if (!this.ctx.store.setProvisioning(session.id, warm.name)) {
+    if (!(await this.ctx.store.setProvisioning(session.id, warm.name))) {
       // The session moved on (destroyed, reaped) between selection and here.
       this.claimed.delete(warm.warmId);
       await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
@@ -237,10 +237,10 @@ export class WarmPool {
     }
 
     if (warm.nodeName) {
-      this.ctx.capacity.pinSessionNode(session.id, warm.nodeName);
+      await this.ctx.capacity.pinSessionNode(session.id, warm.nodeName);
     }
     const claimedAt = this.ctx.now();
-    this.ctx.store.mergeTimings(session.id, {
+    await this.ctx.store.mergeTimings(session.id, {
       provisionStartAt: claimedAt,
       podRequestedAt: claimedAt,
       warmClaimAt: claimedAt,

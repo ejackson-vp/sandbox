@@ -115,19 +115,19 @@ export class SettlementRecovery {
     if (!this.lookup?.supported) return { checked: 0, recovered: 0, errors: 0 };
 
     const cutoff = this.now() - this.opts.graceMs;
-    const intents = this.store.listStaleClaimedIntents(cutoff, this.opts.limit);
+    const intents = await this.store.listStaleClaimedIntents(cutoff, this.opts.limit);
     let recovered = 0;
     let errors = 0;
 
     for (const intent of intents) {
       // Already accounted for: a completed entitlement, a previous recovery, or
       // a refund. Nothing to do.
-      if (this.store.getLedgerByPayment(intent.paymentKey)) continue;
+      if (await this.store.getLedgerByPayment(intent.paymentKey)) continue;
       try {
         const record = await this.lookup.lookup(intent.paymentKey);
         if (!record) continue;
         const requirements = requirementsOf(intent);
-        const inserted = this.store.insertUnclaimedLedger({
+        const inserted = await this.store.insertUnclaimedLedger({
           paymentKey: intent.paymentKey,
           sessionId: `unsettled:${intent.paymentKey}`,
           payer: record.payer ?? null,
@@ -144,9 +144,9 @@ export class SettlementRecovery {
         });
         if (!inserted) continue;
         recovered += 1;
-        const ledger = this.store.getLedgerByPayment(intent.paymentKey);
+        const ledger = await this.store.getLedgerByPayment(intent.paymentKey);
         let outcome: RefundOutcome = "pending";
-        if (ledger) outcome = this.refunds.applyPolicy(ledger, "settled_without_entitlement");
+        if (ledger) outcome = await this.refunds.applyPolicy(ledger, "settled_without_entitlement");
         metrics
           .counter("sandbox_settlement_recovery_total", "Settled payments recovered without an entitlement")
           .inc({ result: outcome });

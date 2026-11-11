@@ -47,7 +47,7 @@ export class OperationFence {
 
   async reconcile(): Promise<FenceReconcileResult> {
     const result: FenceReconcileResult = { cleared: 0, held: 0, errors: 0 };
-    for (const session of this.store.listFencedSessions()) {
+    for (const session of await this.store.listFencedSessions()) {
       const requestId = session.activeRequestId;
       if (!requestId) continue;
 
@@ -97,7 +97,7 @@ export class OperationFence {
       // so the command cannot still be running. (A pod that outlives its relay
       // link is killed by the lease and by guest shutdown on reconnect failure.)
       if (!state.registered || !state.connected) {
-        if (this.release(session.id, requestId, session.execEpoch)) result.cleared += 1;
+        if (await this.release(session.id, requestId, session.execEpoch)) result.cleared += 1;
         continue;
       }
 
@@ -130,13 +130,13 @@ export class OperationFence {
         continue;
       }
 
-      if (this.release(session.id, requestId, session.execEpoch)) result.cleared += 1;
+      if (await this.release(session.id, requestId, session.execEpoch)) result.cleared += 1;
     }
     return result;
   }
 
-  private release(sessionId: string, requestId: string, epoch: number): boolean {
-    const cleared = this.store.clearFencedGate(sessionId, requestId, epoch);
+  private async release(sessionId: string, requestId: string, epoch: number): Promise<boolean> {
+    const cleared = await this.store.clearFencedGate(sessionId, requestId, epoch);
     if (cleared) {
       log.info("operation_fence_cleared", { sessionId, requestId, epoch });
     }

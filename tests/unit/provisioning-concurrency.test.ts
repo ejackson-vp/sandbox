@@ -19,6 +19,19 @@ function session(id: string, state: SessionRecord["state"] = "PAID"): SessionRec
   } as unknown as SessionRecord;
 }
 
+/**
+ * Let the microtask queue drain.
+ *
+ * `provision()` used to claim its in-process slot synchronously. The store port
+ * is asynchronous now, so the persisted count is one `await` away from the
+ * claim and the claim itself is the next synchronous step. A test that asserts
+ * on `admissions()` has to cross that boundary, nothing more: the cap is still
+ * decided without an interleaving point between the check and the claim.
+ */
+function flush(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => {
@@ -44,7 +57,7 @@ function harness(limit: number, persisted: SessionRecord[] = []) {
   const mergeTimings = vi.fn();
   const requestTermination = vi.fn();
   const store = {
-    listNonTerminal: () => persisted,
+    listNonTerminal: async () => persisted,
     mergeTimings,
     requestTermination,
   } as unknown as Store;
@@ -102,6 +115,7 @@ describe("provisioning slot cap", () => {
     const { provisioning, mergeTimings, gate, admissions } = harness(2, persisted);
 
     const inflight = provisioning.provision(session("sbx_inflight"));
+    await flush();
     expect(admissions()).toBe(1);
 
     const third = provisioning.provision(session("sbx_third"));
@@ -129,6 +143,7 @@ describe("provisioning slot cap", () => {
     // Occupancy is 2 (one persisted, one in flight), so a third fits.
     const inflight = provisioning.provision(session("sbx_inflight"));
     const third = provisioning.provision(session("sbx_third"));
+    await flush();
     expect(admissions()).toBe(2);
 
     // Now occupancy is 3; a fourth must wait for a slot to free.

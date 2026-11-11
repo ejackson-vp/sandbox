@@ -158,6 +158,20 @@ the container registry.
 - The SDK `run` doc comment no longer says `base` is the only runtime. It
   documents `runtime` as `base` (default), `python` or `node`, rejected at
   create time when the controller does not run that profile.
+- The controller's store ports return `Promise`s, and every caller awaits them
+  (first step of #25, see [ADR 0010](docs/adr/0010-controller-ha-storage.md)).
+  No behaviour change: the SQLite adapter is still one blocking statement per
+  method and no `BEGIN IMMEDIATE` transaction contains an `await`. The point is
+  the interface shape, because no Postgres client can be called from a
+  synchronous method. Consequences a reader should know: a store call is now an
+  interleaving point, so where a use case used to read and then write without a
+  gap the decision either stays inside the adapter (guarded `UPDATE ... WHERE
+  state = ...`, the operation claim, settlement) or is re-checked on the write;
+  a store failure now surfaces as a rejected promise rather than a synchronous
+  throw; and the readiness probe, the scrape-time SQLite gauges and leadership
+  acquisition (which runs startup recovery) are awaited before the thing they
+  gate. The operation gate and recovery moved to `controller/src/store/operations.ts`
+  so `Store` stays inside the module size limit.
 
 ## 0.1.22
 

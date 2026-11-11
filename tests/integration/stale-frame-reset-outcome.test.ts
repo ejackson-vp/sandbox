@@ -215,9 +215,9 @@ async function scenario(): Promise<Run> {
   const clientNonce = toBase64(await generateNonce());
   const sessionId = `sbx_stale_reset_${Date.now().toString(36)}`;
   const paymentKey = "e".repeat(64);
-  const claim = store.claimPaymentIntent(paymentKey, "stale-frame-reset", 30_000);
+  const claim = await store.claimPaymentIntent(paymentKey, "stale-frame-reset", 30_000);
   if (claim.status !== "claimed") throw new Error(`could not claim payment: ${claim.status}`);
-  store.completeEntitlement(
+  await store.completeEntitlement(
     paymentKey,
     claim.token,
     paymentRecord(paymentKey),
@@ -274,7 +274,7 @@ describe("a withdrawn stale frame does not strand a READY session", () => {
     expect(ready!.guestPublicKey).toBeTruthy();
 
     const oldRequestId = "stale-reset-old-request";
-    const claim = run.store.claimOperation(run.sessionId, oldRequestId, "exec");
+    const claim = await run.store.claimOperation(run.sessionId, oldRequestId, "exec");
     expect(claim).toMatchObject({ ok: true, epoch: 1 });
 
     const envelope = await sealJsonTo(fromBase64(ready!.guestPublicKey!), {
@@ -296,8 +296,8 @@ describe("a withdrawn stale frame does not strand a READY session", () => {
 
     // The controller restarts: the interrupted request becomes outcome_unknown
     // and the session epoch is bumped. Housekeeping then reconciles the fence.
-    expect(run.store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
-    expect(run.store.getSession(run.sessionId)).toMatchObject({
+    expect(await run.store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+    expect(await run.store.getSession(run.sessionId)).toMatchObject({
       activeRequestId: oldRequestId,
       execEpoch: 2,
     });
@@ -318,7 +318,7 @@ describe("a withdrawn stale frame does not strand a READY session", () => {
     // the guest read the frame before the reset (the ADR residual), not a
     // degraded close.
     expect(resetCounts(run.relayMetrics)).toEqual({ tcp_reset: 1 });
-    expect(run.store.getSession(run.sessionId)?.state).toBe("READY");
+    expect((await run.store.getSession(run.sessionId))?.state).toBe("READY");
 
     // Resume the process so it observes the reset and exits, exactly as an
     // unstoppable production guest would.
@@ -350,6 +350,6 @@ describe("a withdrawn stale frame does not strand a READY session", () => {
 
     // The session reached READY, so it delivered service and is not refunded;
     // the ledger stays settled (RefundOnlyWhenNoService).
-    expect(run.store.getLedgerBySession(run.sessionId)?.status).toBe("SETTLED");
+    expect((await run.store.getLedgerBySession(run.sessionId))?.status).toBe("SETTLED");
   }, 90_000);
 });

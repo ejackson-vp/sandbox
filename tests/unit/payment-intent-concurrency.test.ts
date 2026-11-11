@@ -101,7 +101,7 @@ describe("real SQLite payment-intent concurrency", () => {
     try {
       expect(probe.countSessions()).toBe(0);
       expect(probe.countPayments()).toBe(0);
-      expect(probe.getPaymentIntent(paymentKey)?.status).toBe("claimed");
+      expect((await probe.getPaymentIntent(paymentKey))?.status).toBe("claimed");
     } finally {
       probe.close();
     }
@@ -144,9 +144,9 @@ describe("real SQLite payment-intent concurrency", () => {
     try {
       expect(final.countSessions()).toBe(1);
       expect(final.countPayments()).toBe(1);
-      expect(final.getSession(winner)?.paymentKey).toBe(paymentKey);
-      expect(final.getLedgerBySession(winner)?.status).toBe("SETTLED");
-      expect(final.getPaymentIntent(paymentKey)).toMatchObject({
+      expect((await final.getSession(winner))?.paymentKey).toBe(paymentKey);
+      expect((await final.getLedgerBySession(winner))?.status).toBe("SETTLED");
+      expect(await final.getPaymentIntent(paymentKey)).toMatchObject({
         status: "settled",
         sessionId: winner,
         claimToken: null,
