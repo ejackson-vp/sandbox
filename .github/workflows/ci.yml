@@ -15,13 +15,17 @@ on:
   # Required so release.yml can gate image publishing on the test suite.
   workflow_call:
 
-# One run per head branch. A superseded commit is cancelled instead of raced:
-# two concurrent copies of the integration suite are the load condition behind
-# #128 and the reason #145 exists. `github.head_ref` is only set on
-# `pull_request`; `ref_name` covers main pushes, tags and dispatch.
+# One group per head branch. `github.head_ref` is only set on `pull_request`;
+# `ref_name` covers main pushes, tags and dispatch.
+#
+# Only a pull request cancels in progress. A rapid second push to main must not
+# kill the first run's `coverage-badge` job mid-publish: with `false` the new
+# main run stays pending behind the running one and supersedes only a previously
+# pending run. A superseded PR run is cancelled, which is the case that used to
+# race two copies of the integration suite under load.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Keep the token read-only even though the repository default is now write
 # (GHCR pushes require that default; explicit workflow permissions cap it).
