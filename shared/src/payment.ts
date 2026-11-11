@@ -26,6 +26,12 @@ import type {
   VerifyResponse,
 } from "@x402/core/types";
 import { canonicalJson, sha256Hex } from "./crypto.js";
+import { parseUsdPrice } from "./money.js";
+
+// The price helpers live in `money.ts` so a caller that only formats a price
+// does not load this module's node:crypto and libsodium graph. Re-exported here
+// because `payment.ts` was their original home.
+export * from "./money.js";
 
 export const PAYMENT_VERSION = 2;
 export const MOCK_NETWORK = "mock:local" as Network;
@@ -83,27 +89,6 @@ export function paymentKey(payload: PaymentPayload): string {
       payload: payload.payload,
     }),
   );
-}
-
-/** Price helpers: parse "$0.01" into atomic units at a given decimals. */
-export function parseUsdPrice(price: string): { amount: bigint; decimals: number; normalized: string } {
-  const m = /^\$?(\d+)(?:\.(\d{1,6}))?$/.exec(price.trim());
-  if (!m) throw new Error(`invalid price: ${price}`);
-  const whole = m[1] ?? "0";
-  const frac = (m[2] ?? "").padEnd(6, "0");
-  return {
-    amount: BigInt(whole) * 10n ** 6n + BigInt(frac),
-    decimals: 6,
-    normalized: `$${whole}.${frac}`,
-  };
-}
-
-export function formatUsd(amountAtomic: string, decimals = 6): string {
-  const v = BigInt(amountAtomic);
-  const base = 10n ** BigInt(decimals);
-  const whole = v / base;
-  const frac = (v % base).toString().padStart(decimals, "0").replace(/0+$/, "");
-  return frac ? `$${whole}.${frac}` : `$${whole}`;
 }
 
 /* ------------------------------------------------------------------ */

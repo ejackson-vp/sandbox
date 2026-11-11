@@ -74,7 +74,15 @@ const SHARED_LAYERS = [
     name: "pure",
     pure: true,
     match: (rel) =>
-      ["fp.ts", "protocol.ts", "env.ts", "ip.ts", "dev-attestation.ts", "runtimes.ts"].includes(rel) ||
+      [
+        "fp.ts",
+        "protocol.ts",
+        "env.ts",
+        "ip.ts",
+        "dev-attestation.ts",
+        "runtimes.ts",
+        "money.ts",
+      ].includes(rel) ||
       rel.startsWith("protocol/") ||
       rel.startsWith("domain/"),
   },

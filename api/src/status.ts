@@ -1,7 +1,7 @@
 /**
  * Wire mapping: controller session view -> public SessionStatus/CreateResponse.
  */
-import { formatUsd } from "@x402s/shared/payment";
+import { formatUsd } from "@x402s/shared/money";
 import type {
   CreateSessionResponse,
   SessionLimits,

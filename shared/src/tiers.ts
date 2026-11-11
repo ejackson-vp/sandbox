@@ -6,7 +6,7 @@
  * without code changes; hard caps are enforced regardless.
  */
 import { canonicalJson, sha256Hex } from "./crypto.js";
-import { formatUsd, parseUsdPrice } from "./payment.js";
+import { formatUsd, parseUsdPrice } from "./money.js";
 import { resolveRuntime } from "./runtimes.js";
 import {
   MAX_LEASE_SECONDS,

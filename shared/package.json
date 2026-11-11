@@ -18,6 +18,10 @@
       "types": "./dist/entries/runtimes.d.ts",
       "default": "./dist/entries/runtimes.js"
     },
+    "./money": {
+      "types": "./dist/entries/money.d.ts",
+      "default": "./dist/entries/money.js"
+    },
     "./domain": {
       "types": "./dist/entries/domain.d.ts",
       "default": "./dist/entries/domain.js"

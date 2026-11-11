@@ -23,6 +23,7 @@ export * from "./commitment.js";
 export * from "./attestation.js";
 export * from "./dev-attestation.js";
 export * from "./payment.js";
+export * from "./money.js";
 export * from "./tiers.js";
 export * from "./runtimes.js";
 export * from "./ip.js";
