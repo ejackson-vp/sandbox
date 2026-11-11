@@ -9,8 +9,16 @@ name: docs
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# A branch push fires both `push` and `pull_request` for the same commit, which
+# ran markdownlint and the link check twice per branch push. The `push` trigger
+# is limited to main, so a PR commit is checked once by its `pull_request` run.
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
