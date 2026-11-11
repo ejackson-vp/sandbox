@@ -127,7 +127,14 @@ export interface LeaseLeadershipOptions {
   identity: string;
   renewIntervalMs?: number;
   leaseDurationMs?: number;
+  /** Wall clock, for the timestamps written into the Lease. */
   now?: () => number;
+  /**
+   * Monotonic clock, for the durations that decide when to step down and when a
+   * foreign lease counts as stalled. A wall clock that jumps (NTP, suspend) must
+   * not be able to shorten either window.
+   */
+  monotonic?: () => number;
   callTimeoutMs?: number;
 }
 
@@ -141,6 +148,7 @@ export class LeaseLeadership extends BaseLeadership {
   private readonly leaseDurationMs: number;
   private readonly callTimeoutMs: number;
   private readonly now: () => number;
+  private readonly monotonic: () => number;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private stopped = true;
@@ -167,6 +175,7 @@ export class LeaseLeadership extends BaseLeadership {
     this.leaseDurationMs = options.leaseDurationMs ?? LEASE_DURATION_MS;
     this.callTimeoutMs = options.callTimeoutMs ?? LEASE_CALL_TIMEOUT_MS;
     this.now = options.now ?? (() => Date.now());
+    this.monotonic = options.monotonic ?? (() => performance.now());
   }
 
   async start(): Promise<void> {
@@ -219,8 +228,11 @@ export class LeaseLeadership extends BaseLeadership {
   }
 
   private async attempt(): Promise<void> {
+    // stop() may have won the race against an in-flight attempt.
+    if (this.stopped) return;
     const now = this.now();
-    if (this.leader && now >= this.expiresAt) {
+    const mono = this.monotonic();
+    if (this.leader && mono >= this.expiresAt) {
       // We could not renew in time (API outage, stalled event loop). Another
       // replica is entitled to the lease now, so give the writer role up first.
       log.warn("leader_lease_expired", { lease: this.leaseRef(), identity: this.identity });
@@ -247,8 +259,8 @@ export class LeaseLeadership extends BaseLeadership {
       // our own release), so the lease is gone whatever our clock says.
       this.loseLease("superseded");
     }
-    this.observe(record, resourceVersion, now);
-    if (!this.foreignExpired(now)) return;
+    this.observe(record, resourceVersion, mono);
+    if (!this.foreignExpired(mono)) return;
     await this.takeOver(record, resourceVersion, now);
   }
 
@@ -306,13 +318,13 @@ export class LeaseLeadership extends BaseLeadership {
     this.setLeader(false);
   }
 
-  private observe(record: LeaseRecord, resourceVersion: string, now: number): void {
+  private observe(record: LeaseRecord, resourceVersion: string, mono: number): void {
     const key = `${record.holderIdentity}@${resourceVersion}`;
     if (this.foreign?.key === key) return;
     this.foreign = {
       holder: record.holderIdentity,
       key,
-      since: now,
+      since: mono,
       durationMs: Math.max(
         (record.leaseDurationSeconds || 0) * 1000,
         this.renewIntervalMs,
@@ -361,9 +373,12 @@ export class LeaseLeadership extends BaseLeadership {
   }
 
   private becomeLeader(record: LeaseRecord): void {
-    // Our deadline comes from our own clock at the moment our write succeeded,
-    // never from the recorded renewTime: clocks differ between nodes.
-    this.expiresAt = this.now() + this.leaseDurationMs;
+    // stop() may have won the race against an in-flight attempt: the lease is
+    // not ours to use any more.
+    if (this.stopped) return;
+    // Our deadline comes from our own monotonic clock at the moment our write
+    // succeeded, never from the recorded renewTime: clocks differ between nodes.
+    this.expiresAt = this.monotonic() + this.leaseDurationMs;
     this.foreign = null;
     if (this.leader) return;
     log.info("leader_lease_acquired", {

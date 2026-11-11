@@ -95,21 +95,32 @@ function clone(snapshot: LeaseSnapshot): LeaseSnapshot {
   return { record: { ...snapshot.record }, resourceVersion: snapshot.resourceVersion };
 }
 
-function clock(start = 1_000_000): { now: () => number; advance: (ms: number) => void } {
-  let value = start;
+interface TestClock {
+  now: () => number;
+  mono: () => number;
+  /** Advance both clocks: the normal case. */
+  advance: (ms: number) => void;
+  /** Advance only the wall clock, as an NTP step would. */
+  advanceWallOnly: (ms: number) => void;
+}
+
+function clock(start = 1_000_000): TestClock {
+  let wall = start;
+  let mono = 5_000;
   return {
-    now: () => value,
+    now: () => wall,
+    mono: () => mono,
     advance: (ms) => {
-      value += ms;
+      wall += ms;
+      mono += ms;
+    },
+    advanceWallOnly: (ms) => {
+      wall += ms;
     },
   };
 }
 
-function makeLease(
-  client: LeaseClient,
-  time: { now: () => number },
-  identity: string,
-): LeaseLeadership {
+function makeLease(client: LeaseClient, time: TestClock, identity: string): LeaseLeadership {
   return new LeaseLeadership({
     client,
     namespace: NAMESPACE,
@@ -119,6 +130,7 @@ function makeLease(
     leaseDurationMs: 10_000,
     callTimeoutMs: 500,
     now: time.now,
+    monotonic: time.mono,
   });
 }
 
@@ -226,6 +238,25 @@ describe("lease leadership", () => {
     expect(lease.isLeader()).toBe(true);
     expect(seen).toEqual([true, false, true]);
     await lease.stop();
+  });
+
+  it("ignores a wall-clock jump when deciding its own deadline", async () => {
+    const client = new FakeLeaseClient();
+    const time = clock();
+    const lease = makeLease(client, time, "controller-0");
+    await lease.start();
+    client.down = new Error("connect ECONNREFUSED 10.96.0.1:443");
+
+    // A forward NTP step must not make the process think its lease expired
+    // early: the deadline is measured on the monotonic clock.
+    time.advanceWallOnly(600_000);
+    await lease.tick();
+    expect(lease.isLeader()).toBe(true);
+
+    // A real 10s of elapsed time still ends the lease.
+    time.advance(10_000);
+    await lease.tick();
+    expect(lease.isLeader()).toBe(false);
   });
 
   it("keeps a standby out for as long as the holder renews", async () => {
