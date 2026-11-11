@@ -1,8 +1,14 @@
 name: codeql
 
 on:
+  # Every branch, not just main. CodeQL attaches an analysis to the head commit
+  # of the event that triggered it, so a multi-commit push to main leaves the
+  # intermediate commits unanalysed: they were never a push head. Analysing each
+  # branch push gives every commit an analysis under the ref it was pushed on,
+  # which is what the OpenSSF SAST check reads (#227, #99). Do not add
+  # `paths-ignore` here; it recreates the same gap for the ignored paths.
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
     branches: [main]
   schedule:
