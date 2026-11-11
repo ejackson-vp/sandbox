@@ -25,6 +25,7 @@ import type { Snapshotter } from "../../controller/src/snapshotter.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
 import { CapacityService } from "../../controller/src/capacity/service.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
+import { hostPathEnv } from "./dev-path.js";
 import {
   clientCommitmentMessage,
   fromBase64,
@@ -871,6 +872,7 @@ describe("WebSocket data plane", () => {
       name: "ws",
       command: ["node", "ws-echo-server.js"],
       port: 18084,
+      env: hostPathEnv,
     });
     const ws = await client.openWebSocket(handle, { port: 18084, path: "/" });
     await ws.send("hello-ws");

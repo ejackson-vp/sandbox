@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import { GuestHarness } from "../helpers/guest.js";
 import { makeTar } from "../helpers/tar.js";
+import { hostPathEnv } from "./dev-path.js";
 import { testPort } from "./ports.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -62,7 +63,9 @@ describe("multi-command session", () => {
   it("runs python3 and node", async () => {
     const py = await guest.exec(["python3", "-c", "print(1 + 1)"]);
     expect(py.stdout.trim()).toBe("2");
-    const node = await guest.exec(["node", "-e", "console.log(process.version.startsWith('v'))"]);
+    const node = await guest.exec(["node", "-e", "console.log(process.version.startsWith('v'))"], {
+      env: hostPathEnv,
+    });
     expect(node.stdout.trim()).toBe("true");
   });
 
