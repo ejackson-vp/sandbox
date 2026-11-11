@@ -107,13 +107,13 @@ export class RefundWorker {
   async run(): Promise<RefundWorkerResult> {
     const pending = metrics.gauge("sandbox_refunds_pending", "Ledger rows awaiting a real-mode refund");
     // Bounded label on the worker counter; the row count itself is the gauge.
-    pending.set({}, this.store.countLedgerByStatus("REFUND_PENDING"));
+    pending.set({}, await this.store.countLedgerByStatus("REFUND_PENDING"));
     if (!this.executor) {
       return { attempted: 0, refunded: 0, failed: 0, exhausted: 0, skipped: true };
     }
 
     const now = this.now();
-    const rows = this.store.listRefundPendingDue(now, this.opts.limit);
+    const rows = await this.store.listRefundPendingDue(now, this.opts.limit);
     let refunded = 0;
     let failed = 0;
     let exhausted = 0;
@@ -125,7 +125,11 @@ export class RefundWorker {
       }
       try {
         const { transaction } = await this.executor.refund(requestOf(row));
-        const changed = this.store.markRefunded(row.paymentKey, transaction, row.reason ?? "refund_worker");
+        const changed = await this.store.markRefunded(
+          row.paymentKey,
+          transaction,
+          row.reason ?? "refund_worker",
+        );
         if (changed) {
           refunded += 1;
           metrics.counter("sandbox_refunds_total", "Payment refund outcomes").inc({ mode: row.mode, result: "refunded" });
@@ -139,7 +143,7 @@ export class RefundWorker {
         failed += 1;
         const message = (err as Error).message;
         const backoff = Math.min(this.retryMaxMs, this.opts.retryBaseMs * 2 ** row.refundAttempts);
-        this.store.recordRefundAttempt(row.paymentKey, message, now + backoff);
+        await this.store.recordRefundAttempt(row.paymentKey, message, now + backoff);
         metrics
           .counter("sandbox_refund_worker_total", "Refund worker attempts by result")
           .inc({ result: "error" });

@@ -85,8 +85,7 @@ export class Provisioning implements CreatePath {
     const holdsSlot = limit > 0;
     if (holdsSlot) {
       const persisted = new Set(
-        this.ctx.store
-          .listNonTerminal()
+        (await this.ctx.store.listNonTerminal())
           .filter((s) => s.state === "PROVISIONING")
           .map((s) => s.id),
       );
@@ -95,11 +94,14 @@ export class Provisioning implements CreatePath {
         if (!persisted.has(id)) occupied += 1;
       }
       if (occupied >= limit) {
-        this.deferForSlot(session);
+        await this.deferForSlot(session);
         return;
       }
-      // No await between the check and the claim: a concurrent worker cannot
-      // slip into the same slot.
+      // The read above awaits, so the persisted half of `occupied` can be out
+      // of date by the time we get here. That is unchanged in effect: a
+      // concurrent pass that starts afterwards sees this id in `inFlight`,
+      // because the check below and the claim are still one synchronous step
+      // with no await between them.
       this.inFlight.add(session.id);
     }
     try {
@@ -111,16 +113,16 @@ export class Provisioning implements CreatePath {
     }
   }
 
-  private deferForSlot(session: SessionRecord): void {
+  private async deferForSlot(session: SessionRecord): Promise<void> {
     const queued = session.timingsJson
       ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
       : {};
     if (typeof queued.provisionQueueEnteredAt !== "number") {
-      this.ctx.store.mergeTimings(session.id, { provisionQueueEnteredAt: this.ctx.now() });
+      await this.ctx.store.mergeTimings(session.id, { provisionQueueEnteredAt: this.ctx.now() });
     }
     const waited = session.paidAt === null ? 0 : this.ctx.now() - session.paidAt;
     if (this.ctx.cfg.provisionQueueTimeoutMs > 0 && waited > this.ctx.cfg.provisionQueueTimeoutMs) {
-      this.ctx.store.requestTermination(session.id, "failure:provisioning_queue_timeout", {
+      await this.ctx.store.requestTermination(session.id, "failure:provisioning_queue_timeout", {
         code: "provisioning_queue_timeout",
         message: "the provisioning queue did not drain in time",
       });
@@ -137,7 +139,7 @@ export class Provisioning implements CreatePath {
     // The runtime profile comes first: a session that asks for a profile this
     // controller does not run can never be provisioned, so it is terminated
     // before it reserves compute or a provisioning slot.
-    const profile = this.admission.runtimeProfile(session);
+    const profile = await this.admission.runtimeProfile(session);
     if (!profile) return;
     if (!(await this.admission.relayReady(session))) return;
     const reservation = await this.admission.reserve(session);
@@ -147,7 +149,7 @@ export class Provisioning implements CreatePath {
     if (!endpoints) return;
 
     if (lifetimeExpired(snapshotOf(session), this.ctx.now())) {
-      this.ctx.store.requestTermination(session.id, "max_lifetime");
+      await this.ctx.store.requestTermination(session.id, "max_lifetime");
       return;
     }
 
@@ -256,9 +258,9 @@ export class Provisioning implements CreatePath {
         registration,
       },
     );
-    if (!this.ctx.store.setProvisioning(session.id, podName)) return false;
-    this.ctx.capacity.updatePod(session.id, podName);
-    this.ctx.store.mergeTimings(session.id, { podCreateCallMs: Date.now() - createStarted });
+    if (!(await this.ctx.store.setProvisioning(session.id, podName))) return false;
+    await this.ctx.capacity.updatePod(session.id, podName);
+    await this.ctx.store.mergeTimings(session.id, { podCreateCallMs: Date.now() - createStarted });
     this.pods.recordGeneration(session.id, relayGeneration);
     metrics
       .histogram("sandbox_provision_duration_seconds", "Entitlement to pod create", LATENCY_BUCKETS)
@@ -286,21 +288,21 @@ export class Provisioning implements CreatePath {
       ...(request.nodeName ? { nodeName: request.nodeName } : {}),
       registration,
     });
-    this.ctx.capacity.updatePod(session.id, podName);
-    if (!this.ctx.store.markResuming(session.id, podName)) {
+    await this.ctx.capacity.updatePod(session.id, podName);
+    if (!(await this.ctx.store.markResuming(session.id, podName))) {
       // The row moved on under the create. Return the compute and the pod: the
       // caller retries from SUSPENDED, and a leftover pod would collide with
       // the deterministic name.
       await this.ctx.provisioner.deletePod(podName, 0).catch(() => undefined);
       await this.ctx.relay.purge(session.id).catch(() => undefined);
-      this.ctx.capacity.suspend(session.id);
+      await this.ctx.capacity.suspend(session.id);
       return false;
     }
     // The reaper may have seen the session as SUSPENDED while the pod was being
     // created and re-suspended the reservation we just admitted. The session is
     // RESUMING now, so reassert the allocation before it is observable as READY
     // with suspended capacity.
-    this.ctx.capacity.reassertAllocated(session.id);
+    await this.ctx.capacity.reassertAllocated(session.id);
     metrics.counter("sandbox_sessions_resumed_total", "Sessions resumed").inc();
     log.info("sandbox_resuming", {
       sessionId: session.id,
@@ -357,7 +359,7 @@ export class Provisioning implements CreatePath {
       typeof timings.warmClaimAt === "number" &&
       this.ctx.now() - timings.warmClaimAt > this.ctx.cfg.warmClaimTimeoutMs
     ) {
-      this.ctx.store.requestTermination(session.id, "failure:warm_claim_timeout", {
+      await this.ctx.store.requestTermination(session.id, "failure:warm_claim_timeout", {
         code: "warm_claim_timeout",
         message: "the warm sandbox did not attach to the session in time",
       });
@@ -372,7 +374,7 @@ export class Provisioning implements CreatePath {
       session.state === "RESUMING" ? session.updatedAt : (session.paidAt ?? session.createdAt);
     const age = this.ctx.now() - startedAt;
     if (age > this.ctx.cfg.provisioningTimeoutMs) {
-      this.ctx.store.requestTermination(session.id, "failure:provisioning_timeout", {
+      await this.ctx.store.requestTermination(session.id, "failure:provisioning_timeout", {
         code: "provisioning_timeout",
         message: "sandbox did not become ready in time",
       });
@@ -444,7 +446,7 @@ export class Provisioning implements CreatePath {
           }
           // Reject an unsupported guest while the session is still pre-READY,
           // where termination is refundable. A versionless hello is accepted.
-          if (this.rejectUnsupportedGuest(session, state, state.attestation)) return;
+          if (await this.rejectUnsupportedGuest(session, state, state.attestation)) return;
           const readyAt = this.ctx.now();
           const requestedLease = readyAt + session.durationSeconds * 1000;
           const leaseExpiresAt = leaseDeadline(
@@ -489,7 +491,7 @@ export class Provisioning implements CreatePath {
             const podInfo = warm || !session.podName
               ? null
               : await this.ctx.provisioner.getPod(session.podName).catch(() => null);
-            this.ctx.store.mergeTimings(session.id, {
+            await this.ctx.store.mergeTimings(session.id, {
               ...(warm
                 ? {}
                 : {
@@ -534,13 +536,13 @@ export class Provisioning implements CreatePath {
    *    the previous behaviour (accept, and the verifier's "not pinned" warning
    *    remains a client-side concern).
    */
-  private rejectUnsupportedGuest(
+  private async rejectUnsupportedGuest(
     session: SessionRecord,
     state: RelaySessionState,
     evidence: AttestationEnvelope,
-  ): boolean {
+  ): Promise<boolean> {
     if (!supportsGuestProtocolVersion(state.protocolVersion)) {
-      this.ctx.store.requestTermination(session.id, "failure:guest_protocol_unsupported", {
+      await this.ctx.store.requestTermination(session.id, "failure:guest_protocol_unsupported", {
         code: "guest_protocol_unsupported",
         message: `guest protocol ${state.protocolVersion} is below the supported minimum ${MIN_SUPPORTED_GUEST_PROTOCOL_VERSION}`,
       });
@@ -574,7 +576,7 @@ export class Provisioning implements CreatePath {
 
     const reason =
       verdict.code === "measurement_not_allowed" ? "guest_measurement_not_allowed" : "guest_attestation_rejected";
-    this.ctx.store.requestTermination(session.id, `failure:${reason}`, {
+    await this.ctx.store.requestTermination(session.id, `failure:${reason}`, {
       code: reason,
       message: verdict.message,
     });

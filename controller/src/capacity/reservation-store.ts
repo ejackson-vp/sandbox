@@ -5,6 +5,13 @@
  * deployment can supply a conditional-write adapter (Postgres, DynamoDB) with
  * the same admission contract; the SQLite adapter is the single-writer local
  * implementation.
+ *
+ * Every method returns a `Promise` for the same reason the session ports do
+ * (ADR 0010): no network client can be called from a synchronous method, and the
+ * reservation invariant ("the accounting snapshot and the insert agree") has to
+ * hold for an adapter that does its check and write in another process. The
+ * synchronous SQLite adapter satisfies this with `async` methods that return the
+ * same values.
  */
 import type {
   AdmissionDecision,
@@ -38,32 +45,32 @@ export interface ReservationStore {
     snapshot: CapacitySnapshot,
     request: SandboxResourceRequest,
     opts?: AdmitOptions,
-  ): ReservationAdmission;
+  ): Promise<ReservationAdmission>;
   attachToSession(
     snapshot: CapacitySnapshot,
     request: SandboxResourceRequest,
     paymentKey: string,
     sessionId: string,
     specHash: string,
-  ): ReservationAdmission;
+  ): Promise<ReservationAdmission>;
   resume(
     snapshot: CapacitySnapshot,
     request: SandboxResourceRequest,
     sessionId: string,
-  ): ReservationAdmission;
+  ): Promise<ReservationAdmission>;
 
-  releasePayment(paymentKey: string): boolean;
-  suspendSession(sessionId: string): boolean;
-  reassertAllocated(sessionId: string): boolean;
-  beginRelease(sessionId: string, podName: string | null): boolean;
-  confirmRelease(sessionId: string): boolean;
-  releaseSession(sessionId: string): boolean;
-  updatePod(sessionId: string, podName: string | null): void;
-  pinNode(sessionId: string, nodeId: string): boolean;
+  releasePayment(paymentKey: string): Promise<boolean>;
+  suspendSession(sessionId: string): Promise<boolean>;
+  reassertAllocated(sessionId: string): Promise<boolean>;
+  beginRelease(sessionId: string, podName: string | null): Promise<boolean>;
+  confirmRelease(sessionId: string): Promise<boolean>;
+  releaseSession(sessionId: string): Promise<boolean>;
+  updatePod(sessionId: string, podName: string | null): Promise<void>;
+  pinNode(sessionId: string, nodeId: string): Promise<boolean>;
 
-  listActive(): ReservationRecord[];
-  listReleasing(): ReservationRecord[];
-  getBySession(sessionId: string): ReservationRecord | null;
-  getByPayment(paymentKey: string): ReservationRecord | null;
-  reapExpiredHolds(now: number): number;
+  listActive(): Promise<ReservationRecord[]>;
+  listReleasing(): Promise<ReservationRecord[]>;
+  getBySession(sessionId: string): Promise<ReservationRecord | null>;
+  getByPayment(paymentKey: string): Promise<ReservationRecord | null>;
+  reapExpiredHolds(now: number): Promise<number>;
 }

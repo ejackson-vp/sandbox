@@ -26,13 +26,13 @@ export function budgetLimitsFrom(cfg: ControlApiDeps["cfg"]): BudgetLimits {
 export function registerBudgetRoutes(app: Express, deps: ControlApiDeps): void {
   const limits = budgetLimitsFrom(deps.cfg);
 
-  app.post("/internal/budgets/reserve", (req: Request, res: Response) => {
+  app.post("/internal/budgets/reserve", async (req: Request, res: Response) => {
     const parsed = budgetReserveSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
       return;
     }
-    const decision = deps.store.reserveBudgets(
+    const decision = await deps.store.reserveBudgets(
       parsed.data.payer ?? null,
       parsed.data.amount,
       limits,

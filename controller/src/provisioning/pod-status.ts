@@ -30,9 +30,9 @@ export class PodStatus {
     if (!session.podName) return;
     const pod = await this.ctx.provisioner.getPod(session.podName).catch(() => null);
     if (pod?.nodeName) {
-      const reservation = this.ctx.capacity.getReservation(session.id);
+      const reservation = await this.ctx.capacity.getReservation(session.id);
       if (reservation && reservation.nodeId !== pod.nodeName && reservation.nodeId !== "disabled") {
-        this.ctx.capacity.pinSessionNode(session.id, pod.nodeName);
+        await this.ctx.capacity.pinSessionNode(session.id, pod.nodeName);
         metrics.counter("sandbox_capacity_placement_reconciled_total", "Placement intents reconciled with Kubernetes").inc();
         log.warn("sandbox_placement_reconciled", {
           sessionId: session.id,
@@ -41,7 +41,7 @@ export class PodStatus {
         });
       }
       if (session.workspacePvc && !session.nodeName) {
-        this.ctx.store.setNodeName(session.id, pod.nodeName);
+        await this.ctx.store.setNodeName(session.id, pod.nodeName);
         session.nodeName = pod.nodeName;
       }
     }
@@ -49,11 +49,11 @@ export class PodStatus {
       // Record the first observation of a running container (tick resolution).
       const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
       if (!timings.podRunningObservedAt && timings.warmPoolHit !== 1) {
-        this.ctx.store.mergeTimings(session.id, { podRunningObservedAt: this.ctx.now() });
+        await this.ctx.store.mergeTimings(session.id, { podRunningObservedAt: this.ctx.now() });
       }
     }
     if (pod && (pod.phase === "Failed" || pod.phase === "Succeeded")) {
-      this.ctx.store.requestTermination(session.id, "failure:pod_terminated", {
+      await this.ctx.store.requestTermination(session.id, "failure:pod_terminated", {
         code: "pod_terminated",
         message: `pod reached phase ${pod.phase}`,
       });

@@ -11,8 +11,11 @@ export function registerSqliteMetrics(registry: MetricsRegistry = metrics): void
   registry.counter("sandbox_sqlite_busy_retries_total", "SQLite operations retried after SQLITE_BUSY");
 }
 
-export function collectSqliteMetrics(store: MetricsStore, registry: MetricsRegistry = metrics): void {
-  const stats = store.stats();
+export async function collectSqliteMetrics(
+  store: MetricsStore,
+  registry: MetricsRegistry = metrics,
+): Promise<void> {
+  const stats = await store.stats();
   registry.gauge("sandbox_sqlite_size_bytes", "Main SQLite database file size").set({}, stats.sizeBytes);
   registry.gauge("sandbox_sqlite_wal_bytes", "SQLite WAL sidecar file size").set({}, stats.walBytes);
 }

@@ -126,21 +126,21 @@ function sessionRecord(id: string, key: string): SessionRecord {
   };
 }
 
-function seedPaid(store: Store, id: string, keyChar: string): void {
+async function seedPaid(store: Store, id: string, keyChar: string): Promise<void> {
   const key = keyChar.repeat(64);
-  const claim = store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+  const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
-  store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(id, key));
+  await store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(id, key));
 }
 
 /** A session parked in SUSPENDING, ready to be finished by a pass. */
-function seedSuspending(store: Store, id: string, keyChar: string): void {
-  seedPaid(store, id, keyChar);
-  if (!store.setProvisioning(id, `pod-${id}`)) throw new Error("expected PROVISIONING");
-  store.setRelayToken(id, "relay-hash");
+async function seedSuspending(store: Store, id: string, keyChar: string): Promise<void> {
+  await seedPaid(store, id, keyChar);
+  if (!await store.setProvisioning(id, `pod-${id}`)) throw new Error("expected PROVISIONING");
+  await store.setRelayToken(id, "relay-hash");
   const now = Date.now();
-  if (!store.setReady(id, now, now + 60_000, "{}", "guest-pk")) throw new Error("expected READY");
-  if (!store.markSuspending(id)) throw new Error("expected SUSPENDING");
+  if (!await store.setReady(id, now, now + 60_000, "{}", "guest-pk")) throw new Error("expected READY");
+  if (!await store.markSuspending(id)) throw new Error("expected SUSPENDING");
 }
 
 function readNextDue(path: string, id: string): number | null {
@@ -178,7 +178,7 @@ describe("due-time reconcile pass", () => {
     const path = tempDb();
     const store = new Store(path);
     try {
-      seedPaid(store, "sbx_rearm", "a");
+      await seedPaid(store, "sbx_rearm", "a");
       const clock = { now: Date.now() };
       // Park the schedule in the past: this pass must pick it up.
       expect(store.bumpDue("sbx_rearm", clock.now)).toBe(true);
@@ -193,7 +193,7 @@ describe("due-time reconcile pass", () => {
       expect(firstDue).not.toBeNull();
       expect(firstDue!).toBeGreaterThan(clock.now);
       // Nothing consumes the schedule between two ticks at the same instant.
-      expect(store.listDue(clock.now, 10).map((s) => s.id)).not.toContain("sbx_rearm");
+      expect((await store.listDue(clock.now, 10)).map((s) => s.id)).not.toContain("sbx_rearm");
 
       await reconciler.tick();
       expect(provision).toHaveBeenCalledTimes(1);
@@ -213,7 +213,7 @@ describe("due-time reconcile pass", () => {
     const path = tempDb();
     const store = new Store(path);
     try {
-      seedSuspending(store, "sbx_transition", "b");
+      await seedSuspending(store, "sbx_transition", "b");
       const clock = { now: Date.now() };
       expect(store.bumpDue("sbx_transition", clock.now)).toBe(true);
 
@@ -225,12 +225,12 @@ describe("due-time reconcile pass", () => {
           lifecycle: { finishSuspend: (s: SessionRecord) => Promise<void> };
         }
       ).lifecycle.finishSuspend = async (s) => {
-        expect(store.markSuspended(s.id, Date.now())).toBe(true);
+        expect(await store.markSuspended(s.id, Date.now())).toBe(true);
       };
 
       const before = Date.now();
       await reconciler.tick();
-      expect(store.getSession("sbx_transition")?.state).toBe("SUSPENDED");
+      expect((await store.getSession("sbx_transition"))?.state).toBe("SUSPENDED");
 
       const due = readNextDue(path, "sbx_transition");
       expect(due).not.toBeNull();
@@ -239,7 +239,7 @@ describe("due-time reconcile pass", () => {
       expect(due!).toBeGreaterThanOrEqual(before + cadenceFor("SUSPENDED") - 500);
 
       // A future deadline is never pulled forward by a later re-arm attempt.
-      expect(store.rearmDue("sbx_transition", clock.now + 1, clock.now)).toBe(false);
+      expect(await store.rearmDue("sbx_transition", clock.now + 1, clock.now)).toBe(false);
       expect(readNextDue(path, "sbx_transition")).toBe(due);
     } finally {
       store.close();
@@ -250,7 +250,9 @@ describe("due-time reconcile pass", () => {
     const store = new Store(tempDb());
     try {
       const ids = ["sbx_b1", "sbx_b2", "sbx_b3"];
-      ids.forEach((id, i) => seedPaid(store, id, String.fromCharCode(99 + i)));
+      for (const [i, id] of ids.entries()) {
+        await seedPaid(store, id, String.fromCharCode(99 + i));
+      }
       const clock = { now: Date.now() };
       for (const id of ids) expect(store.bumpDue(id, clock.now)).toBe(true);
 
@@ -265,7 +267,7 @@ describe("due-time reconcile pass", () => {
       await reconciler.tick();
       expect(provision).toHaveBeenCalledTimes(2);
       // The third row is still due for the next pass, not lost.
-      expect(store.listDue(clock.now, 10).map((s) => s.id)).toEqual(["sbx_b3"]);
+      expect((await store.listDue(clock.now, 10)).map((s) => s.id)).toEqual(["sbx_b3"]);
 
       // The registry caches rendered text for 500ms; wait it out.
       await new Promise((resolve) => setTimeout(resolve, 520));
@@ -277,16 +279,16 @@ describe("due-time reconcile pass", () => {
     }
   });
 
-  it("makes a destroy request immediately due, even from a long cadence", () => {
+  it("makes a destroy request immediately due, even from a long cadence", async () => {
     const store = new Store(tempDb());
     try {
-      seedPaid(store, "sbx_destroy", "f");
+      await seedPaid(store, "sbx_destroy", "f");
       const clock = { now: Date.now() };
       expect(store.bumpDue("sbx_destroy", clock.now + cadenceFor("SUSPENDED"))).toBe(true);
-      expect(store.listDue(clock.now, 10)).toEqual([]);
+      expect(await store.listDue(clock.now, 10)).toEqual([]);
 
-      store.requestDestroy("sbx_destroy");
-      expect(store.listDue(Date.now(), 10).map((s) => s.id)).toEqual(["sbx_destroy"]);
+      await store.requestDestroy("sbx_destroy");
+      expect((await store.listDue(Date.now(), 10)).map((s) => s.id)).toEqual(["sbx_destroy"]);
     } finally {
       store.close();
     }
@@ -294,7 +296,7 @@ describe("due-time reconcile pass", () => {
 });
 
 describe("reconcile cadence policy", () => {
-  it("enumerates every non-terminal state with an ordered cadence", () => {
+  it("enumerates every non-terminal state with an ordered cadence", async () => {
     // Provisioning is latency-critical; steady-state and suspended are not.
     expect(cadenceFor("PROVISIONING")).toBeLessThanOrEqual(250);
     expect(cadenceFor("RESUMING")).toBeLessThanOrEqual(250);

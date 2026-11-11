@@ -233,11 +233,11 @@ function freshStore(): { store: Store; path: string } {
 }
 
 /** Claim then complete, as the API does. */
-function seedPaid(store: Store, id: string, keyChar: string): void {
+async function seedPaid(store: Store, id: string, keyChar: string): Promise<void> {
   const key = keyChar.repeat(64);
-  const claim = store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+  const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
-  store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(id, key));
+  await store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(id, key));
 }
 
 /**
@@ -258,7 +258,7 @@ function readNextDue(path: string, id: string): number | null {
 }
 
 describe("schema migration", () => {
-  it("upgrades v7 additively and preserves payments, ledger and sessions", () => {
+  it("upgrades v7 additively and preserves payments, ledger and sessions", async () => {
     const path = tempDb();
     seedV7(path);
     const db = new DatabaseSync(path);
@@ -291,7 +291,7 @@ describe("schema migration", () => {
     again.close();
   });
 
-  it("survives a backup/restore round trip", () => {
+  it("survives a backup/restore round trip", async () => {
     const path = tempDb();
     seedV7(path);
     const backup = `${path}.bak`;
@@ -312,7 +312,7 @@ describe("schema migration", () => {
     expect(after.ledger).toBe(1);
   });
 
-  it("refuses to open a database from a newer build", () => {
+  it("refuses to open a database from a newer build", async () => {
     const path = tempDb();
     seedV7(path);
     const db = new DatabaseSync(path);
@@ -325,7 +325,7 @@ describe("schema migration", () => {
     expect(readBack(path).version).toBe(999);
   });
 
-  it("rolls back a partially applied migration", () => {
+  it("rolls back a partially applied migration", async () => {
     const path = tempDb();
     seedV7(path);
     const db = new DatabaseSync(path);
@@ -342,7 +342,7 @@ describe("schema migration", () => {
     expect(after.sessions).toBe(1);
   });
 
-  it("creates the current schema on a fresh database", () => {
+  it("creates the current schema on a fresh database", async () => {
     const path = tempDb();
     const db = new DatabaseSync(path);
     migrate(db);
@@ -358,7 +358,7 @@ describe("schema migration", () => {
 });
 
 describe("due-time schedule", () => {
-  it("adds next_due_ms to an existing database and keeps every row", () => {
+  it("adds next_due_ms to an existing database and keeps every row", async () => {
     const path = tempDb();
     seedV7(path);
 
@@ -376,88 +376,98 @@ describe("due-time schedule", () => {
     expect(readNextDue(path, "sbx_old")).toBeNull();
   });
 
-  it("listDue returns only due live sessions, earliest first, bounded by the limit", () => {
+  it("listDue returns only due live sessions, earliest first, bounded by the limit", async () => {
     const { store, path } = freshStore();
     try {
-      seedPaid(store, "sbx_due_a", "a");
-      seedPaid(store, "sbx_due_b", "b");
-      seedPaid(store, "sbx_due_c", "c");
-      seedPaid(store, "sbx_due_d", "d");
-      seedPaid(store, "sbx_due_terminal", "e");
+      await seedPaid(store, "sbx_due_a", "a");
+      await seedPaid(store, "sbx_due_b", "b");
+      await seedPaid(store, "sbx_due_c", "c");
+      await seedPaid(store, "sbx_due_d", "d");
+      await seedPaid(store, "sbx_due_terminal", "e");
 
       expect(store.bumpDue("sbx_due_a", 100)).toBe(true);
       expect(store.bumpDue("sbx_due_b", 50)).toBe(true);
       expect(store.bumpDue("sbx_due_d", 10_000)).toBe(true);
       // sbx_due_c is never scheduled: NULL is due immediately.
 
-      expect(store.requestTermination("sbx_due_terminal", "client_destroy")).toBe(true);
-      expect(store.finalizeTermination("sbx_due_terminal")).toBe("DESTROYED");
+      expect(await store.requestTermination("sbx_due_terminal", "client_destroy")).toBe(true);
+      expect(await store.finalizeTermination("sbx_due_terminal")).toBe("DESTROYED");
       // Even with the earliest deadline, a terminal row is never due.
       store.bumpDue("sbx_due_terminal", 0);
 
-      expect(store.listDue(1_000, 10).map((session) => session.id)).toEqual([
+      expect((await store.listDue(1_000, 10)).map((session) => session.id)).toEqual([
         "sbx_due_c",
         "sbx_due_b",
         "sbx_due_a",
       ]);
-      expect(store.listDue(1_000, 2).map((session) => session.id)).toEqual([
+      expect((await store.listDue(1_000, 2)).map((session) => session.id)).toEqual([
         "sbx_due_c",
         "sbx_due_b",
       ]);
       // NULL is always due; timestamped rows in the future are not.
-      expect(store.listDue(-1, 10).map((session) => session.id)).toEqual(["sbx_due_c"]);
+      expect((await store.listDue(-1, 10)).map((session) => session.id)).toEqual(["sbx_due_c"]);
       expect(readNextDue(path, "sbx_due_c")).toBeNull();
     } finally {
       store.close();
     }
   });
 
-  it("refreshes next_due_ms on every state change", () => {
+  it("refreshes next_due_ms on every state change", async () => {
     const { store, path } = freshStore();
     try {
       const id = "sbx_walk";
-      seedPaid(store, id, "f");
+      await seedPaid(store, id, "f");
       // A freshly created session is due immediately.
       expect(readNextDue(path, id)).toBeNull();
-      expect(store.listDue(Date.now(), 10).map((session) => session.id)).toContain(id);
+      expect((await store.listDue(Date.now(), 10)).map((session) => session.id)).toContain(id);
 
-      const refreshedBy = (label: string, step: () => void): void => {
+      const refreshedBy = async (label: string, step: () => void | Promise<void>): Promise<void> => {
         // Park the schedule in the past, then prove the transition moved it.
         expect(store.bumpDue(id, 1), label).toBe(true);
-        step();
+        await step();
         const due = readNextDue(path, id);
         expect(due, label).not.toBeNull();
         expect(due!, label).toBeGreaterThan(1);
       };
 
       const before = Date.now();
-      refreshedBy("provisioning", () => expect(store.setProvisioning(id, "pod-1")).toBe(true));
+      await refreshedBy("provisioning", async () =>
+        expect(await store.setProvisioning(id, "pod-1")).toBe(true),
+      );
       expect(readNextDue(path, id)!).toBeGreaterThanOrEqual(before + DEFAULT_REDUE_INTERVAL_MS);
 
-      store.setRelayToken(id, "relay-hash");
+      await store.setRelayToken(id, "relay-hash");
       const readyAt = Date.now();
-      refreshedBy("ready", () =>
-        expect(store.setReady(id, readyAt, readyAt + 60_000, "{}", "guest-pk")).toBe(true),
+      await refreshedBy("ready", async () =>
+        expect(await store.setReady(id, readyAt, readyAt + 60_000, "{}", "guest-pk")).toBe(true),
       );
-      refreshedBy("operation started", () => {
-        expect(store.claimOperation(id, "req-1", "exec").ok).toBe(true);
+      await refreshedBy("operation started", async () => {
+        expect((await store.claimOperation(id, "req-1", "exec")).ok).toBe(true);
       });
-      refreshedBy("operation finished", () => store.finishOperation(id, "req-1", "done"));
-      refreshedBy("suspending", () => expect(store.markSuspending(id)).toBe(true));
-      refreshedBy("suspended", () => expect(store.markSuspended(id, Date.now())).toBe(true));
-      refreshedBy("resuming", () => expect(store.markResuming(id, "pod-2")).toBe(true));
+      await refreshedBy("operation finished", () => store.finishOperation(id, "req-1", "done"));
+      await refreshedBy("suspending", async () =>
+        expect(await store.markSuspending(id)).toBe(true),
+      );
+      await refreshedBy("suspended", async () =>
+        expect(await store.markSuspended(id, Date.now())).toBe(true),
+      );
+      await refreshedBy("resuming", async () =>
+        expect(await store.markResuming(id, "pod-2")).toBe(true),
+      );
 
-      store.setRelayToken(id, "relay-hash-2");
+      await store.setRelayToken(id, "relay-hash-2");
       const resumedAt = Date.now();
-      refreshedBy("resumed ready", () =>
-        expect(store.setReady(id, resumedAt, resumedAt + 60_000, "{}", "guest-pk-2")).toBe(true),
+      await refreshedBy("resumed ready", async () =>
+        expect(await store.setReady(id, resumedAt, resumedAt + 60_000, "{}", "guest-pk-2")).toBe(true),
       );
-      refreshedBy("terminating", () =>
-        expect(store.requestTermination(id, "client_destroy")).toBe(true),
+      await refreshedBy("terminating", async () =>
+        expect(await store.requestTermination(id, "client_destroy")).toBe(true),
       );
-      refreshedBy("terminated", () => expect(store.finalizeTermination(id)).toBe("DESTROYED"));
+      await refreshedBy("terminated", async () =>
+        expect(await store.finalizeTermination(id)).toBe("DESTROYED"),
+      );
 
-      expect(store.listDue(Number.MAX_SAFE_INTEGER, 10).map((session) => session.id)).not.toContain(
+      expect((await store.listDue(Number.MAX_SAFE_INTEGER, 10)).map((session) => session.id)).not.toContain(
         id,
       );
     } finally {
@@ -465,7 +475,7 @@ describe("due-time schedule", () => {
     }
   });
 
-  it("serves the due query from the sessions_due partial index", () => {
+  it("serves the due query from the sessions_due partial index", async () => {
     const path = tempDb();
     const db = new DatabaseSync(path);
     migrate(db);

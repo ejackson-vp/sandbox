@@ -88,59 +88,59 @@ function freshStore(): Store {
 }
 
 /** Claim then complete, as the API does. */
-function seedEntitlement(store: Store, key: string, record: SessionRecord): void {
-  const claim = store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+async function seedEntitlement(store: Store, key: string, record: SessionRecord): Promise<void> {
+  const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
-  store.completeEntitlement(key, claim.token, payment(key), record);
+  await store.completeEntitlement(key, claim.token, payment(key), record);
 }
 
 describe("lifecycle persistence transitions", () => {
-  it("walks PAID -> PROVISIONING -> READY -> SUSPENDING -> SUSPENDED -> RESUMING -> READY", () => {
+  it("walks PAID -> PROVISIONING -> READY -> SUSPENDING -> SUSPENDED -> RESUMING -> READY", async () => {
     const store = freshStore();
     try {
       const key = "b".repeat(64);
       const id = "sbx_000000000000000000000001";
-      seedEntitlement(store, key, session(id, key));
+      await seedEntitlement(store, key, session(id, key));
 
-      expect(store.setProvisioning(id, "pod-1")).toBe(true);
-      store.setRelayToken(id, "relay-hash-1");
-      expect(store.getSession(id)?.state).toBe("PROVISIONING");
+      expect(await store.setProvisioning(id, "pod-1")).toBe(true);
+      await store.setRelayToken(id, "relay-hash-1");
+      expect((await store.getSession(id))?.state).toBe("PROVISIONING");
 
       const readyAt = NOW + 1000;
-      expect(store.setReady(id, readyAt, readyAt + 60_000, "{}", "guest-pk")).toBe(true);
-      expect(store.getSession(id)?.state).toBe("READY");
+      expect(await store.setReady(id, readyAt, readyAt + 60_000, "{}", "guest-pk")).toBe(true);
+      expect((await store.getSession(id))?.state).toBe("READY");
 
-      expect(store.markSuspending(id)).toBe(true);
-      expect(store.getSession(id)?.state).toBe("SUSPENDING");
-      expect(store.markSuspended(id, readyAt + 2000)).toBe(true);
-      expect(store.getSession(id)?.state).toBe("SUSPENDED");
-      expect(store.getSession(id)?.podName).toBeNull();
+      expect(await store.markSuspending(id)).toBe(true);
+      expect((await store.getSession(id))?.state).toBe("SUSPENDING");
+      expect(await store.markSuspended(id, readyAt + 2000)).toBe(true);
+      expect((await store.getSession(id))?.state).toBe("SUSPENDED");
+      expect((await store.getSession(id))?.podName).toBeNull();
 
-      expect(store.markResuming(id, "pod-2")).toBe(true);
-      store.setRelayToken(id, "relay-hash-2");
-      expect(store.getSession(id)?.state).toBe("RESUMING");
-      expect(store.getSession(id)?.resumeCount).toBe(1);
+      expect(await store.markResuming(id, "pod-2")).toBe(true);
+      await store.setRelayToken(id, "relay-hash-2");
+      expect((await store.getSession(id))?.state).toBe("RESUMING");
+      expect((await store.getSession(id))?.resumeCount).toBe(1);
 
       const resumedAt = readyAt + 3000;
-      expect(store.setReady(id, resumedAt, resumedAt + 60_000, "{}", "guest-pk-2")).toBe(true);
-      expect(store.getSession(id)?.state).toBe("READY");
+      expect(await store.setReady(id, resumedAt, resumedAt + 60_000, "{}", "guest-pk-2")).toBe(true);
+      expect((await store.getSession(id))?.state).toBe("READY");
     } finally {
       store.close();
     }
   });
 
-  it("refuses to mark SUSPENDED unless the session is SUSPENDING", () => {
+  it("refuses to mark SUSPENDED unless the session is SUSPENDING", async () => {
     const store = freshStore();
     try {
       const key = "c".repeat(64);
       const id = "sbx_000000000000000000000002";
-      seedEntitlement(store, key, session(id, key));
-      store.setProvisioning(id, "pod-1");
-      store.setRelayToken(id, "relay-hash");
-      store.setReady(id, NOW + 1000, NOW + 60_000, "{}", "guest-pk");
+      await seedEntitlement(store, key, session(id, key));
+      await store.setProvisioning(id, "pod-1");
+      await store.setRelayToken(id, "relay-hash");
+      await store.setReady(id, NOW + 1000, NOW + 60_000, "{}", "guest-pk");
 
-      expect(store.markSuspended(id, NOW + 2000)).toBe(false);
-      expect(store.getSession(id)?.state).toBe("READY");
+      expect(await store.markSuspended(id, NOW + 2000)).toBe(false);
+      expect((await store.getSession(id))?.state).toBe("READY");
     } finally {
       store.close();
     }

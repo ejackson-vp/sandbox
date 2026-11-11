@@ -110,14 +110,14 @@ function sessionRecord(id: string, key: string): SessionRecord {
   };
 }
 
-function seedReadySession(store: Store, sessionId: string): void {
+async function seedReadySession(store: Store, sessionId: string): Promise<void> {
   const key = "f".repeat(64);
-  const claim = store.claimPaymentIntent(key, "fence-spec", 30_000);
+  const claim = await store.claimPaymentIntent(key, "fence-spec", 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
-  store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(sessionId, key));
-  store.setProvisioning(sessionId, "pod-fence");
-  store.setRelayToken(sessionId, "relay-hash");
-  store.setReady(sessionId, Date.now(), Date.now() + 120_000, "{}", "guestpk");
+  await store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(sessionId, key));
+  await store.setProvisioning(sessionId, "pod-fence");
+  await store.setRelayToken(sessionId, "relay-hash");
+  await store.setReady(sessionId, Date.now(), Date.now() + 120_000, "{}", "guestpk");
 }
 
 async function listen(app: http.RequestListener, port: number): Promise<http.Server> {
@@ -172,7 +172,7 @@ describe("controller restart fences an in-flight operation", () => {
     await guest.start();
     relay = new RelayClient({ baseUrl: `http://127.0.0.1:${RELAY_PORT}`, adminToken: "harness-admin-token-0123456789" });
     store = new Store(dbPath);
-    seedReadySession(store, guest.sessionId);
+    await seedReadySession(store, guest.sessionId);
     server = await listen(
       createControlApi({
         cfg: CONFIG,
@@ -198,7 +198,7 @@ describe("controller restart fences an in-flight operation", () => {
     const oldRequestId = "fence-old-request-0001";
 
     // 1. A long operation is in flight in the guest.
-    const claim = store.claimOperation(sessionId, oldRequestId, "exec");
+    const claim = await store.claimOperation(sessionId, oldRequestId, "exec");
     expect(claim).toMatchObject({ ok: true, epoch: 1 });
     const envelope = await sealJsonTo(guest.guestKey!, {
       v: 2,
@@ -216,12 +216,12 @@ describe("controller restart fences an in-flight operation", () => {
     await close(server);
     store.close();
     store = new Store(dbPath);
-    expect(store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
-    expect(store.getExecRequest(sessionId, oldRequestId)).toMatchObject({
+    expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+    expect(await store.getExecRequest(sessionId, oldRequestId)).toMatchObject({
       state: "outcome_unknown",
       epoch: 1,
     });
-    expect(store.getSession(sessionId)).toMatchObject({
+    expect(await store.getSession(sessionId)).toMatchObject({
       activeRequestId: oldRequestId,
       execEpoch: 2,
     });
@@ -244,7 +244,7 @@ describe("controller restart fences an in-flight operation", () => {
     expect(refused.status).toBe(409);
     expect(refused.body).toMatchObject({ error: "busy", requestId: oldRequestId });
     expect((await relay.state(sessionId)).pending).toBe(pendingBefore);
-    expect(store.listFencedSessions().map((session) => session.id)).toEqual([sessionId]);
+    expect((await store.listFencedSessions()).map((session) => session.id)).toEqual([sessionId]);
 
     // 4. The old request is a defined outcome, never a success/failure/expiry.
     const unknown = await callJson(
@@ -270,7 +270,7 @@ describe("controller restart fences an in-flight operation", () => {
     expect(cancelled.status).toBe(202);
     await waitForGuestState((state) => state.activeRequestId === "", "guest slot idle");
     expect(await fence.reconcile()).toEqual({ cleared: 1, held: 0, errors: 0 });
-    expect(store.getSession(sessionId)?.activeRequestId).toBeNull();
+    expect((await store.getSession(sessionId))?.activeRequestId).toBeNull();
 
     // 6. The next operation is admitted under the new epoch and succeeds.
     const newRequestId = "fence-new-request-0002";
@@ -296,7 +296,7 @@ describe("controller restart fences an in-flight operation", () => {
     );
     expect(result.ok).toBe(true);
     expect(result.stdout.trim()).toBe("after-fence");
-    expect(store.getExecRequest(sessionId, newRequestId)).toMatchObject({ state: "done", epoch: 2 });
+    expect(await store.getExecRequest(sessionId, newRequestId)).toMatchObject({ state: "done", epoch: 2 });
 
     // 7. A frame from the old generation is refused before it can reach the
     //    guest. The relay enforces the session epoch floor that recovery

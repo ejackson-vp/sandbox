@@ -132,21 +132,21 @@ function paymentRecord(key: string): PaymentRecord {
 }
 
 /** Claim then complete, as the API does. */
-function seedEntitlement(store: Store, key: string, record: SessionRecord): void {
-  const claim = store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+async function seedEntitlement(store: Store, key: string, record: SessionRecord): Promise<void> {
+  const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
-  store.completeEntitlement(key, claim.token, paymentRecord(key), record);
+  await store.completeEntitlement(key, claim.token, paymentRecord(key), record);
 }
 
 describe("pricing and session specs", () => {
-  it("parses and formats USD prices at 6 decimals", () => {
+  it("parses and formats USD prices at 6 decimals", async () => {
     expect(parseUsdPrice("$0.01").amount.toString()).toBe("10000");
     expect(parseUsdPrice("1.5").amount.toString()).toBe("1500000");
     expect(formatUsd("50000")).toBe("$0.05");
     expect(formatUsd("1500000")).toBe("$1.5");
   });
 
-  it("resolves preset tiers with fixed durations", () => {
+  it("resolves preset tiers with fixed durations", async () => {
     const limits = loadPlatformLimits({});
     const resolved = resolveSessionSpec(
       { tier: "standard", clientPublicKey: "a", clientNonce: "b" },
@@ -169,7 +169,7 @@ describe("pricing and session specs", () => {
     if (!mismatch.ok) expect(mismatch.code).toBe("tier_duration_mismatch");
   });
 
-  it("supports custom durations within the hard cap and rejects out-of-range values", () => {
+  it("supports custom durations within the hard cap and rejects out-of-range values", async () => {
     const limits = loadPlatformLimits({});
     const custom = resolveSessionSpec(
       { tier: "custom", durationSeconds: 2, cpuMillis: 200, memoryMiB: 256, diskMiB: 64, clientPublicKey: "a", clientNonce: "b" },
@@ -196,7 +196,7 @@ describe("pricing and session specs", () => {
     if (!disabled.ok) expect(disabled.code).toBe("custom_not_allowed");
   });
 
-  it("hashes specs stably", () => {
+  it("hashes specs stably", async () => {
     expect(specHash(spec)).toBe(specHash({ ...spec }));
     expect(specHash(spec)).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -242,21 +242,21 @@ describe("payment intent outbox and entitlements", () => {
     return { store, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
   }
 
-  it("makes one payment redeemable exactly once and completes idempotently", () => {
-    const { store, cleanup } = openStore();
+  it("makes one payment redeemable exactly once and completes idempotently", async () => {
+    const { store, cleanup } = await openStore();
     try {
       const key = "f".repeat(64);
       const digest = specHash(spec);
-      const first = store.claimPaymentIntent(key, digest, 30_000);
+      const first = await store.claimPaymentIntent(key, digest, 30_000);
       expect(first).toMatchObject({ status: "claimed", recovered: false });
       if (first.status !== "claimed") throw new Error("expected claim");
       expect(first.token).toMatch(/^[0-9a-f]{32}$/);
-      expect(store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({ status: "in_progress" });
+      expect(await store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({ status: "in_progress" });
 
       const firstSession = "sbx_000000000000000000000001";
-      expect(store.completeEntitlement(key, first.token, paymentRecord(key), sessionRecord(firstSession, key)))
+      expect(await store.completeEntitlement(key, first.token, paymentRecord(key), sessionRecord(firstSession, key)))
         .toEqual({ sessionId: firstSession, created: true });
-      expect(store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({
+      expect(await store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({
         status: "settled",
         sessionId: firstSession,
       });
@@ -264,7 +264,7 @@ describe("payment intent outbox and entitlements", () => {
       // A duplicate completion hands back the winning session instead of an
       // error, and never creates a second session.
       expect(
-        store.completeEntitlement(key, first.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000002", key)),
+        await store.completeEntitlement(key, first.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000002", key)),
       ).toEqual({ sessionId: firstSession, created: false });
       expect(store.countSessions()).toBe(1);
       expect(store.countPayments()).toBe(1);
@@ -273,33 +273,38 @@ describe("payment intent outbox and entitlements", () => {
     }
   });
 
-  it("fences a stale owner out of completion after a reclaim", () => {
-    const { store, cleanup } = openStore();
+  it("fences a stale owner out of completion after a reclaim", async () => {
+    const { store, cleanup } = await openStore();
     try {
       const key = "e".repeat(64);
       const digest = specHash(spec);
-      const owner = store.claimPaymentIntent(key, digest, 5);
+      const owner = await store.claimPaymentIntent(key, digest, 5);
       if (owner.status !== "claimed") throw new Error("expected claim");
 
-      const stale = store.claimPaymentIntent(key, digest, -1);
+      const stale = await store.claimPaymentIntent(key, digest, -1);
       expect(stale).toMatchObject({ status: "claimed", recovered: true });
       if (stale.status !== "claimed") throw new Error("expected reclaim");
       expect(stale.token).not.toBe(owner.token);
 
       // The reclaimed owner is the only one that may settle.
-      expect(() =>
-        store.completeEntitlement(key, owner.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000010", key)),
-      ).toThrow(PaymentClaimLostError);
+      await expect(
+        store.completeEntitlement(
+          key,
+          owner.token,
+          paymentRecord(key),
+          sessionRecord("sbx_000000000000000000000010", key),
+        ),
+      ).rejects.toThrow(PaymentClaimLostError);
       expect(store.countSessions()).toBe(0);
-      expect(store.getPaymentIntent(key)?.status).toBe("claimed");
+      expect((await store.getPaymentIntent(key))?.status).toBe("claimed");
 
       expect(
-        store.completeEntitlement(key, stale.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000011", key)),
+        await store.completeEntitlement(key, stale.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000011", key)),
       ).toEqual({ sessionId: "sbx_000000000000000000000011", created: true });
 
       // After settlement the old owner learns the outcome rather than an error.
       expect(
-        store.completeEntitlement(key, owner.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000012", key)),
+        await store.completeEntitlement(key, owner.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000012", key)),
       ).toEqual({ sessionId: "sbx_000000000000000000000011", created: false });
       expect(store.countSessions()).toBe(1);
     } finally {
@@ -307,18 +312,18 @@ describe("payment intent outbox and entitlements", () => {
     }
   });
 
-  it("recovers a stale claim but rejects a spec mismatch", () => {
-    const { store, cleanup } = openStore();
+  it("recovers a stale claim but rejects a spec mismatch", async () => {
+    const { store, cleanup } = await openStore();
     try {
       const key = "e".repeat(64);
       const digest = specHash(spec);
-      expect(store.claimPaymentIntent(key, digest, 5)).toMatchObject({ status: "claimed" });
-      const stale = store.claimPaymentIntent(key, digest, -1);
+      expect(await store.claimPaymentIntent(key, digest, 5)).toMatchObject({ status: "claimed" });
+      const stale = await store.claimPaymentIntent(key, digest, -1);
       expect(stale).toMatchObject({ status: "claimed", recovered: true });
-      expect(store.claimPaymentIntent(key, "b".repeat(64), -1)).toMatchObject({ status: "mismatch" });
-      store.failPaymentIntent(key, "settlement_failed");
-      expect(store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({ status: "failed" });
-      expect(store.getPaymentIntent(key)).toMatchObject({ status: "failed", claimToken: null });
+      expect(await store.claimPaymentIntent(key, "b".repeat(64), -1)).toMatchObject({ status: "mismatch" });
+      await store.failPaymentIntent(key, "settlement_failed");
+      expect(await store.claimPaymentIntent(key, digest, 30_000)).toMatchObject({ status: "failed" });
+      expect(await store.getPaymentIntent(key)).toMatchObject({ status: "failed", claimToken: null });
     } finally {
       cleanup();
     }
@@ -326,40 +331,40 @@ describe("payment intent outbox and entitlements", () => {
 });
 
 describe("operation gating", () => {
-  function openStore() {
+  async function openStore() {
     const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
     const store = new Store(join(dir, "test.db"));
     const key = "d".repeat(64);
-    const claim = store.claimPaymentIntent(key, specHash(spec), 30_000);
+    const claim = await store.claimPaymentIntent(key, specHash(spec), 30_000);
     if (claim.status !== "claimed") throw new Error("expected claim");
-    store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000003", key));
-    store.setProvisioning("sbx_000000000000000000000003", "pod-x");
-    store.setRelayToken("sbx_000000000000000000000003", "relay-hash");
-    store.setReady("sbx_000000000000000000000003", Date.now(), Date.now() + 60_000, "{}", "guestpk");
+    await store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000003", key));
+    await store.setProvisioning("sbx_000000000000000000000003", "pod-x");
+    await store.setRelayToken("sbx_000000000000000000000003", "relay-hash");
+    await store.setReady("sbx_000000000000000000000003", Date.now(), Date.now() + 60_000, "{}", "guestpk");
     return { store, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
   }
 
-  it("allows one active operation and treats request ids as idempotency keys", () => {
-    const { store, cleanup } = openStore();
+  it("allows one active operation and treats request ids as idempotency keys", async () => {
+    const { store, cleanup } = await openStore();
     try {
       const id = "sbx_000000000000000000000003";
-      expect(store.claimOperation(id, "request-1", "exec")).toMatchObject({ ok: true });
-      expect(store.claimOperation(id, "request-2", "exec")).toMatchObject({ ok: false, code: "busy" });
-      expect(store.claimOperation(id, "request-1", "exec")).toMatchObject({ ok: false, code: "duplicate" });
-      store.finishOperation(id, "request-1", "done");
-      expect(store.claimOperation(id, "request-2", "exec")).toMatchObject({ ok: true });
-      expect(store.getSession(id)?.state).toBe("ACTIVE");
+      expect(await store.claimOperation(id, "request-1", "exec")).toMatchObject({ ok: true });
+      expect(await store.claimOperation(id, "request-2", "exec")).toMatchObject({ ok: false, code: "busy" });
+      expect(await store.claimOperation(id, "request-1", "exec")).toMatchObject({ ok: false, code: "duplicate" });
+      await store.finishOperation(id, "request-1", "done");
+      expect(await store.claimOperation(id, "request-2", "exec")).toMatchObject({ ok: true });
+      expect((await store.getSession(id))?.state).toBe("ACTIVE");
     } finally {
       cleanup();
     }
   });
 
-  it("records a payment ledger and makes refund transitions idempotent", () => {
-    const { store, cleanup } = openStore();
+  it("records a payment ledger and makes refund transitions idempotent", async () => {
+    const { store, cleanup } = await openStore();
     try {
       const id = "sbx_000000000000000000000003";
       const key = "d".repeat(64);
-      const ledger = store.getLedgerBySession(id);
+      const ledger = await store.getLedgerBySession(id);
       expect(ledger).toMatchObject({
         paymentKey: key,
         sessionId: id,
@@ -368,34 +373,34 @@ describe("operation gating", () => {
         status: "SETTLED",
         refundTransaction: null,
       });
-      expect(store.markRefundPending(key, "no_service")).toBe(true);
-      expect(store.getLedgerByPayment(key)?.status).toBe("REFUND_PENDING");
-      expect(store.markRefundPending(key, "again")).toBe(false);
-      expect(store.markRefunded(key, "mock:refund:1", "no_service")).toBe(true);
-      expect(store.getLedgerByPayment(key)).toMatchObject({
+      expect(await store.markRefundPending(key, "no_service")).toBe(true);
+      expect((await store.getLedgerByPayment(key))?.status).toBe("REFUND_PENDING");
+      expect(await store.markRefundPending(key, "again")).toBe(false);
+      expect(await store.markRefunded(key, "mock:refund:1", "no_service")).toBe(true);
+      expect(await store.getLedgerByPayment(key)).toMatchObject({
         status: "REFUNDED",
         refundTransaction: "mock:refund:1",
         reason: "no_service",
       });
-      expect(store.markRefunded(key, "mock:refund:2", "again")).toBe(false);
+      expect(await store.markRefunded(key, "mock:refund:2", "again")).toBe(false);
     } finally {
       cleanup();
     }
   });
 
-  it("repairs a refund left SETTLED after a crash", () => {
+  it("repairs a refund left SETTLED after a crash", async () => {
     const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
     const store = new Store(join(dir, "test.db"));
     try {
       const key = "e".repeat(64);
       const id = "sbx_000000000000000000000005";
-      seedEntitlement(store, key, sessionRecord(id, key));
-      store.requestTermination(id, "failure:crash_before_refund");
-      expect(store.finalizeTermination(id)).toBe("FAILED");
-      expect(store.getLedgerBySession(id)?.status).toBe("SETTLED");
+      await seedEntitlement(store, key, sessionRecord(id, key));
+      await store.requestTermination(id, "failure:crash_before_refund");
+      expect(await store.finalizeTermination(id)).toBe("FAILED");
+      expect((await store.getLedgerBySession(id))?.status).toBe("SETTLED");
 
-      new RefundService(store).reconcile();
-      expect(store.getLedgerBySession(id)).toMatchObject({
+      await new RefundService(store).reconcile();
+      expect(await store.getLedgerBySession(id)).toMatchObject({
         status: "REFUNDED",
         sessionId: id,
       });
@@ -405,25 +410,25 @@ describe("operation gating", () => {
     }
   });
 
-  it("fences an operation interrupted by a controller crash", () => {
-    const { store, cleanup } = openStore();
+  it("fences an operation interrupted by a controller crash", async () => {
+    const { store, cleanup } = await openStore();
     try {
       const id = "sbx_000000000000000000000003";
-      expect(store.claimOperation(id, "request-crash", "exec")).toMatchObject({ ok: true, epoch: 1 });
-      expect(store.getSession(id)?.activeRequestId).toBe("request-crash");
+      expect(await store.claimOperation(id, "request-crash", "exec")).toMatchObject({ ok: true, epoch: 1 });
+      expect((await store.getSession(id))?.activeRequestId).toBe("request-crash");
 
-      expect(store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
-      expect(store.getExecRequest(id, "request-crash")).toMatchObject({
+      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+      expect(await store.getExecRequest(id, "request-crash")).toMatchObject({
         state: "outcome_unknown",
         epoch: 1,
       });
       // The gate stays closed: the old command may still run in the guest.
-      expect(store.getSession(id)).toMatchObject({
+      expect(await store.getSession(id)).toMatchObject({
         activeRequestId: "request-crash",
         execEpoch: 2,
       });
-      expect(store.listFencedSessions().map((session) => session.id)).toEqual([id]);
-      expect(store.claimOperation(id, "request-after-restart", "exec")).toMatchObject({
+      expect((await store.listFencedSessions()).map((session) => session.id)).toEqual([id]);
+      expect(await store.claimOperation(id, "request-after-restart", "exec")).toMatchObject({
         ok: false,
         code: "busy",
         requestId: "request-crash",
@@ -431,64 +436,64 @@ describe("operation gating", () => {
 
       // A stale caller that read the request as pending before recovery must
       // not finish it afterwards: the fence still owns the gate.
-      store.finishOperation(id, "request-crash", "error");
-      expect(store.getExecRequest(id, "request-crash")?.state).toBe("outcome_unknown");
-      expect(store.getSession(id)).toMatchObject({ activeRequestId: "request-crash" });
+      await store.finishOperation(id, "request-crash", "error");
+      expect((await store.getExecRequest(id, "request-crash"))?.state).toBe("outcome_unknown");
+      expect(await store.getSession(id)).toMatchObject({ activeRequestId: "request-crash" });
 
       // Only the generation that owns the fence can release it.
-      expect(store.clearFencedGate(id, "request-crash", 1)).toBe(false);
-      expect(store.clearFencedGate(id, "request-crash", 2)).toBe(true);
-      expect(store.getSession(id)?.activeRequestId).toBeNull();
-      expect(store.claimOperation(id, "request-after-restart", "exec")).toMatchObject({
+      expect(await store.clearFencedGate(id, "request-crash", 1)).toBe(false);
+      expect(await store.clearFencedGate(id, "request-crash", 2)).toBe(true);
+      expect((await store.getSession(id))?.activeRequestId).toBeNull();
+      expect(await store.claimOperation(id, "request-after-restart", "exec")).toMatchObject({
         ok: true,
         epoch: 2,
       });
       // The old request keeps its terminal, non-committal state.
-      expect(store.getExecRequest(id, "request-crash")?.state).toBe("outcome_unknown");
+      expect((await store.getExecRequest(id, "request-crash"))?.state).toBe("outcome_unknown");
     } finally {
       cleanup();
     }
   });
 
-  it("does not fence sessions that had no operation in flight", () => {
-    const { store, cleanup } = openStore();
+  it("does not fence sessions that had no operation in flight", async () => {
+    const { store, cleanup } = await openStore();
     try {
       const id = "sbx_000000000000000000000003";
-      expect(store.recoverInterruptedOperations()).toEqual({ requests: 0, sessions: 0 });
-      expect(store.getSession(id)).toMatchObject({ activeRequestId: null, execEpoch: 1 });
-      expect(store.listFencedSessions()).toEqual([]);
-      expect(store.getExecRequest(id, "never-seen")).toBeNull();
+      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 0, sessions: 0 });
+      expect(await store.getSession(id)).toMatchObject({ activeRequestId: null, execEpoch: 1 });
+      expect(await store.listFencedSessions()).toEqual([]);
+      expect(await store.getExecRequest(id, "never-seen")).toBeNull();
     } finally {
       cleanup();
     }
   });
 
-  it("refuses operations after the lease deadline", () => {
+  it("refuses operations after the lease deadline", async () => {
     const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
     const store = new Store(join(dir, "test.db"));
     try {
       const id = "sbx_000000000000000000000004";
       const key = "c".repeat(64);
-      seedEntitlement(store, key, sessionRecord(id, key));
-      store.setProvisioning(id, "pod-y");
-      store.setRelayToken(id, "relay-hash");
-      store.setReady(id, Date.now() - 120_000, Date.now() - 60_000, "{}", "guestpk");
-      expect(store.claimOperation(id, "request-1", "exec")).toMatchObject({ ok: false, code: "lease_expired" });
+      await seedEntitlement(store, key, sessionRecord(id, key));
+      await store.setProvisioning(id, "pod-y");
+      await store.setRelayToken(id, "relay-hash");
+      await store.setReady(id, Date.now() - 120_000, Date.now() - 60_000, "{}", "guestpk");
+      expect(await store.claimOperation(id, "request-1", "exec")).toMatchObject({ ok: false, code: "lease_expired" });
     } finally {
       store.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("finalises terminal state from the termination reason", () => {
-    const { store, cleanup } = openStore();
+  it("finalises terminal state from the termination reason", async () => {
+    const { store, cleanup } = await openStore();
     try {
       const id = "sbx_000000000000000000000003";
-      store.requestTermination(id, "lease_expired");
-      expect(store.getSession(id)?.state).toBe("TERMINATING");
-      expect(store.finalizeTermination(id)).toBe("EXPIRED");
-      expect(store.getSession(id)?.state).toBe("EXPIRED");
-      expect(store.getSession(id)?.destroyedAt).toBeTruthy();
+      await store.requestTermination(id, "lease_expired");
+      expect((await store.getSession(id))?.state).toBe("TERMINATING");
+      expect(await store.finalizeTermination(id)).toBe("EXPIRED");
+      expect((await store.getSession(id))?.state).toBe("EXPIRED");
+      expect((await store.getSession(id))?.destroyedAt).toBeTruthy();
     } finally {
       cleanup();
     }
@@ -496,13 +501,13 @@ describe("operation gating", () => {
 });
 
 describe("capability and proxy tokens", () => {
-  it("mints opaque capabilities with no structure", () => {
+  it("mints opaque capabilities with no structure", async () => {
     const token = newOpaqueToken();
     expect(token.length).toBeGreaterThan(40);
     expect(token).not.toContain(".");
   });
 
-  it("verifies signed proxy tokens and rejects tampering/expiry", () => {
+  it("verifies signed proxy tokens and rejects tampering/expiry", async () => {
     const secret = "s".repeat(32);
     const token = mintProxyToken(secret, "sbx_abc", 60_000);
     const ok = verifyProxyToken(secret, token);
@@ -516,14 +521,14 @@ describe("capability and proxy tokens", () => {
     expect(verifyProxyToken("other-secret", token).ok).toBe(false);
   });
 
-  it("accepts Bearer and Basic proxy authorization forms", () => {
+  it("accepts Bearer and Basic proxy authorization forms", async () => {
     expect(extractProxyToken("Bearer abc123")).toBe("abc123");
     expect(extractProxyToken(`Basic ${Buffer.from("x402:tok").toString("base64")}`)).toBe("tok");
     expect(extractProxyToken("Basic not-base64!!")).toBe("");
     expect(extractProxyToken(undefined)).toBe("");
   });
 
-  it("parses CONNECT authorities including IPv6 literals", () => {
+  it("parses CONNECT authorities including IPv6 literals", async () => {
     expect(parseAuthority("example.com:443")).toEqual({ host: "example.com", port: 443 });
     expect(parseAuthority("[2606:4700::1111]:443")).toEqual({ host: "2606:4700::1111", port: 443 });
     expect(parseAuthority("example.com")).toBeNull();

@@ -247,34 +247,34 @@ function instrument(store: Store, reconciler: Reconciler, m: Instruments): void 
   const getSession = store.getSession.bind(store);
   const rearmDue = store.rearmDue.bind(store);
 
-  store.listDue = (nowMs, limit) => {
+  store.listDue = async (nowMs, limit) => {
     const started = performance.now();
-    const rows = listDue(nowMs, limit);
+    const rows = await listDue(nowMs, limit);
     m.listDueMs += performance.now() - started;
     m.listDueRows += rows.length;
     return rows;
   };
-  store.countDue = (nowMs) => {
+  store.countDue = async (nowMs) => {
     const started = performance.now();
-    const n = countDue(nowMs);
+    const n = await countDue(nowMs);
     m.countDueMs += performance.now() - started;
     return n;
   };
-  store.countLiveByState = () => {
+  store.countLiveByState = async () => {
     const started = performance.now();
-    const counts = countLive();
+    const counts = await countLive();
     m.countLiveMs += performance.now() - started;
     return counts;
   };
-  store.getSession = (id) => {
+  store.getSession = async (id) => {
     const started = performance.now();
-    const record = getSession(id);
+    const record = await getSession(id);
     m.getSessionMs += performance.now() - started;
     return record;
   };
-  store.rearmDue = (id, atMs, nowMs) => {
+  store.rearmDue = async (id, atMs, nowMs) => {
     const started = performance.now();
-    const moved = rearmDue(id, atMs, nowMs);
+    const moved = await rearmDue(id, atMs, nowMs);
     m.rearmDueMs += performance.now() - started;
     return moved;
   };

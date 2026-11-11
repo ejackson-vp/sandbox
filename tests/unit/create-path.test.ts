@@ -143,26 +143,30 @@ function freshStore(): Store {
 }
 
 /** Claim then complete, as the API does: a real PAID row through the real guards. */
-function seedPaid(store: Store, id: string, overrides: Partial<SessionRecord> = {}): SessionRecord {
+async function seedPaid(
+  store: Store,
+  id: string,
+  overrides: Partial<SessionRecord> = {},
+): Promise<SessionRecord> {
   const key = `${id}-key`;
   const record = sessionRecord(id, key, overrides);
-  const claim = store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+  const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
-  store.completeEntitlement(key, claim.token, payment(key), record);
-  const row = store.getSession(id);
+  await store.completeEntitlement(key, claim.token, payment(key), record);
+  const row = await store.getSession(id);
   if (!row) throw new Error("session was not created");
   return row;
 }
 
 /** Walk a paid row to SUSPENDED through the store, so the guards are real. */
-function seedSuspended(store: Store, id: string): SessionRecord {
-  seedPaid(store, id, { idlePolicyJson: "{}", workspacePvc: `x402-ws-${id}` });
-  store.setProvisioning(id, `pod-${id}`);
-  store.setRelayToken(id, "relay-hash");
-  store.setReady(id, NOW, NOW + 60_000, "{}", "guest-pk");
-  store.markSuspending(id);
-  store.markSuspended(id, NOW + 1000);
-  const row = store.getSession(id);
+async function seedSuspended(store: Store, id: string): Promise<SessionRecord> {
+  await seedPaid(store, id, { idlePolicyJson: "{}", workspacePvc: `x402-ws-${id}` });
+  await store.setProvisioning(id, `pod-${id}`);
+  await store.setRelayToken(id, "relay-hash");
+  await store.setReady(id, NOW, NOW + 60_000, "{}", "guest-pk");
+  await store.markSuspending(id);
+  await store.markSuspended(id, NOW + 1000);
+  const row = await store.getSession(id);
   if (row?.state !== "SUSPENDED") throw new Error(`expected SUSPENDED, got ${row?.state}`);
   return row;
 }
@@ -182,7 +186,7 @@ function harness(
     cfg?: ControllerConfig;
     serviceAddress?: (name: string, shard?: number) => Promise<{ host: string; port: number } | null>;
     warmPod?: boolean;
-    beforePodWrite?: (id: string) => void;
+    beforePodWrite?: (id: string) => void | Promise<void>;
   } = {},
 ): Harness {
   const cfg = opts.cfg ?? config();
@@ -191,7 +195,7 @@ function harness(
 
   const createPod = vi.fn(async (spec: { sessionId: string; guestToken: string; workspacePvc?: string; resume?: boolean }) => {
     calls.push(`createPod:${spec.sessionId}`);
-    opts.beforePodWrite?.(spec.sessionId);
+    await opts.beforePodWrite?.(spec.sessionId);
     return { podName: `pod-${spec.sessionId}` };
   });
   const createWorkspacePvc = vi.fn(async (sessionId: string) => {
@@ -315,11 +319,11 @@ function harness(
 describe("PAID -> PROVISIONING through the effect interpreter", () => {
   it("creates the workspace, registers the credential and then the pod", async () => {
     const h = harness();
-    const row = seedPaid(h.store, "sbx_cold_path_01", { idlePolicyJson: "{}" });
+    const row = await seedPaid(h.store, "sbx_cold_path_01", { idlePolicyJson: "{}" });
 
     await h.provisioning.provision(row);
 
-    const after = h.store.getSession("sbx_cold_path_01");
+    const after = await h.store.getSession("sbx_cold_path_01");
     expect(after?.state).toBe("PROVISIONING");
     expect(after?.podName).toBe("pod-sbx_cold_path_01");
     expect(after?.workspacePvc).toBe("x402-ws-sbx_cold_path_01");
@@ -344,11 +348,11 @@ describe("PAID -> PROVISIONING through the effect interpreter", () => {
 
   it("claims a warm pod instead of creating one when the session is not suspendable", async () => {
     const h = harness({ cfg: config({ WARM_POOL_SIZE: "1" }), warmPod: true });
-    const row = seedPaid(h.store, "sbx_warm_path_01");
+    const row = await seedPaid(h.store, "sbx_warm_path_01");
 
     await h.provisioning.provision(row);
 
-    const after = h.store.getSession("sbx_warm_path_01");
+    const after = await h.store.getSession("sbx_warm_path_01");
     expect(after?.state).toBe("PROVISIONING");
     expect(after?.podName).toBe("warm-pod-1");
     expect(after?.workspacePvc).toBeNull();
@@ -368,11 +372,11 @@ describe("PAID -> PROVISIONING through the effect interpreter", () => {
 
   it("defers without a pod when the shard has no endpoint", async () => {
     const h = harness({ serviceAddress: async () => null });
-    const row = seedPaid(h.store, "sbx_no_endpoint_01");
+    const row = await seedPaid(h.store, "sbx_no_endpoint_01");
 
     await h.provisioning.provision(row);
 
-    const after = h.store.getSession("sbx_no_endpoint_01");
+    const after = await h.store.getSession("sbx_no_endpoint_01");
     expect(after?.state).toBe("PAID");
     expect(after?.podName).toBeNull();
     expect(after?.workspacePvc).toBeNull();
@@ -386,15 +390,15 @@ describe("PAID -> PROVISIONING through the effect interpreter", () => {
     // A destroy lands between the pod create and the guarded write. The row is
     // no longer PAID, so `setProvisioning` refuses and nothing after it runs.
     const h = harness({
-      beforePodWrite: (id) => {
-        h.store.requestTermination(id, "client_destroy");
+      beforePodWrite: async (id) => {
+        await h.store.requestTermination(id, "client_destroy");
       },
     });
-    const row = seedPaid(h.store, "sbx_lost_guard_01");
+    const row = await seedPaid(h.store, "sbx_lost_guard_01");
 
     await h.provisioning.provision(row);
 
-    const after = h.store.getSession("sbx_lost_guard_01");
+    const after = await h.store.getSession("sbx_lost_guard_01");
     expect(after?.state).toBe("TERMINATING");
     expect(after?.podName).toBeNull();
     // The bookkeeping after the guarded write did not run.
@@ -405,11 +409,11 @@ describe("PAID -> PROVISIONING through the effect interpreter", () => {
 describe("SUSPENDED -> RESUMING through the effect interpreter", () => {
   it("restores the workspace, registers the credential and boots a cold pod", async () => {
     const h = harness();
-    seedSuspended(h.store, "sbx_resume_path_01");
+    await seedSuspended(h.store, "sbx_resume_path_01");
 
     await h.lifecycle.resume("sbx_resume_path_01");
 
-    const after = h.store.getSession("sbx_resume_path_01");
+    const after = await h.store.getSession("sbx_resume_path_01");
     expect(after?.state).toBe("RESUMING");
     expect(after?.podName).toBe("pod-sbx_resume_path_01");
     expect(after?.resumeCount).toBe(1);

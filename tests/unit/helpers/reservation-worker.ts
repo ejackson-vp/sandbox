@@ -25,10 +25,10 @@ process.on("message", (message: Init) => {
     return;
   }
   process.send?.({ type: "ready" });
-  process.on("message", (next: { type: "go" }) => {
+  process.on("message", async (next: { type: "go" }) => {
     if (next.type !== "go") return;
     try {
-      const result = store.reservations.admit(message.snapshot, message.request, {
+      const result = await store.reservations.admit(message.snapshot, message.request, {
         paymentKey: message.paymentKey,
         specHash: message.specHash,
         ttlMs: 60_000,

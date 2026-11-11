@@ -122,8 +122,8 @@ function sessionRecord(id: string, key: string, client: string): SessionRecord {
 }
 
 /** A claimed intent whose owner died, with the requirements recorded. */
-function seedStaleClaim(store: Store, key: string): void {
-  const claim = store.claimPaymentIntent(key, "b".repeat(64), 30_000, REQUIREMENTS);
+async function seedStaleClaim(store: Store, key: string): Promise<void> {
+  const claim = await store.claimPaymentIntent(key, "b".repeat(64), 30_000, REQUIREMENTS);
   if (claim.status !== "claimed") throw new Error("expected claim");
 }
 
@@ -134,7 +134,7 @@ function lookupReturning(record: { settled: boolean; payer?: string; amount?: st
 describe("settlement recovery", () => {
   it("records a settled payment with no entitlement as refundable", async () => {
     const store = freshStore();
-    seedStaleClaim(store, PAYMENT_KEY);
+    await seedStaleClaim(store, PAYMENT_KEY);
     const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
 
     const result = await new SettlementRecovery(store, new RefundService(store), lookup, {
@@ -144,7 +144,7 @@ describe("settlement recovery", () => {
     }).run();
 
     expect(result).toEqual({ checked: 1, recovered: 1, errors: 0 });
-    const ledger = store.getLedgerByPayment(PAYMENT_KEY)!;
+    const ledger = (await store.getLedgerByPayment(PAYMENT_KEY))!;
     expect(ledger.status).toBe("REFUND_PENDING");
     expect(ledger.sessionId).toBe(`unsettled:${PAYMENT_KEY}`);
     expect(ledger.reason).toBe("settled_without_entitlement");
@@ -157,7 +157,7 @@ describe("settlement recovery", () => {
 
   it("refunds a recovered mock payment immediately", async () => {
     const store = freshStore();
-    seedStaleClaim(store, PAYMENT_KEY);
+    await seedStaleClaim(store, PAYMENT_KEY);
 
     await new SettlementRecovery(store, new RefundService(store), lookupReturning({ settled: true }), {
       graceMs: 0,
@@ -165,14 +165,14 @@ describe("settlement recovery", () => {
       mode: "mock",
     }).run();
 
-    const ledger = store.getLedgerByPayment(PAYMENT_KEY)!;
+    const ledger = (await store.getLedgerByPayment(PAYMENT_KEY))!;
     expect(ledger.status).toBe("REFUNDED");
     expect(ledger.refundTransaction).toMatch(/^mock:refund:/);
   });
 
   it("leaves an unsettled intent alone: the API still owns the retry", async () => {
     const store = freshStore();
-    seedStaleClaim(store, PAYMENT_KEY);
+    await seedStaleClaim(store, PAYMENT_KEY);
 
     const result = await new SettlementRecovery(store, new RefundService(store), lookupReturning({ settled: false }), {
       graceMs: 0,
@@ -181,14 +181,14 @@ describe("settlement recovery", () => {
     }).run();
 
     expect(result.recovered).toBe(0);
-    expect(store.getLedgerByPayment(PAYMENT_KEY)).toBeNull();
+    expect(await store.getLedgerByPayment(PAYMENT_KEY)).toBeNull();
     // Still claimed, so a client retry can still complete it.
-    expect(store.getPaymentIntent(PAYMENT_KEY)?.status).toBe("claimed");
+    expect((await store.getPaymentIntent(PAYMENT_KEY))?.status).toBe("claimed");
   });
 
   it("is a no-op without a settlement lookup", async () => {
     const store = freshStore();
-    seedStaleClaim(store, PAYMENT_KEY);
+    await seedStaleClaim(store, PAYMENT_KEY);
 
     const result = await new SettlementRecovery(store, new RefundService(store), null, {
       graceMs: 0,
@@ -197,12 +197,12 @@ describe("settlement recovery", () => {
     }).run();
 
     expect(result).toEqual({ checked: 0, recovered: 0, errors: 0 });
-    expect(store.getLedgerByPayment(PAYMENT_KEY)).toBeNull();
+    expect(await store.getLedgerByPayment(PAYMENT_KEY)).toBeNull();
   });
 
   it("does not duplicate a row that already exists", async () => {
     const store = freshStore();
-    seedStaleClaim(store, PAYMENT_KEY);
+    await seedStaleClaim(store, PAYMENT_KEY);
     const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
     const recovery = new SettlementRecovery(store, new RefundService(store), lookup, {
       graceMs: 0,
@@ -214,13 +214,13 @@ describe("settlement recovery", () => {
     const second = await recovery.run();
 
     expect(second.recovered).toBe(0);
-    expect(store.listLedgerByStatus("REFUND_PENDING")).toHaveLength(1);
+    expect(await store.listLedgerByStatus("REFUND_PENDING")).toHaveLength(1);
   });
 });
 
 describe("refund worker", () => {
-  function seedPending(store: Store, key = PAYMENT_KEY): void {
-    store.insertUnclaimedLedger({
+  async function seedPending(store: Store, key = PAYMENT_KEY): Promise<void> {
+    await store.insertUnclaimedLedger({
       paymentKey: key,
       sessionId: `unsettled:${key}`,
       payer: PAYER,
@@ -236,7 +236,7 @@ describe("refund worker", () => {
 
   it("executes a pending refund once and records the transaction", async () => {
     const store = freshStore();
-    seedPending(store);
+    await seedPending(store);
     const executor: RefundExecutor = { refund: vi.fn(async () => ({ transaction: "0xdeadbeef" })) };
     const worker = new RefundWorker(store, executor, { maxAttempts: 3, retryBaseMs: 1000, limit: 10 });
 
@@ -246,7 +246,7 @@ describe("refund worker", () => {
       expect.objectContaining({ paymentKey: PAYMENT_KEY, settlementNonce: `0x${"2".repeat(64)}` }),
     );
 
-    const ledger = store.getLedgerByPayment(PAYMENT_KEY)!;
+    const ledger = (await store.getLedgerByPayment(PAYMENT_KEY))!;
     expect(ledger.status).toBe("REFUNDED");
     expect(ledger.refundTransaction).toBe("0xdeadbeef");
 
@@ -258,7 +258,7 @@ describe("refund worker", () => {
 
   it("backs off after a failure and gives up at the attempt limit", async () => {
     const store = freshStore();
-    seedPending(store);
+    await seedPending(store);
     const executor: RefundExecutor = {
       refund: vi.fn(async () => {
         throw new Error("treasury offline");
@@ -272,7 +272,7 @@ describe("refund worker", () => {
 
     const first = await worker.run();
     expect(first).toMatchObject({ attempted: 1, refunded: 0, failed: 1 });
-    const after = store.getLedgerByPayment(PAYMENT_KEY)!;
+    const after = (await store.getLedgerByPayment(PAYMENT_KEY))!;
     expect(after.status).toBe("REFUND_PENDING");
     expect(after.refundAttempts).toBe(1);
     expect(after.refundLastError).toBe("treasury offline");
@@ -282,22 +282,22 @@ describe("refund worker", () => {
     const second = await worker.run();
     expect(second).toMatchObject({ refunded: 0, failed: 0, exhausted: 1 });
     expect(executor.refund).toHaveBeenCalledTimes(1);
-    expect(store.getLedgerByPayment(PAYMENT_KEY)?.status).toBe("REFUND_PENDING");
+    expect((await store.getLedgerByPayment(PAYMENT_KEY))?.status).toBe("REFUND_PENDING");
   });
 
   it("does nothing without a configured executor", async () => {
     const store = freshStore();
-    seedPending(store);
+    await seedPending(store);
     const worker = new RefundWorker(store, null, { maxAttempts: 3, retryBaseMs: 1000, limit: 10 });
 
     const result = await worker.run();
     expect(result).toMatchObject({ attempted: 0, skipped: true });
-    expect(store.getLedgerByPayment(PAYMENT_KEY)?.status).toBe("REFUND_PENDING");
+    expect((await store.getLedgerByPayment(PAYMENT_KEY))?.status).toBe("REFUND_PENDING");
   });
 
-  it("repairs an unentitled row left SETTLED by a crash", () => {
+  it("repairs an unentitled row left SETTLED by a crash", async () => {
     const store = freshStore();
-    store.insertUnclaimedLedger({
+    await store.insertUnclaimedLedger({
       paymentKey: PAYMENT_KEY,
       sessionId: `unsettled:${PAYMENT_KEY}`,
       payer: PAYER,
@@ -310,31 +310,36 @@ describe("refund worker", () => {
       settlementNonce: null,
     });
 
-    new RefundService(store).reconcile();
-    expect(store.getLedgerByPayment(PAYMENT_KEY)?.status).toBe("REFUNDED");
+    await new RefundService(store).reconcile();
+    expect((await store.getLedgerByPayment(PAYMENT_KEY))?.status).toBe("REFUNDED");
   });
 });
 
 describe("double charge", () => {
-  it("refunds a second payment for a client key that already owns a session", () => {
+  it("refunds a second payment for a client key that already owns a session", async () => {
     const store = freshStore();
     const firstKey = "c".repeat(64);
-    const firstClaim = store.claimPaymentIntent(firstKey, "d".repeat(64), 30_000);
+    const firstClaim = await store.claimPaymentIntent(firstKey, "d".repeat(64), 30_000);
     if (firstClaim.status !== "claimed") throw new Error("expected claim");
-    store.completeEntitlement(firstKey, firstClaim.token, payment(firstKey), sessionRecord("sbx_first", firstKey, "shared"));
+    await store.completeEntitlement(firstKey, firstClaim.token, payment(firstKey), sessionRecord("sbx_first", firstKey, "shared"));
 
     const secondKey = "e".repeat(64);
-    const secondClaim = store.claimPaymentIntent(secondKey, "d".repeat(64), 30_000);
+    const secondClaim = await store.claimPaymentIntent(secondKey, "d".repeat(64), 30_000);
     if (secondClaim.status !== "claimed") throw new Error("expected claim");
 
-    expect(() =>
-      store.completeEntitlement(secondKey, secondClaim.token, payment(secondKey), sessionRecord("sbx_second", secondKey, "shared")),
-    ).toThrow(DuplicateEntitlementError);
+    await expect(
+      store.completeEntitlement(
+        secondKey,
+        secondClaim.token,
+        payment(secondKey),
+        sessionRecord("sbx_second", secondKey, "shared"),
+      ),
+    ).rejects.toThrow(DuplicateEntitlementError);
 
     // One session, one charge, and the second charge is already refunded.
     expect(store.countSessions()).toBe(1);
     expect(store.countPayments()).toBe(2);
-    const ledger = store.getLedgerByPayment(secondKey)!;
+    const ledger = (await store.getLedgerByPayment(secondKey))!;
     expect(ledger.sessionId).toBe(`duplicate:${secondKey}`);
     expect(ledger.reason).toBe("duplicate_client_nonce");
     expect(ledger.status).toBe("REFUNDED");
@@ -342,26 +347,31 @@ describe("double charge", () => {
     expect(ledger.refundTransaction).toMatch(/^mock:refund:/);
     expect(ledger.settlementNonce).toBe(`0x${"1".repeat(64)}`);
     // The intent is failed, so a retry of that payment cannot mint a session.
-    expect(store.getPaymentIntent(secondKey)?.status).toBe("failed");
+    expect((await store.getPaymentIntent(secondKey))?.status).toBe("failed");
   });
 
-  it("leaves a real-mode duplicate charge REFUND_PENDING", () => {
+  it("leaves a real-mode duplicate charge REFUND_PENDING", async () => {
     const store = freshStore();
     const firstKey = "f".repeat(64);
-    const firstClaim = store.claimPaymentIntent(firstKey, "d".repeat(64), 30_000);
+    const firstClaim = await store.claimPaymentIntent(firstKey, "d".repeat(64), 30_000);
     if (firstClaim.status !== "claimed") throw new Error("expected claim");
-    store.completeEntitlement(firstKey, firstClaim.token, payment(firstKey), sessionRecord("sbx_a", firstKey, "shared"));
+    await store.completeEntitlement(firstKey, firstClaim.token, payment(firstKey), sessionRecord("sbx_a", firstKey, "shared"));
 
     const secondKey = "1".repeat(64);
-    const secondClaim = store.claimPaymentIntent(secondKey, "d".repeat(64), 30_000);
+    const secondClaim = await store.claimPaymentIntent(secondKey, "d".repeat(64), 30_000);
     if (secondClaim.status !== "claimed") throw new Error("expected claim");
     const testnetPayment: PaymentRecord = { ...payment(secondKey), mode: "testnet", transaction: undefined };
 
-    expect(() =>
-      store.completeEntitlement(secondKey, secondClaim.token, testnetPayment, sessionRecord("sbx_b", secondKey, "shared")),
-    ).toThrow(DuplicateEntitlementError);
+    await expect(
+      store.completeEntitlement(
+        secondKey,
+        secondClaim.token,
+        testnetPayment,
+        sessionRecord("sbx_b", secondKey, "shared"),
+      ),
+    ).rejects.toThrow(DuplicateEntitlementError);
 
-    expect(store.getLedgerByPayment(secondKey)?.status).toBe("REFUND_PENDING");
-    expect(store.listLedgerByStatus("REFUND_PENDING")).toHaveLength(1);
+    expect((await store.getLedgerByPayment(secondKey))?.status).toBe("REFUND_PENDING");
+    expect(await store.listLedgerByStatus("REFUND_PENDING")).toHaveLength(1);
   });
 });

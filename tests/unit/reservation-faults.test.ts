@@ -47,31 +47,31 @@ const request = {
 };
 
 describe("reservation fault recovery", () => {
-  it("persists a hold across a controller restart", () => {
+  it("persists a hold across a controller restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "x402-restart-"));
     dirs.push(dir);
     const dbPath = join(dir, "controller.db");
     const first = new Store(dbPath);
-    expect(first.reservations.admit(snapshot(), request, {
+    expect((await first.reservations.admit(snapshot(), request, {
       paymentKey: "a".repeat(64),
       specHash: "a".repeat(64),
       ttlMs: 60_000,
-    }).admitted).toBe(true);
+    })).admitted).toBe(true);
     first.close();
 
     const second = new Store(dbPath);
     stores.push(second);
-    expect(second.reservations.getByPayment("a".repeat(64))?.state).toBe("HELD");
-    expect(second.reservations.attachToSession(
+    expect((await second.reservations.getByPayment("a".repeat(64)))?.state).toBe("HELD");
+    expect((await second.reservations.attachToSession(
       snapshot(),
       request,
       "a".repeat(64),
       "sbx_restart",
       "a".repeat(64),
-    ).admitted).toBe(true);
+    )).admitted).toBe(true);
   });
 
-  it("does not release RELEASING capacity while the Pod still exists", () => {
+  it("does not release RELEASING capacity while the Pod still exists", async () => {
     const store = freshStore();
     let pod: { phase: string; deleted: boolean } | null = { phase: "Running", deleted: false };
     const fake = {
@@ -105,32 +105,31 @@ describe("reservation fault recovery", () => {
     });
     const capacity = new CapacityService({ cfg, store, provisioner: fake });
 
-    expect(store.reservations.admit(snapshot(), request, {
+    expect((await store.reservations.admit(snapshot(), request, {
       sessionId: "sbx_db_fail",
       state: "ALLOCATED",
-    }).admitted).toBe(true);
-    store.reservations.updatePod("sbx_db_fail", "pod-1");
-    expect(store.reservations.beginRelease("sbx_db_fail", "pod-1")).toBe(true);
+    })).admitted).toBe(true);
+    await store.reservations.updatePod("sbx_db_fail", "pod-1");
+    expect(await store.reservations.beginRelease("sbx_db_fail", "pod-1")).toBe(true);
 
-    return capacity.reap().then(async () => {
-      expect(store.reservations.getBySession("sbx_db_fail")?.state).toBe("RELEASING");
-      pod = null;
-      await capacity.reap();
-      expect(store.reservations.getBySession("sbx_db_fail")?.state).toBe("RELEASED");
-    });
+    await capacity.reap();
+    expect((await store.reservations.getBySession("sbx_db_fail"))?.state).toBe("RELEASING");
+    pod = null;
+    await capacity.reap();
+    expect((await store.reservations.getBySession("sbx_db_fail"))?.state).toBe("RELEASED");
   });
 
-  it("keeps a held reservation available until its TTL expires", () => {
+  it("keeps a held reservation available until its TTL expires", async () => {
     const store = freshStore();
     const now = Date.now();
-    expect(store.reservations.admit(snapshot(), request, {
+    expect((await store.reservations.admit(snapshot(), request, {
       paymentKey: "b".repeat(64),
       specHash: "b".repeat(64),
       ttlMs: 10_000,
-    }).admitted).toBe(true);
-    expect(store.reservations.reapExpiredHolds(now + 5_000)).toBe(0);
-    expect(store.reservations.getByPayment("b".repeat(64))?.state).toBe("HELD");
-    expect(store.reservations.reapExpiredHolds(now + 11_000)).toBe(1);
-    expect(store.reservations.getByPayment("b".repeat(64))?.state).toBe("RELEASED");
+    })).admitted).toBe(true);
+    expect(await store.reservations.reapExpiredHolds(now + 5_000)).toBe(0);
+    expect((await store.reservations.getByPayment("b".repeat(64)))?.state).toBe("HELD");
+    expect(await store.reservations.reapExpiredHolds(now + 11_000)).toBe(1);
+    expect((await store.reservations.getByPayment("b".repeat(64)))?.state).toBe("RELEASED");
   });
 });

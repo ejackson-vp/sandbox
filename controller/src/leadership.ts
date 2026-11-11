@@ -102,8 +102,15 @@ export class SoloLeadership extends BaseLeadership {
  * another replica may already own the lease.
  */
 export interface LeadershipHooks {
-  /** Enable writes and run anything else only a writer may do. Runs first. */
-  acquire(): void;
+  /**
+   * Enable writes and run anything else only a writer may do. Runs first.
+   *
+   * Returning a promise defers `start()` until it settles: startup recovery is
+   * a store write, and a network store makes it asynchronous. A rejection
+   * leaves the loop stopped and is logged, because a replica that could not
+   * recover the previous writer's in-flight operations must not reconcile.
+   */
+  acquire(): void | Promise<void>;
   /** Start the reconcile loop. */
   start(): void;
   /** Stop scheduling reconcile work. */
@@ -115,7 +122,25 @@ export interface LeadershipHooks {
 export function bindLeadership(leadership: Leadership, hooks: LeadershipHooks): () => void {
   return leadership.onChange((isLeader) => {
     if (isLeader) {
-      hooks.acquire();
+      const acquiring = hooks.acquire();
+      // Synchronous hooks keep the old ordering exactly. An async acquire (the
+      // controller's recovery write) has to settle before the loop starts, or
+      // a pass could reconcile rows the recovery was about to fence.
+      if (acquiring instanceof Promise) {
+        void (async () => {
+          try {
+            await acquiring;
+            // The role can change while recovery runs. `setLeader(false)`
+            // already stopped the loop (or it was never started), so starting it
+            // now would reconcile without the lease.
+            if (!leadership.isLeader()) return;
+            hooks.start();
+          } catch (err) {
+            log.error("leadership_acquire_failed", { error: (err as Error).message });
+          }
+        })();
+        return;
+      }
       hooks.start();
       return;
     }

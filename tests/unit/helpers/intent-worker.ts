@@ -86,7 +86,7 @@ function sessionRecord(id: string, key: string): SessionRecord {
   };
 }
 
-process.on("message", (message: Init | Request) => {
+process.on("message", async (message: Init | Request) => {
   if (message.type === "init") {
     try {
       store = new Store(message.dbPath);
@@ -101,7 +101,7 @@ process.on("message", (message: Init | Request) => {
   if (!store) return;
   if (message.type === "claim") {
     try {
-      const claim = store.claimPaymentIntent(message.paymentKey, message.specHash, message.staleMs);
+      const claim = await store.claimPaymentIntent(message.paymentKey, message.specHash, message.staleMs);
       process.send?.({
         type: "result",
         opId: message.opId,
@@ -115,7 +115,7 @@ process.on("message", (message: Init | Request) => {
   }
   if (message.type === "complete") {
     try {
-      const result = store.completeEntitlement(
+      const result = await store.completeEntitlement(
         message.paymentKey,
         message.token,
         paymentRecord(message.paymentKey),

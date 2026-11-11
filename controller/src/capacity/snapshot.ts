@@ -104,7 +104,13 @@ export class CapacitySnapshotBuilder {
   async snapshotWithWarm(): Promise<CapacitySnapshot> {
     const now = Date.now();
     const nodes = await this.loadNodes(now);
-    const reservations = this.reservations.listActive();
+    // One read of the durable reservations, then one read of the warm pods.
+    // The two are not a single consistent moment (they never were: listing pods
+    // is a network call), and admission is decided against whatever this
+    // snapshot says while the store re-checks the insert inside its own
+    // transaction. The snapshot is an input to the decision, never its
+    // authority.
+    const reservations = await this.reservations.listActive();
     const warm = await this.warmReservationsForSnapshot(nodes, now);
     return { nodes, reservations: [...reservations, ...warm], now, accounting: this.cfg.capacityAccounting };
   }

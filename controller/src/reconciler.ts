@@ -96,7 +96,12 @@ export class Reconciler {
     // and new readings instead of silently shortening or extending leases.
     this.clock = new ClockGuard({
       now: deps.now ?? (() => Date.now()),
-      onJump: (jump) => this.reportClockJump(jump),
+      // Reporting reads the store, so it cannot finish inside the clock read
+      // that noticed the jump. It is fire-and-forget by construction: its own
+      // body catches, and a report must never be the reason a pass fails.
+      onJump: (jump) => {
+        void this.reportClockJump(jump);
+      },
     });
     this.now = () => this.clock.now();
     this.serviceAddresses = new ServiceAddressResolver(() => this.now());
@@ -213,7 +218,7 @@ export class Reconciler {
       // earliest first, capped by the budget; a truncated remainder stays due
       // and is served by a later pass. Nothing here re-enters tick(), so a
       // backlog grows latency, never a busy loop.
-      const due = this.deps.store.listDue(now, budget);
+      const due = await this.deps.store.listDue(now, budget);
       const truncated = due.length >= budget;
 
       // Readiness first, terminal cleanup second: cleanup may delete a pod
@@ -229,19 +234,21 @@ export class Reconciler {
             error: (err as Error).message,
           });
         } finally {
-          this.rearm(session);
+          await this.rearm(session);
         }
       });
 
-      const terminal = this.deps.store.listTerminalWithPod().filter((session) => session.podName);
+      const terminal = (await this.deps.store.listTerminalWithPod()).filter(
+        (session) => session.podName,
+      );
       await this.reconcilePhase("cleanup", terminal, async (session) => {
         await this.deps.provisioner.deletePod(session.podName!, 0).catch(() => undefined);
-        this.deps.store.clearPod(session.id);
+        await this.deps.store.clearPod(session.id);
       });
 
       // Same capacity numbers as the old full listing, from one grouped COUNT
       // instead of materialising every live row.
-      const counts = this.deps.store.countLiveByState();
+      const counts = await this.deps.store.countLiveByState();
       metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE").set(
         {},
         (counts.READY ?? 0) + (counts.ACTIVE ?? 0),
@@ -258,8 +265,7 @@ export class Reconciler {
       // Sessions still due after the pass: the budget truncated the read, or
       // a due row was skipped because it is already in flight. When the pass
       // exhausted the due set there is nothing to count.
-      const backlog =
-        truncated || due.length > dispatched ? this.deps.store.countDue(now) : 0;
+      const backlog = truncated || due.length > dispatched ? await this.deps.store.countDue(now) : 0;
       metrics
         .gauge("sandbox_reconcile_due_backlog", "Sessions due but not dispatched this pass")
         .set({}, backlog);
@@ -297,12 +303,12 @@ export class Reconciler {
    * only applies while the row is still due, so a concurrent transition that
    * armed a future deadline always wins.
    */
-  private rearm(processed: SessionRecord): void {
+  private async rearm(processed: SessionRecord): Promise<void> {
     try {
-      const current = this.deps.store.getSession(processed.id);
+      const current = await this.deps.store.getSession(processed.id);
       if (!current || current.state !== processed.state) return;
       const now = this.now();
-      this.deps.store.rearmDue(current.id, now + cadenceFor(current.state), now);
+      await this.deps.store.rearmDue(current.id, now + cadenceFor(current.state), now);
     } catch (err) {
       log.warn("reconcile_rearm_failed", {
         sessionId: processed.id,
@@ -318,13 +324,12 @@ export class Reconciler {
    * affected. A session whose immutable deadline falls inside the jumped window
    * is the one that ends early (forward) or late (backward).
    */
-  private reportClockJump(jump: ClockJump): void {
+  private async reportClockJump(jump: ClockJump): Promise<void> {
     const low = Math.min(jump.from, jump.to);
     const high = Math.max(jump.from, jump.to);
     let affected: string[] = [];
     try {
-      affected = this.deps.store
-        .listNonTerminal()
+      affected = (await this.deps.store.listNonTerminal())
         .filter(
           (session) =>
             session.leaseExpiresAt !== null &&
@@ -417,14 +422,14 @@ export class Reconciler {
       await this.lifecycle.enforce();
       await this.lifecycle.cleanup();
       await this.termination.sweepPvcs();
-      this.termination.reconcileRefunds();
+      await this.termination.reconcileRefunds();
       // Settled-but-unentitled payments first, then the refund worker in the same
       // pass so a recovery that needs a real transfer is attempted immediately.
       await this.settlementRecovery.run();
       await this.refundWorker.run();
       // Expired challenge nonces are dead weight; the TTL check on burn is what
       // enforces the bound, this just keeps the table small.
-      this.deps.store.pruneChallengeNonces();
+      await this.deps.store.pruneChallengeNonces();
       await this.ctx.capacity.reap();
       await this.backup.maybeRun();
     } catch (err) {
@@ -439,8 +444,8 @@ export class Reconciler {
     // A client destroy must win from every non-terminal state, otherwise a
     // session destroyed while SUSPENDED is left with its workspace.
     if (session.destroyRequested && session.state !== "TERMINATING") {
-      if (this.ctx.store.requestTermination(session.id, "client_destroy")) {
-        const updated = this.ctx.store.getSession(session.id);
+      if (await this.ctx.store.requestTermination(session.id, "client_destroy")) {
+        const updated = await this.ctx.store.getSession(session.id);
         if (updated) {
           await this.terminate(updated);
           return;
@@ -520,7 +525,7 @@ export class Reconciler {
           const strikes = (this.healthStrikes.get(session.id) ?? 0) + 1;
           this.healthStrikes.set(session.id, strikes);
           if (strikes >= 2) {
-            this.ctx.store.requestTermination(session.id, "failure:guest_exited", {
+            await this.ctx.store.requestTermination(session.id, "failure:guest_exited", {
               code: "guest_exited",
               message: "the sandbox guest exited before the lease ended",
             });
@@ -538,7 +543,7 @@ export class Reconciler {
     if (deadline === null) return;
     const now = this.ctx.now();
     if (now > deadline + this.ctx.cfg.leaseGraceMs) {
-      this.ctx.store.requestTermination(session.id, "lease_expired");
+      await this.ctx.store.requestTermination(session.id, "lease_expired");
       log.warn("sandbox_lease_expired", { sessionId: session.id, state: session.state, overrunMs: now - deadline });
     }
   }

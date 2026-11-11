@@ -48,7 +48,7 @@ export class ProvisioningAdmission {
    * This runs before the relay gate and the compute reservation, because a
    * session that can never be provisioned must not hold capacity or a slot.
    */
-  runtimeProfile(session: SessionRecord): RuntimeProfile | null {
+  async runtimeProfile(session: SessionRecord): Promise<RuntimeProfile | null> {
     const requested = sessionRuntime(session);
     const profile = resolveRuntimeProfile(this.ctx.cfg.runtimeProfiles, requested);
     if (profile) return profile;
@@ -61,7 +61,7 @@ export class ProvisioningAdmission {
       runtime: requested.slice(0, 64),
       configured: Object.keys(this.ctx.cfg.runtimeProfiles).join(","),
     });
-    this.ctx.store.requestTermination(session.id, "failure:runtime_profile_unavailable", {
+    await this.ctx.store.requestTermination(session.id, "failure:runtime_profile_unavailable", {
       code: "runtime_profile_unavailable",
       message: `runtime profile ${requested.slice(0, 64)} is not available on this controller`,
     });
@@ -86,7 +86,7 @@ export class ProvisioningAdmission {
       metrics
         .counter("sandbox_provisioning_relay_gate_total", "Creates held for relay readiness")
         .inc({ result: "timeout" });
-      this.ctx.store.requestTermination(session.id, "failure:provisioning_timeout", {
+      await this.ctx.store.requestTermination(session.id, "failure:provisioning_timeout", {
         code: "provisioning_timeout",
         message: "the relay did not become ready in time",
       });
@@ -108,7 +108,7 @@ export class ProvisioningAdmission {
    * queue wait is recorded once, on the pass that finally admits it.
    */
   async reserve(session: SessionRecord): Promise<ReservationRecord | null> {
-    let reservation = this.ctx.capacity.getReservation(session.id);
+    let reservation = await this.ctx.capacity.getReservation(session.id);
     if (!reservation) {
       const admission = await this.ctx.capacity.attach(
         session.paymentKey,
@@ -135,7 +135,7 @@ export class ProvisioningAdmission {
       metrics
         .histogram("sandbox_provisioning_wait_seconds", "Time spent waiting for a provisioning slot", LATENCY_BUCKETS)
         .observe(waitMs / 1000);
-      this.ctx.store.mergeTimings(session.id, { provisionQueueWaitMs: waitMs });
+      await this.ctx.store.mergeTimings(session.id, { provisionQueueWaitMs: waitMs });
     }
     return reservation;
   }
@@ -150,12 +150,12 @@ export class ProvisioningAdmission {
     let workspacePvc = session.workspacePvc ?? undefined;
     if (!workspacePvc) {
       workspacePvc = await this.ctx.provisioner.createWorkspacePvc(session.id, session.limits.diskMiB);
-      this.ctx.store.setWorkspacePvc(session.id, workspacePvc);
+      await this.ctx.store.setWorkspacePvc(session.id, workspacePvc);
     } else if (!(await this.ctx.provisioner.workspacePvcExists(workspacePvc).catch(() => false))) {
       // A stale name from a failed attempt; create a fresh PVC rather than
       // leaving the first pod Pending forever.
       workspacePvc = await this.ctx.provisioner.createWorkspacePvc(session.id, session.limits.diskMiB);
-      this.ctx.store.setWorkspacePvc(session.id, workspacePvc);
+      await this.ctx.store.setWorkspacePvc(session.id, workspacePvc);
     }
     return workspacePvc;
   }

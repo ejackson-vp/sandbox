@@ -6,6 +6,13 @@
  * production this becomes Postgres/DynamoDB with the same invariants
  * (UNIQUE payment key, conditional transitions, UNIQUE (session, request)).
  *
+ * Every method the ports declare is `async` and returns the value the
+ * synchronous statement produced. There is no `await` inside any of them: the
+ * `async` is the port contract (ADR 0010), not an admission that this adapter
+ * does I/O concurrently. `node:sqlite` blocks, which is why the guarantees here
+ * still lean on one connection serialising `BEGIN IMMEDIATE` and the
+ * `WHERE state = ...` guards; a network adapter has to earn them again.
+ *
  * Schema changes are additive and transactional; a database from a newer build
  * is refused rather than downgraded.
  */
@@ -30,9 +37,10 @@ import { prepareStatements } from "./store/statements.js";
 import { PaymentRepository } from "./store/payments.js";
 import { ChallengeNonceRepository, type ChallengeBurnResult } from "./store/challenges.js";
 import { LedgerRepository, type UnclaimedLedgerEntry } from "./store/ledger.js";
+import { OperationRepository } from "./store/operations.js";
 import { BudgetRepository, type BudgetDecision, type BudgetLimits } from "./store/budgets.js";
 import { cadenceFor } from "./reconcile-cadence.js";
-import { finalStateForReason, SOURCE_STATES } from "@x402s/shared/protocol";
+import { finalStateForReason } from "@x402s/shared/protocol";
 import { metrics } from "@x402s/shared/runtime";
 
 import { ReservationRepository } from "./capacity/reservations.js";
@@ -99,6 +107,8 @@ export class Store {
   readonly payments: PaymentRepository;
   readonly challenges: ChallengeNonceRepository;
   readonly ledger: LedgerRepository;
+  /** Single-operation gate, restart recovery and exec requests. */
+  private readonly operations: OperationRepository;
   readonly budgets: BudgetRepository;
   /** Path of the main database file (`:memory:` in tests). */
   readonly path: string;
@@ -142,6 +152,7 @@ export class Store {
     this.payments = new PaymentRepository(this.db, this.stmts, this.budgets, this.budgetWindowMs);
     this.challenges = new ChallengeNonceRepository(this.db, this.stmts);
     this.ledger = new LedgerRepository(this.stmts);
+    this.operations = new OperationRepository(this.db, this.stmts, (id) => this.readSession(id));
   }
 
   close(): void {
@@ -175,7 +186,7 @@ export class Store {
    * Readiness probe: schema is current and the database accepts a write.
    * Runs on the store connection so it sees exactly what the reconciler sees.
    */
-  healthCheck(): StoreHealth {
+  async healthCheck(): Promise<StoreHealth> {
     return checkStoreHealth(this.db, { writable: !this.writesBlocked });
   }
 
@@ -184,7 +195,7 @@ export class Store {
    * report 0; the files may disappear between stat calls during a checkpoint,
    * so a missing file is 0 rather than an error.
    */
-  stats(): { sizeBytes: number; walBytes: number } {
+  async stats(): Promise<{ sizeBytes: number; walBytes: number }> {
     const sizeOf = (path: string): number => {
       try {
         return statSync(path).size;
@@ -204,47 +215,51 @@ export class Store {
   /* ---------------- payment intents (outbox) ---------------- */
 
   /** Lease an intent; see PaymentRepository for the ownership contract. */
-  claimPaymentIntent(
+  async claimPaymentIntent(
     paymentKey: string,
     specHashValue: string,
     staleMs: number,
     requirementsJson: string | null = null,
-  ): IntentClaimResult {
+  ): Promise<IntentClaimResult> {
     return this.payments.claimPaymentIntent(paymentKey, specHashValue, staleMs, requirementsJson);
   }
 
-  getPaymentIntent(paymentKey: string): PaymentIntentRecord | null {
+  async getPaymentIntent(paymentKey: string): Promise<PaymentIntentRecord | null> {
     return this.payments.getPaymentIntent(paymentKey);
   }
 
-  failPaymentIntent(paymentKey: string, reason: string): void {
+  async failPaymentIntent(paymentKey: string, reason: string): Promise<void> {
     this.payments.failPaymentIntent(paymentKey, reason);
   }
 
   /** Settle the intent and create the paid session (see PaymentRepository). */
-  completeEntitlement(
+  async completeEntitlement(
     paymentKey: string,
     claimToken: string,
     payment: PaymentRecord,
     session: SessionRecord,
-  ): { sessionId: string; created: boolean } {
+  ): Promise<{ sessionId: string; created: boolean }> {
     return this.payments.completeEntitlement(paymentKey, claimToken, payment, session);
   }
 
   /* ---------------- challenge nonces (F-07) ---------------- */
 
   /** Mint a single-use nonce for one 402 challenge. */
-  issueChallengeNonce(nonce: string, ttlMs: number, maxActive: number): { nonce: string; expiresAt: number } {
+  async issueChallengeNonce(
+    nonce: string,
+    ttlMs: number,
+    maxActive: number,
+  ): Promise<{ nonce: string; expiresAt: number }> {
     return this.challenges.issue(nonce, Date.now(), ttlMs, maxActive);
   }
 
   /** Burn a nonce for one payment; see ChallengeNonceRepository. */
-  burnChallengeNonce(nonce: string, paymentKey: string): ChallengeBurnResult {
+  async burnChallengeNonce(nonce: string, paymentKey: string): Promise<ChallengeBurnResult> {
     return this.challenges.burn(nonce, paymentKey, Date.now());
   }
 
   /** Drop expired nonces. Called from housekeeping so the table stays bounded. */
-  pruneChallengeNonces(): number {
+  async pruneChallengeNonces(): Promise<number> {
     return this.challenges.prune(Date.now());
   }
 
@@ -255,82 +270,102 @@ export class Store {
    * See BudgetRepository: all-or-nothing, one transaction, no spend until the
    * ledger row is written.
    */
-  reserveBudgets(payer: string | null, amountAtomic: string, limits: BudgetLimits): BudgetDecision {
+  async reserveBudgets(
+    payer: string | null,
+    amountAtomic: string,
+    limits: BudgetLimits,
+  ): Promise<BudgetDecision> {
     return this.budgets.reserve(payer, amountAtomic, limits, Date.now());
   }
 
   /* ---------------- sessions ---------------- */
 
-  getSession(id: string): SessionRecord | null {
+  /**
+   * The synchronous read the async port method and the adapter's own
+   * transactions share.
+   *
+   * Nothing outside this class uses it. The two internal callers
+   * (`claimOperation`, `finalizeTermination`) read and then write, and on
+   * SQLite that pair must not be interrupted: `claimOperation` holds
+   * `BEGIN IMMEDIATE` open, so an `await` in the middle would let another
+   * request on this connection try to start a second transaction. A Postgres
+   * adapter replaces both pairs with one guarded statement; until then the read
+   * stays inside the adapter, never in a caller.
+   */
+  private readSession(id: string): SessionRecord | null {
     const row = this.stmts.getSession!.get(id) as RawSession | undefined;
     return row ? mapSession(row) : null;
   }
 
-  getPayment(key: string): PaymentRecord | null {
+  async getSession(id: string): Promise<SessionRecord | null> {
+    return this.readSession(id);
+  }
+
+  async getPayment(key: string): Promise<PaymentRecord | null> {
     return this.payments.getPaymentRecord(key);
   }
 
   /* ---------------- payment ledger (delegated) ---------------- */
 
-  getLedgerByPayment(paymentKey: string): PaymentLedgerRecord | null {
+  async getLedgerByPayment(paymentKey: string): Promise<PaymentLedgerRecord | null> {
     return this.ledger.getByPayment(paymentKey);
   }
 
-  getLedgerBySession(sessionId: string): PaymentLedgerRecord | null {
+  async getLedgerBySession(sessionId: string): Promise<PaymentLedgerRecord | null> {
     return this.ledger.getBySession(sessionId);
   }
 
   /** By EIP-3009 authorisation nonce, for a facilitator webhook or an operator. */
-  getLedgerByNonce(settlementNonce: string): PaymentLedgerRecord | null {
+  async getLedgerByNonce(settlementNonce: string): Promise<PaymentLedgerRecord | null> {
     return this.ledger.getByNonce(settlementNonce);
   }
 
-  listLedgerByStatus(status: LedgerStatus): PaymentLedgerRecord[] {
+  async listLedgerByStatus(status: LedgerStatus): Promise<PaymentLedgerRecord[]> {
     return this.ledger.listByStatus(status);
   }
 
-  countLedgerByStatus(status: LedgerStatus): number {
+  async countLedgerByStatus(status: LedgerStatus): Promise<number> {
     return this.ledger.countByStatus(status);
   }
 
-  listUnrefundedTerminalBeforeReady(): PaymentLedgerRecord[] {
+  async listUnrefundedTerminalBeforeReady(): Promise<PaymentLedgerRecord[]> {
     return this.ledger.listUnrefundedTerminalBeforeReady();
   }
 
   /** Settled rows with no session (unentitled or duplicate charges). */
-  listUnclaimedSettled(): PaymentLedgerRecord[] {
+  async listUnclaimedSettled(): Promise<PaymentLedgerRecord[]> {
     return this.ledger.listUnclaimedSettled();
   }
 
   /** REFUND_PENDING rows whose next attempt is due (#31). */
-  listRefundPendingDue(now: number, limit: number): PaymentLedgerRecord[] {
+  async listRefundPendingDue(now: number, limit: number): Promise<PaymentLedgerRecord[]> {
     return this.ledger.listRefundPendingDue(now, limit);
   }
 
-  markRefundPending(paymentKey: string, reason: string): boolean {
+  async markRefundPending(paymentKey: string, reason: string): Promise<boolean> {
     return this.ledger.markRefundPending(paymentKey, reason);
   }
 
-  markRefunded(paymentKey: string, transaction: string, reason: string): boolean {
+  async markRefunded(paymentKey: string, transaction: string, reason: string): Promise<boolean> {
     return this.ledger.markRefunded(paymentKey, transaction, reason);
   }
 
   /** Record one failed refund attempt and back off. */
-  recordRefundAttempt(paymentKey: string, error: string, nextAttemptAt: number): boolean {
+  async recordRefundAttempt(paymentKey: string, error: string, nextAttemptAt: number): Promise<boolean> {
     return this.ledger.recordRefundAttempt(paymentKey, error, nextAttemptAt);
   }
 
   /** Write the ledger row for a settled payment that no session consumed (#31). */
-  insertUnclaimedLedger(entry: UnclaimedLedgerEntry): boolean {
+  async insertUnclaimedLedger(entry: UnclaimedLedgerEntry): Promise<boolean> {
     return this.ledger.insertUnclaimed(entry);
   }
 
   /** Claimed intents past the recovery grace: the settle-then-crash window. */
-  listStaleClaimedIntents(olderThan: number, limit: number): PaymentIntentRecord[] {
+  async listStaleClaimedIntents(olderThan: number, limit: number): Promise<PaymentIntentRecord[]> {
     return this.ledger.listStaleClaimedIntents(olderThan, limit);
   }
 
-  listNonTerminal(): SessionRecord[] {
+  async listNonTerminal(): Promise<SessionRecord[]> {
     return (this.stmts.listNonTerminal!.all() as unknown as RawSession[]).map(mapSession);
   }
 
@@ -347,17 +382,17 @@ export class Store {
    * session whose state change already armed a future deadline must not be
    * overwritten. Returns true when this call moved it.
    */
-  rearmDue(id: string, atMs: number, nowMs: number): boolean {
+  async rearmDue(id: string, atMs: number, nowMs: number): Promise<boolean> {
     return this.stmts.rearmDue!.run(atMs, id, nowMs).changes > 0;
   }
 
   /** Live sessions whose next pass is due right now. */
-  countDue(nowMs: number): number {
+  async countDue(nowMs: number): Promise<number> {
     return ((this.stmts.countDue!.get(nowMs) as { n: number } | undefined)?.n ?? 0);
   }
 
   /** Live session counts by state, without materialising rows. */
-  countLiveByState(): Partial<Record<SessionState, number>> {
+  async countLiveByState(): Promise<Partial<Record<SessionState, number>>> {
     const counts: Partial<Record<SessionState, number>> = {};
     for (const row of this.stmts.countLiveByState!.all() as Array<{ state: string; n: number }>) {
       counts[row.state as SessionState] = row.n;
@@ -366,11 +401,11 @@ export class Store {
   }
 
   /** Live sessions whose next pass is due, earliest first, bounded by `limit`. */
-  listDue(nowMs: number, limit: number): SessionRecord[] {
+  async listDue(nowMs: number, limit: number): Promise<SessionRecord[]> {
     return (this.stmts.listDue!.all(nowMs, limit) as unknown as RawSession[]).map(mapSession);
   }
 
-  listTerminalWithPod(): SessionRecord[] {
+  async listTerminalWithPod(): Promise<SessionRecord[]> {
     return (this.stmts.listTerminalWithPod!.all() as unknown as RawSession[]).map(mapSession);
   }
 
@@ -382,27 +417,27 @@ export class Store {
     return ((this.stmts.countPayments!.get() as { n: number } | undefined)?.n ?? 0);
   }
 
-  setProvisioning(id: string, podName: string): boolean {
+  async setProvisioning(id: string, podName: string): Promise<boolean> {
     const now = Date.now();
     return this.stmts.setProvisioning!.run(podName, now + cadenceFor("PROVISIONING"), now, id).changes > 0;
   }
 
   /** Replace the pod of a session that is already PROVISIONING (relay restart). */
-  setProvisioningPod(id: string, podName: string): boolean {
+  async setProvisioningPod(id: string, podName: string): Promise<boolean> {
     return this.stmts.setProvisioningPod!.run(podName, Date.now(), id).changes > 0;
   }
 
-  setRelayToken(id: string, tokenHash: string): void {
+  async setRelayToken(id: string, tokenHash: string): Promise<void> {
     this.stmts.setRelayToken!.run(tokenHash, Date.now(), id);
   }
 
-  setReady(
+  async setReady(
     id: string,
     readyAt: number,
     leaseExpiresAt: number,
     attestationJson: string,
     guestPublicKey: string,
-  ): boolean {
+  ): Promise<boolean> {
     const now = Date.now();
     return (
       this.stmts.setReady!.run(
@@ -418,17 +453,17 @@ export class Store {
     );
   }
 
-  touchActivity(id: string): void {
+  async touchActivity(id: string): Promise<void> {
     const now = Date.now();
     this.stmts.touchActivity!.run(now, now, id);
   }
 
-  markSuspending(id: string): boolean {
+  async markSuspending(id: string): Promise<boolean> {
     const now = Date.now();
     return this.stmts.markSuspending!.run(now + cadenceFor("SUSPENDING"), now, id).changes > 0;
   }
 
-  markSuspended(id: string, suspendedAt: number): boolean {
+  async markSuspended(id: string, suspendedAt: number): Promise<boolean> {
     return (
       this.stmts.markSuspended!.run(
         suspendedAt,
@@ -439,28 +474,32 @@ export class Store {
     );
   }
 
-  markResuming(id: string, podName: string): boolean {
+  async markResuming(id: string, podName: string): Promise<boolean> {
     const now = Date.now();
     return this.stmts.markResuming!.run(podName, now + cadenceFor("RESUMING"), now, id).changes > 0;
   }
 
-  setWorkspacePvc(id: string, pvcName: string): void {
+  async setWorkspacePvc(id: string, pvcName: string): Promise<void> {
     this.stmts.setWorkspacePvc!.run(pvcName, Date.now(), id);
   }
 
-  setNodeName(id: string, nodeName: string): void {
+  async setNodeName(id: string, nodeName: string): Promise<void> {
     this.stmts.setNodeName!.run(nodeName, Date.now(), id);
   }
 
-  clearWorkspacePvc(id: string): void {
+  async clearWorkspacePvc(id: string): Promise<void> {
     this.stmts.clearWorkspacePvc!.run(Date.now(), id);
   }
 
-  listTerminalWithPvc(): SessionRecord[] {
+  async listTerminalWithPvc(): Promise<SessionRecord[]> {
     return (this.stmts.listTerminalWithPvc!.all() as unknown as RawSession[]).map(mapSession);
   }
 
-  requestTermination(id: string, reason: string, failure?: { code: string; message: string }): boolean {
+  async requestTermination(
+    id: string,
+    reason: string,
+    failure?: { code: string; message: string },
+  ): Promise<boolean> {
     const now = Date.now();
     const changed = this.stmts.requestTermination!.run(
       now,
@@ -481,8 +520,8 @@ export class Store {
   }
 
   /** Terminal state is derived from the termination reason. */
-  finalizeTermination(id: string): SessionState | null {
-    const session = this.getSession(id);
+  async finalizeTermination(id: string): Promise<SessionState | null> {
+    const session = this.readSession(id);
     if (!session || session.state !== "TERMINATING") return null;
     const reason = session.terminationReason ?? "";
     const final = finalStateForReason(reason);
@@ -491,22 +530,22 @@ export class Store {
     return final;
   }
 
-  requestDestroy(id: string): void {
+  async requestDestroy(id: string): Promise<void> {
     // Due now: a destroy is an event, not a state that can wait out its cadence.
     const now = Date.now();
     this.stmts.requestDestroy!.run(now, now, id);
   }
 
-  markRelayPurged(id: string): void {
+  async markRelayPurged(id: string): Promise<void> {
     this.stmts.markRelayPurged!.run(Date.now(), Date.now(), id);
   }
 
-  clearPod(id: string): void {
+  async clearPod(id: string): Promise<void> {
     this.stmts.clearPod!.run(Date.now(), id);
   }
 
   /** Atomically merge lifecycle timings (JSON patch semantics). */
-  mergeTimings(id: string, patch: Record<string, number | undefined>): void {
+  async mergeTimings(id: string, patch: Record<string, number | undefined>): Promise<void> {
     const clean: Record<string, number> = {};
     for (const [key, value] of Object.entries(patch)) {
       if (typeof value === "number" && Number.isFinite(value)) clean[key] = value;
@@ -517,125 +556,36 @@ export class Store {
 
   /* ---------------- operations ---------------- */
 
-  /**
-   * Startup recovery: the previous controller process may have died with an
-   * operation in flight. Its outcome is unknown, so the request becomes
-   * `outcome_unknown` and its session keeps the single-operation gate closed.
-   *
-   * The session's execution epoch is bumped in the same transaction. The gate
-   * is released only by `clearFencedGate` after the relay reports that the
-   * guest no longer has that request active (see OperationFence). Recovery
-   * publishes the new epoch to the relay before the fence can clear: the relay
-   * then refuses frames from an older generation and withdraws one that was
-   * forwarded but never observed, so it cannot start at the guest afterwards.
-   */
-  recoverInterruptedOperations(): { requests: number; sessions: number } {
-    const now = Date.now();
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const requests = this.stmts.markPendingOutcomeUnknown!.run(now).changes;
-      const sessions = this.stmts.fenceActiveSessions!.run(now).changes;
-      this.db.exec("COMMIT");
-      return { requests: Number(requests), sessions: Number(sessions) };
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+  /** Startup recovery; see `OperationRepository.recoverInterruptedOperations`. */
+  async recoverInterruptedOperations(): Promise<{ requests: number; sessions: number }> {
+    return this.operations.recoverInterruptedOperations();
   }
 
-  /** Sessions whose operation gate is held by an unreconciled recovery fence. */
-  listFencedSessions(): SessionRecord[] {
-    return (this.stmts.listFencedSessions!.all() as unknown as RawSession[]).map(mapSession);
+  async listFencedSessions(): Promise<SessionRecord[]> {
+    return this.operations.listFencedSessions();
   }
 
-  /**
-   * Release a recovery fence only if it still describes this session and
-   * generation. Idempotent: a second caller (or a newer operation) changes
-   * nothing.
-   */
-  clearFencedGate(sessionId: string, requestId: string, epoch: number): boolean {
-    const now = Date.now();
-    return (
-      this.stmts.clearFencedGate!.run(
-        now + cadenceFor("READY"),
-        now,
-        sessionId,
-        requestId,
-        epoch,
-      ).changes > 0
-    );
+  async clearFencedGate(sessionId: string, requestId: string, epoch: number): Promise<boolean> {
+    return this.operations.clearFencedGate(sessionId, requestId, epoch);
   }
 
-  /**
-   * Atomically claim the single operation slot for a session.
-   * Request id doubles as the idempotency key. The returned epoch must travel
-   * with the relay frame so the guest can reject stale generations.
-   */
-  claimOperation(sessionId: string, requestId: string, op: string): ClaimOperationResult {
-    const now = Date.now();
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const session = this.getSession(sessionId);
-      if (!session) {
-        this.db.exec("COMMIT");
-        return { ok: false, code: "not_usable", state: "FAILED" };
-      }
-      if (!SOURCE_STATES.operation_started.includes(session.state)) {
-        this.db.exec("COMMIT");
-        return { ok: false, code: "not_usable", state: session.state };
-      }
-      if (session.leaseExpiresAt !== null && now >= session.leaseExpiresAt) {
-        this.db.exec("COMMIT");
-        return { ok: false, code: "lease_expired", state: session.state };
-      }
-      const existing = this.stmts.getRequest!.get(sessionId, requestId) as
-        | { state: string }
-        | undefined;
-      if (existing) {
-        this.db.exec("COMMIT");
-        return { ok: false, code: "duplicate", state: session.state, requestId };
-      }
-      if (session.activeRequestId) {
-        this.db.exec("COMMIT");
-        return { ok: false, code: "busy", state: session.state, requestId: session.activeRequestId };
-      }
-      this.stmts.insertRequest!.run(requestId, sessionId, op, session.execEpoch, now, now);
-      this.stmts.claimActive!.run(requestId, now + cadenceFor("ACTIVE"), now, sessionId);
-      this.db.exec("COMMIT");
-      return { ok: true, requestId, epoch: session.execEpoch };
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+  async claimOperation(
+    sessionId: string,
+    requestId: string,
+    op: string,
+  ): Promise<ClaimOperationResult> {
+    return this.operations.claimOperation(sessionId, requestId, op);
   }
 
-  finishOperation(sessionId: string, requestId: string, outcome: "done" | "error" | "abandoned"): void {
-    const now = Date.now();
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      // A caller may have read this request as pending before a controller
-      // restart fenced it. Recovery owns that request now; a stale finish must
-      // not clear the gate or overwrite `outcome_unknown`.
-      const finished = this.stmts.finishRequest!.run(outcome, now, sessionId, requestId).changes;
-      if (finished > 0) this.stmts.clearActive!.run(now + cadenceFor("READY"), now, sessionId, requestId);
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+  async finishOperation(
+    sessionId: string,
+    requestId: string,
+    outcome: "done" | "error" | "abandoned",
+  ): Promise<void> {
+    this.operations.finishOperation(sessionId, requestId, outcome);
   }
 
-  getExecRequest(sessionId: string, requestId: string): ExecRequestRecord | null {
-    const row = this.stmts.getRequest!.get(sessionId, requestId) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    return {
-      id: row.id as string,
-      sessionId: row.session_id as string,
-      op: row.op as string,
-      state: row.state as ExecRequestRecord["state"],
-      epoch: row.epoch as number,
-      createdAt: row.created_at as number,
-      updatedAt: row.updated_at as number,
-    };
+  async getExecRequest(sessionId: string, requestId: string): Promise<ExecRequestRecord | null> {
+    return this.operations.getExecRequest(sessionId, requestId);
   }
 }

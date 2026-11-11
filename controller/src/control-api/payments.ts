@@ -22,8 +22,8 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
    * need a second round trip (`GET /internal/sessions/:id`) on the create
    * critical path. Kept additive: an older API ignores the extra field.
    */
-  const completionResponse = (sessionId: string | null, created: boolean) => {
-    const session = sessionId ? describeSession(store, sessionId) : null;
+  const completionResponse = async (sessionId: string | null, created: boolean) => {
+    const session = sessionId ? await describeSession(store, sessionId) : null;
     return {
       sessionId,
       state: "PAID" as const,
@@ -31,13 +31,13 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       ...(session ? { session } : {}),
     };
   };
-  app.post("/internal/payment-intents/claim", (req: Request, res: Response) => {
+  app.post("/internal/payment-intents/claim", async (req: Request, res: Response) => {
     const parsed = intentClaimSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
       return;
     }
-    const result = store.claimPaymentIntent(
+    const result = await store.claimPaymentIntent(
       parsed.data.paymentKey,
       parsed.data.specHash,
       parsed.data.staleMs ?? 30_000,
@@ -69,8 +69,8 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     });
   });
 
-  app.get("/internal/payment-intents/:paymentKey", (req: Request, res: Response) => {
-    const intent = store.getPaymentIntent(String(req.params.paymentKey ?? ""));
+  app.get("/internal/payment-intents/:paymentKey", async (req: Request, res: Response) => {
+    const intent = await store.getPaymentIntent(String(req.params.paymentKey ?? ""));
     if (!intent) {
       res.status(404).json({ error: "not_found" });
       return;
@@ -91,13 +91,13 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       return;
     }
     const body = parsed.data;
-    const intent = store.getPaymentIntent(paymentKey);
+    const intent = await store.getPaymentIntent(paymentKey);
     if (!intent) {
       res.status(409).json({ error: "intent_not_claimed" });
       return;
     }
     if (intent.status === "settled") {
-      res.json(completionResponse(intent.sessionId, false));
+      res.json(await completionResponse(intent.sessionId, false));
       return;
     }
     if (body.payment.paymentKey !== paymentKey) {
@@ -168,7 +168,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     const now = Date.now();
     let completed: { sessionId: string; created: boolean };
     try {
-      completed = store.completeEntitlement(
+      completed = await store.completeEntitlement(
         paymentKey,
         body.claimToken,
         {
@@ -230,7 +230,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       );
       if (completed.created) {
         if (body.timings) {
-          store.mergeTimings(body.sessionId, body.timings);
+          await store.mergeTimings(body.sessionId, body.timings);
         }
         metrics.counter("sandbox_sessions_created_total", "Entitlements created").inc({
           tier: spec.tier,
@@ -246,7 +246,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       }
     } catch (err) {
       if (err instanceof PaymentAlreadyRedeemedError) {
-        const existing = store.getPaymentIntent(paymentKey);
+        const existing = await store.getPaymentIntent(paymentKey);
         res.status(409).json({ error: "payment_already_redeemed", sessionId: existing?.sessionId });
         return;
       }
@@ -264,15 +264,17 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
         // The claim was reclaimed while this request was in flight. Do not free
         // capacity here: the live owner holds the same payment reservation.
         // If it has already settled, hand back the winning session.
-        const current = store.getPaymentIntent(paymentKey);
+        const current = await store.getPaymentIntent(paymentKey);
         if (current?.status === "settled" && current.sessionId) {
-          res.json(completionResponse(current.sessionId, false));
+          res.json(await completionResponse(current.sessionId, false));
           return;
         }
         res.status(409).json({ error: "stale_claim", message: "this intent is no longer held by this claim" });
         return;
       }
-      deps.capacity.releaseSession?.(body.sessionId);
+      // Best effort, exactly as before: the reservation may not exist, and a
+      // failure to release it must not replace the error being reported.
+      await deps.capacity.releaseSession(body.sessionId).catch(() => false);
       throw err;
     }
     if (!completed.created) {
@@ -280,7 +282,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
         sessionId: completed.sessionId,
         paymentKeyPrefix: paymentKey.slice(0, 12),
       });
-      res.json(completionResponse(completed.sessionId, false));
+      res.json(await completionResponse(completed.sessionId, false));
       return;
     }
     log.info("entitlement_created", {
@@ -289,36 +291,36 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       durationSeconds: spec.durationSeconds,
       paymentKeyPrefix: paymentKey.slice(0, 12),
     });
-    res.status(201).json(completionResponse(body.sessionId, true));
+    res.status(201).json(await completionResponse(body.sessionId, true));
   });
 
-  app.post("/internal/payment-intents/:paymentKey/fail", (req: Request, res: Response) => {
+  app.post("/internal/payment-intents/:paymentKey/fail", async (req: Request, res: Response) => {
     const reason = String((req.body ?? {}).reason ?? "settlement_failed");
-    store.failPaymentIntent(String(req.params.paymentKey ?? ""), reason);
+    await store.failPaymentIntent(String(req.params.paymentKey ?? ""), reason);
     log.warn("payment_intent_failed", { reason });
     res.json({ ok: true });
   });
 
   /* ---------------- payment ledger ---------------- */
 
-  app.get("/internal/payments", (req: Request, res: Response) => {
+  app.get("/internal/payments", async (req: Request, res: Response) => {
     const status = String(req.query.status ?? "REFUND_PENDING");
     if (status !== "SETTLED" && status !== "REFUND_PENDING" && status !== "REFUNDED") {
       res.status(400).json({ error: "invalid_status" });
       return;
     }
-    res.json({ payments: store.listLedgerByStatus(status as LedgerStatus) });
+    res.json({ payments: await store.listLedgerByStatus(status as LedgerStatus) });
   });
 
   // A facilitator webhook or an operator can key a refund by the EIP-3009
   // authorisation nonce instead of the payment key (#31).
-  app.get("/internal/payments/by-nonce/:nonce", (req: Request, res: Response) => {
+  app.get("/internal/payments/by-nonce/:nonce", async (req: Request, res: Response) => {
     const nonce = String(req.params.nonce ?? "").toLowerCase();
     if (!/^0x[0-9a-f]{64}$/.test(nonce)) {
       res.status(400).json({ error: "invalid_nonce" });
       return;
     }
-    const ledger = store.getLedgerByNonce(nonce);
+    const ledger = await store.getLedgerByNonce(nonce);
     if (!ledger) {
       res.status(404).json({ error: "not_found" });
       return;
@@ -326,8 +328,8 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     res.json(ledger);
   });
 
-  app.get("/internal/payments/:paymentKey", (req: Request, res: Response) => {
-    const ledger = store.getLedgerByPayment(String(req.params.paymentKey ?? ""));
+  app.get("/internal/payments/:paymentKey", async (req: Request, res: Response) => {
+    const ledger = await store.getLedgerByPayment(String(req.params.paymentKey ?? ""));
     if (!ledger) {
       res.status(404).json({ error: "not_found" });
       return;
@@ -335,32 +337,32 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     res.json(ledger);
   });
 
-  app.post("/internal/payments/:paymentKey/refund", (req: Request, res: Response) => {
+  app.post("/internal/payments/:paymentKey/refund", async (req: Request, res: Response) => {
     // `:paymentKey` may be a payment key or an EIP-3009 nonce; both identify at
     // most one ledger row.
     const identifier = String(req.params.paymentKey ?? "");
     const byNonce = /^0x[0-9a-fA-F]{64}$/.test(identifier);
     const paymentKey = byNonce
-      ? store.getLedgerByNonce(identifier.toLowerCase())?.paymentKey ?? ""
+      ? (await store.getLedgerByNonce(identifier.toLowerCase()))?.paymentKey ?? ""
       : identifier;
     const transaction = typeof req.body?.transaction === "string" ? req.body.transaction : "";
     if (!transaction) {
       res.status(400).json({ error: "transaction_required" });
       return;
     }
-    const ledger = store.getLedgerByPayment(paymentKey);
+    const ledger = await store.getLedgerByPayment(paymentKey);
     if (!ledger) {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const session = store.getSession(ledger.sessionId);
+    const session = await store.getSession(ledger.sessionId);
     if (ledger.status === "SETTLED" && session && session.readyAt !== null) {
       res.status(409).json({ error: "service_delivered", message: "the session reached READY; manual refund requires review" });
       return;
     }
     const reason = typeof req.body?.reason === "string" ? req.body.reason : "manual_refund";
-    const changed = store.markRefunded(paymentKey, transaction, reason);
-    res.json({ ok: true, changed, payment: store.getLedgerByPayment(paymentKey) });
+    const changed = await store.markRefunded(paymentKey, transaction, reason);
+    res.json({ ok: true, changed, payment: await store.getLedgerByPayment(paymentKey) });
   });
 
   /* ---------------- sessions ---------------- */

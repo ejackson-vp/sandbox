@@ -17,10 +17,10 @@ import type { ControlApiDeps } from "./types.js";
 export function registerChallengeNonceRoutes(app: Express, deps: ControlApiDeps): void {
   const cfg = deps.cfg;
 
-  app.post("/internal/challenge-nonces", (_req: Request, res: Response) => {
+  app.post("/internal/challenge-nonces", async (_req: Request, res: Response) => {
     const nonce = `cn_${randomBytes(16).toString("hex")}`;
     try {
-      const issued = deps.store.issueChallengeNonce(
+      const issued = await deps.store.issueChallengeNonce(
         nonce,
         cfg.challengeNonceTtlMs,
         cfg.challengeNonceMaxActive,
@@ -37,7 +37,7 @@ export function registerChallengeNonceRoutes(app: Express, deps: ControlApiDeps)
     }
   });
 
-  app.post("/internal/challenge-nonces/:nonce/burn", (req: Request, res: Response) => {
+  app.post("/internal/challenge-nonces/:nonce/burn", async (req: Request, res: Response) => {
     const parsed = burnChallengeNonceSchema.safeParse({
       nonce: String(req.params.nonce ?? ""),
       paymentKey: (req.body ?? {}).paymentKey,
@@ -46,6 +46,6 @@ export function registerChallengeNonceRoutes(app: Express, deps: ControlApiDeps)
       res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
       return;
     }
-    res.json(deps.store.burnChallengeNonce(parsed.data.nonce, parsed.data.paymentKey));
+    res.json(await deps.store.burnChallengeNonce(parsed.data.nonce, parsed.data.paymentKey));
   });
 }

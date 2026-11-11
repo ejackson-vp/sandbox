@@ -29,8 +29,8 @@ export class Termination {
   }
 
   /** Housekeeping repair for refunds that were interrupted by a crash. */
-  reconcileRefunds(): void {
-    this.refunds.reconcile();
+  reconcileRefunds(): Promise<void> {
+    return this.refunds.reconcile();
   }
 
   async terminate(session: SessionRecord): Promise<void> {
@@ -40,9 +40,9 @@ export class Termination {
     // Replay the effects of entering TERMINATING. Every step is idempotent, so
     // a crash halfway through is repaired by the next pass.
     await executeEffects(terminationEffects(snapshot), effects);
-    this.ctx.capacity.beginRelease(session.id, session.podName);
+    await this.ctx.capacity.beginRelease(session.id, session.podName);
     const cleanupMs = Date.now() - cleanupStarted;
-    this.ctx.store.mergeTimings(session.id, {
+    await this.ctx.store.mergeTimings(session.id, {
       terminationStartedAt: cleanupStarted,
       podDeletedAt: Date.now(),
       cleanupMs,
@@ -63,7 +63,7 @@ export class Termination {
         : null;
     if (finalized) {
       try {
-        this.refunds.refund(session, finalized);
+        await this.refunds.refund(session, finalized);
       } catch (err) {
         log.warn("payment_refund_failed", { sessionId: session.id, error: (err as Error).message });
       }
@@ -99,7 +99,7 @@ export class Termination {
     const now = this.ctx.now();
     for (const pvc of pvcs) {
       if (!pvc.name) continue;
-      const session = pvc.sessionId ? this.ctx.store.getSession(pvc.sessionId) : null;
+      const session = pvc.sessionId ? await this.ctx.store.getSession(pvc.sessionId) : null;
       const reason = workspacePvcReapReason({
         pvc,
         session,
@@ -117,7 +117,7 @@ export class Termination {
         });
         continue;
       }
-      if (session) this.ctx.store.clearWorkspacePvc(session.id);
+      if (session) await this.ctx.store.clearWorkspacePvc(session.id);
       metrics
         .counter(
           "sandbox_workspace_pvcs_reaped_total",
@@ -143,7 +143,7 @@ export class Termination {
     }
     const now = this.ctx.now();
     for (const pod of pods) {
-      const session = pod.sessionId ? this.ctx.store.getSession(pod.sessionId) : null;
+      const session = pod.sessionId ? await this.ctx.store.getSession(pod.sessionId) : null;
       const terminal =
         !session || ["DESTROYED", "EXPIRED", "FAILED", "TERMINATING"].includes(session.state);
       const tooOld = pod.createdAt > 0 && now - pod.createdAt > this.ctx.cfg.maxPodAgeMs;
@@ -167,7 +167,7 @@ export class Termination {
           });
         }
         if (session && session.state !== "TERMINATING") {
-          this.ctx.store.requestTermination(session.id, "failure:reaped", {
+          await this.ctx.store.requestTermination(session.id, "failure:reaped", {
             code: "reaped",
             message: "sandbox exceeded the maximum pod age",
           });

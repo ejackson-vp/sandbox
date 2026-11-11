@@ -7,8 +7,8 @@ import type { ControlApiDeps } from "./types.js";
 
 export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void {
   const { cfg, store, relay } = deps;
-  app.get("/internal/sessions/:id", (req: Request, res: Response) => {
-    const view = describeSession(store, String(req.params.id ?? ""));
+  app.get("/internal/sessions/:id", async (req: Request, res: Response) => {
+    const view = await describeSession(store, String(req.params.id ?? ""));
     if (!view) {
       res.status(404).json({ error: "not_found" });
       return;
@@ -24,7 +24,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     }
     try {
       await deps.suspend(id);
-      const view = describeSession(store, id);
+      const view = await describeSession(store, id);
       if (!view) {
         res.status(404).json({ error: "not_found" });
         return;
@@ -47,7 +47,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     }
     try {
       await deps.resume(id);
-      const view = describeSession(store, id);
+      const view = await describeSession(store, id);
       if (!view) {
         res.status(404).json({ error: "not_found" });
         return;
@@ -81,21 +81,28 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
         .inc({ op: label, result: res.statusCode < 300 ? (res.statusCode === 202 ? "pending" : "ok") : "error" });
     });
 
-    const session = store.getSession(id);
+    const session = await store.getSession(id);
     if (!session) {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    if (session.state !== "SUSPENDED") store.touchActivity(id);
-    const claim = store.claimOperation(id, requestId, op ?? "operation");
+    if (session.state !== "SUSPENDED") await store.touchActivity(id);
+    // The claim is the authority on the single operation slot, not the read
+    // above: the row may have moved on in between, and `claimOperation`
+    // refuses in one transaction rather than on a stale snapshot.
+    const claim = await store.claimOperation(id, requestId, op ?? "operation");
     if (!claim.ok) {
       if (claim.code === "duplicate") {
         // Idempotent retry: return the (possibly still pending) response.
-        const record = store.getExecRequest(id, requestId);
+        const record = await store.getExecRequest(id, requestId);
         const existing = await relay.response(id, requestId, parsed.data.waitMs ?? 1000).catch(() => ({ kind: "pending" as const }));
         if (existing.kind === "envelope") {
-          if (record?.state === "outcome_unknown") store.finishOperation(id, requestId, "done");
-          res.json({ state: store.getSession(id)?.state ?? session.state, requestId, envelope: existing.envelope });
+          if (record?.state === "outcome_unknown") await store.finishOperation(id, requestId, "done");
+          res.json({
+            state: (await store.getSession(id))?.state ?? session.state,
+            requestId,
+            envelope: existing.envelope,
+          });
           return;
         }
         if (record?.state === "outcome_unknown") {
@@ -106,7 +113,11 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
           });
           return;
         }
-        res.status(202).json({ state: store.getSession(id)?.state ?? session.state, requestId, pending: true });
+        res.status(202).json({
+          state: (await store.getSession(id))?.state ?? session.state,
+          requestId,
+          pending: true,
+        });
         return;
       }
       if (claim.code === "busy") {
@@ -119,7 +130,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
         return;
       }
       if (claim.code === "lease_expired") {
-        store.requestTermination(id, "lease_expired");
+        await store.requestTermination(id, "lease_expired");
         res.status(410).json({
           error: "lease_expired",
           state: "TERMINATING",
@@ -140,7 +151,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     try {
       await relay.request(id, requestId, envelope, deadline, claim.epoch);
     } catch (err) {
-      store.finishOperation(id, requestId, "abandoned");
+      await store.finishOperation(id, requestId, "abandoned");
       const status = (err as { status?: number }).status;
       if (status === 409 && (err as Error).message === "stale_epoch") {
         // The relay refused the frame because this controller's epoch is below
@@ -148,14 +159,14 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
         log.warn("operation_stale_epoch", { sessionId: id, requestId, epoch: claim.epoch });
         res.status(409).json({
           error: "stale_epoch",
-          state: store.getSession(id)?.state,
+          state: (await store.getSession(id))?.state,
           requestId,
           message: "the request belongs to an older controller generation",
         });
         return;
       }
       log.warn("operation_delivery_failed", { sessionId: id, requestId, status, error: (err as Error).message });
-      res.status(409).json({ error: "guest_not_available", state: store.getSession(id)?.state });
+      res.status(409).json({ error: "guest_not_available", state: (await store.getSession(id))?.state });
       return;
     }
 
@@ -171,26 +182,26 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
       outcome = await relay.response(id, requestId, waitMs);
     } catch (err) {
       log.warn("operation_response_failed", { sessionId: id, requestId, error: (err as Error).message });
-      res.status(202).json({ state: store.getSession(id)?.state, requestId, pending: true });
+      res.status(202).json({ state: (await store.getSession(id))?.state, requestId, pending: true });
       return;
     }
     if (outcome.kind === "envelope") {
-      store.finishOperation(id, requestId, "done");
-      res.json({ state: store.getSession(id)?.state, requestId, envelope: outcome.envelope });
+      await store.finishOperation(id, requestId, "done");
+      res.json({ state: (await store.getSession(id))?.state, requestId, envelope: outcome.envelope });
       return;
     }
     if (outcome.kind === "guest_error") {
-      store.finishOperation(id, requestId, "error");
+      await store.finishOperation(id, requestId, "error");
       res.status(502).json({ error: "guest_error", message: outcome.message, requestId });
       return;
     }
-    res.status(202).json({ state: store.getSession(id)?.state, requestId, pending: true });
+    res.status(202).json({ state: (await store.getSession(id))?.state, requestId, pending: true });
   });
 
   app.get("/internal/sessions/:id/operations/:requestId", async (req: Request, res: Response) => {
     const id = String(req.params.id ?? "");
     const requestId = String(req.params.requestId ?? "");
-    const record = store.getExecRequest(id, requestId);
+    const record = await store.getExecRequest(id, requestId);
     if (!record) {
       res.status(404).json({ error: "request_not_found" });
       return;
@@ -203,14 +214,18 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
       const outcome = await relay.response(id, requestId, waitMs);
       if (outcome.kind === "envelope") {
         if (record.state === "pending" || record.state === "outcome_unknown") {
-          store.finishOperation(id, requestId, "done");
+          await store.finishOperation(id, requestId, "done");
         }
-        res.json({ state: store.getSession(id)?.state, requestId, envelope: outcome.envelope });
+        res.json({
+          state: (await store.getSession(id))?.state,
+          requestId,
+          envelope: outcome.envelope,
+        });
         return;
       }
       if (outcome.kind === "guest_error") {
         if (record.state === "pending") {
-          store.finishOperation(id, requestId, "error");
+          await store.finishOperation(id, requestId, "error");
           res.status(502).json({ error: "guest_error", message: outcome.message, requestId });
           return;
         }
@@ -221,7 +236,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
       /* fall through to pending/expired */
     }
     if (record.state === "pending") {
-      res.status(202).json({ state: store.getSession(id)?.state, requestId, pending: true });
+      res.status(202).json({ state: (await store.getSession(id))?.state, requestId, pending: true });
       return;
     }
     if (record.state === "outcome_unknown") {
@@ -241,7 +256,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
   app.delete("/internal/sessions/:id/operations/:requestId", async (req: Request, res: Response) => {
     const id = String(req.params.id ?? "");
     const requestId = String(req.params.requestId ?? "");
-    const record = store.getExecRequest(id, requestId);
+    const record = await store.getExecRequest(id, requestId);
     if (!record) {
       res.status(404).json({ error: "request_not_found" });
       return;
@@ -254,17 +269,17 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     res.status(202).json({ ok: true, requestId });
   });
 
-  app.delete("/internal/sessions/:id", (req: Request, res: Response) => {
+  app.delete("/internal/sessions/:id", async (req: Request, res: Response) => {
     const id = String(req.params.id ?? "");
-    const session = store.getSession(id);
+    const session = await store.getSession(id);
     if (!session) {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    store.requestDestroy(id);
+    await store.requestDestroy(id);
     deps.wake?.();
     log.info("session_destroy_requested", { sessionId: id, state: session.state });
-    res.json({ state: store.getSession(id)?.state ?? session.state });
+    res.json({ state: (await store.getSession(id))?.state ?? session.state });
   });
 
 }

@@ -45,9 +45,12 @@ export class Lifecycle {
 
   async enforce(): Promise<void> {
     const now = this.ctx.now();
-    for (const session of this.ctx.store.listNonTerminal()) {
+    // One read, then one await per session. The list is a snapshot: a session
+    // may have been destroyed by the time its turn comes, so every write below
+    // is the guarded one and a refusal is the answer, not an error.
+    for (const session of await this.ctx.store.listNonTerminal()) {
       if (this.lifetimeExceeded(session)) {
-        this.ctx.store.requestTermination(session.id, "max_lifetime");
+        await this.ctx.store.requestTermination(session.id, "max_lifetime");
         continue;
       }
       const snap = snapshotOf(session);
@@ -60,16 +63,16 @@ export class Lifecycle {
         continue;
       }
       if (suspendedExpired(snap, now)) {
-        this.ctx.store.requestTermination(session.id, "suspended_expired");
+        await this.ctx.store.requestTermination(session.id, "suspended_expired");
       }
     }
   }
 
   async cleanup(): Promise<void> {
-    for (const session of this.ctx.store.listTerminalWithPvc()) {
+    for (const session of await this.ctx.store.listTerminalWithPvc()) {
       if (!session.workspacePvc) continue;
       await this.ctx.provisioner.deleteWorkspacePvc(session.workspacePvc).catch(() => undefined);
-      this.ctx.store.clearWorkspacePvc(session.id);
+      await this.ctx.store.clearWorkspacePvc(session.id);
     }
   }
 
@@ -84,7 +87,7 @@ export class Lifecycle {
    * mode; the guest is booted fresh on resume and sees the persisted files.
    */
   async suspend(id: string): Promise<void> {
-    const session = this.ctx.store.getSession(id);
+    const session = await this.ctx.store.getSession(id);
     if (!session) throw new LifecycleError("not_found", "session not found", 404);
     const decision = transition(snapshotOf(session), { type: "suspend_requested" });
     if (!decision.ok) {
@@ -97,7 +100,7 @@ export class Lifecycle {
     if (!isOk(applied)) {
       throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
     }
-    await this.finishSuspend(this.ctx.store.getSession(id) ?? session);
+    await this.finishSuspend((await this.ctx.store.getSession(id)) ?? session);
   }
 
   /**
@@ -131,7 +134,7 @@ export class Lifecycle {
     if (session.podName && !session.nodeName && session.workspacePvc) {
       const pod = await this.ctx.provisioner.getPod(session.podName).catch(() => null);
       if (pod?.nodeName) {
-        this.ctx.store.setNodeName(id, pod.nodeName);
+        await this.ctx.store.setNodeName(id, pod.nodeName);
         session.nodeName = pod.nodeName;
       }
     }
@@ -141,26 +144,26 @@ export class Lifecycle {
     }
     const applied = await executeEffects(decision.value.effects, effectContext(this.ctx, session));
     if (!isOk(applied)) {
-      if (this.ctx.store.getSession(id)?.state === "SUSPENDED") return;
+      if ((await this.ctx.store.getSession(id))?.state === "SUSPENDED") return;
       throw new LifecycleError("not_suspendable", "session changed state while suspending", 409);
     }
-    this.ctx.capacity.suspend(id);
+    await this.ctx.capacity.suspend(id);
     metrics.counter("sandbox_sessions_suspended_total", "Sessions suspended").inc();
     log.info("sandbox_suspended", {
       sessionId: id,
-      suspendedAt: this.ctx.store.getSession(id)?.suspendedAt,
+      suspendedAt: (await this.ctx.store.getSession(id))?.suspendedAt,
     });
   }
 
   /** Boot a fresh guest against the persisted workspace. */
   async resume(id: string): Promise<void> {
-    const session = this.ctx.store.getSession(id);
+    const session = await this.ctx.store.getSession(id);
     if (!session) throw new LifecycleError("not_found", "session not found", 404);
     if (session.state !== "SUSPENDED" || !canResume(snapshotOf(session))) {
       throw new LifecycleError("not_suspended", `session is ${session.state}`, 409);
     }
     if (this.lifetimeExceeded(session)) {
-      this.ctx.store.requestTermination(id, "max_lifetime");
+      await this.ctx.store.requestTermination(id, "max_lifetime");
       throw new LifecycleError("max_lifetime", "session exceeded its maximum lifetime", 409);
     }
     const idle = session.idlePolicyJson
@@ -171,14 +174,14 @@ export class Lifecycle {
       session.suspendedAt &&
       this.ctx.now() - session.suspendedAt > idle.suspendedDurationSeconds * 1000
     ) {
-      this.ctx.store.requestTermination(id, "suspended_expired");
+      await this.ctx.store.requestTermination(id, "suspended_expired");
       throw new LifecycleError("suspended_expired", "session was suspended for too long", 409);
     }
     if (!session.workspacePvc) {
       throw new LifecycleError("not_resumable", "session has no persistent workspace", 409);
     }
     if (!(await this.ctx.provisioner.workspacePvcExists(session.workspacePvc).catch(() => false))) {
-      this.ctx.store.requestTermination(id, "failure:checkpoint_missing", {
+      await this.ctx.store.requestTermination(id, "failure:checkpoint_missing", {
         code: "checkpoint_missing",
         message: "the checkpoint workspace no longer exists",
       });
@@ -240,7 +243,7 @@ export class Lifecycle {
     } catch (err) {
       // The compute reservation is no longer usable; return it before the
       // caller retries. The workspace stays SUSPENDED.
-      this.ctx.capacity.suspend(id);
+      await this.ctx.capacity.suspend(id);
       throw err;
     }
     if (!isOk(outcome)) {
