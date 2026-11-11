@@ -1,10 +1,11 @@
 /**
  * Single-writer persistence for entitlements, sessions and operations.
  *
- * SQLite (WAL) is deliberate for the prototype: payment redemption and session
- * creation must be atomic, and the reconciler must survive restarts. In
- * production this becomes Postgres/DynamoDB with the same invariants
- * (UNIQUE payment key, conditional transitions, UNIQUE (session, request)).
+ * SQLite (WAL) is deliberate for the local prototype: payment redemption and
+ * session creation must be atomic, and the reconciler must survive restarts.
+ * The multi-reader adapter ADR 0010 targets lives in `store/postgres/` and keeps
+ * the same invariants (UNIQUE payment key, conditional transitions, UNIQUE
+ * (session, request)); both are exercised by `tests/unit/store-contract/`.
  *
  * Every method the ports declare is `async` and returns the value the
  * synchronous statement produced. There is no `await` inside any of them: the
@@ -32,6 +33,7 @@ import {
   type SessionState,
 } from "./store/models.js";
 import { migrate } from "./store/schema.js";
+import { boundedFailureReason } from "./store/failure-reasons.js";
 import { checkStoreHealth, type StoreHealth } from "./store/health.js";
 import { prepareStatements } from "./store/statements.js";
 import { PaymentRepository } from "./store/payments.js";
@@ -66,28 +68,6 @@ export {
 } from "./store/models.js";
 
 const SCHEMA_LOCK = /database is locked|database table is locked|SQLITE_BUSY/i;
-
-/**
- * Failure reasons produced by the provisioning/lifecycle paths. Anything else
- * is collapsed to `other` so a new free-text reason cannot grow cardinality
- * before it is added here deliberately.
- */
-const PROVISION_FAILURE_REASONS = new Set([
-  "provisioning_timeout",
-  "provisioning_queue_timeout",
-  "warm_claim_timeout",
-  "pod_terminated",
-  "checkpoint_missing",
-  "guest_exited",
-  "reaped",
-  "guest_protocol_unsupported",
-  "guest_measurement_not_allowed",
-  "guest_attestation_rejected",
-]);
-
-function boundedFailureReason(reason: string): string {
-  return PROVISION_FAILURE_REASONS.has(reason) ? reason : "other";
-}
 
 /**
  * Per-state re-due cadence lives in `reconcile-cadence.ts` (policy, not SQL).
