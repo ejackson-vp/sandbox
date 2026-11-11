@@ -26,7 +26,8 @@
  * where the pod spec and the guarded writes live and this file stays a
  * dispatcher.
  */
-import { assertNever, log, type SessionEffect } from "@x402s/shared";
+import { assertNever, type SessionEffect } from "@x402s/shared/protocol";
+import { log } from "@x402s/shared/runtime";
 import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
 import type { Snapshotter } from "./snapshotter.js";

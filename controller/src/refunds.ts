@@ -7,8 +7,7 @@
  * a later on-chain/facilitator refund worker. The ledger transition is
  * conditional, so repeated termination/finalize paths cannot refund twice.
  */
-import { metrics } from "@x402s/shared";
-import { log } from "@x402s/shared";
+import { log, metrics } from "@x402s/shared/runtime";
 import type { SessionRecord, SessionState } from "./store/models.js";
 import type { RefundStore } from "./store/ports.js";
 

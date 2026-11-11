@@ -20,7 +20,7 @@
  *   released it only after it stopped scheduling work.
  */
 import * as k8s from "@kubernetes/client-node";
-import { log } from "@x402s/shared";
+import { log } from "@x402s/shared/runtime";
 import type { ControllerConfig } from "./config.js";
 import { BaseLeadership } from "./leadership.js";
 

@@ -7,8 +7,8 @@
  * row did so before this pass), and TERMINATING + `terminated` decides the
  * final state. Both go through the effect interpreter.
  */
-import { finalStateForReason, LATENCY_BUCKETS, metrics, terminationEffects, transition } from "@x402s/shared";
-import { log } from "@x402s/shared";
+import { finalStateForReason, terminationEffects, transition } from "@x402s/shared/protocol";
+import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { EffectStore, TerminationStore } from "./store/ports.js";
 

@@ -8,7 +8,7 @@
  * This buys failover, not throughput: the writer is still one process, and a
  * follower's store connection refuses every write (see `Store.setWritesBlocked`).
  */
-import { log } from "@x402s/shared";
+import { log } from "@x402s/shared/runtime";
 
 export type LeadershipListener = (isLeader: boolean) => void;
 

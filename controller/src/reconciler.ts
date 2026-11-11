@@ -14,7 +14,8 @@
  * Deadline enforcement never depends on the untrusted guest cooperating: the
  * controller's clock decides, and pod deletion is the backstop.
  */
-import { LATENCY_BUCKETS, metrics, type RelaySessionState } from "@x402s/shared";
+import type { RelaySessionState } from "@x402s/shared/protocol";
+import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import type { ControllerConfig } from "./config.js";
 import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
@@ -32,7 +33,6 @@ import { OperationFence } from "./operation-fence.js";
 import { runBounded } from "./bounded-queue.js";
 import { ServiceAddressResolver } from "./service-address.js";
 import { cadenceFor } from "./reconcile-cadence.js";
-import { log } from "@x402s/shared";
 
 export { LifecycleError } from "./lifecycle.js";
 

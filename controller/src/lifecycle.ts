@@ -9,11 +9,10 @@ import {
   canResume,
   idleExpired,
   lifetimeExpired,
-  metrics,
   suspendedExpired,
   transition,
-} from "@x402s/shared";
-import { log } from "@x402s/shared";
+} from "@x402s/shared/protocol";
+import { log, metrics } from "@x402s/shared/runtime";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { EffectStore, LifecycleStore } from "./store/ports.js";
 

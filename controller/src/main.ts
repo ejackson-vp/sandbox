@@ -23,12 +23,12 @@ import { bindLeadership, SoloLeadership, type Leadership } from "./leadership.js
 import { makeLeaseLeadership } from "./leadership-lease.js";
 import {
   LATENCY_BUCKETS,
+  log,
   metrics,
   registerBuildInfo,
   registerRuntimeMetrics,
   startMetricsServer,
-} from "@x402s/shared";
-import { log } from "@x402s/shared";
+} from "@x402s/shared/runtime";
 
 async function main(): Promise<void> {
   const cfg = loadControllerConfig();

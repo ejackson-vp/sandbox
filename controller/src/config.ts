@@ -1,12 +1,11 @@
 import { hostname } from "node:os";
+import { envBool as bool, envInt as int } from "@x402s/shared/env";
 import {
   loadPlatformLimits,
   loadTiers,
   type PlatformLimits,
   type TierTable,
-  envBool as bool,
-  envInt as int,
-} from "@x402s/shared";
+} from "@x402s/shared/payment";
 import { KubeProvisioner, NullProvisioner, type Provisioner } from "./k8s.js";
 import { LocalProvisioner } from "./local-provisioner.js";
 import { RelayClient, type RelayClientTlsOptions } from "./relay-client.js";

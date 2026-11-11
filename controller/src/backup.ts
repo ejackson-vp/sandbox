@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from
 import { open, type FileHandle } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { log, metrics } from "@x402s/shared";
+import { log, metrics } from "@x402s/shared/runtime";
 
 const MAGIC = Buffer.from("X402BK1\n");
 const IV_BYTES = 12;

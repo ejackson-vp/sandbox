@@ -2,8 +2,10 @@
  * Controller -> internal API session view. Kept separate from route wiring so
  * the wire shape can be reviewed and tested without Express.
  */
-import { remainingSeconds as remainingLeaseSeconds } from "@x402s/shared";
-import type { ControllerSessionView } from "@x402s/shared";
+import {
+  remainingSeconds as remainingLeaseSeconds,
+  type ControllerSessionView,
+} from "@x402s/shared/protocol";
 import { snapshotOf } from "./session-snapshot.js";
 import type { SessionViewStore } from "./store/ports.js";
 

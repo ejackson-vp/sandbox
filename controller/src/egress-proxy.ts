@@ -18,8 +18,8 @@ import http from "node:http";
 import net from "node:net";
 import dns from "node:dns/promises";
 import type { Duplex } from "node:stream";
-import { classifyAddress, type AddressClass } from "@x402s/shared";
-import { log, metrics } from "@x402s/shared";
+import { classifyAddress, type AddressClass } from "@x402s/shared/ip";
+import { log, metrics } from "@x402s/shared/runtime";
 import { verifyProxyToken } from "./tokens.js";
 
 export interface EgressProxyOptions {
