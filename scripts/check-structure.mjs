@@ -5,7 +5,7 @@
  * backstop against the god files this refactor removed; the real rules live in
  * docs/architecture-principles.md.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, posix, relative } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -176,9 +176,7 @@ for (const rel of modules) {
   }
 }
 
-// The root barrel is the compatibility surface. It must keep re-exporting every
-// module, directly or through `protocol.ts`, or a consumer still on the barrel
-// loses an export without a compile error somewhere else.
+/** Every module reachable by following re-exports from `rel`. */
 function exportedClosure(rel, seen = new Set()) {
   if (seen.has(rel)) return seen;
   seen.add(rel);
@@ -190,8 +188,16 @@ function exportedClosure(rel, seen = new Set()) {
   return seen;
 }
 
-const barrel = exportedClosure("index.ts");
-const unexported = modules.filter((rel) => !isAggregator(rel) && !barrel.has(rel));
+// There is no root barrel. `@x402s/shared` resolves only through the subpaths
+// under `entries/`, so every module has to be reachable from at least one of
+// them: a module no entry re-exports is surface nobody can import, and one that
+// grows back is the coupling the split removed.
+const reachable = new Set();
+for (const entry of modules.filter((rel) => rel.startsWith("entries/"))) {
+  for (const rel of exportedClosure(entry)) reachable.add(rel);
+}
+const unexported = modules.filter((rel) => !isAggregator(rel) && !reachable.has(rel));
+const barrelBack = existsSync(join(ROOT, SHARED, "index.ts"));
 
 // Each subpath must be the single home of its symbols. Two entries exporting
 // the same name means a consumer can import it from either, so the layering
@@ -250,8 +256,13 @@ if (unclassified.length > 0) {
   for (const rel of unclassified) console.error(`  ${rel}`);
 }
 if (unexported.length > 0) {
-  console.error("shared/src modules not re-exported from index.ts:");
+  console.error("shared/src modules reachable from no entry:");
   for (const rel of unexported) console.error(`  ${rel}`);
+}
+if (barrelBack) {
+  console.error(
+    "shared/src/index.ts exists again: there is no root barrel, add the module to an entry instead",
+  );
 }
 if (layeringOffenders.length > 0) {
   console.error("shared/src layering violations (see the guard above):");
@@ -262,7 +273,11 @@ if (duplicateExports.length > 0) {
   for (const line of duplicateExports) console.error(`  ${line}`);
 }
 if (
-  unclassified.length + unexported.length + layeringOffenders.length + duplicateExports.length >
+  unclassified.length +
+    unexported.length +
+    layeringOffenders.length +
+    duplicateExports.length +
+    (barrelBack ? 1 : 0) >
   0
 ) {
   process.exit(1);
@@ -270,5 +285,5 @@ if (
 
 console.log(
   `structure ok: every module is <= ${MAX_LINES} lines; ${modules.length} shared modules layered, ` +
-    `${entryOwners.size} symbols over ${sharedEntries.length} entries, barrel complete`,
+    `${entryOwners.size} symbols over ${sharedEntries.length} entries, no root barrel`,
 );

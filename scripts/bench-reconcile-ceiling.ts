@@ -42,12 +42,12 @@ import type { RelaySessionState } from "../shared/src/index.js";
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /**
- * The reconciler imports the built workspace package (`@x402s/shared`), which
+ * The reconciler imports the built workspace package (`@x402s/shared/*`), which
  * `npm ci` does not produce. Build it once rather than making the gate a
  * two-command incantation. Same prerequisite CI satisfies before running tests.
  */
 function ensureSharedBuilt(): void {
-  if (existsSync(join(REPO_ROOT, "shared/dist/index.js"))) return;
+  if (existsSync(join(REPO_ROOT, "shared/dist/entries/protocol.js"))) return;
   console.log("bench: building @x402s/shared (one-off; the controller imports its dist)");
   execFileSync("npm", ["run", "build", "-w", "@x402s/shared"], { cwd: REPO_ROOT, stdio: "inherit" });
 }
