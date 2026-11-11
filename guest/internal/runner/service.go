@@ -48,6 +48,10 @@ func StartService(
 	if err != nil {
 		return nil, err
 	}
+	// This is a sandbox command executor: the customer command is the
+	// product input. The path is resolved only against the selected profile's
+	// PATH and is executed inside the microVM.
+	// codeql[js/command-line-injection]
 	cmd := exec.Command(path, command[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = childEnv
