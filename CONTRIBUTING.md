@@ -81,6 +81,11 @@ go test . -run=^$ -fuzz=FuzzChunkDecode -fuzztime=10m
 timing-sensitive report, and keep the Fuzz worker count down on a loaded
 machine so the per-target budget is not starved.
 
+CI runs each target as its own step through `scripts/fuzz-go.sh`. That wrapper
+retries a target once when, and only when, the run failed with
+`context deadline exceeded` and found no input (#130); any other nonzero exit is
+fatal and is not retried. A retry is recorded in the job summary.
+
 ### Corpora and reproducers
 
 - Seeds are registered with `f.Add` in the `*_fuzz_test.go` files, using

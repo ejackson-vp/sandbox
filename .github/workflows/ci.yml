@@ -52,15 +52,28 @@ jobs:
           cache-dependency-path: guest/go.sum
       - run: npm ci
       - run: npm run build
-      - name: go fuzz targets (20s each)
+      # One step per target, so the retry in scripts/fuzz-go.sh costs another
+      # 20 s for the target that lost the engine's shutdown race instead of
+      # re-running the whole matrix. Every failure other than
+      # `context deadline exceeded` stays fatal (#130).
+      - name: fuzz FuzzOpen (envelope)
         working-directory: guest
-        run: |
-          go test ./internal/envelope -run=^$ -fuzz=FuzzOpen -fuzztime=20s
-          go test ./internal/files -run=^$ -fuzz=FuzzResolve -fuzztime=20s
-          go test . -run=^$ -fuzz=FuzzTransferFraming -fuzztime=20s
-          go test . -run=^$ -fuzz=FuzzSupervisorDecrypt -fuzztime=20s
-          go test . -run=^$ -fuzz=FuzzFrameDecode -fuzztime=20s
-          go test . -run=^$ -fuzz=FuzzChunkDecode -fuzztime=20s
+        run: ../scripts/fuzz-go.sh ./internal/envelope FuzzOpen 20s
+      - name: fuzz FuzzResolve (files)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh ./internal/files FuzzResolve 20s
+      - name: fuzz FuzzTransferFraming (guest)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh . FuzzTransferFraming 20s
+      - name: fuzz FuzzSupervisorDecrypt (guest)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh . FuzzSupervisorDecrypt 20s
+      - name: fuzz FuzzFrameDecode (guest)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh . FuzzFrameDecode 20s
+      - name: fuzz FuzzChunkDecode (guest)
+        working-directory: guest
+        run: ../scripts/fuzz-go.sh . FuzzChunkDecode 20s
       - name: typescript fuzz targets
         run: npm run test:fuzz
 
