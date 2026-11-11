@@ -9,7 +9,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { NON_TERMINAL_STATE_SQL } from "./models.js";
 
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 /**
  * Due-time index. The due query filters on exactly the states in
@@ -45,6 +45,7 @@ const BASE_SCHEMA = `
     reason TEXT,
     claim_token TEXT,
     claim_expires_at INTEGER,
+    requirements_json TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
     );
@@ -59,11 +60,16 @@ const BASE_SCHEMA = `
     status TEXT NOT NULL,
     reason TEXT,
     refund_tx TEXT,
+    settlement_nonce TEXT,
+    refund_attempts INTEGER NOT NULL DEFAULT 0,
+    refund_last_error TEXT,
+    refund_next_attempt_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS payment_ledger_status ON payment_ledger(status);
     CREATE INDEX IF NOT EXISTS payment_ledger_session ON payment_ledger(session_id);
+    CREATE INDEX IF NOT EXISTS payment_ledger_nonce ON payment_ledger(settlement_nonce);
     CREATE TABLE IF NOT EXISTS challenge_nonces (
     nonce TEXT PRIMARY KEY,
     payment_key TEXT,
@@ -254,6 +260,25 @@ function migrateV13toV14(db: DatabaseSync): void {
   `);
 }
 
+/**
+ * v14 -> v15: settlement reconciliation and refund execution (#31).
+ *
+ * Additive columns only. `settlement_nonce` is the EIP-3009 authorisation nonce,
+ * so a facilitator webhook or an operator can key a refund by it as well as by
+ * the payment key. The `refund_*` columns are the retry state of the refund
+ * worker. `payment_intents.requirements_json` records the payment requirements
+ * at claim time, which is what lets settlement recovery write a correct ledger
+ * row after the API has forgotten the request.
+ */
+function migrateV14toV15(db: DatabaseSync): void {
+  db.exec("ALTER TABLE payment_ledger ADD COLUMN settlement_nonce TEXT;");
+  db.exec("ALTER TABLE payment_ledger ADD COLUMN refund_attempts INTEGER NOT NULL DEFAULT 0;");
+  db.exec("ALTER TABLE payment_ledger ADD COLUMN refund_last_error TEXT;");
+  db.exec("ALTER TABLE payment_ledger ADD COLUMN refund_next_attempt_at INTEGER;");
+  db.exec("CREATE INDEX IF NOT EXISTS payment_ledger_nonce ON payment_ledger(settlement_nonce);");
+  db.exec("ALTER TABLE payment_intents ADD COLUMN requirements_json TEXT;");
+}
+
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = FULL;");
@@ -281,6 +306,7 @@ export function migrate(db: DatabaseSync): void {
       if (version < 12) migrateV11toV12(db);
       if (version < 13) migrateV12toV13(db);
       if (version < 14) migrateV13toV14(db);
+      if (version < 15) migrateV14toV15(db);
       // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

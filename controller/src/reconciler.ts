@@ -29,6 +29,9 @@ import type { ReconcilerContext } from "./reconciler-context.js";
 import { NoopSnapshotter, type Snapshotter } from "./snapshotter.js";
 import { CapacityService } from "./capacity/service.js";
 import { BackupService } from "./backup.js";
+import { RefundService } from "./refunds.js";
+import { HttpRefundExecutor, RefundWorker } from "./refund-worker.js";
+import { HttpSettlementLookup, SettlementRecovery } from "./settlement-recovery.js";
 import { OperationFence } from "./operation-fence.js";
 import { runBounded } from "./bounded-queue.js";
 import { ServiceAddressResolver } from "./service-address.js";
@@ -83,6 +86,8 @@ export class Reconciler {
   private readonly backup: BackupService;
   private readonly fence: OperationFence;
   private readonly clock: ClockGuard;
+  private readonly refundWorker: RefundWorker;
+  private readonly settlementRecovery: SettlementRecovery;
   private readonly now: () => number;
 
   constructor(private readonly deps: ReconcilerDeps) {
@@ -125,6 +130,34 @@ export class Reconciler {
       now: () => this.now(),
     });
     this.fence = deps.fence ?? new OperationFence(deps.store, deps.relay);
+    // Both are inert unless configured: recovery needs a facilitator that
+    // exposes a settlement lookup, and the worker needs an operator-owned
+    // refund endpoint. With neither, real-mode refunds stay REFUND_PENDING.
+    this.refundWorker = new RefundWorker(
+      deps.store,
+      deps.cfg.refundWebhookUrl
+        ? new HttpRefundExecutor(deps.cfg.refundWebhookUrl, deps.cfg.refundWebhookToken)
+        : null,
+      {
+        maxAttempts: deps.cfg.refundMaxAttempts,
+        retryBaseMs: deps.cfg.refundRetryBaseMs,
+        limit: 50,
+        now: () => this.now(),
+      },
+    );
+    this.settlementRecovery = new SettlementRecovery(
+      deps.store,
+      new RefundService(deps.store),
+      deps.cfg.settlementRecoveryEnabled && deps.cfg.facilitatorUrl
+        ? new HttpSettlementLookup(deps.cfg.facilitatorUrl)
+        : null,
+      {
+        graceMs: deps.cfg.settlementRecoveryGraceMs,
+        limit: 25,
+        mode: deps.cfg.paymentMode,
+        now: () => this.now(),
+      },
+    );
   }
 
   start(): void {
@@ -385,6 +418,10 @@ export class Reconciler {
       await this.lifecycle.cleanup();
       await this.termination.sweepPvcs();
       this.termination.reconcileRefunds();
+      // Settled-but-unentitled payments first, then the refund worker in the same
+      // pass so a recovery that needs a real transfer is attempted immediately.
+      await this.settlementRecovery.run();
+      await this.refundWorker.run();
       // Expired challenge nonces are dead weight; the TTL check on burn is what
       // enforces the bound, this just keeps the table small.
       this.deps.store.pruneChallengeNonces();

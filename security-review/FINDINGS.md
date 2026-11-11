@@ -17,7 +17,7 @@ executed), `theoretical` (no concrete path found).
 | F-07 | Medium | code-confirmed | A *full* create-request capture was replayable forever: the commitment was a static signature over (paymentKey, clientPublicKey, clientNonce) | **Fixed** (#47) |
 | F-08 | Low | code-confirmed | Capability derivation changed (`v2` HMAC); capabilities issued by an older build stop verifying after upgrade | Accepted |
 | F-09 | Low | proven | Payer rate-limit key comes from the unverified `from` field; only the per-IP bucket bounds key rotation | Accepted (documented) |
-| F-10 | High | code-confirmed | Testnet crash between settlement and entitlement has no reconciliation and no automatic refund | **Open** |
+| F-10 | High | code-confirmed | Testnet crash between settlement and entitlement had no reconciliation and no automatic refund | **Fixed for mock + review; unexecuted for real money** (#31) |
 | F-11 | — | reviewed | CodeQL `js/missing-rate-limiting` ×9 | False positive (see below) |
 | F-12 | — | reviewed | CodeQL `go/zipslip` (`archive.go:54`) | False positive, guards present |
 | F-13 | — | reviewed | CodeQL `go/request-forgery` (`relay.go:61`) | False positive under the deploy assumption |
@@ -307,12 +307,19 @@ spoof the header and rotate IP buckets too.
 
 **Affected configurations:** direct internet exposure with `TRUST_PROXY_HOPS > 0`
 and no trusted proxy that overwrites the header. Recommended: keep it `0` unless
-a proxy you control sets it, and add a global create budget independent of both
-keys. Not changed here because the correct value is deployment-specific.
+a proxy you control sets it.
+
+**Mitigation added (#48):** a durable global create budget keyed on the constant
+`global`, plus a global concurrent-session cap, checked after the client
+commitment is verified and before any capacity hold or settlement. Rotating
+`from` now buys a fresh *payer* row, not a fresh global row. The per-payer bucket
+key is also checked after proof verification, so the "unverified field" framing
+above no longer applies to the budget check itself: it applies only to the
+in-memory bucket that runs before the proof.
 
 ---
 
-## F-10 — Testnet reconciliation and refunds are not implemented (OPEN)
+## F-10 — Settlement reconciliation and refund execution (implemented, unexecuted against real money)
 
 **Affected configuration:** `PAYMENT_MODE=testnet` (real settlement, no
 `HttpSettlementLookup`; `UnsupportedSettlementLookup` is used).
@@ -328,9 +335,36 @@ The reverse crash window is covered in mock mode by `GET /settlements/:key`.
 `RefundService` marks real-mode refunds `REFUND_PENDING` but **no worker or
 runbook executes them**.
 
-**Status:** open. Do not advertise testnet/public payment as production-ready.
-Blocks the "public beta with payment enforcement" verdict. Mock/local is
-unaffected (lookup is supported and refunds are applied).
+**Fix (#31):**
+
+- `SettlementRecovery` walks intents `claimed` past
+  `SETTLEMENT_RECOVERY_GRACE_MS`, asks the facilitator's settlement lookup, and
+  on a settled payment writes a `REFUND_PENDING` ledger row with the synthetic
+  session id `unsettled:<paymentKey>` and reason `settled_without_entitlement`.
+  The debt is now recorded instead of lost. It does not fabricate an
+  entitlement, and it leaves unsettled intents to the API retry path.
+- `RefundWorker` executes `REFUND_PENDING` rows through an operator-configured
+  `REFUND_WEBHOOK_URL`, conditionally (`status = 'REFUND_PENDING'`), with
+  attempt counting, exponential backoff and a give-up limit. With no webhook it
+  does nothing, which is the honest default.
+- The ledger carries `settlement_nonce`, and the internal API can look up and
+  refund by it, so a facilitator webhook or an operator can key on the EIP-3009
+  nonce instead of the payment key.
+- Double charge: a second signed payment for a client key pair that already owns
+  a session is refunded (`duplicate_client_nonce`) and refused with
+  `409 duplicate_session`, rather than creating a second session.
+
+**What is still open:** nothing in this repository has moved real money. The
+facilitator refund contract is defined here, not by a facilitator, and the
+public testnet facilitator exposes no settlement lookup, so testnet still
+answers `409 reconciliation_pending` for that window. The verdict stays
+"do not advertise testnet/public payment as production-ready" until a real
+settlement sandbox run proves it end to end.
+
+**Regressions:** `tests/unit/settlement-recovery.test.ts` (recovery row, mock
+auto-refund, unsettled intent untouched, no lookup no-op, idempotency, worker
+success/backoff/exhaustion/no-executor, crash repair, duplicate charge in both
+modes).
 
 ---
 

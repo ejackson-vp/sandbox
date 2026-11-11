@@ -12,6 +12,7 @@ import {
   clientCommitmentMessage,
   isChallengeNonce,
   paymentAuthorizer,
+  settlementNonce,
   sha256Hex,
 } from "@x402s/shared/crypto";
 import {
@@ -282,7 +283,13 @@ export function createSessionHandler(deps: CreateSessionDeps) {
       return;
     }
 
-    const claim = await deps.controller.claimIntent(key, specDigest, deps.config.intentStaleMs);
+    const claim = await deps.controller.claimIntent(key, specDigest, deps.config.intentStaleMs, {
+      network: requirement.network,
+      scheme: requirement.scheme,
+      asset: requirement.asset,
+      amount: requirement.amount,
+      payTo: requirement.payTo,
+    });
     if (claim.status === "in_progress") {
       res.status(409).json({ error: "payment_in_progress", message: "this payment is already being processed" });
       return;
@@ -356,6 +363,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
             payer: settled.payer,
             transaction: settled.transaction,
             mode: deps.config.paymentMode,
+            settlementNonce: settlementNonce(payload),
           },
         });
       } catch (err) {

@@ -181,10 +181,15 @@ export class ControllerClient {
 
   /* ---------------- payment intents ---------------- */
 
-  async claimIntent(paymentKey: string, specHash: string, staleMs?: number): Promise<IntentClaim> {
+  async claimIntent(
+    paymentKey: string,
+    specHash: string,
+    staleMs?: number,
+    requirements?: { network: string; scheme: string; asset: string; amount: string; payTo: string },
+  ): Promise<IntentClaim> {
     const res = await this.raw("/internal/payment-intents/claim", {
       method: "POST",
-      body: JSON.stringify({ paymentKey, specHash, staleMs }),
+      body: JSON.stringify({ paymentKey, specHash, staleMs, requirements }),
     });
     const body = (await res.json().catch(() => ({}))) as IntentClaim & { status?: string };
     if (res.ok) return body as IntentClaim;

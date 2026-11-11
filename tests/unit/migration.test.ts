@@ -185,8 +185,10 @@ function sessionRecord(id: string, key: string): SessionRecord {
     id,
     capabilityHash: "a".repeat(64),
     capabilityExpiresAt: NOW + 3_600_000,
-    clientPublicKey: "pk",
-    clientNonce: "nonce",
+    // One client key pair per session: a repeated pair is a duplicate charge
+    // and is refused by completeEntitlement (#31).
+    clientPublicKey: `pk-${id}`,
+    clientNonce: `nonce-${id}`,
     tier: "standard",
     durationSeconds: 300,
     limits,

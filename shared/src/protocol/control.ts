@@ -66,6 +66,8 @@ export interface EntitlementRequest {
     payer?: string;
     transaction?: string;
     mode: "mock" | "testnet";
+    /** EIP-3009 authorisation nonce, so a refund can be keyed by it (#31). */
+    settlementNonce?: string | null;
   };
 }
 

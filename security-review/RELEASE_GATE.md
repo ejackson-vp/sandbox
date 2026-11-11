@@ -17,8 +17,8 @@ Four deployment profiles are gated separately. "Unverified" is not "passed".
 | Egress destination validation (SSRF matrix) | PASS | 24-case suite |
 | Rate-limit penalties survive high cardinality | PASS | F-05 |
 | Image published only after a passing scan | **FAIL** | F-06 |
-| Real-mode settled-but-not-provisioned reconciliation | **FAIL** | F-10 |
-| Real-mode refunds executed | **FAIL** | F-10 (`REFUND_PENDING`, no worker) |
+| Real-mode settled-but-not-provisioned reconciliation | PARTIAL | F-10 (#31): recovery + ledger row; needs a facilitator that exposes a settlement lookup |
+| Real-mode refunds executed | PARTIAL | F-10 (#31): worker + webhook contract, mock-tested only; never run against real money |
 | Actions/images pinned by digest | **FAIL** | F-15 |
 | Guest pod image pinned at admission | PARTIAL | Kyverno policy shipped; unexecuted against a cluster (#30) |
 | Least-privilege workflow tokens | **FAIL** | 3 `TokenPermissionsID` alerts |

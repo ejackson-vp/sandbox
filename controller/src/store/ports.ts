@@ -101,6 +101,7 @@ export interface TerminationStore {
   ): boolean;
   // RefundService shares this store.
   getLedgerBySession(sessionId: string): PaymentLedgerRecord | null;
+  listUnclaimedSettled(): PaymentLedgerRecord[];
   listUnrefundedTerminalBeforeReady(): PaymentLedgerRecord[];
   markRefundPending(paymentKey: string, reason: string): boolean;
   markRefunded(paymentKey: string, transaction: string, reason: string): boolean;
@@ -126,9 +127,38 @@ export interface LifecycleStore {
 export interface RefundStore {
   getLedgerBySession(sessionId: string): PaymentLedgerRecord | null;
   getSession(id: string): SessionRecord | null;
+  /** Settled rows with no session: unentitled or duplicate charges (#31). */
+  listUnclaimedSettled(): PaymentLedgerRecord[];
   listUnrefundedTerminalBeforeReady(): PaymentLedgerRecord[];
   markRefundPending(paymentKey: string, reason: string): boolean;
   markRefunded(paymentKey: string, transaction: string, reason: string): boolean;
+}
+
+/** Automated refund execution (#31). */
+export interface RefundWorkerStore {
+  countLedgerByStatus(status: LedgerStatus): number;
+  listRefundPendingDue(nowMs: number, limit: number): PaymentLedgerRecord[];
+  markRefunded(paymentKey: string, transaction: string, reason: string): boolean;
+  recordRefundAttempt(paymentKey: string, error: string, nextAttemptAt: number): boolean;
+}
+
+/** Settlement recovery for the settle-then-crash window (#31). */
+export interface SettlementRecoveryStore {
+  getLedgerByNonce(settlementNonce: string): PaymentLedgerRecord | null;
+  getLedgerByPayment(paymentKey: string): PaymentLedgerRecord | null;
+  insertUnclaimedLedger(entry: {
+    paymentKey: string;
+    sessionId: string;
+    payer: string | null;
+    amount: string;
+    asset: string;
+    network: string;
+    mode: "mock" | "testnet";
+    status: LedgerStatus;
+    reason: string;
+    settlementNonce: string | null;
+  }): boolean;
+  listStaleClaimedIntents(olderThan: number, limit: number): PaymentIntentRecord[];
 }
 
 export interface SessionViewStore {
@@ -148,6 +178,7 @@ export interface ControlApiStore {
     paymentKey: string,
     specHashValue: string,
     staleMs: number,
+    requirementsJson?: string | null,
   ): IntentClaimResult;
   /** Single-use challenge nonce (#47): mint, burn, and never resurrect. */
   issueChallengeNonce(nonce: string, ttlMs: number, maxActive: number): { nonce: string; expiresAt: number };
@@ -167,6 +198,7 @@ export interface ControlApiStore {
     outcome: "done" | "error" | "abandoned",
   ): void;
   getExecRequest(sessionId: string, requestId: string): ExecRequestRecord | null;
+  getLedgerByNonce(settlementNonce: string): PaymentLedgerRecord | null;
   getLedgerByPayment(paymentKey: string): PaymentLedgerRecord | null;
   getPayment(key: string): PaymentRecord | null;
   getPaymentIntent(paymentKey: string): PaymentIntentRecord | null;
@@ -220,4 +252,6 @@ export type ReconcilerStore = ProvisioningStore &
   WarmPoolStore &
   CapacityStore &
   FenceStore &
-  SchedulerStore;
+  SchedulerStore &
+  RefundWorkerStore &
+  SettlementRecoveryStore;

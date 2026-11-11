@@ -104,6 +104,26 @@ data:
   # stampede the kubelet; the excess stays PAID and retries each tick.
   MAX_CONCURRENT_PROVISIONING: "0"
   PROVISION_QUEUE_TIMEOUT_MS: "120000"
+  # Durable create budget (#48), enforced in the controller. The in-memory API
+  # buckets are the burst smoother; these are the ceiling that survives a
+  # restart and a rotated payer key. Defaults shown.
+  BUDGET_WINDOW_MS: "3600000"
+  PAYER_CREATES_PER_WINDOW: "60"
+  PAYER_SPEND_PER_WINDOW: "50000000"
+  PAYER_CONCURRENT_SESSIONS: "4"
+  GLOBAL_CREATES_PER_WINDOW: "2000"
+  GLOBAL_CONCURRENT_SESSIONS: "200"
+  # Server-issued single-use challenge nonce (#47).
+  CHALLENGE_NONCE_TTL_MS: "180000"
+  CHALLENGE_NONCE_MAX_ACTIVE: "20000"
+  # Settlement reconciliation and refunds (#31). PAYMENT_MODE and FACILITATOR_URL
+  # are above. Empty REFUND_WEBHOOK_URL leaves real-mode refunds REFUND_PENDING
+  # for an operator: this process holds no signing authority.
+  SETTLEMENT_RECOVERY_ENABLED: "true"
+  SETTLEMENT_RECOVERY_GRACE_MS: "300000"
+  REFUND_MAX_ATTEMPTS: "10"
+  REFUND_RETRY_BASE_MS: "60000"
+  # REFUND_WEBHOOK_URL: "https://refunds.example.internal/x402"
   # Pre-booted, unleased sandboxes. 0 = off. The pool is sized by cgroup/disk
   # limits, so only sessions at or below the pool tier can claim a pod.
   #

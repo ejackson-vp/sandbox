@@ -39,6 +39,23 @@ the container registry.
   and controller metric `sandbox_budget_rejections_total{scope}`; auth failures
   gain `challenge_nonce_{missing,expired,reused,unknown}`.
 
+- Settlement reconciliation and an opt-in refund worker (#31, schema v15).
+  `payment_intents` records the payment requirements at claim time;
+  `SettlementRecovery` finds intents `claimed` past
+  `SETTLEMENT_RECOVERY_GRACE_MS` whose payment settled at the facilitator and
+  writes a `REFUND_PENDING` ledger row (`unsettled:<paymentKey>`,
+  `settled_without_entitlement`) instead of losing the payment. `RefundWorker`
+  executes `REFUND_PENDING` rows through `REFUND_WEBHOOK_URL` with attempt
+  counting, backoff and a give-up limit; with no webhook it does nothing.
+  `payment_ledger.settlement_nonce` lets a refund be keyed by the EIP-3009 nonce
+  (`GET /internal/payments/by-nonce/:nonce`, refund endpoint accepts either).
+  Never run against real money; the mock facilitator is the only backend tested.
+- Double-charge guard: a second signed payment for a `(clientPublicKey,
+  clientNonce)` pair that already owns a session is refunded
+  (`duplicate_client_nonce`) and refused with `409 duplicate_session`.
+- Metrics: `sandbox_refund_worker_total{result}`, `sandbox_refunds_pending`,
+  `sandbox_settlement_recovery_total{result}`.
+
 ### Changed
 
 - **Breaking:** the client commitment domain is `v2` and covers

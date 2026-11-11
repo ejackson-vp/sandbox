@@ -14,6 +14,19 @@ export const intentClaimSchema = z.object({
   paymentKey: z.string().regex(/^[0-9a-f]{64}$/),
   specHash: z.string().regex(/^[0-9a-f]{64}$/),
   staleMs: z.number().int().min(1000).max(600_000).optional(),
+  /**
+   * The payment requirements the API gave the client, recorded on the intent so
+   * settlement recovery can describe a payment it no longer has (#31).
+   */
+  requirements: z
+    .object({
+      network: z.string().min(3).max(64),
+      scheme: z.string().min(1).max(32),
+      asset: z.string().min(1).max(128),
+      amount: z.string().regex(/^\d{1,30}$/),
+      payTo: z.string().min(2).max(128),
+    })
+    .optional(),
 });
 
 /** Reserve one create against the durable budget (#48). */
@@ -90,6 +103,7 @@ export const completeSchema = z.object({
     payer: z.string().min(2).max(128).optional(),
     transaction: z.string().min(1).max(256).optional(),
     mode: z.enum(["mock", "testnet"]),
+    settlementNonce: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
   }),
 });
 

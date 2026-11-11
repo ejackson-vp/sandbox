@@ -26,13 +26,71 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       getIntent: db.prepare("SELECT * FROM payment_intents WHERE payment_key = ?"),
       insertLedger: db.prepare(
         `INSERT INTO payment_ledger
-           (payment_key, session_id, payer, amount, asset, network, mode, status, reason, refund_tx, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'SETTLED', NULL, NULL, ?, ?)`,
+           (payment_key, session_id, payer, amount, asset, network, mode, status, reason, refund_tx,
+            settlement_nonce, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'SETTLED', NULL, NULL, ?, ?, ?)`,
+      ),
+      /**
+       * A payment the facilitator settled but no session consumed (#31). The
+       * session id is synthetic and documented: `unsettled:<paymentKey>` or
+       * `duplicate:<paymentKey>`. It keeps the NOT NULL/UNIQUE constraint
+       * meaningful instead of relaxing it.
+       */
+      insertLedgerUnclaimed: db.prepare(
+        `INSERT OR IGNORE INTO payment_ledger
+           (payment_key, session_id, payer, amount, asset, network, mode, status, reason, refund_tx,
+            settlement_nonce, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
       ),
       getLedgerByPayment: db.prepare("SELECT * FROM payment_ledger WHERE payment_key = ?"),
       getLedgerBySession: db.prepare("SELECT * FROM payment_ledger WHERE session_id = ?"),
+      getLedgerByNonce: db.prepare(
+        "SELECT * FROM payment_ledger WHERE settlement_nonce = ? ORDER BY created_at DESC LIMIT 1",
+      ),
+      /** REFUND_PENDING rows whose next attempt is due, oldest first (#31). */
+      listRefundPendingDue: db.prepare(
+        `SELECT * FROM payment_ledger
+         WHERE status = 'REFUND_PENDING'
+           AND (refund_next_attempt_at IS NULL OR refund_next_attempt_at <= ?)
+         ORDER BY updated_at ASC LIMIT ?`,
+      ),
+      markRefundAttempt: db.prepare(
+        `UPDATE payment_ledger
+         SET refund_attempts = refund_attempts + 1, refund_last_error = ?,
+             refund_next_attempt_at = ?, updated_at = ?
+         WHERE payment_key = ? AND status = 'REFUND_PENDING'`,
+      ),
+      /** A client key pair that already owns a session, for the double-charge guard. */
+      findSessionByClientNonce: db.prepare(
+        `SELECT id FROM sessions
+         WHERE client_public_key = ? AND client_nonce = ?
+         ORDER BY created_at ASC LIMIT 1`,
+      ),
+      /**
+       * Claimed intents older than the recovery grace: the crash window between
+       * facilitator settlement and a durable entitlement (#31).
+       */
+      listStaleClaimedIntents: db.prepare(
+        `SELECT * FROM payment_intents
+         WHERE status = 'claimed' AND updated_at <= ?
+         ORDER BY updated_at ASC LIMIT ?`,
+      ),
       listLedgerByStatus: db.prepare(
         "SELECT * FROM payment_ledger WHERE status = ? ORDER BY updated_at ASC",
+      ),
+      countLedgerByStatus: db.prepare("SELECT COUNT(*) AS n FROM payment_ledger WHERE status = ?"),
+
+      /**
+       * Settled ledger rows with no session behind them (settlement recovery,
+       * duplicate charge). They have no `sessions` row, so the terminal-before-
+       * READY join cannot find them; this is the repair path for a crash between
+       * writing the row and applying the refund policy.
+       */
+      listUnclaimedSettled: db.prepare(
+        `SELECT * FROM payment_ledger
+         WHERE status = 'SETTLED'
+           AND (session_id LIKE 'unsettled:%' OR session_id LIKE 'duplicate:%')
+         ORDER BY updated_at ASC LIMIT 100`,
       ),
       listUnrefundedTerminalBeforeReady: db.prepare(
         `SELECT l.* FROM payment_ledger l JOIN sessions s ON s.id = l.session_id
@@ -92,9 +150,11 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
          JOIN payment_ledger l ON l.session_id = s.id
          WHERE lower(l.payer) = ? AND s.state IN (${NON_TERMINAL_STATE_SQL})`,
       ),
-      insertIntent: db.prepare(        `INSERT INTO payment_intents
-           (payment_key, status, session_id, spec_hash, reason, claim_token, claim_expires_at, created_at, updated_at)
-         VALUES (?, 'claimed', NULL, ?, NULL, ?, ?, ?, ?)`,
+      insertIntent: db.prepare(
+        `INSERT INTO payment_intents
+           (payment_key, status, session_id, spec_hash, reason, claim_token, claim_expires_at,
+            requirements_json, created_at, updated_at)
+         VALUES (?, 'claimed', NULL, ?, NULL, ?, ?, ?, ?, ?)`,
       ),
       reclaimIntent: db.prepare(
         `UPDATE payment_intents

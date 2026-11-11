@@ -1,5 +1,6 @@
 import { hostname } from "node:os";
 import { envBool as bool, envInt as int } from "@x402s/shared/env";
+import { atomicAmount, parseSettlement } from "./settlement-config.js";
 import {
   loadPlatformLimits,
   loadTiers,
@@ -218,18 +219,25 @@ export interface ControllerConfig {
   globalCreatesPerWindow: number;
   /** Concurrent non-terminal sessions cluster-wide; 0 disables the check. */
   globalConcurrentSessions: number;
-}
-
-/**
- * A non-negative decimal amount in atomic units, kept as a string so it never
- * loses precision through a JS number (USDC 6dp, but tiers are configurable).
- */
-function atomicAmount(raw: string | undefined, fallback: string): string {
-  const value = (raw ?? fallback).trim();
-  if (!/^\d{1,30}$/.test(value)) {
-    throw new Error(`expected a non-negative decimal amount in atomic units, got ${JSON.stringify(value)}`);
-  }
-  return value;
+  /** Payment mode stamped on ledger rows written by settlement recovery. */
+  paymentMode: "mock" | "testnet";
+  /** Facilitator base URL for settlement lookup; empty disables recovery's lookup. */
+  facilitatorUrl: string;
+  /**
+   * Operator-owned refund endpoint. Empty leaves real-mode refunds
+   * REFUND_PENDING, which is the honest default: this process holds no signing
+   * authority.
+   */
+  refundWebhookUrl: string;
+  refundWebhookToken: string;
+  /** Give up on a refund after this many failed attempts. */
+  refundMaxAttempts: number;
+  /** First retry delay; doubles per attempt up to one hour. */
+  refundRetryBaseMs: number;
+  /** Reconcile intents that settled but never reached an entitlement (#31). */
+  settlementRecoveryEnabled: boolean;
+  /** How long a claim may sit before recovery treats it as a crash. */
+  settlementRecoveryGraceMs: number;
 }
 
 /**
@@ -498,6 +506,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     payerConcurrentSessions: int(env.PAYER_CONCURRENT_SESSIONS, 4, 0, 1_000),
     globalCreatesPerWindow: int(env.GLOBAL_CREATES_PER_WINDOW, 2_000, 1, 10_000_000),
     globalConcurrentSessions: int(env.GLOBAL_CONCURRENT_SESSIONS, 200, 0, 100_000),
+    ...parseSettlement(env),
     capacityEnabled: bool(env.CAPACITY_ENABLED, true),
     capacityAccounting: (() => {
       const mode = env.CAPACITY_ACCOUNTING ?? "baseline";
