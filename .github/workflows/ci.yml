@@ -1,11 +1,27 @@
 name: ci
 
+# Every branch push used to start a `push` run *and* a `pull_request` run for
+# the same commit, with nothing to deduplicate them. Coverage re-ran the
+# integration suite in one of those, so a branch push drove the 62
+# SIGSTOP/socket tests four times (#145). Feature branches are now covered by
+# `pull_request` alone; `push` is main and tags. `workflow_call` stays for
+# release.yml.
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
   # Required so release.yml can gate image publishing on the test suite.
   workflow_call:
+
+# One run per head branch. A superseded commit is cancelled instead of raced:
+# two concurrent copies of the integration suite are the load condition behind
+# #128 and the reason #145 exists. `github.head_ref` is only set on
+# `pull_request`; `ref_name` covers main pushes, tags and dispatch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 # Keep the token read-only even though the repository default is now write
 # (GHCR pushes require that default; explicit workflow permissions cap it).
