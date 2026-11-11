@@ -1,7 +1,8 @@
 import type { WebSocket } from "ws";
 import type { AttestationEnvelope, RelaySessionState } from "@x402s/shared/protocol";
 import { metrics, type MetricsRegistry } from "@x402s/shared/runtime";
-import { constantTimeEqual, guestTokenShard, sha256Hex } from "../tokens.js";
+import { constantTimeEqual, sha256Hex } from "../secrets.js";
+import { guestTokenShard } from "../tokens.js";
 import { registerRelayMetrics, type RelayDisconnectReason } from "./metrics.js";
 
 export const MAX_FRAME_BYTES = 24 * 1024 * 1024;

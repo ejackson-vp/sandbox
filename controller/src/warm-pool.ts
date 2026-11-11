@@ -18,7 +18,8 @@ import {
   type RuntimeProfile,
 } from "./config.js";
 import { warmPoolIdentity } from "./warm-pool-identity.js";
-import { newOpaqueToken, sha256Hex, guestTokenFor } from "./tokens.js";
+import { newOpaqueToken, sha256Hex } from "./secrets.js";
+import { guestTokenFor } from "./tokens.js";
 import { pinnedShard, shardClaim } from "./data-plane-shard.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { WarmPoolStore } from "./store/ports.js";

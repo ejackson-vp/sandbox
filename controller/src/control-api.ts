@@ -21,7 +21,7 @@ import {
   TokenBucket,
   type ComponentCheck,
 } from "@x402s/shared/runtime";
-import { constantTimeEqual } from "./tokens.js";
+import { constantTimeEqual } from "./secrets.js";
 import { createCapacityRouter } from "./capacity/routes.js";
 import { registerPaymentRoutes } from "./control-api/payments.js";
 import { registerSessionRoutes } from "./control-api/sessions.js";

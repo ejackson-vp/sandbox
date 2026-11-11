@@ -11,7 +11,8 @@ import { log } from "@x402s/shared/runtime";
 import { pinnedShard, shardClaim } from "../data-plane-shard.js";
 import type { DataPlanePlacement, DataPlaneService } from "../data-plane-shard.js";
 import type { SessionRecord } from "../store/models.js";
-import { guestTokenFor, newOpaqueToken, sha256Hex } from "../tokens.js";
+import { newOpaqueToken, sha256Hex } from "../secrets.js";
+import { guestTokenFor } from "../tokens.js";
 
 export type Endpoint = { host: string; port: number };
 export type EndpointPair = { relay: Endpoint | null; proxy: Endpoint | null };

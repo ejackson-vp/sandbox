@@ -29,7 +29,7 @@ import { MAX_FRAME_BYTES, RelayRegistry } from "./relay/registry.js";
 import { registerRelayControlRoutes, registerRelayProbeRoutes } from "./relay/http.js";
 import { attachGuestUpgrade } from "./relay/ws.js";
 import { collectRelayMetrics } from "./relay/metrics.js";
-import { constantTimeEqual } from "./tokens.js";
+import { constantTimeEqual } from "./secrets.js";
 
 export interface RelayTlsOptions {
   certFile: string;
