@@ -127,8 +127,9 @@ controller, because the reaper's rules are the same ones you are applying.
   firing (`terminal_session`, `released_pod_gone`); if it stays flat and
   `sandbox_reservation_leaks_detected_total` climbs, the Pod object is still
   there and the Kubernetes API is refusing the delete. Restart the controller
-  only if the recovery path is not firing. A restart is safe for the ledger
-  (SQLite) but interrupts live sessions.
+  only if the recovery path is not firing. A restart is safe for the ledger (the
+  store is a SQLite file today; [ADR 0010](../adr/0010-controller-ha-storage.md)
+  targets Postgres behind the same port) but it interrupts live sessions.
 - **PVC-full:** if the node is out of disk because of accumulated volumes, list
   them with sizes and delete the oldest terminal ones first. `local-path` keeps
   the data on the node, so deletion is what frees it.

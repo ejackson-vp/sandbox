@@ -23,7 +23,7 @@ Four deployment profiles are gated separately. "Unverified" is not "passed".
 | Kata guest→host isolation | **UNVERIFIED** | not executed |
 | Cilium pod→pod / pod→API / metadata isolation | **UNVERIFIED** | not executed |
 | Image vulnerability status | **UNVERIFIED** | no image built |
-| Multi-replica controller | NOT SUPPORTED | SQLite single-writer |
+| Multi-replica controller | NOT SUPPORTED | SQLite on a ReadWriteOnce volume; [ADR 0010](../docs/adr/0010-controller-ha-storage.md) targets Postgres behind the store port |
 | Capacity quotas per payer/IP | PARTIAL | admission exists; no durable per-payer budget |
 
 ---
@@ -91,8 +91,12 @@ Profile: arbitrary internet tenants, real money, untrusted code, SLA.
 - No verified microVM isolation or packet-level network attestation in CI. The
   release gate must run the Kata/Cilium suites on a disposable cluster and record
   the digest of the tested images.
-- Control plane is a single-writer SQLite database with no HA, backup/PITR
-  automation, or cross-region story.
+- Control plane is a single writer on a SQLite file on a `ReadWriteOnce` volume
+  pinned to the control-plane node. The lease failover is implemented and
+  measured, but a replacement pod waits 30 s to 2 min for the volume, so what
+  ships is single-node HA ([ADR 0010](../docs/adr/0010-controller-ha-storage.md)).
+  The accepted direction is Postgres behind the store port (#25); until that
+  lands there is no PITR automation and no cross-region story.
 - Capability remains a bearer token for its TTL (F-07); no per-request
   proof-of-possession.
 - No KMS/HSM for `CAPABILITY_SECRET` / `CONTROLLER_ADMIN_TOKEN` rotation. Key ids
@@ -170,7 +174,7 @@ This is a code-and-process assessment, not an independent penetration test.
 
 Dimension grades: design **A-**, audited code paths **B+**, verification **B-**
 (the isolation suites are unexecuted), supply chain **B** (pins landed; release
-promotion open), operations **C** (single-writer, no KMS rotation, no refunds).
+promotion open), operations **C** (single writer per ADR 0010, manual key rotation without a KMS, no refunds).
 
 Confidence: medium-high on the paths covered by tests; low on every isolation
 claim, because no cluster was available.
