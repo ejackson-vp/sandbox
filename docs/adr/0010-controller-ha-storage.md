@@ -1,6 +1,6 @@
 # 0010. Controller HA needs a multi-reader store, not shared storage
 
-Status: proposed (recommended in #147, awaiting review)
+Status: accepted (2026-11-11, recommended in #147)
 
 ## Context
 
