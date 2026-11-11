@@ -70,6 +70,18 @@ spec:
             - name: CAPABILITY_SECRET
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: capability-secret}
+            # Rotation overlap (#61). These keys are absent until a rotation is
+            # in progress; see docs/runbooks/secret-rotation.md. The previous
+            # key verifies existing capabilities, it never signs new ones.
+            - name: CAPABILITY_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: capability-key-id, optional: true}
+            - name: CAPABILITY_SECRET_PREVIOUS
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: capability-secret-previous, optional: true}
+            - name: CAPABILITY_PREVIOUS_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: capability-previous-key-id, optional: true}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

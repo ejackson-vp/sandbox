@@ -11,6 +11,9 @@ const threshold = LEVELS[(process.env.LOG_LEVEL as LogLevel) ?? "info"] ?? 20;
 
 const REDACT_KEYS = new Set([
   "capability",
+  "secret",
+  "capabilitysecret",
+  "capabilitysecretprevious",
   "authorization",
   "signature",
   "envelope",
@@ -23,6 +26,7 @@ const REDACT_KEYS = new Set([
   "guesttoken",
   "token",
   "admintoken",
+  "admintokenprevious",
   "proxytoken",
   "x-sandbox-capability",
   "evidence",

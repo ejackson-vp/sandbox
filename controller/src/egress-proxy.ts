@@ -174,9 +174,17 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
   });
 
   async function handleConnect(req: http.IncomingMessage, clientSocket: Duplex, head: Buffer): Promise<void> {
+    // `session` is set once the token verifies. Attribution matters for the
+    // egress-abuse runbook: without it a denial cannot be traced to a tenant,
+    // and the proxy keeps no per-session counter that a human can read.
+    let session: string | undefined;
     const deny = (status: number, reason: string, host?: string) => {
       denied += 1;
-      log.warn("egress_denied", { reason, host: host ? host.slice(0, 100) : undefined });
+      log.warn("egress_denied", {
+        reason,
+        host: host ? host.slice(0, 100) : undefined,
+        ...(session ? { sessionId: session } : {}),
+      });
       if (clientSocket.writable) {
         clientSocket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
         // end() flushes; destroy is only a backstop for a hostile peer that
@@ -198,6 +206,7 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
       deny(407, "proxy_authentication_failed");
       return;
     }
+    session = verified.sessionId;
     // Fail closed on a cross-shard landing. The counter this proxy enforces is
     // in memory, so a session split across replicas gets N times the limit
     // regardless of what this check says; rejecting makes the misrouting
@@ -207,6 +216,7 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
         .counter("sandbox_egress_cross_shard_total", "CONNECTs refused for landing on the wrong shard")
         .inc({ service: "proxy", reason: verified.shard === undefined ? "missing_shard" : "wrong_shard" });
       log.warn("egress_cross_shard_rejected", {
+        sessionId: verified.sessionId,
         reason: verified.shard === undefined ? "missing_shard" : "wrong_shard",
         expected: opts.shardIndex,
         claimed: verified.shard ?? null,

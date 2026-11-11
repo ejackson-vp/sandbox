@@ -254,3 +254,30 @@ describe("egress proxy accounting", () => {
     expect(received.join("")).not.toContain("502");
   });
 });
+
+describe("egress denial attribution", () => {
+  it("names the session in the denial log so a runbook can trace it", async () => {
+    const { port } = await startProxy({ tokenSecret: SECRET });
+    const lines: string[] = [];
+    const write = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      lines.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      // Port 22 is refused before any dial, so this is deterministic.
+      const attempt = connectVia(port, "example.com:22", mintProxyToken(SECRET, "session-z", 60_000));
+      expect(await attempt.status).toContain("403");
+      attempt.socket.destroy();
+    } finally {
+      process.stderr.write = write;
+    }
+    const denial = lines.find((line) => line.includes("egress_denied"));
+    expect(denial).toBeDefined();
+    expect(JSON.parse(denial!)).toMatchObject({
+      msg: "egress_denied",
+      reason: "port_not_allowed",
+      sessionId: "session-z",
+    });
+  });
+});

@@ -2,7 +2,7 @@
  * Session routes: status, the single operations surface, and lifecycle.
  */
 import express, { type Request, type Response } from "express";
-import { safeEqualHex, sha256Hex } from "@x402s/shared/crypto";
+import { safeEqualHex, sha256Hex, ringAcceptsToken } from "@x402s/shared/crypto";
 import {
   LATENCY_BUCKETS,
   log,
@@ -48,6 +48,14 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       }
       log.error("session_lookup_failed", { error: (err as Error).message });
       res.status(503).json({ error: "control_plane_unavailable" });
+      return null;
+    }
+    // A token signed by a retired key id is refused before the hash compare, so
+    // retiring a key takes effect immediately instead of when its sessions age
+    // out. Legacy tokens carry no key id and are covered by the hash alone.
+    if (!ringAcceptsToken(deps.config.capabilityKeys, capability)) {
+      recordAuthFailure("capability_invalid");
+      res.status(404).json({ error: "session_not_found" });
       return null;
     }
     const presented = sha256Hex(capability);

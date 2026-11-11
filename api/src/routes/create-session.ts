@@ -47,6 +47,11 @@ export interface CreateSessionDeps {
   requirementFor(priceUsd: string, spec: SessionSpec): Promise<PaymentRequirements>;
   payment402(res: Response, requirement: PaymentRequirements, error: string): Promise<void>;
   capabilityFor(key: string, commitment: string): string;
+  /**
+   * Re-derive the capability an existing session was issued, across a key
+   * rotation. Null means no key in the ring reproduces the stored hash.
+   */
+  recoverCapability(key: string, commitment: string, storedHash: string): string | null;
   ipCreateLimiter: RateLimiter;
   createLimiter: RateLimiter;
 }
@@ -58,6 +63,19 @@ function rejectCapacity(res: Response, decision: Extract<CapacityDecision, { adm
     retryable: decision.retryable,
     reason: decision.reason,
     requested: decision.requested,
+  });
+}
+
+/**
+ * Fail-closed response for a replay whose session was signed with a key that
+ * has been retired. Returning a token signed by the current key would look
+ * valid and then fail every request, so say what happened instead.
+ */
+function rejectRetiredCapabilityKey(res: Response, sessionId: string): void {
+  res.status(409).json({
+    error: "capability_key_retired",
+    sessionId,
+    message: "this payment's capability was signed with a retired key and cannot be reissued; create a new session",
   });
 }
 
@@ -227,7 +245,14 @@ export function createSessionHandler(deps: CreateSessionDeps) {
         return;
       }
       log.info("payment_idempotent_replay", { sessionId: claim.sessionId, paymentKeyPrefix: key.slice(0, 12) });
-      res.status(200).json(createResponseFrom(session, capability, session.limits));
+      // The token may have been signed before a rotation: re-derive the one
+      // that matches the stored hash rather than signing a new one.
+      const replayCapability = deps.recoverCapability(key, commitment, session.capabilityHash);
+      if (!replayCapability) {
+        rejectRetiredCapabilityKey(res, session.sessionId);
+        return;
+      }
+      res.status(200).json(createResponseFrom(session, replayCapability, session.limits));
       return;
     }
 
@@ -288,7 +313,12 @@ export function createSessionHandler(deps: CreateSessionDeps) {
           if (detail?.sessionId) {
             const existing = await deps.controller.getSession(detail.sessionId).catch(() => null);
             if (existing) {
-              res.status(200).json(createResponseFrom(existing, capability, existing.limits));
+              const replayCapability = deps.recoverCapability(key, commitment, existing.capabilityHash);
+              if (!replayCapability) {
+                rejectRetiredCapabilityKey(res, existing.sessionId);
+                return true;
+              }
+              res.status(200).json(createResponseFrom(existing, replayCapability, existing.limits));
               return true;
             }
           }
@@ -317,7 +347,12 @@ export function createSessionHandler(deps: CreateSessionDeps) {
           sessionId: winner.sessionId,
           paymentKeyPrefix: key.slice(0, 12),
         });
-        res.status(200).json(createResponseFrom(winner, capability, winner.limits));
+        const replayCapability = deps.recoverCapability(key, commitment, winner.capabilityHash);
+        if (!replayCapability) {
+          rejectRetiredCapabilityKey(res, winner.sessionId);
+          return true;
+        }
+        res.status(200).json(createResponseFrom(winner, replayCapability, winner.limits));
         return true;
       }
       log.info("session_created", {
