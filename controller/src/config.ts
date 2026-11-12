@@ -1,27 +1,44 @@
-import { hostname } from "node:os";
-import { envBool as bool, envInt as int } from "@x402s/shared/env";
-import { atomicAmount, parseSettlement } from "./settlement-config.js";
-import {
-  loadPlatformLimits,
-  loadTiers,
-  type PlatformLimits,
-  type TierTable,
-} from "@x402s/shared/payment";
+/**
+ * Controller configuration entry point.
+ *
+ * The loader is a sequence of section parsers so a change to one area of the
+ * configuration does not require reading every other parser. The order of the
+ * calls, and of the spreads below, is the startup validation order: a required
+ * setting that used to be refused first is still refused first.
+ *
+ * Sections live in `controller/src/config/`. Types are re-exported here so
+ * existing importers of `./config.js` are unaffected.
+ */
 import { KubeProvisioner, NullProvisioner, type Provisioner } from "./k8s.js";
 import { LocalProvisioner } from "./local-provisioner.js";
-import { RelayClient, type RelayClientTlsOptions } from "./relay-client.js";
-import type { RelayTlsOptions } from "./relay.js";
+import { RelayClient } from "./relay-client.js";
 import { mintProxyToken } from "./tokens.js";
 import { shardClaim } from "./data-plane-shard.js";
-import { parseBackupKey } from "./backup-key.js";
-import { parseStoreSelection } from "./store-selection.js";
+import { parseSettlement } from "./settlement-config.js";
+import { parseGuestMeasurementAllowlist } from "./config/attestation.js";
+import { parseBackup, parseBackupKeyMaterial } from "./config/backup.js";
+import { parseCapacity } from "./config/capacity.js";
+import { parseEgress } from "./config/egress.js";
 import {
-  assertDigestAllowed,
-  DEFAULT_GUEST_IMAGE,
-  imageRefFor,
-  parseRuntimeProfiles,
-  type RuntimeProfileCatalog,
-} from "./runtime-profiles.js";
+  parseClusterFlags,
+  parseExecution,
+  parseKubernetes,
+  parseRuntimeProfilesFor,
+} from "./config/kubernetes.js";
+import { parseLimitTables, parseTierTable } from "./config/limits.js";
+import { parsePaymentLimits } from "./config/payments.js";
+import { parseProvisioning, parseProvisioningLimits } from "./config/provisioning.js";
+import { parseDataPlanePlacement, parseRelayServices } from "./config/relay.js";
+import { parseRole } from "./config/role.js";
+import { parseServer } from "./config/server.js";
+import { parseStore } from "./config/store.js";
+import { parseAdminTokens, parseServiceTokens } from "./config/tokens.js";
+import { parseTransportSecurity } from "./config/tls.js";
+import type { ControllerConfig } from "./config/types.js";
+import { parseWarmPool, parseWarmPoolAllocation } from "./config/warm-pool.js";
+
+export type { Role } from "./config/role.js";
+export type { ControllerConfig } from "./config/types.js";
 
 // The runtime-profile vocabulary lives with the catalog so the controller has
 // one definition of "which profiles exist"; re-exported here because callers
@@ -36,513 +53,42 @@ export {
   type SessionRuntimeSource,
 } from "./runtime-profiles.js";
 
-export type Role = "controller" | "relay" | "proxy" | "all";
-
-export interface ControllerConfig {
-  role: Role;
-  controllerPort: number;
-  /** Private scrape listener. 0 disables it (tests / non-Kubernetes runs). */
-  metricsPort: number;
-  metricsHost: string;
-  /** Optional HTTPS listener for the API; a client cert with CN=api is required. */
-  tlsPort?: number;
-  tlsCertFile?: string;
-  tlsKeyFile?: string;
-  tlsCaFile?: string;
-  relayPort: number;
-  /** mTLS listener for the controller-facing relay control routes. */
-  relayControlPort: number;
-  /** Server certificate/key/client CA for the relay control listener. */
-  relayTls?: RelayTlsOptions;
-  /** Controller client certificate/key/CA for the relay control listener. */
-  relayClientTls?: RelayClientTlsOptions;
-  proxyPort: number;
-  adminToken: string;
-  /**
-   * Previous admin token, accepted but never presented, for the overlap window
-   * of a rotation. Undefined when no rotation is in progress.
-   */
-  adminTokenPrevious?: string;
-  relayAdminToken: string;
-  /** Low-privilege token the relay uses to nudge the reconciler. */
-  wakeToken: string;
-  controllerUrl: string;
-  proxyTokenSecret: string;
-  dbPath: string;
-  /** Which adapter backs the store ports: `sqlite` (default) or `postgres` (ADR 0010). */
-  storeBackend: "sqlite" | "postgres";
-  /** Required when `storeBackend` is postgres; parsed by `parseStoreSelection`. */
-  databaseUrl: string | null;
-  /** Empty disables scheduled backups. */
-  backupDir: string;
-  backupIntervalMs: number;
-  backupRetention: number;
-  /** Required when backupDir is set; null when backups are disabled. */
-  backupKey: Buffer | null;
-  sandboxNamespace: string;
-  controlNamespace: string;
-  guestImageDigest: string;
-  /** Image reference actually used in the pod spec: `repo@sha256:…` when pinned. */
-  guestImageRef: string;
-  /**
-   * Selectable runtime profiles, always including `base` built from
-   * `GUEST_IMAGE`/`GUEST_IMAGE_DIGEST`. A session may only name a profile that
-   * is listed here.
-   */
-  runtimeProfiles: RuntimeProfileCatalog;
-  runtimeClass: string;
-  executionMode: "dev" | "kata";
-  allowInsecureDev: boolean;
-  kubeEnabled: boolean;
-  /**
-   * Hold the single-writer role through a Kubernetes Lease instead of assuming
-   * it. On by default whenever Kubernetes is enabled; `LEADER_ELECTION=off` is
-   * the escape hatch (docs/adr/0009).
-   */
-  leaderElection: boolean;
-  /** Lease holder identity: POD_NAME, falling back to the host name. */
-  leaderIdentity: string;
-  /** Lease object name, created in `controlNamespace`. */
-  leaderLeaseName: string;
-  relayEnabled: boolean;
-  proxyEnabled: boolean;
-  relayBaseUrl: string;
-  relayServiceName: string;
-  proxyServiceName: string;
-  /**
-   * Headless Services that publish per-pod endpoint hostnames (`relay-0`).
-   * Shard resolution reads these: the ClusterIP Service's EndpointSlice entries
-   * carry addresses but no hostname, so a shard can never be matched there.
-   */
-  relayHeadlessService: string;
-  proxyHeadlessService: string;
-  workspaceDir: string;
-  provisioningTimeoutMs: number;
-  /**
-   * How long one create may retry relay registration against the current
-   * generation before the pass gives up (the session stays PAID and is retried
-   * on the next tick).
-   */
-  relayRegistrationTimeoutMs: number;
-  leaseGraceMs: number;
-  reconcileIntervalMs: number;
-  /** Max sessions reconciled in parallel per phase; 1 restores sequential passes. */
-  reconcileConcurrency: number;
-  /**
-   * Max sessions selected for dispatch in one readiness pass. Bounds both the
-   * SQL read and the work a tick can enqueue when many sessions are due.
-   */
-  reconcileBudget: number;
-  maxPodAgeMs: number;
-  relayResponseWaitMs: number;
-  allowedPorts: number[];
-  allowedHostSuffixes: string[];
-  deniedCidrs: string[];
-  egressMaxConnectionsPerSession: number;
-  egressMaxGlobalConnections: number;
-  tiers: TierTable;
-  platformLimits: PlatformLimits;
-  /** Pre-booted, unleased sandboxes kept ready for fast claims (0 = off). */
-  warmPoolSize: number;
-  /**
-   * Share of `warmPoolSize` reserved for `base`. Language profiles start at
-   * zero and grow from demand, but may never push the total over the budget.
-   */
-  warmPoolBaseMin: number;
-  /** Pods added to a profile when a claim misses. */
-  warmPoolGrowthStep: number;
-  /** Minimum gap between two growths of one profile. */
-  warmPoolCooldownMs: number;
-  /** How long a profile must go unused before its extra pods may be drained. */
-  warmPoolIdleDrainMs: number;
-  /** Window over which a miss counts as demand for a profile. */
-  warmPoolDemandWindowMs: number;
-  warmPoolTier: keyof TierTable;
-  warmPoolTtlMs: number;
-  warmClaimTimeoutMs: number;
-  /** Pin a resumed checkpoint to the node that owns its local-path PVC. */
-  pinCheckpointNode: boolean;
-  /**
-   * Delete a workspace PVC that no session owns once it is this old. Checkpoint
-   * volumes are plaintext, so this bounds the exposure window for a volume left
-   * behind by a lost session row.
-   */
-  orphanPvcGraceMs: number;
-  /** 0 = unlimited; otherwise the number of concurrent cold provisions. */
-  maxConcurrentProvisioning: number;
-  /** 0 = no queue timeout; otherwise fail a PAID session after this wait. */
-  provisionQueueTimeoutMs: number;
-  /** Capacity admission is on by default; disable only for local debugging. */
-  capacityEnabled: boolean;
-  /** baseline = guarantee requests; peak = reserve limits (no overcommit). */
-  capacityAccounting: "baseline" | "peak";
-  /** Provisional payment hold lifetime. */
-  capacityHoldTtlMs: number;
-  /** Per-node headroom withheld from sandboxes for system workloads. */
-  capacityPlatformOverhead: { cpuMillicores: number; memoryMiB: number; storageMiB: number };
-  /** Optional test/demo ceilings; 0 means use the node's allocatable values. */
-  capacityNodeCpuOverrideMillis: number;
-  capacityNodeMemoryOverrideMiB: number;
-  /**
-   * SHA-256 hex digests of guest measurements the controller accepts on hello.
-   * Empty (the default) means measurement is not pinned, matching the behaviour
-   * before this option existed.
-   */
-  guestMeasurementAllowlist: string[];
-  /**
-   * Relay and proxy replica counts. Above 1, provisioning pins each session to
-   * a shard-specific pod address and the credential carries the shard, so a
-   * misrouted connection can be rejected instead of served.
-   */
-  relayReplicas: number;
-  proxyReplicas: number;
-  /** Pod host template for a shard; must contain `{shard}` when replicas > 1. */
-  relayHostTemplate: string;
-  proxyHostTemplate: string;
-  /**
-   * Pod ordinal of this relay/proxy process. Unset (the default) accepts any
-   * shard, which is the single-replica behaviour and keeps existing tokens
-   * valid.
-   */
-  shardIndex?: number;
-  /**
-   * Lifetime of a server-issued challenge nonce (#47). A client that takes
-   * longer than this to get its payment signed re-challenges once.
-   */
-  challengeNonceTtlMs: number;
-  /** Hard cap on unburned, unexpired nonces; 0 disables the cap. */
-  challengeNonceMaxActive: number;
-  /** Fixed window for the durable create budget (#48). */
-  budgetWindowMs: number;
-  /** Creates one payer may attempt per window, durable across restarts. */
-  payerCreatesPerWindow: number;
-  /** Atomic units (USDC 6dp) one verified payer may settle per window. */
-  payerSpendPerWindow: string;
-  /** Concurrent non-terminal sessions per payer; 0 disables the check. */
-  payerConcurrentSessions: number;
-  /** Creates across all payers per window; independent of any client field. */
-  globalCreatesPerWindow: number;
-  /** Concurrent non-terminal sessions cluster-wide; 0 disables the check. */
-  globalConcurrentSessions: number;
-  /** Payment mode stamped on ledger rows written by settlement recovery. */
-  paymentMode: "mock" | "testnet";
-  /** Facilitator base URL for settlement lookup; empty disables recovery's lookup. */
-  facilitatorUrl: string;
-  /**
-   * Operator-owned refund endpoint. Empty leaves real-mode refunds
-   * REFUND_PENDING, which is the honest default: this process holds no signing
-   * authority.
-   */
-  refundWebhookUrl: string;
-  refundWebhookToken: string;
-  /** Give up on a refund after this many failed attempts. */
-  refundMaxAttempts: number;
-  /** First retry delay; doubles per attempt up to one hour. */
-  refundRetryBaseMs: number;
-  /** Reconcile intents that settled but never reached an entitlement (#31). */
-  settlementRecoveryEnabled: boolean;
-  /** How long a claim may sit before recovery treats it as a crash. */
-  settlementRecoveryGraceMs: number;
-}
-
 /**
- * Fail-closed configuration validation.
+ * Fail-closed configuration validation, one section at a time.
  */
-function parseRole(env: NodeJS.ProcessEnv): Role {
-  const role = (env.ROLE ?? "controller") as Role;
-  if (!["controller", "relay", "proxy", "all"].includes(role)) {
-    throw new Error(`invalid ROLE ${role}`);
-  }
-  return role;
-}
-
-function parseExecution(
-  env: NodeJS.ProcessEnv,
-  kubeEnabled: boolean,
-  role: Role,
-): Pick<ControllerConfig, "executionMode" | "runtimeClass" | "allowInsecureDev" | "guestImageDigest" | "guestImageRef"> {
-  const executionMode = (env.EXECUTION_MODE ?? "dev") as "dev" | "kata";
-  if (!["dev", "kata"].includes(executionMode)) {
-    throw new Error(`invalid EXECUTION_MODE ${executionMode}`);
-  }
-
-  const runtimeClass = env.RUNTIME_CLASS ?? "x402-sandbox";
-  // Gates guest-image digest enforcement only; no execution mode is
-  // hardware-backed, so there is nothing else to acknowledge.
-  const allowInsecureDev = bool(env.ALLOW_INSECURE_DEV, true);
-
-  const guestImage = env.GUEST_IMAGE ?? DEFAULT_GUEST_IMAGE;
-  const guestImageDigest = env.GUEST_IMAGE_DIGEST ?? "sha256:unpinned-dev-image";
-  assertDigestAllowed("GUEST_IMAGE_DIGEST", guestImageDigest, { kubeEnabled, role, allowInsecureDev });
-
-  const guestImageRef = imageRefFor(guestImage, guestImageDigest);
-  return { executionMode, runtimeClass, allowInsecureDev, guestImageDigest, guestImageRef };
-}
-
-/**
- * All three files must be set together or none of them. Returns undefined when
- * the feature is disabled, so callers can fail closed only where it matters.
- */
-function parseTlsFiles(
-  env: NodeJS.ProcessEnv,
-  prefix: string,
-): { certFile: string; keyFile: string; caFile: string } | undefined {
-  const certFile = env[`${prefix}_CERT_FILE`];
-  const keyFile = env[`${prefix}_KEY_FILE`];
-  const caFile = env[`${prefix}_CA_FILE`];
-  const set = [certFile, keyFile, caFile];
-  if (set.every((value) => !value)) return undefined;
-  if (set.some((value) => !value)) {
-    throw new Error(`${prefix}_CERT_FILE, ${prefix}_KEY_FILE and ${prefix}_CA_FILE must be set together`);
-  }
-  return { certFile: certFile!, keyFile: keyFile!, caFile: caFile! };
-}
-
-function parseTls(env: NodeJS.ProcessEnv): Pick<ControllerConfig, "tlsPort" | "tlsCertFile" | "tlsKeyFile" | "tlsCaFile"> | Record<string, never> {
-  const tlsPortRaw = env.CONTROLLER_TLS_PORT ?? "0";
-  const tlsPortNum = Number(tlsPortRaw);
-  const tlsPort =
-    Number.isInteger(tlsPortNum) && tlsPortNum > 0 && tlsPortNum <= 65535 ? tlsPortNum : undefined;
-  if (tlsPortRaw !== "0" && !tlsPort) throw new Error(`invalid CONTROLLER_TLS_PORT ${tlsPortRaw}`);
-  const tlsFiles = [env.TLS_CERT_FILE, env.TLS_KEY_FILE, env.TLS_CA_FILE];
-  if (tlsPort && tlsFiles.some((v) => !v)) {
-    throw new Error("CONTROLLER_TLS_PORT requires TLS_CERT_FILE, TLS_KEY_FILE and TLS_CA_FILE");
-  }
-  if (!tlsPort && tlsFiles.some(Boolean)) {
-    throw new Error("TLS_CERT_FILE/TLS_KEY_FILE/TLS_CA_FILE require CONTROLLER_TLS_PORT");
-  }
-  const tls =
-    tlsPort && env.TLS_CERT_FILE && env.TLS_KEY_FILE && env.TLS_CA_FILE
-      ? {
-          tlsPort,
-          tlsCertFile: env.TLS_CERT_FILE,
-          tlsKeyFile: env.TLS_KEY_FILE,
-          tlsCaFile: env.TLS_CA_FILE,
-        }
-      : {};
-  return tls;
-}
-
-function parseTokens(
-  env: NodeJS.ProcessEnv,
-  role: Role,
-  adminToken: string,
-  adminTokenPrevious?: string,
-): Pick<ControllerConfig, "relayAdminToken" | "wakeToken" | "proxyTokenSecret"> {
-  const requireDistinctToken = (name: string, value: string | undefined): string => {
-    if (!value || value.length < 16) {
-      throw new Error(`${name} must be set (>=16 chars) and must not reuse ADMIN_TOKEN`);
-    }
-    if (value === adminToken || (adminTokenPrevious !== undefined && value === adminTokenPrevious)) {
-      throw new Error(`${name} must differ from ADMIN_TOKEN (key separation)`);
-    }
-    return value;
-  };
-  const needsRelayTokens = role === "all" || role === "controller" || role === "relay";
-  const needsProxyToken = role === "all" || role === "controller" || role === "proxy";
-  const relayAdminToken = needsRelayTokens
-    ? requireDistinctToken("RELAY_ADMIN_TOKEN", env.RELAY_ADMIN_TOKEN)
-    : (env.RELAY_ADMIN_TOKEN ?? "");
-  const wakeToken = needsRelayTokens
-    ? requireDistinctToken("WAKE_TOKEN", env.WAKE_TOKEN)
-    : (env.WAKE_TOKEN ?? "");
-  const proxyTokenSecret = needsProxyToken
-    ? requireDistinctToken("PROXY_TOKEN_SECRET", env.PROXY_TOKEN_SECRET)
-    : (env.PROXY_TOKEN_SECRET ?? "");
-  return { relayAdminToken, wakeToken, proxyTokenSecret };
-}
-
 export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): ControllerConfig {
   const role = parseRole(env);
 
   // Parsed before parseExecution because a real cluster deployment must pin the
   // guest image by digest independently of the payment/attestation dev switch.
-  const kubeEnabled = bool(env.KUBERNETES_ENABLED, true);
-  // Leader election needs an API server to hold the Lease. Without one this
-  // process is the only writer by construction, so it runs solo.
-  const leaderElection = kubeEnabled && bool(env.LEADER_ELECTION, true);
-  const execution = parseExecution(env, kubeEnabled, role);
-  const adminToken = env.ADMIN_TOKEN ?? "";
-  if (["controller", "all"].includes(role) && adminToken.length < 16) {
-    throw new Error("ADMIN_TOKEN must be set (>=16 chars) for controller roles");
-  }
-  // Rotation overlap: the new token is presented, the old one is still accepted
-  // until every caller has been switched over. Validated here rather than in
-  // the control API so a bad pair fails at startup, not on the first request.
-  const adminTokenPrevious = env.ADMIN_TOKEN_PREVIOUS ?? "";
-  if (adminTokenPrevious.length > 0) {
-    if (["controller", "all"].includes(role) && adminTokenPrevious.length < 16) {
-      throw new Error("ADMIN_TOKEN_PREVIOUS must be at least 16 characters when set");
-    }
-    if (adminTokenPrevious === adminToken) {
-      throw new Error("ADMIN_TOKEN_PREVIOUS must differ from ADMIN_TOKEN");
-    }
-  }
-
-  const tiers = loadTiers(env);
-  const warmPoolSize = int(env.WARM_POOL_SIZE, 0, 0, 50);
-  const warmPoolBaseMin = int(env.WARM_POOL_BASE_MIN, warmPoolSize, 0, 50);
-  if (warmPoolBaseMin > warmPoolSize) {
-    throw new Error(`WARM_POOL_BASE_MIN (${warmPoolBaseMin}) must not exceed WARM_POOL_SIZE (${warmPoolSize})`);
-  }
-  const warmPoolTier = (env.WARM_POOL_TIER ?? "short") as keyof TierTable;
-  if (!(warmPoolTier in tiers)) {
-    throw new Error(`invalid WARM_POOL_TIER ${String(warmPoolTier)}`);
-  }
-  const runtimeProfiles = parseRuntimeProfiles(
-    env,
-    {
-      image: env.GUEST_IMAGE ?? DEFAULT_GUEST_IMAGE,
-      digest: execution.guestImageDigest,
-      imageRef: execution.guestImageRef,
-    },
-    { kubeEnabled, role, allowInsecureDev: execution.allowInsecureDev },
-  );
-  const tls = parseTls(env);
-  const relayTls = parseTlsFiles(env, "RELAY_TLS");
-  const relayClientTls = parseTlsFiles(env, "RELAY_CLIENT_TLS");
-  // A cluster relay must never expose the control routes over plaintext. The
-  // local process and unit tests may run without certificates.
-  if (kubeEnabled && (role === "relay" || role === "all") && !relayTls) {
-    throw new Error("RELAY_TLS_CERT_FILE/RELAY_TLS_KEY_FILE/RELAY_TLS_CA_FILE are required for a relay when KUBERNETES_ENABLED is true");
-  }
-  if (relayClientTls && !/^https:/i.test(env.RELAY_URL ?? "")) {
-    throw new Error("RELAY_CLIENT_TLS_* requires an https:// RELAY_URL");
-  }
-  if (!relayClientTls && /^https:/i.test(env.RELAY_URL ?? "")) {
-    throw new Error("RELAY_CLIENT_TLS_CERT_FILE/RELAY_CLIENT_TLS_KEY_FILE/RELAY_CLIENT_TLS_CA_FILE are required for an https:// RELAY_URL");
-  }
-  const tokens = parseTokens(env, role, adminToken, adminTokenPrevious || undefined);
-  const backupEnabled = role === "controller" || role === "all";
-  const backupDir = backupEnabled ? (env.BACKUP_DIR ?? "") : "";
-  const backupKey =
-    backupEnabled && backupDir && env.BACKUP_ENCRYPTION_KEY
-      ? parseBackupKey(env.BACKUP_ENCRYPTION_KEY)
-      : null;
-  if (backupDir && !backupKey) {
-    throw new Error("BACKUP_ENCRYPTION_KEY is required when BACKUP_DIR is set");
-  }
+  const cluster = parseClusterFlags(env);
+  const execution = parseExecution(env, cluster.kubeEnabled, role);
+  const admin = parseAdminTokens(env, role);
+  const tiers = parseTierTable(env);
+  const warmPool = parseWarmPoolAllocation(env, tiers);
+  const runtimeProfiles = parseRuntimeProfilesFor(env, execution, cluster, role);
+  const security = parseTransportSecurity(env, cluster.kubeEnabled, role);
+  const tokens = parseServiceTokens(env, role, admin.adminToken, admin.adminTokenPrevious);
+  // Backup key material is checked before any listener port, matching the
+  // original loader: a backup directory without a key is refused first.
+  const backup = parseBackupKeyMaterial(env, role);
 
   return {
     role,
-    controllerPort: int(env.X402_CONTROLLER_PORT ?? env.CONTROLLER_PORT, 3001, 1, 65535),
-    metricsPort: int(env.METRICS_PORT, 9100, 0, 65535),
-    metricsHost: env.METRICS_HOST ?? "0.0.0.0",
-    ...tls,
-    relayPort: int(env.X402_RELAY_PORT ?? env.RELAY_PORT, 8443, 1, 65535),
-    relayControlPort: int(env.RELAY_CONTROL_PORT, 8444, 1, 65535),
-    ...(relayTls ? { relayTls } : {}),
-    ...(relayClientTls ? { relayClientTls } : {}),
-    proxyPort: int(env.X402_PROXY_PORT ?? env.PROXY_PORT, 3128, 1, 65535),
-    adminToken,
-    ...(adminTokenPrevious ? { adminTokenPrevious } : {}),
-    ...tokens,
-    controllerUrl: env.CONTROLLER_URL ?? "http://127.0.0.1:3001",
-    dbPath: env.DB_PATH ?? "/data/controller.db",
-    ...parseStoreSelection(env, backupDir),
-    backupDir,
-    backupIntervalMs: int(env.BACKUP_INTERVAL_MS, 21_600_000, 60_000, 604_800_000),
-    backupRetention: int(env.BACKUP_RETENTION, 14, 1, 365),
-    backupKey,
-    sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",
-    controlNamespace: env.CONTROL_NAMESPACE ?? "sandbox-system",
-    ...execution,
-    runtimeProfiles,
-    kubeEnabled,
-    leaderElection,
-    leaderIdentity: env.POD_NAME?.trim() || hostname(),
-    leaderLeaseName: env.LEADER_LEASE_NAME ?? "controller-leader",
-    relayEnabled: bool(env.RELAY_ENABLED, role === "all" || role === "relay"),
-    proxyEnabled: bool(env.PROXY_ENABLED, role === "all" || role === "proxy"),
-    relayBaseUrl: env.RELAY_URL ?? "http://127.0.0.1:8443",
-    relayServiceName: env.RELAY_SERVICE_NAME ?? "relay",
-    proxyServiceName: env.PROXY_SERVICE_NAME ?? "egress-proxy",
-    relayHeadlessService:
-      env.RELAY_HEADLESS_SERVICE ?? `${env.RELAY_SERVICE_NAME ?? "relay"}-headless`,
-    proxyHeadlessService:
-      env.PROXY_HEADLESS_SERVICE ?? `${env.PROXY_SERVICE_NAME ?? "egress-proxy"}-headless`,
-    workspaceDir: env.WORKSPACE_DIR ?? "/workspace",
-    provisioningTimeoutMs: int(env.PROVISIONING_TIMEOUT_MS, 90_000, 10_000, 600_000),
-    relayRegistrationTimeoutMs: int(env.RELAY_REGISTRATION_TIMEOUT_MS, 5_000, 500, 60_000),
-    leaseGraceMs: int(env.LEASE_GRACE_MS, 2_000, 0, 60_000),
-    reconcileIntervalMs: int(env.RECONCILE_INTERVAL_MS, 250, 50, 10_000),
-    reconcileConcurrency: int(env.RECONCILE_CONCURRENCY, 8, 1, 256),
-    // Upper bound keeps one pass from enqueuing an unbounded batch; lower
-    // bound keeps the loop making progress (a budget of 0 would starve).
-    reconcileBudget: int(env.RECONCILE_BUDGET, 1_000, 1, 10_000),
-    maxPodAgeMs: int(env.MAX_POD_AGE_MS, 3_600_000, 120_000, 7_200_000),
-    relayResponseWaitMs: int(env.RELAY_RESPONSE_WAIT_MS, 25_000, 0, 120_000),
-    allowedPorts: (env.EGRESS_ALLOWED_PORTS ?? "443").split(",").map((p) => Number(p.trim())).filter((n) => Number.isInteger(n)),
-    allowedHostSuffixes: (env.EGRESS_ALLOWED_HOST_SUFFIXES ?? "")
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean),
-    deniedCidrs: (env.EGRESS_DENIED_CIDRS ?? "10.244.0.0/16,10.96.0.0/12")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
-    egressMaxConnectionsPerSession: int(env.EGRESS_MAX_CONNECTIONS_PER_SESSION, 16, 1, 1024),
-    egressMaxGlobalConnections: int(env.EGRESS_MAX_GLOBAL_CONNECTIONS, 512, 1, 65_536),
-    tiers,
-    platformLimits: loadPlatformLimits(env),
-    warmPoolSize,
-    warmPoolBaseMin,
-    warmPoolGrowthStep: int(env.WARM_POOL_GROWTH_STEP, 1, 1, 10),
-    warmPoolCooldownMs: int(env.WARM_POOL_COOLDOWN_MS, 15_000, 0, 600_000),
-    warmPoolIdleDrainMs: int(env.WARM_POOL_IDLE_DRAIN_MS, 60_000, 0, 3_600_000),
-    warmPoolDemandWindowMs: int(env.WARM_POOL_DEMAND_WINDOW_MS, 120_000, 1_000, 3_600_000),
-    warmPoolTier,
-    warmPoolTtlMs: int(env.WARM_POOL_TTL_MS, 300_000, 30_000, 3_600_000),
-    warmClaimTimeoutMs: int(env.WARM_CLAIM_TIMEOUT_MS, 8_000, 1_000, 60_000),
-    pinCheckpointNode: bool(env.PIN_CHECKPOINT_NODE, true),
-    orphanPvcGraceMs: int(env.ORPHAN_PVC_GRACE_MS, 3_600_000, 60_000, 86_400_000),
-    maxConcurrentProvisioning: int(env.MAX_CONCURRENT_PROVISIONING, 0, 0, 1_000),
-    provisionQueueTimeoutMs: int(env.PROVISION_QUEUE_TIMEOUT_MS, 120_000, 0, 3_600_000),
-    // Long enough for a human-speed wallet signature, short enough that a
-    // captured challenge is worthless by the time a log is read.
-    challengeNonceTtlMs: int(env.CHALLENGE_NONCE_TTL_MS, 180_000, 10_000, 900_000),
-    challengeNonceMaxActive: int(env.CHALLENGE_NONCE_MAX_ACTIVE, 20_000, 0, 1_000_000),
-    // The durable budget is the backstop behind the in-memory buckets, so its
-    // defaults are looser than CREATE_RATE_BURST (30/1s): roughly two creates a
-    // minute sustained per payer, and a global ceiling that a rotating `from`
-    // cannot escape.
-    budgetWindowMs: int(env.BUDGET_WINDOW_MS, 3_600_000, 60_000, 86_400_000),
-    payerCreatesPerWindow: int(env.PAYER_CREATES_PER_WINDOW, 60, 1, 1_000_000),
-    payerSpendPerWindow: atomicAmount(env.PAYER_SPEND_PER_WINDOW, "50000000"),
-    payerConcurrentSessions: int(env.PAYER_CONCURRENT_SESSIONS, 4, 0, 1_000),
-    globalCreatesPerWindow: int(env.GLOBAL_CREATES_PER_WINDOW, 2_000, 1, 10_000_000),
-    globalConcurrentSessions: int(env.GLOBAL_CONCURRENT_SESSIONS, 200, 0, 100_000),
+    ...parseServer(env, admin, tokens, security),
+    ...parseStore(env, backup.backupDir),
+    ...parseBackup(env, backup),
+    ...parseKubernetes(env, cluster, execution, runtimeProfiles),
+    ...parseRelayServices(env, role),
+    ...parseProvisioning(env),
+    ...parseEgress(env),
+    ...parseLimitTables(env, tiers),
+    ...parseWarmPool(env, warmPool),
+    ...parseProvisioningLimits(env),
+    ...parsePaymentLimits(env),
     ...parseSettlement(env),
-    capacityEnabled: bool(env.CAPACITY_ENABLED, true),
-    capacityAccounting: (() => {
-      const mode = env.CAPACITY_ACCOUNTING ?? "baseline";
-      if (mode !== "baseline" && mode !== "peak") {
-        throw new Error(`invalid CAPACITY_ACCOUNTING ${mode}`);
-      }
-      return mode;
-    })(),
-    capacityHoldTtlMs: int(env.CAPACITY_HOLD_TTL_MS, 120_000, 5_000, 900_000),
-    capacityPlatformOverhead: {
-      cpuMillicores: int(env.CAPACITY_PLATFORM_OVERHEAD_CPU_MILLICORES, 250, 0, 64_000),
-      memoryMiB: int(env.CAPACITY_PLATFORM_OVERHEAD_MEMORY_MIB, 256, 0, 1_048_576),
-      storageMiB: int(env.CAPACITY_PLATFORM_OVERHEAD_STORAGE_MIB, 1_024, 0, 1_048_576),
-    },
-    capacityNodeCpuOverrideMillis: int(env.CAPACITY_NODE_CPU_MILLICORES, 0, 0, 1_000_000),
-    capacityNodeMemoryOverrideMiB: int(env.CAPACITY_NODE_MEMORY_MIB, 0, 0, 1_048_576),
-    // Append-only: another branch adds fields above this line.
-    guestMeasurementAllowlist: (() => {
-      const values = (env.GUEST_MEASUREMENT_ALLOWLIST ?? "")
-        .split(",")
-        .map((value) => value.trim().toLowerCase())
-        .filter(Boolean);
-      for (const value of values) {
-        // sha256 hex only: a typo must fail startup, never silently unpin.
-        if (!/^[0-9a-f]{64}$/.test(value)) {
-          throw new Error(`invalid GUEST_MEASUREMENT_ALLOWLIST entry ${value}`);
-        }
-      }
-      return values;
-    })(),
+    ...parseCapacity(env),
+    ...parseGuestMeasurementAllowlist(env),
     ...parseDataPlanePlacement(env, role),
   };
 }
@@ -580,66 +126,4 @@ export function makeRelayClient(cfg: ControllerConfig): RelayClient {
 export function proxyTokenFor(cfg: ControllerConfig, sessionId: string): string {
   const shard = shardClaim(cfg, "proxy", sessionId);
   return mintProxyToken(cfg.proxyTokenSecret, sessionId, 60 * 60_000, shard);
-}
-
-/**
- * Relay/proxy placement, appended (never interleaved) so concurrent config
- * changes do not conflict.
- *
- * A replica count above 1 without a `{shard}` template would silently send
- * every session to the same hostname, so it fails at startup instead.
- */
-function parseDataPlanePlacement(
-  env: NodeJS.ProcessEnv,
-  role: Role,
-): Pick<
-  ControllerConfig,
-  "relayReplicas" | "proxyReplicas" | "relayHostTemplate" | "proxyHostTemplate" | "shardIndex"
-> {
-  const relayReplicas = int(env.RELAY_REPLICAS, 1, 1, 64);
-  const proxyReplicas = int(env.PROXY_REPLICAS, 1, 1, 64);
-  const relayHostTemplate = env.RELAY_HOST_TEMPLATE ?? "relay-{shard}.relay-headless";
-  const proxyHostTemplate = env.PROXY_HOST_TEMPLATE ?? "egress-proxy-{shard}.egress-proxy-headless";
-
-  if (relayReplicas > 1 && !relayHostTemplate.includes("{shard}")) {
-    throw new Error("RELAY_HOST_TEMPLATE must contain {shard} when RELAY_REPLICAS > 1");
-  }
-  if (proxyReplicas > 1 && !proxyHostTemplate.includes("{shard}")) {
-    throw new Error("PROXY_HOST_TEMPLATE must contain {shard} when PROXY_REPLICAS > 1");
-  }
-
-  // In Kubernetes the pod ordinal arrives as the pod name (`relay-0`), so
-  // accept both "0" and a trailing "-<ordinal>".
-  const rawShard = env.SHARD_INDEX?.trim();
-  let shardIndex: number | undefined;
-  if (rawShard) {
-    const ordinal = /(?:^|-)(\d+)$/.exec(rawShard);
-    if (!ordinal) throw new Error(`invalid SHARD_INDEX ${rawShard}`);
-    shardIndex = Number(ordinal[1]);
-  }
-  if (shardIndex !== undefined) {
-    const replicas = role === "proxy" ? proxyReplicas : role === "relay" ? relayReplicas : 0;
-    if (replicas > 0 && shardIndex >= replicas) {
-      throw new Error(
-        `SHARD_INDEX ${shardIndex} is outside the ${replicas}-replica range for this role`,
-      );
-    }
-  }
-  // Affinity is only enforced when the ordinal is known. More than one replica
-  // without it would route guests into the wrong in-memory registry silently,
-  // so refuse to start rather than run blind.
-  if (shardIndex === undefined && role === "relay" && relayReplicas > 1) {
-    throw new Error("SHARD_INDEX is required when RELAY_REPLICAS > 1");
-  }
-  if (shardIndex === undefined && role === "proxy" && proxyReplicas > 1) {
-    throw new Error("SHARD_INDEX is required when PROXY_REPLICAS > 1");
-  }
-
-  return {
-    relayReplicas,
-    proxyReplicas,
-    relayHostTemplate,
-    proxyHostTemplate,
-    ...(shardIndex !== undefined ? { shardIndex } : {}),
-  };
 }
