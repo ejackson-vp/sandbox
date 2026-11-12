@@ -19,7 +19,7 @@ import {
   type CreateSessionUseCaseDeps,
 } from "../use-cases/create-session.js";
 
-export interface CreateSessionDeps extends CreateSessionUseCaseDeps {
+interface CreateSessionDeps extends CreateSessionUseCaseDeps {
   ipCreateLimiter: RateLimiter;
   payment402(res: Response, requirement: PaymentRequirements, error: string): Promise<void>;
 }

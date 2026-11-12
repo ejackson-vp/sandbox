@@ -19,7 +19,6 @@ type vector struct {
 	Name     string          `json:"name"`
 	Input    json.RawMessage `json:"input"`
 	Expected string          `json:"expected"`
-	Note     string          `json:"note"`
 }
 
 type fixture struct {

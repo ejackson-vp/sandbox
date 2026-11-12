@@ -19,7 +19,7 @@ import { accountedResources, addResources, requestForLimits, requestForSession, 
 import { CapacitySnapshotBuilder } from "./snapshot.js";
 import type { ReservationAdmission, ReservationRecord, ReservationStore } from "./reservation-store.js";
 
-export interface CapacityDeps {
+interface CapacityDeps {
   cfg: ControllerConfig;
   store: CapacityStore;
   provisioner: Provisioner;
@@ -27,7 +27,7 @@ export interface CapacityDeps {
   reservations?: ReservationStore;
 }
 
-export interface CapacityView {
+interface CapacityView {
   accounting: "baseline" | "peak";
   nodes: Array<{
     id: string;

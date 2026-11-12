@@ -22,7 +22,7 @@ import { classifyAddress, type AddressClass } from "@x402s/shared/ip";
 import { log, metrics } from "@x402s/shared/runtime";
 import { verifyProxyToken } from "./tokens.js";
 
-export interface EgressProxyOptions {
+interface EgressProxyOptions {
   tokenSecret: string;
   /**
    * Ordinal of this proxy replica. When set, a CONNECT whose token claims a

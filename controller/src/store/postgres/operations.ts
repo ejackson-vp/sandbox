@@ -132,7 +132,7 @@ export class PgOperationRepository {
         if ((claimed.rowCount ?? 0) === 0) {
           // Roll the request row back and report why the gate was refused.
           const after = await this.read(tx, sessionId);
-          throw new RolledBack<ClaimOperationResult>(this.refusal(after ?? session, requestId));
+          throw new RolledBack<ClaimOperationResult>(this.refusal(after ?? session));
         }
         return { ok: true, requestId, epoch: session.execEpoch };
       });
@@ -142,7 +142,7 @@ export class PgOperationRepository {
     }
   }
 
-  private refusal(session: SessionRecord, requestId: string): ClaimOperationResult {
+  private refusal(session: SessionRecord): ClaimOperationResult {
     if (session.activeRequestId) {
       return { ok: false, code: "busy", state: session.state, requestId: session.activeRequestId };
     }

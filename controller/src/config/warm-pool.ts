@@ -12,13 +12,13 @@ import { envInt as int } from "@x402s/shared/env";
 import type { TierTable } from "@x402s/shared/payment";
 import type { ControllerConfig } from "./types.js";
 
-export interface WarmPoolAllocation {
+interface WarmPoolAllocation {
   warmPoolSize: number;
   warmPoolBaseMin: number;
   warmPoolTier: keyof TierTable;
 }
 
-export type WarmPoolSettings = Pick<
+type WarmPoolSettings = Pick<
   ControllerConfig,
   | "warmPoolSize"
   | "warmPoolBaseMin"

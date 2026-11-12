@@ -14,14 +14,14 @@ import { parseBackupKey } from "../backup-key.js";
 import type { Role } from "./role.js";
 import type { ControllerConfig } from "./types.js";
 
-export interface BackupKeyMaterial {
+interface BackupKeyMaterial {
   /** Empty disables scheduled backups. */
   backupDir: string;
   /** Required when backupDir is set; null when backups are disabled. */
   backupKey: Buffer | null;
 }
 
-export type BackupSettings = Pick<
+type BackupSettings = Pick<
   ControllerConfig,
   "backupDir" | "backupIntervalMs" | "backupRetention" | "backupKey"
 >;

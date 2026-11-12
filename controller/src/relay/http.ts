@@ -9,14 +9,14 @@ import {
 } from "@x402s/shared/runtime";
 import { MAX_FRAME_BYTES, type RelayRegistry } from "./registry.js";
 
-export interface RelayProbeOptions {
+interface RelayProbeOptions {
   /** Identity of this relay process; changes on every restart. */
   generation: string;
   /** Optional registry size, reported on /healthz for dashboards. */
   registry?: RelayRegistry;
 }
 
-export interface RelayControlOptions {
+interface RelayControlOptions {
   /** Identity of this relay process; changes on every restart. */
   generation: string;
   /**

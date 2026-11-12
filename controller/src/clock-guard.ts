@@ -36,7 +36,7 @@ export interface ClockJump {
   direction: "forward" | "backward";
 }
 
-export interface ClockGuardOptions {
+interface ClockGuardOptions {
   /** Wall clock. Injected so tests can step it. */
   now?: () => number;
   /** Monotonic clock, used only as the reference for elapsed time. */

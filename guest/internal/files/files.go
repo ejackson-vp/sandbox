@@ -300,16 +300,3 @@ func (w *Workspace) Stat(p string) (*protocol.FileEntry, error) {
 		MtimeMs: fi.ModTime().UnixMilli(),
 	}, nil
 }
-
-// Cleanup empties the workspace. The pod is deleted afterwards, but this makes
-// the "ephemeral data removed" property explicit.
-func (w *Workspace) Cleanup() error {
-	entries, err := os.ReadDir(w.Root)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		_ = os.RemoveAll(filepath.Join(w.Root, e.Name()))
-	}
-	return nil
-}

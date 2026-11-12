@@ -61,13 +61,13 @@ export interface MockFacilitatorHandle {
   setFailSettle(enabled: boolean): void;
 }
 
-export interface MockFacilitatorOptions {
+interface MockFacilitatorOptions {
   dbPath?: string;
   allowControl?: boolean;
 }
 
 export async function createMockFacilitator(opts: MockFacilitatorOptions = {}): Promise<MockFacilitatorHandle> {
-  const db = new DatabaseSync(opts.dbPath ?? ":memory:");;
+  const db = new DatabaseSync(opts.dbPath ?? ":memory:");
   db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000;");
   const store = new SqliteNonceStore(db);
 

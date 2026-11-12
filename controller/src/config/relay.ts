@@ -11,7 +11,7 @@ import { envBool as bool, envInt as int } from "@x402s/shared/env";
 import type { Role } from "./role.js";
 import type { ControllerConfig } from "./types.js";
 
-export type RelayServiceSettings = Pick<
+type RelayServiceSettings = Pick<
   ControllerConfig,
   | "relayEnabled"
   | "proxyEnabled"
@@ -22,7 +22,7 @@ export type RelayServiceSettings = Pick<
   | "proxyHeadlessService"
 >;
 
-export type DataPlanePlacement = Pick<
+type DataPlanePlacement = Pick<
   ControllerConfig,
   "relayReplicas" | "proxyReplicas" | "relayHostTemplate" | "proxyHostTemplate" | "shardIndex"
 >;

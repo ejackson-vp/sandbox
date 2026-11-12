@@ -10,7 +10,7 @@
 import { SCHEMA_VERSION } from "../schema.js";
 import type { PgConnection } from "./pg.js";
 
-export type StoreHealth =
+type StoreHealth =
   | { ok: true; schemaVersion: number }
   | {
       ok: false;

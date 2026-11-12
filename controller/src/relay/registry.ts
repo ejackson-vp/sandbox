@@ -9,7 +9,7 @@ export const MAX_FRAME_BYTES = 24 * 1024 * 1024;
 export const MAX_PENDING = 8;
 const MAX_CACHED_RESPONSES = 64;
 
-export type WaiterValue = { envelope: string } | { error: string } | null;
+type WaiterValue = { envelope: string } | { error: string } | null;
 
 interface Pending {
   at: number;
@@ -61,7 +61,7 @@ interface Entry {
   epochFloor: number;
 }
 
-export interface RelayRegistryOptions {
+interface RelayRegistryOptions {
   maxSessions: number;
   responseTtlMs: number;
   /**
@@ -82,8 +82,8 @@ export interface RelayRegistryOptions {
   metricsRegistry?: MetricsRegistry;
 }
 
-export type RegisterResult = "ok" | "already_connected" | "at_capacity";
-export type RequestResult =
+type RegisterResult = "ok" | "already_connected" | "at_capacity";
+type RequestResult =
   | "sent"
   | "cached"
   | "pending"
@@ -91,19 +91,19 @@ export type RequestResult =
   | "not_connected"
   | "not_registered"
   | "stale_epoch";
-export type EpochResult = "ok" | "unknown";
+type EpochResult = "ok" | "unknown";
 
-export interface RaiseEpochResult {
+interface RaiseEpochResult {
   result: EpochResult;
   /** Pending frames dropped from the superseded generation. */
   withdrawn: number;
   /** Whether the guest link was reset to discard an unread frame. */
   reset: boolean;
 }
-export type SendResult = "sent" | "not_registered" | "not_connected";
-export type AttachResult = "ok" | "not_found" | "expired" | "bad_token" | "wrong_shard" | "connected";
+type SendResult = "sent" | "not_registered" | "not_connected";
+type AttachResult = "ok" | "not_found" | "expired" | "bad_token" | "wrong_shard" | "connected";
 
-export type WaitResult =
+type WaitResult =
   | { kind: "envelope"; envelope: string }
   | { kind: "error"; message: string }
   | { kind: "pending"; stillPending: boolean }

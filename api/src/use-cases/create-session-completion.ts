@@ -36,7 +36,7 @@ import {
 } from "./create-session-contract.js";
 
 /** Everything a completion needs, captured once the intent is claimed. */
-export interface CompletionContext {
+interface CompletionContext {
   claimToken: string;
   key: string;
   commitment: string;
@@ -58,7 +58,7 @@ export interface CompletionContext {
  * concurrent attempt already completed it, so return that session rather than
  * charging twice.
  */
-export async function completeFailure(
+async function completeFailure(
   deps: CreateSessionUseCaseDeps,
   err: unknown,
   key: string,

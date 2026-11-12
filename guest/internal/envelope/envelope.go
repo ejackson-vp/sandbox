@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 
 	"golang.org/x/crypto/nacl/box"
 )
@@ -68,12 +67,4 @@ func Seal(recipient *[32]byte, plaintext []byte) (string, error) {
 		return "", fmt.Errorf("seal: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(out), nil
-}
-
-func RandomBase64(n int) (string, error) {
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(buf), nil
 }

@@ -7,7 +7,7 @@
  */
 import type { ControllerConfig } from "./types.js";
 
-export type AttestationSettings = Pick<ControllerConfig, "guestMeasurementAllowlist">;
+type AttestationSettings = Pick<ControllerConfig, "guestMeasurementAllowlist">;
 
 export function parseGuestMeasurementAllowlist(
   env: NodeJS.ProcessEnv,

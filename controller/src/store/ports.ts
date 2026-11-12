@@ -257,7 +257,7 @@ export interface MetricsStore {
 }
 
 /** The reconcile scheduler's own view: due selection plus the cleanup sweep. */
-export interface SchedulerStore {
+interface SchedulerStore {
   backupTo(path: string): Promise<void>;
   clearPod(id: string): Promise<void>;
   countDue(nowMs: number): Promise<number>;

@@ -18,7 +18,7 @@ import { constantTimeEqual } from "./secrets.js";
  * format has a named contract and `verifyProxyToken` does not return an
  * anonymous object (#148).
  */
-export interface ProxyTokenClaims {
+interface ProxyTokenClaims {
   sessionId: string;
   /** Epoch milliseconds. */
   expiresAt: number;
@@ -26,7 +26,7 @@ export interface ProxyTokenClaims {
   shard?: number;
 }
 
-export type ProxyTokenVerification =
+type ProxyTokenVerification =
   | ({ ok: true } & ProxyTokenClaims)
   | { ok: false; reason: string };
 

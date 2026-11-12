@@ -10,11 +10,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@x402/core": "^2.30.0",
-    "@x402/evm": "^2.30.0",
-    "@x402/fetch": "^2.30.0",
-    "@x402s/shared": "*",
-    "viem": "^2.57.16",
-    "@x402s/sdk": "*"
+    "@x402s/sdk": "*",
+    "@x402s/shared": "*"
   }
 }

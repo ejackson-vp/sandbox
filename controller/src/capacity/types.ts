@@ -96,7 +96,7 @@ export function accountedResources(
     : { cpuMillicores: 0, memoryBytes: 0, storageBytes: committed.storageBytes };
 }
 
-export interface NodeTaint {
+interface NodeTaint {
   key: string;
   effect: "NoSchedule" | "PreferNoSchedule" | "NoExecute";
 }
@@ -143,7 +143,7 @@ export type AdmissionRejectionReason =
   | "insufficient_storage"
   | "runtime_profile_unavailable";
 
-export interface ReservationPlan {
+interface ReservationPlan {
   nodeId: string;
   baseline: ResourceVector;
   peak: ResourceVector;

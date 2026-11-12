@@ -15,7 +15,7 @@ import type { RelayClientTlsOptions } from "../relay-client.js";
 import type { Role } from "./role.js";
 import type { ControllerConfig } from "./types.js";
 
-export type PublicTls =
+type PublicTls =
   | Pick<ControllerConfig, "tlsPort" | "tlsCertFile" | "tlsKeyFile" | "tlsCaFile">
   | Record<string, never>;
 
@@ -29,7 +29,7 @@ export interface TransportSecurity {
  * All three files must be set together or none of them. Returns undefined when
  * the feature is disabled, so callers can fail closed only where it matters.
  */
-export function parseTlsFiles(
+function parseTlsFiles(
   env: NodeJS.ProcessEnv,
   prefix: string,
 ): { certFile: string; keyFile: string; caFile: string } | undefined {
@@ -53,7 +53,7 @@ function parseTlsPort(env: NodeJS.ProcessEnv): number | undefined {
   return tlsPort;
 }
 
-export function parseTls(env: NodeJS.ProcessEnv): PublicTls {
+function parseTls(env: NodeJS.ProcessEnv): PublicTls {
   const tlsPort = parseTlsPort(env);
   const certFile = env.TLS_CERT_FILE;
   const keyFile = env.TLS_KEY_FILE;

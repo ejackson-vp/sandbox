@@ -46,7 +46,7 @@ import { checkPostgresHealth } from "./health.js";
 
 export { WriterLockUnavailableError } from "./pg.js";
 
-export interface PostgresStoreOptions {
+interface PostgresStoreOptions {
   /**
    * Start as the writer and migrate. `false` opens a read-only participant: it
    * migrates nothing and refuses to write until `setWritesBlocked(false)`

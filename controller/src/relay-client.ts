@@ -9,7 +9,7 @@ export interface RelayClientTlsOptions {
   caFile: string;
 }
 
-export interface RelayClientOptions {
+interface RelayClientOptions {
   /** Control URL. `https://…` when `tls` is set (the mTLS control listener). */
   baseUrl: string;
   /** Low-privilege relay admin token; plaintext local-dev path only. */
@@ -37,12 +37,12 @@ export interface RelayClientOptions {
   relayControlPort?: number;
 }
 
-export type RelayResponse =
+type RelayResponse =
   | { kind: "envelope"; envelope: string }
   | { kind: "pending" }
   | { kind: "guest_error"; message: string };
 
-export interface RelayHealth {
+interface RelayHealth {
   ok: boolean;
   /** Per-process identity; changes on every relay restart. */
   generation: string;
@@ -56,7 +56,7 @@ export class RelayUnavailableError extends Error {
   }
 }
 
-export interface RegistrationOptions {
+interface RegistrationOptions {
   /** Total time to keep retrying. Each attempt is a fresh connection. */
   deadlineMs?: number;
   /**
@@ -67,7 +67,7 @@ export interface RegistrationOptions {
   onRetry?: (attempt: number, error: Error) => void;
 }
 
-export interface RegistrationResult {
+interface RegistrationResult {
   generation: string;
   attempts: number;
 }

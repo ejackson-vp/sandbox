@@ -59,8 +59,6 @@ type Frame struct {
 	Epoch  int64  `json:"epoch"`
 	Reason string `json:"reason"`
 	Claim  *Claim `json:"claim,omitempty"`
-	// ActiveRequestID is set on outbound status frames only.
-	ActiveRequestID string `json:"activeRequestId,omitempty"`
 }
 
 // Claim is the session identity handed to a warm guest. It is only valid on a

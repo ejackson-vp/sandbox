@@ -23,7 +23,7 @@ import { WarmPool, type WarmClaimOutcome } from "./warm-pool.js";
 /** Pods the whole manager may create per reconcile pass. */
 const MAX_CREATE_PER_PASS = 2;
 
-export interface ProfilePoolStats {
+interface ProfilePoolStats {
   profile: string;
   /** Desired idle pods for this profile. */
   target: number;

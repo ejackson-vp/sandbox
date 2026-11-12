@@ -124,7 +124,7 @@ export function admitPayer(
 }
 
 /** The proven identity of the payer and the challenge it signed. */
-export interface Commitment {
+interface Commitment {
   key: string;
   authorizer: `0x${string}`;
   challengeNonce: string;

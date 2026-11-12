@@ -23,7 +23,7 @@ import { log, metrics } from "@x402s/shared/runtime";
 import type { PaymentLedgerRecord } from "./store/models.js";
 import type { RefundWorkerStore } from "./store/ports.js";
 
-export interface RefundRequest {
+interface RefundRequest {
   paymentKey: string;
   /** EIP-3009 authorisation nonce, when the payment carried one. */
   settlementNonce: string | null;
@@ -39,7 +39,7 @@ export interface RefundExecutor {
   refund(request: RefundRequest): Promise<{ transaction: string }>;
 }
 
-export interface RefundWorkerOptions {
+interface RefundWorkerOptions {
   maxAttempts: number;
   retryBaseMs: number;
   /** Rows examined per pass. */
@@ -49,7 +49,7 @@ export interface RefundWorkerOptions {
   now?: () => number;
 }
 
-export interface RefundWorkerResult {
+interface RefundWorkerResult {
   attempted: number;
   refunded: number;
   failed: number;

@@ -14,7 +14,6 @@
  * Deadline enforcement never depends on the untrusted guest cooperating: the
  * controller's clock decides, and pod deletion is the backstop.
  */
-import type { RelaySessionState } from "@x402s/shared/protocol";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import type { ControllerConfig } from "./config.js";
 import type { Provisioner } from "./k8s.js";
@@ -40,7 +39,7 @@ import { ClockGuard, type ClockJump } from "./clock-guard.js";
 
 export { LifecycleError } from "./lifecycle.js";
 
-export interface ReconcilerDeps {
+interface ReconcilerDeps {
   cfg: ControllerConfig;
   store: ReconcilerStore;
   provisioner: Provisioner;
@@ -551,4 +550,3 @@ export class Reconciler {
 
 }
 
-export type { RelaySessionState };

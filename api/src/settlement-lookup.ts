@@ -8,7 +8,7 @@
  * is unavailable the API answers 409 `reconciliation_pending` instead of
  * charging twice or silently losing the entitlement.
  */
-export interface SettlementRecord {
+interface SettlementRecord {
   settled: boolean;
   transaction?: string;
   payer?: string;

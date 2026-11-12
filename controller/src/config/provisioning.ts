@@ -8,7 +8,7 @@
 import { envBool as bool, envInt as int } from "@x402s/shared/env";
 import type { ControllerConfig } from "./types.js";
 
-export type ProvisioningSettings = Pick<
+type ProvisioningSettings = Pick<
   ControllerConfig,
   | "workspaceDir"
   | "provisioningTimeoutMs"
@@ -21,7 +21,7 @@ export type ProvisioningSettings = Pick<
   | "relayResponseWaitMs"
 >;
 
-export type ProvisioningLimitSettings = Pick<
+type ProvisioningLimitSettings = Pick<
   ControllerConfig,
   | "pinCheckpointNode"
   | "orphanPvcGraceMs"

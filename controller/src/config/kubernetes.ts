@@ -19,12 +19,12 @@ import { envBool as bool } from "@x402s/shared/env";
 import type { Role } from "./role.js";
 import type { ControllerConfig } from "./types.js";
 
-export interface ClusterFlags {
+interface ClusterFlags {
   kubeEnabled: boolean;
   leaderElection: boolean;
 }
 
-export type ExecutionSettings = Pick<
+type ExecutionSettings = Pick<
   ControllerConfig,
   "executionMode" | "runtimeClass" | "allowInsecureDev" | "guestImageDigest" | "guestImageRef"
 >;
@@ -81,7 +81,7 @@ export function parseRuntimeProfilesFor(
   );
 }
 
-export type KubernetesSettings = Pick<
+type KubernetesSettings = Pick<
   ControllerConfig,
   | "sandboxNamespace"
   | "controlNamespace"

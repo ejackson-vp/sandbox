@@ -22,7 +22,7 @@ export interface WorkspacePvcInfo {
   deleting: boolean;
 }
 
-export interface PvcReapInput {
+interface PvcReapInput {
   pvc: WorkspacePvcInfo;
   session: { id: string; state: string } | null;
   now: number;
@@ -32,7 +32,7 @@ export interface PvcReapInput {
 /** Final states; `TERMINATING` still owns its volume until termination finishes. */
 const TERMINAL_STATES = new Set(["DESTROYED", "EXPIRED", "FAILED"]);
 
-export type PvcReapReason = "terminal_session" | "no_session" | "unattributed";
+type PvcReapReason = "terminal_session" | "no_session" | "unattributed";
 
 export function workspacePvcReapReason(input: PvcReapInput): PvcReapReason | null {
   const { pvc, session, now, orphanGraceMs } = input;

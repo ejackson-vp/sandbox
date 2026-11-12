@@ -39,7 +39,7 @@ const DEV_PLACEHOLDER_DIGEST = /^sha256:(dev-)?unpinned/;
  * Who is loading this configuration. Typed as a plain string so this module
  * does not import the controller's `Role` union and create a cycle.
  */
-export interface DigestPolicy {
+interface DigestPolicy {
   kubeEnabled: boolean;
   role: string;
   allowInsecureDev: boolean;

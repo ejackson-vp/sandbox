@@ -12,7 +12,7 @@
  */
 import { envBool as bool, envInt as int } from "@x402s/shared/env";
 
-export interface SettlementConfig {
+interface SettlementConfig {
   paymentMode: "mock" | "testnet";
   facilitatorUrl: string;
   refundWebhookUrl: string;

@@ -40,7 +40,7 @@ const types = {
  * alone cannot make atomic. They are arbitrary but stable: changing one is a
  * behaviour change, not a rename.
  */
-export const WRITER_LOCK_KEY = 8_402_001;
+const WRITER_LOCK_KEY = 8_402_001;
 /** Durable create budget: the concurrency caps are counted, not enforced by a row. */
 export const BUDGET_LOCK_KEY = 8_402_002;
 /** Capacity admission: the snapshot and the insert must agree. */

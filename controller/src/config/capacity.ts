@@ -8,7 +8,7 @@
 import { envBool as bool, envInt as int } from "@x402s/shared/env";
 import type { ControllerConfig } from "./types.js";
 
-export type CapacitySettings = Pick<
+type CapacitySettings = Pick<
   ControllerConfig,
   | "capacityEnabled"
   | "capacityAccounting"

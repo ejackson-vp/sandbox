@@ -5,7 +5,7 @@
 import * as k8s from "@kubernetes/client-node";
 import type { SessionLimits } from "@x402s/shared/protocol";
 
-export type PodEnvSpec = {
+type PodEnvSpec = {
   executionMode: string;
   image: string;
   imageDigest: string;

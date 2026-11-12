@@ -7,7 +7,7 @@
  * changes that IP. Caching it across a restart points new guests at a dead
  * process.
  */
-export interface ServiceAddress {
+interface ServiceAddress {
   host: string;
   port: number;
 }
