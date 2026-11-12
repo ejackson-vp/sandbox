@@ -15,11 +15,11 @@
  * settlement backend, and none of this has moved real money.
  */
 import { describe, expect, it, vi } from "vitest";
-import {
+import { 
   DuplicateEntitlementError,
   type PaymentRecord,
   type SessionRecord,
-} from "../../controller/src/store.js";
+ } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { countRows, freshStore } from "../helpers/test-store.js";
 import { RefundService } from "../../controller/src/refunds.js";

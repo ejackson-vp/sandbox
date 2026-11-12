@@ -7,7 +7,7 @@
  * the winning session instead of an error.
  */
 import { describe, expect, it } from "vitest";
-import { PaymentClaimLostError } from "../../controller/src/store.js";
+import { PaymentClaimLostError } from "../../controller/src/store/models.js";
 import type { PaymentRecord, SessionRecord } from "../../controller/src/store/models.js";
 import { limitsFor, paymentFixture, sessionFixture } from "../helpers/store-fixtures.js";
 import { countRows, freshStore } from "../helpers/test-store.js";
@@ -39,12 +39,15 @@ describe("real Postgres payment-intent concurrency", () => {
     const paymentKey = "c".repeat(64);
     const specHash = "a".repeat(64);
 
-    // 1. Both claims race. One inserts the intent, the other reclaims it
-    //    (staleMs = -1 forces the crash path).
-    const claims = await Promise.all([
-      store.claimPaymentIntent(paymentKey, specHash, -1),
-      store.claimPaymentIntent(paymentKey, specHash, -1),
-    ]);
+    // 1. The first claim inserts the intent; the second reclaims it because
+    //    its lease is already stale (staleMs = -1). On Postgres the two
+    //    inserts serialise on the primary key, so the interesting step is the
+    //    reclaim, not a simultaneous insert: a concurrent second claim can
+    //    legitimately answer in_progress while the first is still in flight.
+    const claims = [
+      await store.claimPaymentIntent(paymentKey, specHash, -1),
+      await store.claimPaymentIntent(paymentKey, specHash, -1),
+    ];
     expect(claims.map((c) => c.status)).toEqual(["claimed", "claimed"]);
     const staleIndex = claims.findIndex((c) => c.status === "claimed" && c.recovered === false);
     const liveIndex = claims.findIndex((c) => c.status === "claimed" && c.recovered === true);

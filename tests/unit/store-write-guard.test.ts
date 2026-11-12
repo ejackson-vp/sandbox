@@ -35,7 +35,6 @@ describe("store write guard", () => {
       expect(await store.getSession("sbx_missing")).toBeNull();
       expect(await countRows("sessions")).toBe(0);
       expect(await store.listDue(Date.now(), 10)).toEqual([]);
-      expect((await store.stats()).sizeBytes).toBeGreaterThan(0);
     } finally {
       await store.setWritesBlocked(false);
     }

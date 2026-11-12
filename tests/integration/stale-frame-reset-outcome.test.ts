@@ -35,7 +35,7 @@ import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import { OperationFence } from "../../controller/src/operation-fence.js";
-import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
 import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";

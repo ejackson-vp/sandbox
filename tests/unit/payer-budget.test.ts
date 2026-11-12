@@ -13,8 +13,8 @@
  *    a rotated `from` cannot escape (F-09).
  */
 import { describe, expect, it } from "vitest";
-import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
-import { payerBudgetKey, type BudgetLimits } from "../../controller/src/store/budgets.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
+import { payerBudgetKey, type BudgetLimits } from "../../controller/src/store/budget-decision.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { postCreate } from "../helpers/create-route.js";
 import { freshStore, openStore, sqlExec } from "../helpers/test-store.js";

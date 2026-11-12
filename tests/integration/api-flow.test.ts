@@ -23,7 +23,7 @@ import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
-import type { SessionRecord } from "../../controller/src/store.js";
+import type {  SessionRecord  } from "../../controller/src/store/models.js";
 import type { Snapshotter } from "../../controller/src/snapshotter.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
 import { CapacityService } from "../../controller/src/capacity/service.js";
@@ -47,7 +47,7 @@ import {
 } from "../../sdk/src/index.js";
 import { createSessionPayment, requestChallenge } from "../helpers/x402.js";
 import { makeTar } from "../helpers/tar.js";
-import { testPort } from "./ports.js";
+import { freePort, testPort } from "./ports.js";
 import { countRows, freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const API_PORT = testPort(13300);
@@ -808,28 +808,29 @@ describe("local services and HTTP data plane", () => {
     await client.waitForReady(handle);
     await client.putFile(handle, { path: "index.html", data: Buffer.from("hello-http\n") });
 
+    const port = await freePort();
     const info = await client.startService(handle, {
       name: "web",
-      command: ["python3", "-m", "http.server", "18080", "--bind", "127.0.0.1"],
-      port: 18080,
+      command: ["python3", "-m", "http.server", String(port), "--bind", "127.0.0.1"],
+      port,
     });
     expect(info.state).toBe("running");
-    expect(info.port).toBe(18080);
+    expect(info.port).toBe(port);
 
     const services = await client.listServices(handle);
     expect(services.map((s) => s.name)).toContain("web");
 
-    const response = await client.http(handle, { port: 18080, path: "/", method: "GET" });
+    const response = await client.http(handle, { port, path: "/", method: "GET" });
     expect(response.status).toBe(200);
     expect(response.body.toString()).toContain("hello-http");
 
     // A port that is not declared by a running service is rejected.
-    await expect(client.http(handle, { port: 18081, path: "/" })).rejects.toMatchObject({
+    await expect(client.http(handle, { port: port === 65535 ? port - 1 : port + 1, path: "/" })).rejects.toMatchObject({
       code: "service_unavailable",
     });
 
     await client.stopService(handle, "web");
-    await expect(client.http(handle, { port: 18080, path: "/" })).rejects.toMatchObject({
+    await expect(client.http(handle, { port, path: "/" })).rejects.toMatchObject({
       code: "service_unavailable",
     });
     await client.destroy(handle);

@@ -7,7 +7,8 @@ import { loadControllerConfig } from "../../controller/src/config.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
-import type { SessionRecord, Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 import { testDatabaseUrl } from "../helpers/test-store.js";
 
@@ -61,7 +62,7 @@ function harness(limit: number, persisted: SessionRecord[] = []) {
     listNonTerminal: async () => persisted,
     mergeTimings,
     requestTermination,
-  } as unknown as Store;
+  } as unknown as PostgresStore;
   let admissions = 0;
   const relay = {
     isReady: async () => {

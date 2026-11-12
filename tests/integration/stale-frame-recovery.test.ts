@@ -19,7 +19,7 @@ import { sealJsonTo } from "@x402s/shared/crypto";
 import type { SessionLimits } from "@x402s/shared/protocol";
 import { OperationFence } from "../../controller/src/operation-fence.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
-import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { GuestHarness } from "../helpers/guest.js";
 import { freshStore, openStore } from "../helpers/test-store.js";
@@ -154,7 +154,13 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       guest.pause();
       await sleep(100);
       await relay.request(sessionId, oldRequestId, envelope, Date.now() + 120_000, 1);
-      expect((await relay.state(sessionId)).pending).toBe(1);
+      const beforeRecovery = await relay.state(sessionId);
+      expect(beforeRecovery.pending).toBe(1);
+      // The frame is queued, not observed: no guest command may be active and
+      // the guest's own epoch must be behind the recovery epoch. If either is
+      // false the reset path is allowed to skip, and this test's premise is gone.
+      expect(beforeRecovery.activeRequestId).toBe("");
+      expect(beforeRecovery.execEpoch).toBeLessThan(2);
 
       // The controller crashes. Only the store is replaced: the relay and the
       // (frozen) guest survive, exactly like a controller Deployment restart.

@@ -14,7 +14,8 @@ import {
 } from "../../controller/src/checkpoint-retention.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
 import type { ReconcilerContext } from "../../controller/src/reconciler-context.js";
-import type { SessionRecord, Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { Termination } from "../../controller/src/termination.js";
 import { testDatabaseUrl } from "../helpers/test-store.js";
 
@@ -140,7 +141,7 @@ function harness(
     clearWorkspacePvc: (id: string) => {
       cleared.push(id);
     },
-  } as unknown as Store;
+  } as unknown as PostgresStore;
   const provisioner = {
     listWorkspacePvcs: async () => {
       if (opts.listFails) throw new Error("kubernetes api unavailable");

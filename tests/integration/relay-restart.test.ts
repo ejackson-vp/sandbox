@@ -34,7 +34,7 @@ import { CapacityService } from "../../controller/src/capacity/service.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
-import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
 import type { SandboxPodSpec } from "../../controller/src/k8s.js";
@@ -358,7 +358,14 @@ describe("relay restart during a paid create", () => {
     expect(failed.failureCode).toBe("provisioning_timeout");
     expect(failed.readyAt).toBeNull();
 
-    const ledger = await run.store.getLedgerBySession(run.sessionId);
+    // The terminal state and the refund are separate writes: the session is
+    // marked FAILED first, then the ledger row is refunded. Wait for the
+    // contract ("eventually refunded"), not the scheduler's ordering.
+    let ledger = await run.store.getLedgerBySession(run.sessionId);
+    for (let attempt = 0; attempt < 50 && ledger?.status !== "REFUNDED"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      ledger = await run.store.getLedgerBySession(run.sessionId);
+    }
     expect(ledger?.status).toBe("REFUNDED");
     assertNotChargedPodTerminated(run.store, run.sessionId);
   }, 90_000);

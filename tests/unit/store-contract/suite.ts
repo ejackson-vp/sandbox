@@ -9,9 +9,9 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
-import { DuplicateEntitlementError, PaymentClaimLostError } from "../../../controller/src/store.js";
+import {  DuplicateEntitlementError, PaymentClaimLostError  } from "../../../controller/src/store/models.js";
 import type { StoreBackend } from "../../../controller/src/store/backend.js";
-import type { BudgetLimits } from "../../../controller/src/store/budgets.js";
+import type { BudgetLimits } from "../../../controller/src/store/budget-decision.js";
 import { MAX_PERSISTED_RESULT_BYTES } from "../../../controller/src/store/models.js";
 import {
   capacitySnapshot,

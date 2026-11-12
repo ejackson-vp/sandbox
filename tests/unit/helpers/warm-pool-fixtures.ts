@@ -12,7 +12,7 @@ import type { RelayClient } from "../../../controller/src/relay-client.js";
 import type { ReconcilerContext } from "../../../controller/src/reconciler-context.js";
 import type { Snapshotter } from "../../../controller/src/snapshotter.js";
 import type { SessionRecord } from "../../../controller/src/store/models.js";
-import type { Store } from "../../../controller/src/store.js";
+import type { PostgresStore } from "../../../controller/src/store/postgres/store.js";
 import type { WarmClaim } from "@x402s/shared/protocol";
 import { WarmPoolManager } from "../../../controller/src/warm-pool-manager.js";
 
@@ -122,7 +122,7 @@ export function harness(opts: HarnessOptions = {}): WarmHarness {
     setProvisioning: () => true,
     setRelayToken: () => {},
     requestTermination: () => true,
-  } as unknown as Store;
+  } as unknown as PostgresStore;
 
   const ctx: ReconcilerContext = {
     cfg,

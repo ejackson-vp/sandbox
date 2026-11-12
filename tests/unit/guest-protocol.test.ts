@@ -20,7 +20,8 @@ import { MetricsRegistry } from "../../shared/src/entries/runtime.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import { RelayRegistry } from "../../controller/src/relay/registry.js";
-import type { SessionRecord, Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 import { testDatabaseUrl } from "../helpers/test-store.js";
 
@@ -160,7 +161,7 @@ function harness(opts: {
   const provisioning = new Provisioning(
     {
       cfg: config(opts.allowlist),
-      store: store as unknown as Store,
+      store: store as unknown as PostgresStore,
       // A PROVISIONING row carries a pod name, so awaitReady probes it. There
       // is no pod to read in this harness, which is a normal miss.
       provisioner: { getPod: vi.fn(async () => null) } as never,

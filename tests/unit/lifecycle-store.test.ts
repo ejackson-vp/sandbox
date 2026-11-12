@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionLimits } from "../../shared/src/entries/protocol.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
-import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
 import { freshStore } from "../helpers/test-store.js";
 
 const limits: SessionLimits = {

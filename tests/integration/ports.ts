@@ -10,6 +10,9 @@
  *
  * The default is 0, so CI and `make verify` keep the original ports.
  */
+import { createServer } from "node:net";
+import type { AddressInfo } from "node:net";
+
 const raw = process.env.X402_TEST_PORT_BASE ?? "0";
 const base = Number(raw);
 
@@ -23,4 +26,24 @@ export function testPort(port: number): number {
     throw new Error(`port ${port} plus base ${base} exceeds 65535`);
   }
   return shifted;
+}
+
+/**
+ * Ask the kernel for an unused loopback port.
+ *
+ * A fixed port is fine for the API and relay fixtures because they are offset
+ * per run. It is not fine for a service started inside a guest: another
+ * developer container on the host can already own the port, which is how the
+ * loopback HTTP test failed against 18080. Bind port 0, read the assignment,
+ * release it, and hand it to the guest.
+ */
+export async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
 }

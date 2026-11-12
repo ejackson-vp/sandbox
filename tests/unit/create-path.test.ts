@@ -31,7 +31,7 @@ import { warmPoolIdentity } from "../../controller/src/warm-pool-identity.js";
 import type { ReconcilerContext } from "../../controller/src/reconciler-context.js";
 import type { Snapshotter } from "../../controller/src/snapshotter.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
-import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
 import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const NOW = Date.now();

@@ -13,7 +13,7 @@ import { Reconciler } from "../../controller/src/reconciler.js";
 import { cadenceFor, DEFAULT_REDUE_INTERVAL_MS } from "../../controller/src/reconcile-cadence.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
-import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { SessionLimits } from "../../shared/src/entries/protocol.js";
 import { limitsFor, paymentFixture, sessionFixture } from "../helpers/store-fixtures.js";

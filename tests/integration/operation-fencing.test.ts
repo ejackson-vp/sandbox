@@ -15,7 +15,7 @@ import { createControlApi } from "../../controller/src/control-api.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { OperationFence } from "../../controller/src/operation-fence.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
-import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
 import { GuestHarness } from "../helpers/guest.js";

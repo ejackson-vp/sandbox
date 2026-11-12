@@ -15,11 +15,11 @@ import {
 import { formatUsd, parseUsdPrice } from "../../shared/src/entries/money.js";
 import { type SessionLimits, type SessionSpec } from "../../shared/src/entries/protocol.js";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
-import {
+import { 
   PaymentClaimLostError,
   type PaymentRecord,
   type SessionRecord,
-} from "../../controller/src/store.js";
+ } from "../../controller/src/store/models.js";
 import { RefundService } from "../../controller/src/refunds.js";
 import { newOpaqueToken } from "../../controller/src/secrets.js";
 import { mintProxyToken, verifyProxyToken } from "../../controller/src/tokens.js";

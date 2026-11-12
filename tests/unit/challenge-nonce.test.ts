@@ -12,7 +12,7 @@
  * by tests/integration/api-flow.test.ts, which CI runs.
  */
 import { describe, expect, it } from "vitest";
-import { ChallengeNonceCapacityError } from "../../controller/src/store/challenges.js";
+import { ChallengeNonceCapacityError } from "../../controller/src/store/models.js";
 import { CHALLENGE_NONCE, postCreate } from "../helpers/create-route.js";
 import { freshStore, openStore, sqlExec } from "../helpers/test-store.js";
 

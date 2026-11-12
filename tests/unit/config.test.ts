@@ -259,6 +259,7 @@ describe("transport security", () => {
 describe("leader election config", () => {
   const cluster = {
     ...TOKENS,
+    DATABASE_URL,
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "true",

@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { StoreHealth } from "../../controller/src/store/models.js";
 import { checkPostgresHealth } from "../../controller/src/store/postgres/health.js";
 import type { PgConnection } from "../../controller/src/store/postgres/pg.js";
-import { SCHEMA_VERSION } from "../../controller/src/store/schema.js";
+import { SCHEMA_VERSION } from "../../controller/src/store/schema-version.js";
 import { freshStore } from "../helpers/test-store.js";
 
 /** Stand-in for the pool: the health probe only ever calls `query`. */
