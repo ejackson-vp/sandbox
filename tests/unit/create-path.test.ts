@@ -18,10 +18,7 @@
  *  - a guarded write that loses the race stops the tail instead of leaving a pod
  *    that no session owns.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionLimits, WarmClaim } from "../../shared/src/entries/protocol.js";
 import { sha256Hex } from "../../shared/src/entries/crypto.js";
 import { loadControllerConfig, type ControllerConfig } from "../../controller/src/config.js";
@@ -33,11 +30,9 @@ import { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 import { warmPoolIdentity } from "../../controller/src/warm-pool-identity.js";
 import type { ReconcilerContext } from "../../controller/src/reconciler-context.js";
 import type { Snapshotter } from "../../controller/src/snapshotter.js";
-import {
-  Store,
-  type PaymentRecord,
-  type SessionRecord,
-} from "../../controller/src/store.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const NOW = Date.now();
 
@@ -65,7 +60,7 @@ function config(env: Record<string, string> = {}): ControllerConfig {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     ...env,
   });
 }
@@ -131,20 +126,9 @@ function sessionRecord(id: string, key: string, overrides: Partial<SessionRecord
   } as unknown as SessionRecord;
 }
 
-const dirs: string[] = [];
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function freshStore(): Store {
-  const dir = mkdtempSync(join(tmpdir(), "x402-create-path-"));
-  dirs.push(dir);
-  return new Store(join(dir, "controller.db"));
-}
-
 /** Claim then complete, as the API does: a real PAID row through the real guards. */
 async function seedPaid(
-  store: Store,
+  store: PostgresStore,
   id: string,
   overrides: Partial<SessionRecord> = {},
 ): Promise<SessionRecord> {
@@ -159,7 +143,7 @@ async function seedPaid(
 }
 
 /** Walk a paid row to SUSPENDED through the store, so the guards are real. */
-async function seedSuspended(store: Store, id: string): Promise<SessionRecord> {
+async function seedSuspended(store: PostgresStore, id: string): Promise<SessionRecord> {
   await seedPaid(store, id, { idlePolicyJson: "{}", workspacePvc: `x402-ws-${id}` });
   await store.setProvisioning(id, `pod-${id}`);
   await store.setRelayToken(id, "relay-hash");
@@ -173,7 +157,7 @@ async function seedSuspended(store: Store, id: string): Promise<SessionRecord> {
 
 /** Everything the provisioning and lifecycle use cases touch, minus the world. */
 interface Harness {
-  store: Store;
+  store: PostgresStore;
   provisioning: Provisioning;
   lifecycle: Lifecycle;
   calls: string[];
@@ -181,16 +165,16 @@ interface Harness {
   relay: RelayClient;
 }
 
-function harness(
+async function harness(
   opts: {
     cfg?: ControllerConfig;
     serviceAddress?: (name: string, shard?: number) => Promise<{ host: string; port: number } | null>;
     warmPod?: boolean;
     beforePodWrite?: (id: string) => void | Promise<void>;
   } = {},
-): Harness {
+): Promise<Harness> {
   const cfg = opts.cfg ?? config();
-  const store = freshStore();
+  const store = await freshStore({ namespace: "unit" });
   const calls: string[] = [];
 
   const createPod = vi.fn(async (spec: { sessionId: string; guestToken: string; workspacePvc?: string; resume?: boolean }) => {
@@ -318,7 +302,7 @@ function harness(
 
 describe("PAID -> PROVISIONING through the effect interpreter", () => {
   it("creates the workspace, registers the credential and then the pod", async () => {
-    const h = harness();
+    const h = await harness();
     const row = await seedPaid(h.store, "sbx_cold_path_01", { idlePolicyJson: "{}" });
 
     await h.provisioning.provision(row);
@@ -347,7 +331,7 @@ describe("PAID -> PROVISIONING through the effect interpreter", () => {
   });
 
   it("claims a warm pod instead of creating one when the session is not suspendable", async () => {
-    const h = harness({ cfg: config({ WARM_POOL_SIZE: "1" }), warmPod: true });
+    const h = await harness({ cfg: config({ WARM_POOL_SIZE: "1" }), warmPod: true });
     const row = await seedPaid(h.store, "sbx_warm_path_01");
 
     await h.provisioning.provision(row);
@@ -371,7 +355,7 @@ describe("PAID -> PROVISIONING through the effect interpreter", () => {
   });
 
   it("defers without a pod when the shard has no endpoint", async () => {
-    const h = harness({ serviceAddress: async () => null });
+    const h = await harness({ serviceAddress: async () => null });
     const row = await seedPaid(h.store, "sbx_no_endpoint_01");
 
     await h.provisioning.provision(row);
@@ -389,7 +373,7 @@ describe("PAID -> PROVISIONING through the effect interpreter", () => {
   it("stops the tail when the PROVISIONING write loses the race", async () => {
     // A destroy lands between the pod create and the guarded write. The row is
     // no longer PAID, so `setProvisioning` refuses and nothing after it runs.
-    const h = harness({
+    const h = await harness({
       beforePodWrite: async (id) => {
         await h.store.requestTermination(id, "client_destroy");
       },
@@ -408,7 +392,7 @@ describe("PAID -> PROVISIONING through the effect interpreter", () => {
 
 describe("SUSPENDED -> RESUMING through the effect interpreter", () => {
   it("restores the workspace, registers the credential and boots a cold pod", async () => {
-    const h = harness();
+    const h = await harness();
     await seedSuspended(h.store, "sbx_resume_path_01");
 
     await h.lifecycle.resume("sbx_resume_path_01");

@@ -1,17 +1,14 @@
 /**
  * Reservation store port.
  *
- * The controller depends on this interface, not on SQLite. A multi-controller
- * deployment can supply a conditional-write adapter (Postgres, DynamoDB) with
- * the same admission contract; the SQLite adapter is the single-writer local
- * implementation.
+ * The controller depends on this interface, not on an adapter. The Postgres
+ * adapter is the implementation; another backend could satisfy the same
+ * admission contract without touching capacity accounting.
  *
  * Every method returns a `Promise` for the same reason the session ports do
  * (ADR 0010): no network client can be called from a synchronous method, and the
  * reservation invariant ("the accounting snapshot and the insert agree") has to
- * hold for an adapter that does its check and write in another process. The
- * synchronous SQLite adapter satisfies this with `async` methods that return the
- * same values.
+ * hold for an adapter that does its check and write in another process.
  */
 import type {
   AdmissionDecision,

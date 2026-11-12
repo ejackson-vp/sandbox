@@ -9,8 +9,11 @@ const TOKENS = {
   PROXY_TOKEN_SECRET: "p".repeat(24),
 };
 
+const DATABASE_URL = "postgres://user:pw@db:5432/sandbox";
+
 const base = {
   ...TOKENS,
+  DATABASE_URL,
   EXECUTION_MODE: "kata",
   ALLOW_INSECURE_DEV: "false",
   KUBERNETES_ENABLED: "false",
@@ -19,6 +22,7 @@ const base = {
 
 const dev = {
   ...TOKENS,
+  DATABASE_URL,
   EXECUTION_MODE: "dev",
   ALLOW_INSECURE_DEV: "true",
   KUBERNETES_ENABLED: "false",
@@ -255,6 +259,7 @@ describe("transport security", () => {
 describe("leader election config", () => {
   const cluster = {
     ...TOKENS,
+    DATABASE_URL,
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "true",
@@ -288,43 +293,11 @@ describe("leader election config", () => {
 });
 
 describe("store backend selection", () => {
-  it("defaults to SQLite with no database URL", () => {
-    const cfg = loadControllerConfig({ ...dev });
-    expect(cfg.storeBackend).toBe("sqlite");
-    expect(cfg.databaseUrl).toBeNull();
-  });
-
-  it("fails closed when postgres is selected without a URL", () => {
-    expect(() => loadControllerConfig({ ...dev, STORE_BACKEND: "postgres" })).toThrow(
-      /DATABASE_URL/,
-    );
-  });
-
-  it("rejects an unknown backend instead of guessing", () => {
-    expect(() =>
-      loadControllerConfig({ ...dev, STORE_BACKEND: "dynamodb", DATABASE_URL: "postgres://x/y" }),
-    ).toThrow(/STORE_BACKEND/);
-  });
-
-  it("accepts postgres with a URL", () => {
+  it("carries the database URL", () => {
     const cfg = loadControllerConfig({
       ...dev,
-      STORE_BACKEND: "postgres",
       DATABASE_URL: "postgres://user:pw@db:5432/sandbox",
     });
-    expect(cfg.storeBackend).toBe("postgres");
     expect(cfg.databaseUrl).toBe("postgres://user:pw@db:5432/sandbox");
-  });
-
-  it("refuses the SQLite backup path with a postgres store", () => {
-    expect(() =>
-      loadControllerConfig({
-        ...dev,
-        STORE_BACKEND: "postgres",
-        DATABASE_URL: "postgres://user:pw@db:5432/sandbox",
-        BACKUP_DIR: "/backup",
-        BACKUP_ENCRYPTION_KEY: "a".repeat(43),
-      }),
-    ).toThrow(/BACKUP_DIR/);
   });
 });

@@ -122,7 +122,7 @@
       "type": "timeseries",
       "title": "HTTP 5xx ratio",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
       "targets": [
         {
           "expr": "sum(rate(sandbox_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(sandbox_http_requests_total[5m])), 0.001)",
@@ -138,7 +138,7 @@
       "type": "timeseries",
       "title": "Provision failures by reason",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
       "targets": [
         {
           "expr": "sum by (reason) (rate(sandbox_provision_failures_total[5m]))",
@@ -147,26 +147,6 @@
         }
       ],
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
-    },
-    {
-      "id": 10,
-      "type": "timeseries",
-      "title": "SQLite size, WAL and busy retries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
-      "targets": [
-        { "expr": "max(sandbox_sqlite_size_bytes)", "legendFormat": "database", "refId": "A" },
-        { "expr": "max(sandbox_sqlite_wal_bytes)", "legendFormat": "WAL", "refId": "B" },
-        {
-          "expr": "sum(rate(sandbox_sqlite_busy_retries_total[5m]))",
-          "legendFormat": "busy retries/s",
-          "refId": "C"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [
-        { "matcher": { "id": "byName", "options": "busy retries/s" }, "properties": [{ "id": "unit", "value": "ops" }] }
-      ] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
     },
     {

@@ -62,7 +62,7 @@
 
   <rect class="box" x="450" y="244" width="330" height="132" rx="10"/>
   <text class="t" x="474" y="280">Controller</text>
-  <text class="s" x="474" y="304">single writer · SQLite</text>
+  <text class="s" x="474" y="304">single writer · Postgres</text>
   <text class="s" x="474" y="324">reconciler · lease deadlines</text>
 
   <rect class="box" x="816" y="244" width="330" height="132" rx="10"/>

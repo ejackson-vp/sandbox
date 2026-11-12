@@ -126,6 +126,13 @@ The controller stays at one replica (ADR 0010).
 Local clusters use `runc`, not microVMs. The demo exercises the same API, relay
 and guest as a real deployment.
 
+The control plane keeps payments and session state in Postgres 17, deployed by
+the same manifests and reachable only from the controller
+([ADR 0010](docs/adr/0010-controller-ha-storage.md)). There is no SQLite path:
+`make up` generates the database credentials into the git-ignored
+`deploy/kubernetes/02-secrets-dev.yaml`, and backups are the database layer's
+job, not the controller's ([backup-restore.md](docs/backup-restore.md)).
+
 Without a cluster, most of the system is testable in under a minute:
 
 ```bash

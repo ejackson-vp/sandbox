@@ -14,7 +14,9 @@ import { loadControllerConfig } from "../../controller/src/config.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
-import type { SessionRecord, Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
+import { testDatabaseUrl } from "../helpers/test-store.js";
 
 const ADMIN = "unit-admin-token-0123456789";
 
@@ -25,7 +27,7 @@ function config(concurrency: number) {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
@@ -48,7 +50,7 @@ function session(id: string, state: SessionRecord["state"] = "PAID"): SessionRec
 function harness(sessions: SessionRecord[], terminal: SessionRecord[] = [], concurrency = 8) {
   const clearPod = vi.fn();
   // The tick selects by due time; this fake treats every listed session as
-  // due and re-arms through the same store surface as the real Store. The
+  // due and re-arms through the same store surface as the real PostgresStore. The
   // assertions below are unchanged: they exercise dispatch/concurrency, not
   // the SQL schedule.
   const store = {
@@ -65,7 +67,7 @@ function harness(sessions: SessionRecord[], terminal: SessionRecord[] = [], conc
       }, {}),
     clearPod,
     requestTermination: vi.fn(() => true),
-  } as unknown as Store;
+  } as unknown as PostgresStore;
   const deletePod = vi.fn(async () => undefined);
   const provisioner = { deletePod } as unknown as Provisioner;
   const relay = { isReady: async () => true } as unknown as RelayClient;

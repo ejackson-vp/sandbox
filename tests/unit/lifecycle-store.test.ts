@@ -1,9 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import type { SessionLimits } from "../../shared/src/entries/protocol.js";
-import { Store, type PaymentRecord, type SessionRecord } from "../../controller/src/store.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
+import { freshStore } from "../helpers/test-store.js";
 
 const limits: SessionLimits = {
   cpuMillis: 1000,
@@ -76,19 +75,8 @@ function session(id: string, key: string): SessionRecord {
   };
 }
 
-const dirs: string[] = [];
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function freshStore(): Store {
-  const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
-  dirs.push(dir);
-  return new Store(join(dir, "controller.db"));
-}
-
 /** Claim then complete, as the API does. */
-async function seedEntitlement(store: Store, key: string, record: SessionRecord): Promise<void> {
+async function seedEntitlement(store: PostgresStore, key: string, record: SessionRecord): Promise<void> {
   const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
   await store.completeEntitlement(key, claim.token, payment(key), record);
@@ -96,7 +84,7 @@ async function seedEntitlement(store: Store, key: string, record: SessionRecord)
 
 describe("lifecycle persistence transitions", () => {
   it("walks PAID -> PROVISIONING -> READY -> SUSPENDING -> SUSPENDED -> RESUMING -> READY", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const key = "b".repeat(64);
       const id = "sbx_000000000000000000000001";
@@ -125,12 +113,12 @@ describe("lifecycle persistence transitions", () => {
       expect(await store.setReady(id, resumedAt, resumedAt + 60_000, "{}", "guest-pk-2")).toBe(true);
       expect((await store.getSession(id))?.state).toBe("READY");
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("refuses to mark SUSPENDED unless the session is SUSPENDING", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const key = "c".repeat(64);
       const id = "sbx_000000000000000000000002";
@@ -142,7 +130,7 @@ describe("lifecycle persistence transitions", () => {
       expect(await store.markSuspended(id, NOW + 2000)).toBe(false);
       expect((await store.getSession(id))?.state).toBe("READY");
     } finally {
-      store.close();
+      await store.close();
     }
   });
 });

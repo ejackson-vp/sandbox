@@ -1,12 +1,13 @@
 /**
  * Who holds the single-writer role.
  *
- * SQLite is a single writer (docs/adr/0004). A second controller replica is
- * therefore only safe if exactly one of them reconciles at a time, so the
- * process asks this port before it starts the loop and before it reports ready.
+ * The store has one writer, and the Postgres adapter enforces that with an
+ * advisory lock (docs/adr/0010). A second controller replica is therefore only
+ * safe if exactly one of them reconciles at a time, so the process asks this port
+ * before it starts the loop and before it reports ready.
  *
- * This buys failover, not throughput: the writer is still one process, and a
- * follower's store connection refuses every write (see `Store.setWritesBlocked`).
+ * This buys failover, not throughput: a follower's store connection refuses every
+ * write (see `PostgresStore.setWritesBlocked`).
  */
 import { log } from "@x402s/shared/runtime";
 

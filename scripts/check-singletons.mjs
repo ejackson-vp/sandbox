@@ -4,7 +4,7 @@
  *
  * The control plane has three pieces of state that are per-process:
  *
- *   controller  SQLite, on a ReadWriteOnce volume, written by one reconciler.
+ *   controller  one writer, so a second replica cannot diverge on state.
  *   relay       The guest registry in memory; a session is pinned to the pod
  *               that holds its socket.
  *
@@ -117,7 +117,7 @@ function unquote(value) {
 
 /**
  * The controller: one replica, and a rollout that cannot have two pods serving
- * from the SQLite volume at once. `Recreate` gives that directly; a
+ * from the database at once. `Recreate` gives that directly; a
  * `RollingUpdate` is only accepted with `maxSurge: 0`.
  */
 function checkController(entity, problems) {
@@ -137,7 +137,7 @@ function checkController(entity, problems) {
     if (maxSurge !== "0") {
       problems.push(
         `${file}: controller strategy is RollingUpdate with maxSurge ${maxSurge ?? "unset"}, ` +
-          "must be 0 or strategy Recreate; two pods must not hold the SQLite volume",
+          "must be 0 or strategy Recreate; a second replica must not become a second writer",
       );
     }
     return;

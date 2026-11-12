@@ -8,37 +8,24 @@
  */
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createControlApi } from "../../controller/src/control-api.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
-import { Store } from "../../controller/src/store.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const CURRENT = "current-admin-token-0123456789";
 const PREVIOUS = "previous-admin-token-0123456789";
 const RELAY_ADMIN = "r".repeat(24);
 
 const servers: http.Server[] = [];
-const stores: Store[] = [];
-const dirs: string[] = [];
 
 afterEach(async () => {
   for (const server of servers.splice(0)) {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-  for (const store of stores.splice(0)) store.close();
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
-
-function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "x402-admin-rotation-"));
-  dirs.push(dir);
-  return dir;
-}
 
 function config(extra: Record<string, string> = {}) {
   return loadControllerConfig({
@@ -48,14 +35,13 @@ function config(extra: Record<string, string> = {}) {
     RELAY_ADMIN_TOKEN: RELAY_ADMIN,
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "p".repeat(24),
-    DB_PATH: join(tempDir(), "controller.db"),
+    DATABASE_URL: testDatabaseUrl(),
     ...extra,
   });
 }
 
 async function wakeStatus(cfg: ReturnType<typeof config>, token: string): Promise<number> {
-  const store = new Store(join(tempDir(), "controller.db"));
-  stores.push(store);
+  const store = await freshStore();
   const app = createControlApi({
     cfg,
     store,

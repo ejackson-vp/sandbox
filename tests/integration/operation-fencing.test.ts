@@ -9,23 +9,17 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import http from "node:http";
-import { mkdtempSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { openSealedJson, sealJsonTo } from "@x402s/shared/crypto";
 import type { SessionLimits } from "@x402s/shared/protocol";
 import { createControlApi } from "../../controller/src/control-api.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { OperationFence } from "../../controller/src/operation-fence.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
-import {
-  Store,
-  type PaymentRecord,
-  type SessionRecord,
-} from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
 import { GuestHarness } from "../helpers/guest.js";
+import { freshStore, openStore, testDatabaseUrl } from "../helpers/test-store.js";
 import { testPort } from "./ports.js";
 
 const RELAY_PORT = testPort(18870);
@@ -38,7 +32,7 @@ const CONFIG = loadControllerConfig({
   PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
   ROLE: "controller",
   KUBERNETES_ENABLED: "false",
-  DB_PATH: "/tmp/operation-fencing-unused.db",
+  DATABASE_URL: testDatabaseUrl("integration"),
 });
 
 const limits: SessionLimits = {
@@ -110,7 +104,7 @@ function sessionRecord(id: string, key: string): SessionRecord {
   };
 }
 
-async function seedReadySession(store: Store, sessionId: string): Promise<void> {
+async function seedReadySession(store: PostgresStore, sessionId: string): Promise<void> {
   const key = "f".repeat(64);
   const claim = await store.claimPaymentIntent(key, "fence-spec", 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
@@ -149,10 +143,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 describe("controller restart fences an in-flight operation", () => {
   let guest: GuestHarness;
   let relay: RelayClient;
-  let store: Store;
+  let store: PostgresStore;
   let server: http.Server;
-  let workDir: string;
-  let dbPath: string;
   const sessionIdRef = () => guest.sessionId;
 
   async function waitForGuestState(predicate: (state: Awaited<ReturnType<RelayClient["state"]>>) => boolean, label: string) {
@@ -166,12 +158,10 @@ describe("controller restart fences an in-flight operation", () => {
   }
 
   beforeAll(async () => {
-    workDir = mkdtempSync(join(tmpdir(), "x402-fencing-"));
-    dbPath = join(workDir, "controller.db");
     guest = new GuestHarness({ port: RELAY_PORT, leaseSeconds: 120, maxCommandSeconds: 120 });
     await guest.start();
     relay = new RelayClient({ baseUrl: `http://127.0.0.1:${RELAY_PORT}`, adminToken: "harness-admin-token-0123456789" });
-    store = new Store(dbPath);
+    store = await freshStore({ namespace: "integration" });
     await seedReadySession(store, guest.sessionId);
     server = await listen(
       createControlApi({
@@ -188,9 +178,8 @@ describe("controller restart fences an in-flight operation", () => {
 
   afterAll(async () => {
     if (server) await close(server).catch(() => undefined);
-    store?.close();
+    await store?.close();
     await guest?.stop();
-    await rm(workDir, { recursive: true, force: true });
   });
 
   it("keeps the gate closed until the guest finishes, then admits the next operation", async () => {
@@ -214,8 +203,8 @@ describe("controller restart fences an in-flight operation", () => {
 
     // 2. The controller crashes: only the store and HTTP surface are replaced.
     await close(server);
-    store.close();
-    store = new Store(dbPath);
+    await store.close();
+    store = await openStore({ namespace: "integration" });
     expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
     expect(await store.getExecRequest(sessionId, oldRequestId)).toMatchObject({
       state: "outcome_unknown",

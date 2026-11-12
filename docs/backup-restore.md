@@ -1,152 +1,102 @@
 # Backup and restore
 
-Status: **implemented; disabled by default.** Enable it in the cluster overlay
-once the `backup-encryption-key` secret exists.
+Status: **the controller does not back anything up.** The database layer owns
+backup, PITR, encryption, retention and the restore drill.
 
-The controller keeps the payment ledger, intents and session state in one SQLite
-database. This page covers the automated, encrypted backup and the restore
-procedure. It is not a substitute for off-site storage or point-in-time
-recovery.
+The controller keeps the payment ledger, intents and session state in Postgres
+(`deploy/kubernetes/05-postgres.yaml`, [ADR 0010](adr/0010-controller-ha-storage.md)).
+It used to copy its SQLite file to a `controller-backups` PVC and encrypt the
+copy itself. That path is deleted, along with the volume, the
+`BACKUP_ENCRYPTION_KEY` secret and the `BACKUP_*` settings. A service that backs
+up its own database has to get the schedule, the off-site copy, the retention and
+the restore drill right, and it usually does none of them well.
 
 ## What is backed up
 
-Every backup is a consistent copy of the whole controller database, including:
+The whole database, including:
 
 - `payments` and `payment_ledger` (the money records);
 - `payment_intents` (the replay/outbox state);
-- `sessions`, operations and reservations.
+- `sessions`, operations, reservations and `challenge_nonces`.
 
-The copy is made with SQLite's online backup API, so the controller keeps
-serving while it runs. The copy is checked with `PRAGMA integrity_check` and
-table row counts before it is encrypted.
-
-**Checkpoint workspaces are not in these backups.** A suspendable session's
+**Checkpoint workspaces are not in the database.** A suspendable session's
 `/workspace` is a separate per-session PVC, never mounted by the controller, and
-it is plaintext. Restoring the controller restores the session *record*; if the
+it is plaintext. Restoring the database restores the session *record*; if the
 workspace PVC is gone, the session resumes as `checkpoint_missing`. Checkpoint
-durability and checkpoint encryption are separate problems — see
+durability is a separate problem: see
 [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) and
 [lifecycle.md](lifecycle.md#checkpoint-at-rest-expiry-and-backup).
 
-## Schedule and retention
+## Pick a layer
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `BACKUP_DIR` | empty | Backup directory. Empty disables the service. |
-| `BACKUP_INTERVAL_MS` | `21600000` (6 h) | Minimum time between backup attempts. |
-| `BACKUP_RETENTION` | `14` | Number of encrypted backups to keep. |
-| `BACKUP_ENCRYPTION_KEY` | required when enabled | 32 bytes as base64 or 64 hex characters. |
+Two shapes fit this deployment. Neither is in this repository; both replace the
+bare StatefulSet in `05-postgres.yaml` when the deployment outgrows it.
 
-The RPO is the backup interval (6 hours by default). The RTO is the time to
-scale the controller down, run the restore job, verify counts and scale up:
-expect roughly 10 minutes for a small homelab database. Backups live on the
-separate `controller-backups` PVC. That protects against a corrupt database or a
-bad migration, but **not** against losing the node or both PVCs. Copy the newest
-encrypted file off the cluster for disaster recovery.
+| Option | What it gives you | What it costs |
+| --- | --- | --- |
+| **CloudNativePG** | A `Cluster` CRD with streaming replicas, continuous WAL archiving to object storage, PITR, and `barman-cloud` for base backups. Restores are `bootstrap.recovery` from a backup or a PITR target. | An operator on the cluster, an object store, and a CRD that owns the Postgres pods instead of the plain StatefulSet here. |
+| **pgBackRest** | Repo-based full/differential/incremental backups, parallel WAL archiving, PITR, and its own retention and encryption. Works with the existing StatefulSet. | A sidecar or CronJob plus a repo (S3, NFS or a PVC), and a config file that has to be right before the first backup. |
 
-## Encryption
+Either way, the properties the controller's old path had to provide are now
+configuration in that layer:
 
-Each file is written as:
+- **Encryption.** CloudNativePG's object-store backend or pgBackRest's
+  `repo-cipher-pass` encrypts at rest. Losing that key makes every backup
+  unreadable, so keep it with the other recovery material, not in the same
+  bucket.
+- **Retention.** Set a retention policy in the layer (for example
+  `retentionPolicy: "14d"` or pgBackRest's `repo1-retention-full`). The database
+  layer prunes; nothing here does.
+- **Off-cluster copy.** The backup repo must not be the same volume or the same
+  node as the primary. A backup that lives beside the database protects against
+  a bad migration, not against losing the node.
+- **RPO / RTO.** WAL archiving gives a PITR window of minutes; a nightly base
+  backup alone gives an RPO of a day. Decide the window, then verify the restore
+  meets the RTO you wrote down.
 
-```text
-X402BK1\n | 12-byte IV | AES-256-GCM ciphertext | 16-byte tag
-```
+## Restore verification
 
-The key is read from `backup-encryption-key` in `x402-secrets`. Losing it makes
-every backup unreadable; keep it with the other recovery material. Rotating it
-does not re-encrypt old files, so retain the old key for the old backups.
+A restore you have never run is a guess. The check is the store contract suite,
+run against the restored database, because it proves the payment, session,
+transition and reservation invariants survived the copy, not just that `pg_dump`
+exited zero.
 
-## Enable
-
-1. Generate a key and add it to the secret (do not commit the plaintext):
-
-   ```bash
-   openssl rand -base64 32
-   ```
-
-   Add the value as `backup-encryption-key` in `x402-secrets` (the homelab's
-   SOPS file, or local `deploy/kubernetes/02-secrets-dev.yaml`). If your local
-   secret predates this key, rerun `scripts/dev-secrets.sh --force`.
-
-2. In the cluster overlay, set:
-
-   ```yaml
-   BACKUP_DIR: "/backups"
-   BACKUP_INTERVAL_MS: "21600000"
-   BACKUP_RETENTION: "14"
-   ```
-
-   The base manifest already mounts `controller-backups` at `/backups`. The
-   controller fails fast if `BACKUP_DIR` is set without the key.
-
-3. Roll the controller and check the first backup:
+1. Restore into a **scratch** database, never over the primary:
 
    ```bash
-   kubectl -n sandbox-system rollout status deploy/controller
-   kubectl -n sandbox-system exec deploy/controller -- \
-     ls -l /backups
-   curl -s http://controller.sandbox-system:9100/metrics | \
-     grep sandbox_backup
+   # CloudNativePG: a recovery cluster
+   kubectl apply -f restore-cluster.yaml     # bootstrap.recovery, no application traffic
+
+   # pgBackRest: restore to a new data directory, then start a throwaway server
+   pgbackrest --stanza=sandbox --pg1-path=/restore/data --delta restore
    ```
 
-A successful backup logs `backup_completed` with the row counts and byte size.
-A failed attempt logs `backup_failed` and increments
-`sandbox_backup_failures_total`. Alert when `sandbox_backup_age_seconds` exceeds
-twice the configured interval.
-
-## Restore
-
-Stop the writer first. A WAL or SHM sidecar next to the target is refused rather
-than overwritten.
-
-1. Scale the controller to zero:
+2. Point the suite at it. It truncates every table, so the target must be the
+   restored copy and nothing else:
 
    ```bash
-   kubectl -n sandbox-system scale deploy/controller --replicas=0
-   kubectl -n sandbox-system wait --for=delete pod -l app=controller --timeout=120s
+   DATABASE_URL='postgres://sandbox:<pw>@127.0.0.1:5433/sandbox?sslmode=disable' \
+     npm run test:store-contract
    ```
 
-2. Pick the newest backup:
+   A local server from the restored directory works too: start `postgres` on a
+   spare port with `-D /restore/data`, run the suite, then stop it.
 
-   ```bash
-   kubectl -n sandbox-system run backup-list --rm -it --restart=Never \
-     --image=<control-image> \
-     --overrides='{"spec":{"containers":[{"name":"list","image":"<control-image>","command":["ls","-l","/backups"],"volumeMounts":[{"name":"backups","mountPath":"/backups"}]}],"volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"controller-backups"}}]}}'
-   ```
+3. Run a create/exec/destroy smoke test against a controller pointed at the
+   restored database, and confirm a known `payments.payment_key` has its
+   `payment_ledger` row.
 
-3. Run the restore job. Copy
-   [`deploy/kubernetes/backup-restore-job.yaml.example`](../deploy/kubernetes/backup-restore-job.yaml.example),
-   replace the image tag and backup filename, and apply it:
+4. Record the RTO, the backup age and any step that was not in this page. Repeat
+   quarterly, and after any change to the backup layer.
 
-   ```bash
-   kubectl apply -f deploy/kubernetes/backup-restore-job.yaml.example
-   kubectl -n sandbox-system logs -f job/controller-restore
-   ```
+The suite is the one `npm run test:store-contract` runs. It skips unless
+`DATABASE_URL` is set, which is what makes it safe to point at a scratch
+database and dangerous to point at a primary.
 
-   The job decrypts to a temporary file, verifies integrity and counts,
-   preserves the existing database as `controller.db.pre-restore-<timestamp>`,
-   and only then installs the restored copy. Add
-   `--payment-key=<key>` to the job args to assert that a known payment and its
-   ledger row are present.
+## What is not covered
 
-4. Scale the controller back up and check readiness:
-
-   ```bash
-   kubectl -n sandbox-system scale deploy/controller --replicas=1
-   kubectl -n sandbox-system rollout status deploy/controller
-   ```
-
-5. Keep the `pre-restore` file until a create/exec/destroy smoke test passes,
-   then remove it.
-
-## Rehearsal
-
-A restore you have never run is a guess. Once a quarter:
-
-1. take the newest file to a scratch namespace or a local directory;
-2. run the same `backup-restore` command against a scratch database;
-3. confirm the printed counts and `PRAGMA integrity_check`;
-4. record the RTO and any missing steps.
-
-The unit tests cover encryption round-trips, a wrong key, a truncated file, a
-known payment, retention, and the native online copy.
+- **Checkpoint workspaces.** A suspendable workspace is a plaintext per-session
+  PVC with its own expiry. An object-store checkpoint with a client-held key is
+  follow-up 1 in [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md).
+- **Relay state.** In-memory per pod, by design
+  ([architecture-principles.md](architecture-principles.md)).

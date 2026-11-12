@@ -1,21 +1,24 @@
 /**
  * Durable per-payer and global create budgets, for Postgres (#48).
  *
- * SQLite gets the all-or-nothing reservation from `BEGIN IMMEDIATE`: the global
- * and payer rows cannot be read by a second writer until the first commits. Here
- * a transaction-scoped advisory lock (`BUDGET_LOCK_KEY`) stands in for that,
- * because the concurrency caps are counted from other tables and a row lock on
- * `payer_budgets` cannot make a *count of sessions* stable. Every reservation
- * therefore takes the same lock, then reads, then writes; the second reservation
- * sees the committed counters.
+ * A transaction-scoped advisory lock (`BUDGET_LOCK_KEY`) serialises the
+ * reservation because the concurrency caps are counted from other tables and a
+ * row lock on `payer_budgets` cannot make a *count of sessions* stable. Every
+ * reservation therefore takes the same lock, then reads, then writes; the second
+ * reservation sees the committed counters.
  *
  * Spend is separate: it commits inside `completeEntitlement`'s transaction and
  * takes a `FOR UPDATE` lock on the payer row, which is enough because the only
  * writer that can change `spend` is another settlement.
  */
-import { GLOBAL_BUDGET_KEY, payerBudgetKey } from "../budgets.js";
 import { NON_TERMINAL_STATE_SQL } from "../models.js";
-import { decideBudget, type BudgetDecision, type BudgetLimits } from "../budget-decision.js";
+import {
+  GLOBAL_BUDGET_KEY,
+  decideBudget,
+  payerBudgetKey,
+  type BudgetDecision,
+  type BudgetLimits,
+} from "../budget-decision.js";
 import { BUDGET_LOCK_KEY, type PgConnection, type Tx } from "./pg.js";
 
 export type {

@@ -20,8 +20,10 @@ import { MetricsRegistry } from "../../shared/src/entries/runtime.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import { RelayRegistry } from "../../controller/src/relay/registry.js";
-import type { SessionRecord, Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
+import { testDatabaseUrl } from "../helpers/test-store.js";
 
 const SESSION_ID = "sbx_guest_protocol_0001";
 const NONCE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
@@ -119,7 +121,7 @@ function config(allowlist?: string) {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
@@ -159,7 +161,7 @@ function harness(opts: {
   const provisioning = new Provisioning(
     {
       cfg: config(opts.allowlist),
-      store: store as unknown as Store,
+      store: store as unknown as PostgresStore,
       // A PROVISIONING row carries a pod name, so awaitReady probes it. There
       // is no pod to read in this harness, which is a normal miss.
       provisioner: { getPod: vi.fn(async () => null) } as never,

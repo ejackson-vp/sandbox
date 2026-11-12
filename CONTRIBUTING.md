@@ -15,7 +15,7 @@ Each command, and what it deliberately leaves out:
 | Command | Covers |
 | --- | --- |
 | `npm test` | `tests/unit` and `tests/property` with `--fileParallelism`. Fast, hermetic, the same set the badge measures. |
-| `npm run test:unit` | `tests/unit`: store, controller, API and CLI behaviour on SQLite. |
+| `npm run test:unit` | `tests/unit`: store, controller, API and CLI behaviour on Postgres. |
 | `npm run test:property` | `tests/property`: `fast-check` invariants. |
 | `npm run test:portable` | `tests/transfers`, `tests/workloads`, `tests/compatibility`. No cluster; the browser case skips without its image. |
 | `make verify` | Build, typecheck, structure lint, unit, property, portable, `go test`, `go vet`. What a reviewer runs. |

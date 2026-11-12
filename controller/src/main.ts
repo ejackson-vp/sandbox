@@ -8,8 +8,7 @@
 import http from "node:http";
 import https from "node:https";
 import type { Server } from "node:http";
-import { mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import { loadControllerConfig, makeProvisioner, makeRelayClient, type ControllerConfig } from "./config.js";
 import { openStore } from "./store-backend.js";
 import type { StoreBackend } from "./store/backend.js";
@@ -19,7 +18,6 @@ import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
 import { OperationFence } from "./operation-fence.js";
 import { CapacityService } from "./capacity/service.js";
-import { collectSqliteMetrics, registerSqliteMetrics } from "./store-metrics.js";
 import { bindLeadership, SoloLeadership, type Leadership } from "./leadership.js";
 import { makeLeaseLeadership } from "./leadership-lease.js";
 import {
@@ -54,7 +52,6 @@ async function main(): Promise<void> {
   metrics.counter("sandbox_budget_rejections_total", "Create-budget rejections by scope");
   metrics.counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason");
   metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE");
-  registerSqliteMetrics(metrics);
 
   // Scrape-time collectors. The listener exists for every role so a scrape
   // config can target API, controller and relay on the same port.
@@ -67,9 +64,8 @@ async function main(): Promise<void> {
       port: cfg.metricsPort,
       host: cfg.metricsHost,
       onScrape: async () => {
-        // Awaited one at a time: the SQLite gauges are read from the database
-        // file, and the scrape that reported them should be the scrape they
-        // were measured for.
+        // Awaited one at a time, so the scrape reports the value each collector
+        // measured for it.
         for (const collect of collectors) await collect();
       },
     });
@@ -133,13 +129,10 @@ async function main(): Promise<void> {
   const leadership: Leadership = cfg.leaderElection
     ? makeLeaseLeadership(cfg)
     : new SoloLeadership(cfg.leaderIdentity);
-  if (cfg.storeBackend === "sqlite") mkdirSync(dirname(cfg.dbPath), { recursive: true });
   const store: StoreBackend = await openStore(cfg, { writer: leadership.isLeader() });
-  if (cfg.storeBackend === "sqlite") collectors.push(() => collectSqliteMetrics(store));
   log.info("leadership_mode", {
     mode: leadership.mode,
     identity: leadership.identity,
-    storeBackend: cfg.storeBackend,
     reason: cfg.leaderElection ? "kubernetes_lease" : cfg.kubeEnabled ? "leader_election_off" : "kubernetes_disabled",
   });
 

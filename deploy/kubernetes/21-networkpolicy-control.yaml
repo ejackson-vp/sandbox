@@ -102,6 +102,15 @@ spec:
         # listener; the sandbox namespace owns that path.
         - protocol: TCP
           port: 8444
+    # The durable store (05-postgres.yaml). This is the only client the
+    # database admits, and the only place the controller's egress policy
+    # reaches a data service.
+    - to:
+        - podSelector:
+            matchLabels: {app: postgres}
+      ports:
+        - protocol: TCP
+          port: 5432
     - to:
         - namespaceSelector:
             matchLabels:
@@ -114,6 +123,29 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+---
+# The store accepts connections and dials nothing. Ingress is the controller on
+# 5432 only: the API, relay, proxy and facilitator have no rule that reaches it,
+# and sandbox pods cannot either because their egress policy has no route into
+# this namespace. Reply traffic on the established connection is stateful and
+# needs no egress rule of its own.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres
+  namespace: sandbox-system
+spec:
+  podSelector:
+    matchLabels: {app: postgres}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: controller}
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress: []
 ---
 # The relay is the only sandbox-reachable control-plane service.
 apiVersion: networking.k8s.io/v1

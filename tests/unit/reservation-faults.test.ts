@@ -1,29 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Store } from "../../controller/src/store.js";
+import { describe, expect, it } from "vitest";
 import { CapacityService } from "../../controller/src/capacity/service.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
 import type { CapacitySnapshot } from "../../controller/src/capacity/types.js";
+import { freshStore, openStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const MiB = 1024 * 1024;
-const dirs: string[] = [];
-const stores: Store[] = [];
-
-afterEach(() => {
-  for (const store of stores.splice(0)) store.close();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function freshStore(): Store {
-  const dir = mkdtempSync(join(tmpdir(), "x402-faults-"));
-  dirs.push(dir);
-  const store = new Store(join(dir, "controller.db"));
-  stores.push(store);
-  return store;
-}
 
 function node(): CapacitySnapshot["nodes"][number] {
   return {
@@ -48,19 +30,15 @@ const request = {
 
 describe("reservation fault recovery", () => {
   it("persists a hold across a controller restart", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "x402-restart-"));
-    dirs.push(dir);
-    const dbPath = join(dir, "controller.db");
-    const first = new Store(dbPath);
+    const first = await freshStore();
     expect((await first.reservations.admit(snapshot(), request, {
       paymentKey: "a".repeat(64),
       specHash: "a".repeat(64),
       ttlMs: 60_000,
     })).admitted).toBe(true);
-    first.close();
+    await first.close();
 
-    const second = new Store(dbPath);
-    stores.push(second);
+    const second = await openStore();
     expect((await second.reservations.getByPayment("a".repeat(64)))?.state).toBe("HELD");
     expect((await second.reservations.attachToSession(
       snapshot(),
@@ -72,7 +50,7 @@ describe("reservation fault recovery", () => {
   });
 
   it("does not release RELEASING capacity while the Pod still exists", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     let pod: { phase: string; deleted: boolean } | null = { phase: "Running", deleted: false };
     const fake = {
       async listNodes() {
@@ -102,6 +80,7 @@ describe("reservation fault recovery", () => {
       EXECUTION_MODE: "dev",
       ALLOW_INSECURE_DEV: "true",
       KUBERNETES_ENABLED: "false",
+      DATABASE_URL: testDatabaseUrl(),
     });
     const capacity = new CapacityService({ cfg, store, provisioner: fake });
 
@@ -120,7 +99,7 @@ describe("reservation fault recovery", () => {
   });
 
   it("keeps a held reservation available until its TTL expires", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     const now = Date.now();
     expect((await store.reservations.admit(snapshot(), request, {
       paymentKey: "b".repeat(64),

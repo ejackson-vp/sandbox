@@ -59,13 +59,13 @@ that administrator from the trust domain cannot answer the issue as written.
 
 | Property | Value |
 | --- | --- |
-| The controller, API, relay, SQLite database and logs hold checkpoint plaintext | No — none mounts the PVC |
+| The controller, API, relay, database and logs hold checkpoint plaintext | No — none mounts the PVC |
 | The node/storage administrator can read a suspended workspace | **Yes** |
 | Checkpoint encryption at rest | **None** |
 | A workspace PVC is ever reused by another session | No |
 | A workspace PVC survives session termination | No |
 | An unowned workspace PVC survives indefinitely | No — reaped after `ORPHAN_PVC_GRACE_MS` while the controller runs |
-| Checkpoint data is in `BACKUP_DIR` backups | No |
+| Checkpoint data is in the database backups | No |
 
 ## Consequences
 

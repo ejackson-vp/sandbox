@@ -5,8 +5,10 @@ import type { Provisioner } from "../../controller/src/k8s.js";
 import type { Endpoint } from "../../controller/src/provisioning/endpoints.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
-import type { SessionRecord, Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
+import { testDatabaseUrl } from "../helpers/test-store.js";
 
 const TOKENS = {
   ADMIN_TOKEN: "a".repeat(24),
@@ -22,7 +24,7 @@ function config(env: Record<string, string> = {}): ControllerConfig {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     ...env,
   });
 }
@@ -71,7 +73,7 @@ function harness(
     setRelayToken: vi.fn(),
     setProvisioning: vi.fn(() => true),
     requestTermination,
-  } as unknown as Store;
+  } as unknown as PostgresStore;
   const relay = {
     isReady: async () => true,
     registerCurrent: vi.fn(async () => ({ generation: "g", attempts: 1 })),

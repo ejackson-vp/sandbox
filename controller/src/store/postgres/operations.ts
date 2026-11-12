@@ -1,10 +1,10 @@
 /**
  * The single-operation gate, restart recovery and exec requests, for Postgres.
  *
- * `claimOperation` is the one place the SQLite adapter explicitly relies on
- * holding a transaction open across a read: it reloads the session, checks five
- * conditions and writes, all inside `BEGIN IMMEDIATE`. Here the gate itself is
- * the guard. A single conditional UPDATE claims the slot:
+ * `claimOperation` is the one place the previous single-connection adapter
+ * relied on holding a transaction open across a read: it reloaded the session,
+ * checked five conditions and wrote, all inside one serialised transaction. Here
+ * the gate itself is the guard. A single conditional UPDATE claims the slot:
  *
  *   UPDATE sessions SET active_request_id = $1, state = CASE WHEN state = 'READY'
  *          THEN 'ACTIVE' ELSE state END, …
@@ -14,7 +14,7 @@
  * Zero rows means someone else holds the gate, the state moved on, or the lease
  * expired; the transaction rolls back the request row and the caller re-reads to
  * say which. The cheap classifications are made before the write so the refusal
- * codes keep the same precedence as the SQLite adapter.
+ * codes keep the same precedence as before.
  */
 import { SOURCE_STATES } from "@x402s/shared/protocol";
 import { cadenceFor } from "../../reconcile-cadence.js";
@@ -156,7 +156,7 @@ export class PgOperationRepository {
     outcome: "done" | "error" | "abandoned",
     resultEnvelope?: string | null,
   ): Promise<void> {
-    // Same bound and same rule as the SQLite adapter: too large is stored as
+    // One bound and one rule: too large is stored as
     // NULL, never truncated.
     const envelope = persistableResultEnvelope(resultEnvelope);
     await this.conn.tx(async (tx) => {

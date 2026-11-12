@@ -14,7 +14,7 @@ SETTLED ──> REFUND_PENDING ──> REFUNDED
    └──────────────────────────> REFUNDED   (mock auto-refund or manual)
 ```
 
-A ledger row is written in the **same SQLite transaction** as the payment,
+A ledger row is written in the **same database transaction** as the payment,
 session and payment-intent settlement in `Store.completeEntitlement`. There is
 never a session without a ledger row, or a ledger row without its entitlement.
 

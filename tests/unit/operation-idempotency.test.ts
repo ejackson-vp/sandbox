@@ -12,16 +12,13 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalJson, generateBoxKeyPair, sealJsonTo, sha256Hex } from "../../shared/src/entries/crypto.js";
 import { createControlApi } from "../../controller/src/control-api.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
-import { Store } from "../../controller/src/store.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
 import { loadConfig } from "../../api/src/config.js";
 import { createSessionsRouter } from "../../api/src/routes/sessions.js";
@@ -29,6 +26,7 @@ import { mintCapability } from "../../shared/src/capability.js";
 import { SandboxClient } from "../../sdk/src/client.js";
 import type { SessionHandle } from "../../sdk/src/types.js";
 import { seedReadySession } from "./store-contract/fixtures.js";
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const PAYMENT_KEY = "a".repeat(64);
 const SESSION_ID = `sbx_${"7".repeat(24)}`;
@@ -59,25 +57,15 @@ function stubRelay(): { relay: RelayClient; sent: SentFrame[] } {
 }
 
 const servers: http.Server[] = [];
-const stores: Store[] = [];
-const dirs: string[] = [];
 
 afterEach(async () => {
   vi.unstubAllGlobals();
   for (const server of servers.splice(0)) {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-  for (const store of stores.splice(0)) store.close();
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
 
-function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "x402-operation-idempotency-"));
-  dirs.push(dir);
-  return dir;
-}
-
-async function startController(relay: RelayClient, store: Store): Promise<number> {
+async function startController(relay: RelayClient, store: PostgresStore): Promise<number> {
   const cfg = loadControllerConfig({
     ADMIN_TOKEN: "c".repeat(24),
     ROLE: "controller",
@@ -85,7 +73,7 @@ async function startController(relay: RelayClient, store: Store): Promise<number
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "p".repeat(24),
-    DB_PATH: join(tempDir(), "controller.db"),
+    DATABASE_URL: testDatabaseUrl(),
   });
   const app = createControlApi({ cfg, store, relay, capacity: {} as CapacityService });
   const server = http.createServer(app);
@@ -116,8 +104,7 @@ async function operate(
 }
 
 async function seededController(): Promise<{ port: number; sent: SentFrame[] }> {
-  const store = new Store(join(tempDir(), "controller.db"));
-  stores.push(store);
+  const store = await freshStore();
   await seedReadySession(store, SESSION_ID, PAYMENT_KEY);
   const { relay, sent } = stubRelay();
   const port = await startController(relay, store);

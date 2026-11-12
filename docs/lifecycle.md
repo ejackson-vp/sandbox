@@ -133,7 +133,7 @@ local-path checkpoint is a single-node feature.
 - **Workspace deleted while suspended:** resume checks the PVC exists, marks the
   session `FAILED` with `checkpoint_missing` and returns `409 resume_unavailable`.
   It does not create a pod against a missing volume.
-- **Controller restart while suspended:** the session is in SQLite and the PVC is
+- **Controller restart while suspended:** the session is in Postgres and the PVC is
   untouched; the restarted controller resumes it and the workspace is intact.
 - **Relay restart while suspended:** covered by the lifecycle soak; resume
   registers a fresh relay entry.
@@ -177,7 +177,7 @@ What the checkpoint is:
   `WORKSPACE_STORAGE_CLASS` (default `standard`). The PVC *is* the checkpoint;
   there is no separate snapshot object and no copy.
 - The controller creates, checks and deletes the PVC. It never mounts it, so the
-  controller, API, relay, SQLite database and their logs never hold the
+  controller, API, relay, Postgres database and their logs never hold the
   checkpoint's contents.
 - The guest is the only reader/writer, and only while a pod is running. When the
   pod is gone, nothing in this system can read the files except whoever controls
@@ -191,7 +191,7 @@ What that means:
 | Who can read it? | The node administrator, the storage administrator, anyone who can read the node's filesystem or copy the volume, and any backup of that volume. |
 | Does the controller hold a key? | No. There is no checkpoint key anywhere in the control plane. |
 | Is it protected by the StorageClass? | No class in this repository provides encryption. An encrypted CSI class, where one exists, protects a detached disk against a third party — not against the node admin — and the controller does not verify it. |
-| Is it in the SQLite backups (`BACKUP_DIR`)? | No. Backups contain session metadata and, for live sessions, the client-sealed result envelopes; neither is workspace content, and a restore does not restore workspaces. |
+| Is it in the database backups? | No. Backups contain session metadata and, for live sessions, the client-sealed result envelopes; neither is workspace content, and a restore does not restore workspaces. |
 | Is it ever reused by another session? | No. One PVC per session; never relabelled or handed on. |
 
 Retention and expiry:

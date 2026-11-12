@@ -1,16 +1,12 @@
 /**
  * Fixtures and the backend seam for the store contract suite.
  *
- * The suite is one file of assertions run twice: once over SQLite, once over
- * Postgres. Everything that differs between them (how a store is opened, how a
- * clean database is produced, whether two "stores" are two connections or one
- * pool) sits behind `ContractBackend`.
+ * The suite is one file of assertions run against the Postgres adapter. It ran
+ * twice while SQLite existed; now the backend seam is a single implementation
+ * and stays because `reset()` and the one-pool-per-run rule are contract
+ * concerns, not adapter detail.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import pg from "pg";
-import { Store } from "../../../controller/src/store.js";
 import { PostgresStore } from "../../../controller/src/store/postgres/store.js";
 import type { StoreBackend } from "../../../controller/src/store/backend.js";
 import type { PaymentRecord, SessionRecord } from "../../../controller/src/store/models.js";
@@ -112,38 +108,6 @@ export async function seedReadySession(
   if (!(await store.setReady(id, Date.now(), Date.now() + 60_000, "{}", "guest-key"))) {
     throw new Error("setReady refused");
   }
-}
-
-/** SQLite: a fresh database file per test, two connections when concurrency asks. */
-export function sqliteBackend(): ContractBackend {
-  let dir: string | null = null;
-  let path: string | null = null;
-  const opened: Store[] = [];
-
-  return {
-    label: "sqlite",
-    async open() {
-      if (!path) {
-        dir = mkdtempSync(join(tmpdir(), "x402-contract-"));
-        path = join(dir, "controller.db");
-      }
-      const store = new Store(path);
-      opened.push(store);
-      return store;
-    },
-    async reset() {
-      for (const store of opened.splice(0)) store.close();
-      if (dir) rmSync(dir, { recursive: true, force: true });
-      dir = null;
-      path = null;
-    },
-    async close() {
-      for (const store of opened.splice(0)) store.close();
-      if (dir) rmSync(dir, { recursive: true, force: true });
-      dir = null;
-      path = null;
-    },
-  };
 }
 
 /**

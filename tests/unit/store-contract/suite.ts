@@ -1,18 +1,17 @@
 /**
- * The store contract: invariants that must hold on every backend.
+ * The store contract: invariants the Postgres adapter must hold.
  *
- * Written once and run against SQLite and Postgres so a divergence is a failed
- * test rather than a production surprise. The concurrency tests issue real
- * concurrent calls: on SQLite that is two connections on one file serialised by
- * `BEGIN IMMEDIATE`, on Postgres it is two pool connections under
- * `READ COMMITTED`. The assertions are about outcomes (one row, one refusal,
- * one gate holder), not about how the backend got there.
+ * It ran against two backends while SQLite existed; it stays one file because
+ * the assertions are about outcomes (one row, one refusal, one gate holder),
+ * not about how the adapter got there. The concurrency tests issue real
+ * concurrent calls: they land on separate pool connections under
+ * `READ COMMITTED`.
  */
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
-import { DuplicateEntitlementError, PaymentClaimLostError } from "../../../controller/src/store.js";
+import {  DuplicateEntitlementError, PaymentClaimLostError  } from "../../../controller/src/store/models.js";
 import type { StoreBackend } from "../../../controller/src/store/backend.js";
-import type { BudgetLimits } from "../../../controller/src/store/budgets.js";
+import type { BudgetLimits } from "../../../controller/src/store/budget-decision.js";
 import { MAX_PERSISTED_RESULT_BYTES } from "../../../controller/src/store/models.js";
 import {
   capacitySnapshot,

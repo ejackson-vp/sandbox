@@ -1,6 +1,7 @@
 /**
- * Capacity service: builds an immutable snapshot from Kubernetes + SQLite,
- * delegates the decision to the pure model, and persists the reservation.
+ * Capacity service: builds an immutable snapshot from Kubernetes and the
+ * reservation rows, delegates the decision to the pure model, and persists the
+ * reservation.
  */
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared/runtime";
 import type { ControllerConfig } from "../config.js";
@@ -23,7 +24,7 @@ interface CapacityDeps {
   cfg: ControllerConfig;
   store: CapacityStore;
   provisioner: Provisioner;
-  /** Override the reservation store port; defaults to Store's SQLite adapter. */
+  /** Override the reservation store port; defaults to the store's own adapter. */
   reservations?: ReservationStore;
 }
 

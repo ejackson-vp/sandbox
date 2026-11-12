@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { loadTiers } from "@x402s/shared/payment";
-import { parseBackup, parseBackupKeyMaterial } from "../../controller/src/config/backup.js";
 import { parseCapacity } from "../../controller/src/config/capacity.js";
 import { parsePaymentLimits } from "../../controller/src/config/payments.js";
 import { parseDataPlanePlacement } from "../../controller/src/config/relay.js";
@@ -40,29 +39,6 @@ describe("warm pool allocation", () => {
   });
 });
 
-describe("backup material", () => {
-  it("leaves backups off for a role that never writes the store", () => {
-    expect(parseBackupKeyMaterial({ BACKUP_DIR: "/backup" }, "relay")).toEqual({
-      backupDir: "",
-      backupKey: null,
-    });
-  });
-
-  it("requires a key when the controller has a backup directory", () => {
-    expect(() => parseBackupKeyMaterial({ BACKUP_DIR: "/backup" }, "controller")).toThrow(
-      /BACKUP_ENCRYPTION_KEY/,
-    );
-  });
-
-  it("keeps the default schedule", () => {
-    const material = parseBackupKeyMaterial({}, "controller");
-    const schedule = parseBackup({}, material);
-    expect(schedule.backupDir).toBe("");
-    expect(schedule.backupIntervalMs).toBe(21_600_000);
-    expect(schedule.backupRetention).toBe(14);
-    expect(schedule.backupKey).toBeNull();
-  });
-});
 
 describe("data plane placement", () => {
   it("refuses more than one replica without a shard template", () => {

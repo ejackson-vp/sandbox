@@ -41,12 +41,15 @@ contains tokens, session ids, payloads or exception text.
 
 ### Semantics
 
-- **Store.** Readiness reads `PRAGMA user_version` and requires it to equal the
-  build's `SCHEMA_VERSION`, then runs a no-op `UPDATE` inside a transaction and
-  rolls it back. A read-only connection accepts `BEGIN IMMEDIATE` but rejects
-  the write, so the probe detects a read-only file and a locked database, not
-  just an open handle. The probe lowers `busy_timeout` to 200 ms so Kubernetes
-  owns the timeout budget instead of a stuck write.
+- **Store.** Readiness asks the database three questions: is the schema
+  current (the `sandbox_schema` version equals the build's `SCHEMA_VERSION`), is
+  this process the writer, and does the server accept a write. The write probe
+  is a no-op `UPDATE ... WHERE false`, not a `SELECT`, because a read-only
+  replica answers a `SELECT` happily and only rejects the write. A connection
+  that fails, or a missing schema table, reports `unavailable` or
+  `migrations_incomplete` instead of a generic failure. The scale on the read
+  side is the Postgres connection pool, so a probe never waits on a global
+  write lock.
 - **Relay.** A bounded `GET /healthz` (1.5 s) on the relay. A failed probe means
   the controller cannot register or forward operations, which is exactly when a
   paid create would stall in `PAID`.
@@ -394,10 +397,11 @@ sweeper reports deletion failures instead of logging that an undeleted Pod was
 reaped.
 
 A controller crash during an operation used to leave `active_request_id` set in
-SQLite, so the paid session stayed `busy` forever; a later fix cleared the gate
-but forgot which request was running, so the next operation could be forwarded
-into the guest's busy slot and the old outcome became `result_expired`.
-Recovery now fences the old generation instead of forgetting it:
+the database, so the paid session stayed `busy` forever; a later fix cleared the
+gate but forgot which request was running, so the next operation could be
+forwarded into the guest's busy slot and the old outcome became
+`result_expired`. Recovery now fences the old generation instead of forgetting
+it:
 
 1. Startup marks every pending request `outcome_unknown` and bumps the session's
    execution epoch (`sessions.exec_epoch`) in the same transaction. The
@@ -438,8 +442,12 @@ The Pod-adoption case required two earlier product fixes:
 - Controller restart with sessions in transient SUSPENDING/RESUMING/
   TERMINATING states.
 - Duplicate/delayed Kubernetes API responses against the real provisioner.
+- A Postgres primary restart and a node drain with paid sessions in flight. The
+  matrix ran against a SQLite-backed controller; the failure modes above are
+  store-agnostic, but the recovery times are not.
 
 ## Non-goals
 
-No Postgres, Redis, leader election, multiple controller replicas, autoscaling
-or distributed queueing. SQLite is deliberate for studying transactions.
+No Redis, no distributed queueing, no autoscaling. The controller keeps one
+writer by Lease (ADR 0009) and the store is a single Postgres primary, so the
+matrix is about convergence, not about clustering.

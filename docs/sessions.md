@@ -128,7 +128,7 @@ a prerequisite that is not ready leaves the session where it is.
 - Suspended sessions have no pod and no relay entry; only the PVC remains.
 - The reconciler reaps pods whose session is unknown or terminal, and pods older
   than `MAX_POD_AGE_MS`, including after a controller crash.
-- The SQLite database stores metadata only (state, timings, hashes, limits) plus
+- The Postgres database stores metadata only (state, timings, hashes, limits) plus
   the client-sealed result envelopes described above, which the controller
   cannot open and clears at terminal; terminal rows are pruned after 24 h.
 
@@ -141,7 +141,7 @@ a prerequisite that is not ready leaves the session where it is.
 | While `PROVISIONING` | New controller re-registers the relay session, adopts the existing pod (idempotent create) and continues. |
 | While `SUSPENDING` | New controller finishes the checkpoint idempotently: stop guest, delete pod, purge relay, mark `SUSPENDED`. |
 | While `RESUMING` | New controller adopts the pod and continues the readiness handshake; the provisioning timeout is measured from the resume start, not the original payment. |
-| While `ACTIVE` | Lease deadline is in SQLite; the new controller enforces it and deletes the pod. |
+| While `ACTIVE` | Lease deadline is in Postgres; the new controller enforces it and deletes the pod. |
 | While `TERMINATING` | Cleanup is idempotent and retried on the next tick. |
 
 ## Failure semantics

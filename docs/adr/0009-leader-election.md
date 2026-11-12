@@ -29,7 +29,9 @@ it every 2s, and treats a 10s unrenewed lease as free.
 - The store connection is the backstop. A standby sets SQLite `query_only`, so a
   write that slipped past the scheduler throws (`attempt to write a readonly
   database`) instead of diverging. One pragma covers every repository on that
-  connection.
+  connection. (The store is Postgres now and the guard is a `pg_advisory_lock`
+  the standby does not hold; [0010](0010-controller-ha-storage.md) records the
+  change. The election is unaffected.)
 - On leaving the role, the loop stops scheduling *before* the store refuses
   writes, so a pass still in flight fails loudly rather than writing after
   another replica may already own the lease.

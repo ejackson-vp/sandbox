@@ -13,7 +13,7 @@ All quantities are integers:
 - storage: bytes
 - time: epoch milliseconds
 
-The model never queries Kubernetes, SQLite or the clock. The service builds a
+The model never queries Kubernetes, the database or the clock. The service builds a
 `CapacitySnapshot` and calls `admitCapacity(snapshot, request)`.
 
 ```text

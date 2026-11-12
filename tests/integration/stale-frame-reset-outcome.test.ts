@@ -35,12 +35,10 @@ import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import { OperationFence } from "../../controller/src/operation-fence.js";
-import {
-  Store,
-  type PaymentRecord,
-  type SessionRecord,
-} from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const RELAY_ADMIN = "r".repeat(24);
 const ADMIN = "stale-frame-reset-admin-0123456789";
@@ -152,7 +150,7 @@ function resetCounts(registry: MetricsRegistry): Record<string, number> {
 }
 
 interface Run {
-  store: Store;
+  store: PostgresStore;
   sessionId: string;
   workDir: string;
   markerPath: string;
@@ -177,14 +175,14 @@ async function scenario(): Promise<Run> {
   await new Promise<void>((resolve) => relay.server.listen(0, "127.0.0.1", resolve));
   const relayPort = (relay.server.address() as { port: number }).port;
 
-  const store = new Store(join(workDir, "controller.db"));
+  const store = await freshStore({ namespace: "integration" });
   const cfg = loadControllerConfig({
     ADMIN_TOKEN: ADMIN,
     ROLE: "controller",
     KUBERNETES_ENABLED: "false",
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
-    DB_PATH: join(workDir, "controller.db"),
+    DATABASE_URL: testDatabaseUrl("integration"),
     RELAY_URL: `http://127.0.0.1:${relayPort}`,
     RELAY_SERVICE_NAME: "relay",
     PROXY_SERVICE_NAME: "egress-proxy",
@@ -239,12 +237,15 @@ async function scenario(): Promise<Run> {
     relayMetrics,
     cleanup: async () => {
       reconciler.stop();
+      // A tick already in flight still owns pool connections; let it finish
+      // before the pool ends, so it cannot reject after the test completes.
+      await new Promise((resolve) => setTimeout(resolve, 100));
       // A stopped process does not act on SIGKILL until it is continued.
       if (run.podName) provisioner.signalPod(run.podName, "SIGCONT");
       for (const pod of await provisioner.listSandboxPods().catch(() => [])) {
         await provisioner.deletePod(pod.name).catch(() => undefined);
       }
-      store.close();
+      await store.close();
       await relay.close();
       rmSync(run.markerPath, { force: true });
       await rm(workDir, { recursive: true, force: true });

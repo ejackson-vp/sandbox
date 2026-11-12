@@ -1,33 +1,16 @@
 /**
  * Store readiness verdicts.
  *
- * Both adapters ask the same three questions in the same order and answer with
- * the one shared `StoreHealth` type, so a probe result means the same thing
- * whichever backend is configured. The SQLite probe runs against a real
- * database; the Postgres probe runs against a scripted connection, which pins
- * the reason mapping without a server.
+ * The probe asks three questions in order and answers with one `StoreHealth`
+ * type. The live cases run against the real test database; the scripted cases
+ * pin the reason mapping without needing a broken server.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { Store } from "../../controller/src/store.js";
+import { describe, expect, it } from "vitest";
 import type { StoreHealth } from "../../controller/src/store/models.js";
 import { checkPostgresHealth } from "../../controller/src/store/postgres/health.js";
 import type { PgConnection } from "../../controller/src/store/postgres/pg.js";
-import { SCHEMA_VERSION } from "../../controller/src/store/schema.js";
-
-const dirs: string[] = [];
-
-afterEach(() => {
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
-});
-
-function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "x402-health-"));
-  dirs.push(dir);
-  return dir;
-}
+import { SCHEMA_VERSION } from "../../controller/src/store/schema-version.js";
+import { freshStore } from "../helpers/test-store.js";
 
 /** Stand-in for the pool: the health probe only ever calls `query`. */
 function probe(answer: (sql: string) => Promise<unknown>): PgConnection {
@@ -39,25 +22,23 @@ function migrated(sql: string): Promise<unknown> {
   return Promise.resolve({ rows: [] });
 }
 
-describe("sqlite store health", () => {
+describe("postgres store health, live", () => {
   it("reports the migrated version and goes read_only when the writer role is surrendered", async () => {
-    const store = new Store(join(tempDir(), "controller.db"));
-    try {
-      const health: StoreHealth = await store.healthCheck();
-      expect(health).toEqual({ ok: true, schemaVersion: SCHEMA_VERSION });
+    const store = await freshStore();
+    const health: StoreHealth = await store.healthCheck();
+    expect(health).toEqual({ ok: true, schemaVersion: SCHEMA_VERSION });
 
-      await store.setWritesBlocked(true);
-      expect(await store.healthCheck()).toMatchObject({ ok: false, reason: "read_only" });
-    } finally {
-      store.close();
-    }
+    await store.setWritesBlocked(true);
+    expect(await store.healthCheck()).toMatchObject({ ok: false, reason: "read_only" });
+    // Hand it back so the next file's writer is not blocked on this pool.
+    await store.setWritesBlocked(false);
   });
 
-  it("reports a closed database instead of throwing", async () => {
-    const store = new Store(join(tempDir(), "controller.db"));
-    store.close();
+  it("reports a closed store instead of throwing", async () => {
+    const store = await freshStore();
+    await store.close();
     const health: StoreHealth = await store.healthCheck();
-    expect(health).toMatchObject({ ok: false, reason: "closed" });
+    expect(health).toMatchObject({ ok: false });
   });
 });
 

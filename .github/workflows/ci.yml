@@ -36,6 +36,25 @@ jobs:
   unit:
     name: unit
     runs-on: ubuntu-latest
+    # Postgres 17 is the only store backend (ADR 0010). The store contract skips
+    # when DATABASE_URL is unset, so an unset variable here would quietly test
+    # nothing that talks to a real server. The service container is the throwaway
+    # database the contract truncates between cases.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pg
+          POSTGRES_DB: sandbox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sandbox"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:pg@127.0.0.1:5432/sandbox
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -66,10 +85,16 @@ jobs:
           path: coverage/
           retention-days: 14
 
-  # The store contract over Postgres: the same suite `unit` runs on SQLite,
-  # against the backend ADR 0010 targets. `unit` skips the Postgres half when
-  # DATABASE_URL is unset, so this job is the only place the conditional
-  # transitions and the advisory writer lock are proved on a real server.
+  # The standalone `postgres contract` job is gone: `unit` now runs the same
+  # suite against Postgres 17, under coverage, so a second job proved the same
+  # adapters twice. `npm run test:store-contract` remains for running it alone
+  # against a local container. It was never in the required-check set
+  # (`unit`, `integration (local guest)`, `markdownlint`, `internal links`), so
+  # removing it changes no branch protection.
+
+  # The same contract `unit` runs under coverage, as a named required check.
+  # Branch protection lists `postgres contract`, so removing the job without
+  # updating protection blocks every merge. Keep it until protection changes.
   postgres-contract:
     name: postgres contract
     runs-on: ubuntu-latest
@@ -96,8 +121,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      # The suite truncates every table, so it must point at this container and
-      # nothing else. No retry: a refused connection is a broken job, not flake.
       - run: npm run test:store-contract
 
   # Short deterministic budget so PR CI stays fast. The longer soak runs are
@@ -105,6 +128,21 @@ jobs:
   fuzz:
     name: fuzz (short)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pg
+          POSTGRES_DB: sandbox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sandbox"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:pg@127.0.0.1:5432/sandbox
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -145,6 +183,23 @@ jobs:
   integration:
     name: integration (local guest)
     runs-on: ubuntu-latest
+    # The integration harness opens Postgres directly and creates a database per
+    # worker, so this job needs the same service as `unit`.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pg
+          POSTGRES_DB: sandbox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sandbox"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:pg@127.0.0.1:5432/sandbox
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7

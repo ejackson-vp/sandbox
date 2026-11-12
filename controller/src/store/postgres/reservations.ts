@@ -1,18 +1,17 @@
 /**
  * Durable reservations, for Postgres.
  *
- * The invariant is unchanged from SQLite: the accounting snapshot and the insert
- * must agree, so admission cannot be "read the reservations, decide, insert"
- * across two transactions. SQLite gets that from `BEGIN IMMEDIATE`; here a
- * transaction-scoped advisory lock (`CAPACITY_LOCK_KEY`) serialises admission
- * across controllers, which is the only way to make a *count of rows* stable
- * under `READ COMMITTED`. The per-identity uniqueness (`payment_key`,
- * `session_id`, `warm_id`) also exists as a UNIQUE constraint, so a bug in the
- * lock still cannot produce two reservations for one payment.
+ * The invariant is unchanged: the accounting snapshot and the insert must agree,
+ * so admission cannot be "read the reservations, decide, insert" across two
+ * transactions. A transaction-scoped advisory lock (`CAPACITY_LOCK_KEY`)
+ * serialises admission across controllers, which is the only way to make a
+ * *count of rows* stable under `READ COMMITTED`. The per-identity uniqueness
+ * (`payment_key`, `session_id`, `warm_id`) also exists as a UNIQUE constraint, so
+ * a bug in the lock still cannot produce two reservations for one payment.
  *
  * The row shape, its mapping and the admission decision are in
- * `reservation-decision.ts`, shared with the SQLite adapter; this file owns the
- * reads, the transaction and the writes.
+ * `reservation-decision.ts`; this file owns the reads, the transaction and the
+ * writes.
  */
 import { randomBytes } from "node:crypto";
 import { admitCapacity } from "../../capacity/admission.js";
@@ -95,7 +94,7 @@ export class PgReservationRepository implements ReservationStore {
   /**
    * Extend a live hold without changing its resources. A renew is a retry of
    * the same identity, so the vectors already sold to capacity accounting stay,
-   * not the retry's hints. SQLite does the same in `renewHold`.
+   * not the retry's hints.
    */
   private async renewHeld(
     tx: Tx,

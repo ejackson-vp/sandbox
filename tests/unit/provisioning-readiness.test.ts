@@ -3,8 +3,10 @@ import { loadControllerConfig } from "../../controller/src/config.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
-import type { SessionRecord, Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
+import { testDatabaseUrl } from "../helpers/test-store.js";
 
 function config() {
   return loadControllerConfig({
@@ -13,7 +15,7 @@ function config() {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
@@ -53,7 +55,7 @@ function harness(
     setReady: vi.fn(() => true),
     mergeTimings: vi.fn(),
     requestTermination: vi.fn(),
-  } as unknown as Store;
+  } as unknown as PostgresStore;
   const relay = {
     state,
     registerCurrent,

@@ -14,11 +14,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${ROOT}/deploy/kubernetes/02-secrets-dev.yaml"
 
 if [ -f "${OUT}" ] && [ "${1:-}" != "--force" ]; then
-  if grep -q "name: relay-tls" "${OUT}"; then
+  if grep -q "name: relay-tls" "${OUT}" && grep -q "name: postgres-credentials" "${OUT}"; then
     echo "==> dev credentials already exist: deploy/kubernetes/02-secrets-dev.yaml"
     exit 0
   fi
-  echo "==> existing dev credentials predate relay mTLS; regenerating"
+  echo "==> existing dev credentials predate relay mTLS or Postgres; regenerating"
 fi
 
 rand() { openssl rand -hex 24; }
@@ -27,6 +27,11 @@ rand() { openssl rand -hex 24; }
 # key is pinned in shared/src/dev-attestation.ts; simulated attestation only
 # verifies with this keypair. Production removes the dev key entirely.
 ATTESTATION_KEY="qSgP+dPwGhb/58O0ZD/dSqCMovhhWNIQbT3MeTD35WY="
+
+# One password for the local Postgres, rendered twice: once as the server's
+# POSTGRES_PASSWORD and once inside `database-url` for the controller. Hex only,
+# so it needs no URL escaping.
+POSTGRES_PASSWORD="$(rand)"
 
 umask 077
 cat > "${OUT}" <<EOF
@@ -48,12 +53,25 @@ stringData:
   proxy-token-secret: "$(rand)"
   # HMAC key for deriving session capabilities from settled payments.
   capability-secret: "$(rand)"
-  # AES-256 key for encrypted SQLite backups (32 bytes, base64).
-  backup-encryption-key: "$(openssl rand -base64 32)"
   # Ed25519 seed (32 bytes, base64) for simulated attestation. Published test
   # key: the public half is pinned in shared/src/dev-attestation.ts.
   dev-attestation-key: "${ATTESTATION_KEY}"
   dev-attestation-key-id: "x402-dev-attestation-key-INSECURE-DEV-ONLY"
+---
+# The controller's store (deploy/kubernetes/05-postgres.yaml). The
+# database-url value must carry the same password as the password key; it is
+# the only value the controller reads.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: sandbox-system
+type: Opaque
+stringData:
+  username: "sandbox"
+  password: "${POSTGRES_PASSWORD}"
+  database: "sandbox"
+  database-url: "postgres://sandbox:${POSTGRES_PASSWORD}@postgres.sandbox-system.svc.cluster.local:5432/sandbox?sslmode=disable"
 EOF
 
 # ---------------------------------------------------------------------------

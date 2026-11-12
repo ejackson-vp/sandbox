@@ -34,14 +34,12 @@ import { CapacityService } from "../../controller/src/capacity/service.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
-import {
-  Store,
-  type PaymentRecord,
-  type SessionRecord,
-} from "../../controller/src/store.js";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
 import type { SandboxPodSpec } from "../../controller/src/k8s.js";
 import { TcpRouter } from "../helpers/tcp-router.js";
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const RELAY_ADMIN = "r".repeat(24);
 const ADMIN = "relay-restart-admin-token-0123456789";
@@ -143,7 +141,7 @@ async function listen(relay: RelayServer): Promise<number> {
 }
 
 async function waitFor(
-  store: Store,
+  store: PostgresStore,
   sessionId: string,
   predicate: (session: SessionRecord) => boolean,
   timeoutMs = 30_000,
@@ -160,7 +158,7 @@ async function waitFor(
 }
 
 interface Scenario {
-  store: Store;
+  store: PostgresStore;
   sessionId: string;
   workDir: string;
   relayA: RelayServer;
@@ -186,14 +184,14 @@ async function scenario(mode: "ready" | "refund"): Promise<Scenario> {
   // becomes ready.
   const deadPort = await freePort();
 
-  const store = new Store(join(workDir, "controller.db"));
+  const store = await freshStore({ namespace: "integration" });
   const cfg = loadControllerConfig({
     ADMIN_TOKEN: ADMIN,
     ROLE: "controller",
     KUBERNETES_ENABLED: "false",
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
-    DB_PATH: join(workDir, "controller.db"),
+    DATABASE_URL: testDatabaseUrl("integration"),
     RELAY_URL: `http://127.0.0.1:${routerPort}`,
     RELAY_SERVICE_NAME: "relay",
     PROXY_SERVICE_NAME: "egress-proxy",
@@ -259,10 +257,13 @@ async function scenario(mode: "ready" | "refund"): Promise<Scenario> {
     clientKeys: keys,
     cleanup: async () => {
       reconciler.stop();
+      // A tick already in flight still owns pool connections; let it finish
+      // before the pool ends, so it cannot reject after the test completes.
+      await new Promise((resolve) => setTimeout(resolve, 100));
       for (const pod of await provisioner.listSandboxPods().catch(() => [])) {
         await provisioner.deletePod(pod.name).catch(() => undefined);
       }
-      store.close();
+      await store.close();
       await router.close();
       await relayA.close();
       await relayB.close();
@@ -282,7 +283,7 @@ async function freePort(): Promise<number> {
   });
 }
 
-async function assertNotChargedPodTerminated(store: Store, sessionId: string): Promise<void> {
+async function assertNotChargedPodTerminated(store: PostgresStore, sessionId: string): Promise<void> {
   const session = await store.getSession(sessionId);
   const ledger = await store.getLedgerBySession(sessionId);
   const chargedPodTerminated =
@@ -357,7 +358,14 @@ describe("relay restart during a paid create", () => {
     expect(failed.failureCode).toBe("provisioning_timeout");
     expect(failed.readyAt).toBeNull();
 
-    const ledger = await run.store.getLedgerBySession(run.sessionId);
+    // The terminal state and the refund are separate writes: the session is
+    // marked FAILED first, then the ledger row is refunded. Wait for the
+    // contract ("eventually refunded"), not the scheduler's ordering.
+    let ledger = await run.store.getLedgerBySession(run.sessionId);
+    for (let attempt = 0; attempt < 50 && ledger?.status !== "REFUNDED"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      ledger = await run.store.getLedgerBySession(run.sessionId);
+    }
     expect(ledger?.status).toBe("REFUNDED");
     assertNotChargedPodTerminated(run.store, run.sessionId);
   }, 90_000);

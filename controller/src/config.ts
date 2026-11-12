@@ -16,7 +16,6 @@ import { mintProxyToken } from "./tokens.js";
 import { shardClaim } from "./data-plane-shard.js";
 import { parseSettlement } from "./settlement-config.js";
 import { parseGuestMeasurementAllowlist } from "./config/attestation.js";
-import { parseBackup, parseBackupKeyMaterial } from "./config/backup.js";
 import { parseCapacity } from "./config/capacity.js";
 import { parseEgress } from "./config/egress.js";
 import {
@@ -69,15 +68,11 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   const runtimeProfiles = parseRuntimeProfilesFor(env, execution, cluster, role);
   const security = parseTransportSecurity(env, cluster.kubeEnabled, role);
   const tokens = parseServiceTokens(env, role, admin.adminToken, admin.adminTokenPrevious);
-  // Backup key material is checked before any listener port, matching the
-  // original loader: a backup directory without a key is refused first.
-  const backup = parseBackupKeyMaterial(env, role);
 
   return {
     role,
     ...parseServer(env, admin, tokens, security),
-    ...parseStore(env, backup.backupDir),
-    ...parseBackup(env, backup),
+    ...parseStore(env, role),
     ...parseKubernetes(env, cluster, execution, runtimeProfiles),
     ...parseRelayServices(env, role),
     ...parseProvisioning(env),

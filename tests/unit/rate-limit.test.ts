@@ -1,8 +1,5 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MetricsRegistry } from "../../shared/src/metrics.js";
 import { TokenBucket, rateLimit } from "../../shared/src/rate-limit.js";
@@ -10,29 +7,21 @@ import { createControlApi } from "../../controller/src/control-api.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
-import { Store } from "../../controller/src/store.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const ADMIN = "rate-limit-admin-token-0123456789";
 const RELAY_ADMIN = "r".repeat(24);
 
 const servers: http.Server[] = [];
 const relays: RelayServer[] = [];
-const dirs: string[] = [];
 
 afterEach(async () => {
   for (const relay of relays.splice(0)) await relay.close().catch(() => undefined);
   for (const server of servers.splice(0)) {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
-
-function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "x402-rate-limit-"));
-  dirs.push(dir);
-  return dir;
-}
 
 function listen(app: http.RequestListener): Promise<number> {
   const server = http.createServer(app);
@@ -50,7 +39,7 @@ function controllerConfig() {
     RELAY_ADMIN_TOKEN: RELAY_ADMIN,
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "p".repeat(24),
-    DB_PATH: join(tempDir(), "controller.db"),
+    DATABASE_URL: testDatabaseUrl(),
   });
 }
 
@@ -89,7 +78,7 @@ describe("TokenBucket", () => {
 describe("internal listener rate limiting", () => {
   it("returns 429 on an over-burst controller wake", async () => {
     let now = 0;
-    const store = new Store(join(tempDir(), "controller.db"));
+    const store = await freshStore();
     const app = createControlApi({
       cfg: controllerConfig(),
       store,
@@ -113,7 +102,7 @@ describe("internal listener rate limiting", () => {
 
     now += 1_000;
     expect((await wake()).status).toBe(202);
-    store.close();
+    await store.close();
   });
 
   it("records the scope when the shared middleware rejects", () => {

@@ -1,21 +1,26 @@
 /**
  * The store contract, over Postgres, plus the writer lock.
  *
- * Skipped unless `DATABASE_URL` points at a throwaway database. CI runs it in
- * the `postgres contract` job against a `postgres:17` service container; locally
- * it runs when the variable is exported. The suite truncates every table, so
- * point it at a database nobody else is using.
+ * Runs unconditionally: Postgres is the only backend now, and the suite harness
+ * has already failed the run if `DATABASE_URL` is missing. The tests use this
+ * worker's throwaway database, so the truncation in the contract fixture cannot
+ * touch anything else.
  */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
 import { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { WriterLockUnavailableError } from "../../controller/src/store/postgres/pg.js";
+import { ensureTestDatabase, testDatabaseUrl } from "../helpers/test-store.js";
 import { postgresBackend } from "./store-contract/fixtures.js";
 import { describeStoreContract } from "./store-contract/suite.js";
 
-const url = process.env.DATABASE_URL ?? "";
+const url = testDatabaseUrl();
 
-describe.skipIf(!url)("postgres", () => {
+describe("postgres", () => {
+  beforeAll(async () => {
+    await ensureTestDatabase();
+  });
+
   describeStoreContract(postgresBackend(url));
 
   describe("writer lock", () => {
@@ -78,7 +83,7 @@ describe.skipIf(!url)("postgres", () => {
           await standby.close();
         }
       } finally {
-        await admin.query(`DROP DATABASE IF EXISTS "${scratch}"`);
+        await admin.query(`DROP DATABASE IF EXISTS "${scratch}" WITH (FORCE)`);
         await admin.end();
       }
     });

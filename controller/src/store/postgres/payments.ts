@@ -1,15 +1,15 @@
 /**
  * Payment intents, settlement and the outbox half of the Postgres store.
  *
- * The claim fence is the same token the SQLite adapter uses; what changes is
- * how the fence is enforced. On SQLite the whole `claimPaymentIntent` /
- * `completeEntitlement` body runs inside one `BEGIN IMMEDIATE`, so the
- * read → check → write sequence cannot interleave. Here the intent row is taken
- * with `SELECT … FOR UPDATE` and the settle is a conditional
- * `UPDATE … WHERE status = 'claimed' AND claim_token = $n RETURNING session_id`,
- * so a second worker blocks on the row, re-reads the committed state under
- * `READ COMMITTED`, and returns the winner's session instead of creating a
- * second one.
+ * The claim fence is the same token it always was; what matters is how the fence
+ * is enforced. The previous single-connection adapter ran the whole
+ * `claimPaymentIntent` / `completeEntitlement` body inside one serialised
+ * transaction, so the read → check → write sequence could not interleave. Here
+ * the intent row is taken with `SELECT … FOR UPDATE` and the settle is a
+ * conditional `UPDATE … WHERE status = 'claimed' AND claim_token = $n
+ * RETURNING session_id`, so a second worker blocks on the row, re-reads the
+ * committed state under `READ COMMITTED`, and returns the winner's session
+ * instead of creating a second one.
  */
 import { randomBytes } from "node:crypto";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
@@ -58,7 +58,7 @@ export class PgPaymentRepository {
    * Two statements, in this order: an `INSERT … ON CONFLICT DO NOTHING` decides
    * who created the row, and a conditional reclaim decides who takes over a
    * stale one. A claimer that loses either race re-reads and answers with the
-   * committed state, which is the same vocabulary the SQLite adapter returns
+   * committed state, using the same vocabulary as before
    * (`settled`, `failed`, `in_progress`, `mismatch`).
    */
   async claimPaymentIntent(
@@ -165,7 +165,7 @@ export class PgPaymentRepository {
    *
    * Idempotent by design: the losing worker returns the winner's session with
    * `created: false`. A duplicate client key pair is refunded and refused
-   * (`DuplicateEntitlementError`) exactly as on SQLite; the advisory key on the
+   * (`DuplicateEntitlementError`) as before; the advisory key on the
    * key pair is what stops two creates for the same pair both passing the
    * lookup, which a plain `SELECT` cannot do under `READ COMMITTED`.
    */

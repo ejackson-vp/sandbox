@@ -4,7 +4,8 @@ import type { SandboxPodSpec } from "../../controller/src/k8s-types.js";
 import { guestEnvFor } from "../../controller/src/k8s-pod.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
-import type { SessionRecord, Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
 import { config, digestBase, digestPython } from "./helpers/warm-pool-fixtures.js";
 
@@ -38,7 +39,7 @@ function harness() {
     mergeTimings: vi.fn(),
     setRelayToken: vi.fn(),
     requestTermination: vi.fn(() => true),
-  } as unknown as Store;
+  } as unknown as PostgresStore;
   const relay = {
     isReady: vi.fn(async () => true),
     registerCurrent: vi.fn(async () => ({ generation: "test", attempts: 1 })),

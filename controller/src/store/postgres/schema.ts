@@ -1,24 +1,24 @@
 /**
- * Postgres schema, the same tables and the same ladder as the SQLite migrations.
+ * Postgres schema and migration ladder.
  *
- * The tables, columns, uniques and indexes are the SQLite ones (see
- * `controller/src/store/schema.ts`, schema v17). Two dialect differences are
- * deliberate and are called out where they occur:
+ * The tables, columns, uniques and indexes are those of schema v17, the version
+ * the controller shipped before the Postgres-only migration. Two dialect
+ * differences are deliberate and are called out where they occur:
  *
  *   - epoch milliseconds are `BIGINT`, because 2026 is past `int4`'s ceiling.
  *     The pool decodes int8 as a number (`postgres/pg.ts`), so records map
- *     identically to the SQLite adapter's;
- *   - `sessions_due` is declared `NULLS FIRST`, matching SQLite's ordering, so
- *     `listDue` can use the index without a sort. Postgres sorts NULLs last by
- *     default, which would starve every never-scheduled row.
+ *     identically to the records the API and reconciler expect;
+ *   - `sessions_due` is declared `NULLS FIRST`, matching the ordering the due
+ *     query needs, so `listDue` can use the index without a sort. Postgres sorts
+ *     NULLs last by default, which would starve every never-scheduled row.
  *
- * Versioning is one row in `sandbox_schema`, not a `PRAGMA`. A database from a
- * newer build is refused, and a database with no version row is treated as v0
- * and migrated forward: the ladder is additive and idempotent, so replaying a
- * step cannot corrupt a money table.
+ * Versioning is one row in `sandbox_schema`. A database from a newer build is
+ * refused, and a database with no version row is treated as v0 and migrated
+ * forward: the ladder is additive and idempotent, so replaying a step cannot
+ * corrupt a money table.
  */
 import type { Tx } from "./pg.js";
-import { SCHEMA_VERSION } from "../schema.js";
+import { SCHEMA_VERSION } from "../schema-version.js";
 
 /** DDL statements are applied under one transaction-scoped advisory lock. */
 const MIGRATION_LOCK_KEY = 8_402_000;
@@ -183,7 +183,7 @@ function dueIndexSql(nonTerminalStatesSql: string): string {
     WHERE state IN (${nonTerminalStatesSql});`;
 }
 
-/** Additive steps, mirroring `migrateV7toV8` … `migrateV14toV15` in SQLite. */
+/** Additive steps applied by the ladder; each one is idempotent. */
 const LADDER: ReadonlyArray<{ from: number; sql: string }> = [
   { from: 8, sql: "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS client_signer TEXT;" },
   {

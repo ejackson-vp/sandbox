@@ -16,7 +16,7 @@ export interface MetricsServerOptions {
   host?: string;
   registry?: MetricsRegistry;
   /**
-   * Refresh scrape-time gauges (SQLite size, relay registry size, runtime
+   * Refresh scrape-time gauges (store size, relay registry size, runtime
    * counters) before rendering. Errors are swallowed so one collector cannot
    * take the scrape endpoint down.
    */

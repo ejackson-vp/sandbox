@@ -128,7 +128,6 @@ evaluators all load them unchanged.
 | `SandboxProvisioningQueueWaitP95High` | queue wait p95 > 5 s | 10m | warning |
 | `SandboxRelayPendingRequests` | relay pending > 0 | 5m | warning |
 | `SandboxReconcileP95High` | reconcile p95 > 1 s | 10m | warning |
-| `SandboxSQLiteBusyRetries` | busy retry rate > 0 | 10m | warning |
 | `SandboxReconciliationPending` | create-route 409s > 0 | 5m | warning |
 | `SandboxWarmPoolEmpty` | no live pods in any profile while a target exists | 5m | warning |
 | `SandboxWarmPoolMissPressure` | `miss_empty` > 20% of hit+miss_empty, at least 20 claims | 15m | warning |

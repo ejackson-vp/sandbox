@@ -11,74 +11,62 @@
  * The end-to-end handshake (a real wallet signature over the nonce) is covered
  * by tests/integration/api-flow.test.ts, which CI runs.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { Store } from "../../controller/src/store.js";
-import { ChallengeNonceCapacityError } from "../../controller/src/store/challenges.js";
+import { describe, expect, it } from "vitest";
+import { ChallengeNonceCapacityError } from "../../controller/src/store/models.js";
 import { CHALLENGE_NONCE, postCreate } from "../helpers/create-route.js";
+import { freshStore, openStore, sqlExec } from "../helpers/test-store.js";
 
 const NONCE = `cn_${"a".repeat(32)}`;
 const OTHER = `cn_${"b".repeat(32)}`;
 const PAYMENT = "f".repeat(64);
 
-const dirs: string[] = [];
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function freshStore(): { store: Store; path: string } {
-  const dir = mkdtempSync(join(tmpdir(), "x402-nonce-"));
-  dirs.push(dir);
-  const path = join(dir, "controller.db");
-  return { store: new Store(path), path };
-}
-
 describe("challenge nonce store", () => {
-  it("burns once, replays for the same payment and refuses another", () => {
-    const { store } = freshStore();
-    const now = 1_000;
-    store.challenges.issue(NONCE, now, 60_000, 0);
+  it("burns once, replays for the same payment and refuses another", async () => {
+    const store = await freshStore();
+    await store.issueChallengeNonce(NONCE, 60_000, 0);
 
-    expect(store.challenges.burn(NONCE, PAYMENT, now + 1)).toEqual({ status: "burned" });
+    expect(await store.burnChallengeNonce(NONCE, PAYMENT)).toEqual({ status: "burned" });
     // The same payment retrying is the crash-recovery path, not an attack.
-    expect(store.challenges.burn(NONCE, PAYMENT, now + 2)).toEqual({ status: "replay" });
+    expect(await store.burnChallengeNonce(NONCE, PAYMENT)).toEqual({ status: "replay" });
     // A different payment cannot ride the same challenge.
-    expect(store.challenges.burn(NONCE, "e".repeat(64), now + 3)).toEqual({ status: "reused" });
+    expect(await store.burnChallengeNonce(NONCE, "e".repeat(64))).toEqual({ status: "reused" });
   });
 
-  it("refuses an expired nonce and an unknown one", () => {
-    const { store } = freshStore();
-    store.challenges.issue(NONCE, 1_000, 5_000, 0);
-    expect(store.challenges.burn(NONCE, PAYMENT, 6_000)).toEqual({ status: "expired" });
-    expect(store.challenges.burn(OTHER, PAYMENT, 6_000)).toEqual({ status: "unknown" });
+  it("refuses an expired nonce and an unknown one", async () => {
+    const store = await freshStore();
+    // A zero TTL is expired by the time the burn reads the row.
+    await store.issueChallengeNonce(NONCE, 0, 0);
+    expect(await store.burnChallengeNonce(NONCE, PAYMENT)).toEqual({ status: "expired" });
+    expect(await store.burnChallengeNonce(OTHER, PAYMENT)).toEqual({ status: "unknown" });
   });
 
-  it("keeps the burn across a restart", () => {
-    const { store, path } = freshStore();
-    store.challenges.issue(NONCE, Date.now(), 60_000, 0);
-    store.challenges.burn(NONCE, PAYMENT, Date.now());
-    store.close();
+  it("keeps the burn across a restart", async () => {
+    const store = await freshStore();
+    await store.issueChallengeNonce(NONCE, 60_000, 0);
+    await store.burnChallengeNonce(NONCE, PAYMENT);
+    await store.close();
 
-    const reopened = new Store(path);
-    expect(reopened.challenges.burn(NONCE, PAYMENT, Date.now())).toEqual({ status: "replay" });
-    expect(reopened.challenges.burn(NONCE, "e".repeat(64), Date.now())).toEqual({ status: "reused" });
-    reopened.close();
+    const reopened = await openStore();
+    try {
+      expect(await reopened.burnChallengeNonce(NONCE, PAYMENT)).toEqual({ status: "replay" });
+      expect(await reopened.burnChallengeNonce(NONCE, "e".repeat(64))).toEqual({ status: "reused" });
+    } finally {
+      await reopened.close();
+    }
   });
 
-  it("bounds active nonces and recovers once they expire", () => {
-    const { store } = freshStore();
-    store.challenges.issue(NONCE, 1_000, 1_000, 2);
-    store.challenges.issue(OTHER, 1_000, 1_000, 2);
-    expect(() => store.challenges.issue(`cn_${"c".repeat(32)}`, 1_000, 1_000, 2)).toThrow(
+  it("bounds active nonces and recovers once they expire", async () => {
+    const store = await freshStore();
+    await store.issueChallengeNonce(NONCE, 60_000, 2);
+    await store.issueChallengeNonce(OTHER, 60_000, 2);
+    await expect(store.issueChallengeNonce(`cn_${"c".repeat(32)}`, 60_000, 2)).rejects.toThrow(
       ChallengeNonceCapacityError,
     );
     // Past the TTL the same cap admits a new challenge.
-    expect(store.challenges.issue(`cn_${"c".repeat(32)}`, 5_000, 1_000, 2)).toMatchObject({
-      nonce: `cn_${"c".repeat(32)}`,
-      expiresAt: 6_000,
-    });
+    await sqlExec("UPDATE challenge_nonces SET expires_at = 0");
+    const issued = await store.issueChallengeNonce(`cn_${"c".repeat(32)}`, 60_000, 2);
+    expect(issued.nonce).toBe(`cn_${"c".repeat(32)}`);
+    expect(issued.expiresAt).toBeGreaterThan(Date.now());
   });
 });
 

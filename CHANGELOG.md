@@ -159,6 +159,12 @@ the container registry.
 
 ### Changed
 
+- **Breaking:** the SQLite store backend is removed. The controller requires
+  `DATABASE_URL` and always uses Postgres; `STORE_BACKEND`, `DB_PATH` and the
+  encrypted SQLite backup settings are refused at startup. The deployment runs a
+  Postgres StatefulSet, the controller no longer takes backups, and the docs
+  point at CloudNativePG or pgBackRest with a restore drill. There are no
+  customers and no stored data to migrate.
 - CodeQL analyses every branch push, not just `main`, so a commit that lands
   inside a multi-commit push still has its own analysis (the OpenSSF `SAST`
   check reads that).

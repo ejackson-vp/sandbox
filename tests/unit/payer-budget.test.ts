@@ -12,17 +12,12 @@
  *  - the global budget is independent of any client-chosen field, which is what
  *    a rotated `from` cannot escape (F-09).
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  Store,
-  type PaymentRecord,
-  type SessionRecord,
-} from "../../controller/src/store.js";
-import type { BudgetLimits } from "../../controller/src/store/budgets.js";
+import { describe, expect, it } from "vitest";
+import type {  PaymentRecord, SessionRecord  } from "../../controller/src/store/models.js";
+import { payerBudgetKey, type BudgetLimits } from "../../controller/src/store/budget-decision.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { postCreate } from "../helpers/create-route.js";
+import { freshStore, openStore, sqlExec } from "../helpers/test-store.js";
 
 const NOW = Date.now();
 const PAYER = "0x00000000000000000000000000000000000000aa";
@@ -47,18 +42,6 @@ const SESSION_LIMITS = {
   maxProcesses: 64,
 };
 
-const dirs: string[] = [];
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function freshStore(): { store: Store; path: string } {
-  const dir = mkdtempSync(join(tmpdir(), "x402-budget-"));
-  dirs.push(dir);
-  const path = join(dir, "controller.db");
-  return { store: new Store(path), path };
-}
-
 function payment(key: string, payer: string, amount = "50000"): PaymentRecord {
   return {
     paymentKey: key,
@@ -75,7 +58,7 @@ function payment(key: string, payer: string, amount = "50000"): PaymentRecord {
 
 /** A PAID row with a ledger entry, i.e. a live session owned by `payer`. */
 async function seedLiveSession(
-  store: Store,
+  store: PostgresStore,
   id: string,
   payer: string,
   amount = "50000",
@@ -130,7 +113,7 @@ async function seedLiveSession(
 
 describe("durable create budget", () => {
   it("caps creates per payer per window and reports what is left", async () => {
-    const { store } = freshStore();
+    const store = await freshStore();
     const limits = { ...LIMITS, payerCreates: 2 };
 
     expect((await store.reserveBudgets(PAYER, "50000", limits)).ok).toBe(true);
@@ -146,31 +129,40 @@ describe("durable create budget", () => {
   });
 
   it("keeps the window across a restart", async () => {
-    const { store, path } = freshStore();
+    const store = await freshStore();
     const limits = { ...LIMITS, payerCreates: 2 };
     await store.reserveBudgets(PAYER, "50000", limits);
     await store.reserveBudgets(PAYER, "50000", limits);
-    store.close();
+    await store.close();
 
-    const reopened = new Store(path);
-    const rejected = await reopened.reserveBudgets(PAYER, "50000", limits);
-    expect(rejected.ok).toBe(false);
-    if (rejected.ok) throw new Error("expected rejection");
-    expect(rejected.scope).toBe("payer_create");
-    reopened.close();
+    const reopened = await openStore();
+    try {
+      const rejected = await reopened.reserveBudgets(PAYER, "50000", limits);
+      expect(rejected.ok).toBe(false);
+      if (rejected.ok) throw new Error("expected rejection");
+      expect(rejected.scope).toBe("payer_create");
+    } finally {
+      await reopened.close();
+    }
   });
 
   it("rolls the window when it expires", async () => {
-    const { store } = freshStore();
+    const store = await freshStore();
     const limits = { ...LIMITS, payerCreates: 1, windowMs: 1_000 };
-    const now = NOW;
-    expect(store.budgets.reserve(PAYER, "0", limits, now).ok).toBe(true);
-    expect(store.budgets.reserve(PAYER, "0", limits, now + 10).ok).toBe(false);
-    expect(store.budgets.reserve(PAYER, "0", limits, now + 1_001).ok).toBe(true);
+    expect((await store.reserveBudgets(PAYER, "0", limits)).ok).toBe(true);
+    expect((await store.reserveBudgets(PAYER, "0", limits)).ok).toBe(false);
+
+    // The window is wall-clock inside the adapter; move the row's start into
+    // the past the way an hour of traffic would.
+    await sqlExec("UPDATE payer_budgets SET window_start_ms = $1 WHERE budget_key = $2", [
+      Date.now() - 2_000,
+      payerBudgetKey(PAYER),
+    ]);
+    expect((await store.reserveBudgets(PAYER, "0", limits)).ok).toBe(true);
   });
 
   it("commits spend in the settlement transaction and refuses over-budget payers", async () => {
-    const { store } = freshStore();
+    const store = await freshStore();
     const limits = { ...LIMITS, payerCreates: 100, payerSpend: "1000000" };
 
     // A settled payment commits 400000 to the verified payer.
@@ -186,7 +178,7 @@ describe("durable create budget", () => {
   });
 
   it("does not count spend for a payment that never settled", async () => {
-    const { store } = freshStore();
+    const store = await freshStore();
     const limits = { ...LIMITS, payerCreates: 100, payerSpend: "100000" };
     expect((await store.reserveBudgets(PAYER, "100000", limits)).ok).toBe(true);
     // The create was reserved but nothing settled, so the payer can still spend
@@ -195,7 +187,7 @@ describe("durable create budget", () => {
   });
 
   it("counts concurrency from live sessions", async () => {
-    const { store } = freshStore();
+    const store = await freshStore();
     const limits = { ...LIMITS, payerCreates: 100, payerConcurrent: 1 };
     await seedLiveSession(store, "sbx_live_1", PAYER);
 
@@ -210,7 +202,7 @@ describe("durable create budget", () => {
   });
 
   it("bounds the global budget independently of the payer key", async () => {
-    const { store } = freshStore();
+    const store = await freshStore();
     const limits = { ...LIMITS, payerCreates: 100, globalCreates: 2 };
     expect((await store.reserveBudgets(PAYER, "0", limits)).ok).toBe(true);
     expect((await store.reserveBudgets(OTHER_PAYER, "0", limits)).ok).toBe(true);
@@ -223,7 +215,7 @@ describe("durable create budget", () => {
   });
 
   it("does not consume global budget when the payer budget refuses", async () => {
-    const { store } = freshStore();
+    const store = await freshStore();
     const limits = { ...LIMITS, payerCreates: 1, globalCreates: 10 };
     expect((await store.reserveBudgets(PAYER, "0", limits)).ok).toBe(true);
 

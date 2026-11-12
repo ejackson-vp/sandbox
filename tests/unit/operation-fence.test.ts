@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { OperationFence } from "../../controller/src/operation-fence.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
-import type { SessionRecord, Store } from "../../controller/src/store.js";
+import type { SessionRecord } from "../../controller/src/store/models.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { RelaySessionState } from "@x402s/shared/protocol";
 
 interface Fenced {
@@ -26,7 +27,7 @@ function harness(initial: Fenced[], opts: { raiseEpochError?: Error; reset?: boo
       cleared.push({ sessionId, requestId, epoch });
       return true;
     },
-  } as unknown as Store;
+  } as unknown as PostgresStore;
 
   const relay = {
     raiseEpoch: async (
