@@ -9,7 +9,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { NON_TERMINAL_STATE_SQL } from "./models.js";
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 /**
  * Due-time index. The due query filters on exactly the states in
@@ -163,6 +163,7 @@ const BASE_SCHEMA = `
     op TEXT NOT NULL,
     state TEXT NOT NULL,
     epoch INTEGER NOT NULL DEFAULT 1,
+    payload_hash TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, id)
@@ -284,6 +285,20 @@ function migrateV14toV15(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS sessions_client_key ON sessions(client_public_key, client_nonce);");
 }
 
+/**
+ * v15 -> v16: bind the operation idempotency key to the request payload.
+ *
+ * `exec_requests.payload_hash` is the SHA-256 of the sealed envelope. A retry
+ * of the same `requestId` with a different payload is refused instead of
+ * returning the first operation's cached result. The column is nullable and
+ * existing rows keep NULL, which means "written before this check existed" and
+ * accepts any duplicate: the migration cannot verify a payload it never stored,
+ * and refusing those retries would break in-flight requests across the upgrade.
+ */
+function migrateV15toV16(db: DatabaseSync): void {
+  db.exec("ALTER TABLE exec_requests ADD COLUMN payload_hash TEXT;");
+}
+
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = FULL;");
@@ -312,6 +327,7 @@ export function migrate(db: DatabaseSync): void {
       if (version < 13) migrateV12toV13(db);
       if (version < 14) migrateV13toV14(db);
       if (version < 15) migrateV14toV15(db);
+      if (version < 16) migrateV15toV16(db);
       // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

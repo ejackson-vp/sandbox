@@ -110,6 +110,12 @@ export const completeSchema = z.object({
 export const operationSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/),
   envelope: z.string().min(1).max(16 * 1024 * 1024),
+  /**
+   * Client-computed SHA-256 of the canonical operation plaintext. The
+   * controller cannot verify it and uses it only to bind the idempotency key;
+   * absent, the ciphertext hash is the fallback.
+   */
+  payloadHash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   op: z.string().min(1).max(32).optional(),
   waitMs: z.number().int().min(0).max(120_000).optional(),
 });

@@ -83,6 +83,12 @@ export interface ExecRequestRecord {
    * lookup must never turn it into a success or a plain expiry.
    */
   state: "pending" | "done" | "error" | "abandoned" | "outcome_unknown";
+  /**
+   * SHA-256 of the sealed envelope this request id was first claimed with.
+   * Null on rows written before v16: those predate payload binding, so a
+   * duplicate against them is accepted.
+   */
+  payloadHash: string | null;
   epoch: number;
   createdAt: number;
   updatedAt: number;
@@ -161,9 +167,26 @@ export class PaymentClaimLostError extends Error {
   }
 }
 
+/**
+ * True when two stored payload hashes disagree. A NULL on either side means the
+ * check cannot be made (pre-v16 row, or a caller that supplied no hash) and the
+ * duplicate is accepted, which is the documented upgrade behaviour.
+ */
+export function payloadDiffers(
+  stored: string | null,
+  incoming: string | null | undefined,
+): boolean {
+  return stored !== null && incoming !== null && incoming !== undefined && stored !== incoming;
+}
+
 export type ClaimOperationResult =
   | { ok: true; requestId: string; epoch: number }
-  | { ok: false; code: "busy" | "not_usable" | "lease_expired" | "duplicate"; state: SessionState; requestId?: string };
+  | {
+      ok: false;
+      code: "busy" | "not_usable" | "lease_expired" | "duplicate" | "idempotency_key_reused";
+      state: SessionState;
+      requestId?: string;
+    };
 
 export type IntentClaimResult =
   | { status: "claimed"; recovered: boolean; token: string; expiresAt: number }
