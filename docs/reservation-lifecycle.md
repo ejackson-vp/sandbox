@@ -65,10 +65,10 @@ Consequences:
 - a retry with a different spec hash is rejected,
 - `HELD → ALLOCATED` is one row update, not release + re-reserve.
 
-SQLite is single-writer. `ReservationStore` in
-`capacity/reservation-store.ts` is the port; `ReservationRepository` is the
-SQLite adapter. A multi-controller deployment supplies a conditional-write
-adapter (Postgres, DynamoDB) with the same admission contract. `CapacityService` accepts a `ReservationStore` override; the snapshot builder
+The store has one writer. `ReservationStore` in
+`capacity/reservation-store.ts` is the port; `ReservationRepository` is the SQL
+adapter over Postgres. A second adapter (DynamoDB, for example) would have to
+provide the same admission contract. `CapacityService` accepts a `ReservationStore` override; the snapshot builder
 uses the same port. The capacity snapshot still needs to be shared or refreshed
 from a single source.
 
@@ -82,7 +82,7 @@ from a single source.
 | while `SUSPENDING` | reconcile finishes the checkpoint; reservation moves to `SUSPENDED` |
 | while `RESUMING` | reservation is `ALLOCATED`; readiness handshake continues |
 | while `RELEASING` | reaper releases when the Pod is gone, or immediately when the row names no Pod |
-| controller restart | all state is reloaded from SQLite; no in-memory counters |
+| controller restart | all state is reloaded from Postgres; no in-memory counters |
 
 `reap()` runs in housekeeping:
 

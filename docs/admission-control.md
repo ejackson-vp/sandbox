@@ -58,7 +58,7 @@ ConfigMap defaults afterwards.
 The two token buckets live in the API process. A restart refills every bucket,
 and the per-payer key comes from a client-chosen field (F-09), so neither is a
 bound on a determined client. The controller therefore keeps a **durable fixed
-window** per payer and one **global** window in SQLite (`payer_budgets`, schema
+window** per payer and one **global** window in Postgres (`payer_budgets`, schema
 v14), checked before any capacity hold, intent claim or settlement:
 
 | Budget | Default | Key | Bounds |
@@ -84,7 +84,7 @@ Three properties matter more than the numbers:
   is verified against `authorization.from`, so the budget is keyed on a wallet
   the caller demonstrated control of. An unproven create never reaches it.
 - **Creates are counted at admission; spend only when money moves.** A
-  reservation counts an attempt. Spend is written in the same SQLite transaction
+  reservation counts an attempt. Spend is written in the same database transaction
   as the payment and ledger rows (`completeEntitlement`), against the payer the
   facilitator verified. A failed settlement therefore cannot lock a payer out,
   and a settled payment cannot be invisible to the budget.

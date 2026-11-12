@@ -72,12 +72,9 @@ data:
   PROXY_REPLICAS: "1"
   RELAY_HOST_TEMPLATE: "relay-{shard}.relay-headless"
   PROXY_HOST_TEMPLATE: "egress-proxy-{shard}.egress-proxy-headless"
-  # Automated SQLite backups. Empty BACKUP_DIR disables them. To enable, set
-  # BACKUP_DIR=/backups and add backup-encryption-key to x402-secrets.
-  # See docs/backup-restore.md.
-  BACKUP_DIR: ""
-  BACKUP_INTERVAL_MS: "21600000"
-  BACKUP_RETENTION: "14"
+  # Backups are not this process's job any more. The controller never copies
+  # the database; logical/physical backups, PITR, encryption and retention
+  # belong to the Postgres layer. See docs/backup-restore.md.
   SANDBOX_NAMESPACE: "sandbox-workloads"
   CONTROL_NAMESPACE: "sandbox-system"
 

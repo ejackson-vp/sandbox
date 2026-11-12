@@ -28,8 +28,8 @@ The load-bearing choices behind this picture are recorded as
                 │             ▼
                 │     ┌──────────────────────────────────────────┐     ┌──────────────┐
                 │     │  Controller                              │────►│ Kubernetes   │
-                │     │  - SQLite: payments, intents, sessions,  │     │ API (pods in │
-                │     │    exec_requests                         │     │ sandbox ns)  │
+                │     │  - Postgres: payments, intents,          │     │ API (pods in │
+                │     │    sessions, exec_requests               │     │ sandbox ns)  │
                 │     │  - reconciler: lease + cleanup           │     └──────────────┘
                 │     └───────┬──────────────────────────────────┘
                 │             │ admin HTTP
@@ -62,6 +62,13 @@ The load-bearing choices behind this picture are recorded as
        └──────────────────────┘
 ```
 
+The controller's durable state is a Postgres 17 StatefulSet in
+`sandbox-system` (`deploy/kubernetes/05-postgres.yaml`), reached over the
+cluster network on 5432 by the controller only. Postgres is the only store
+backend; ADR 0010 records why. Backups and point-in-time recovery are the
+database layer's responsibility, not the controller's
+([backup-restore.md](backup-restore.md)).
+
 ### API server (`api/`)
 
 - Public, unauthenticated; x402 v2 protected `POST /v1/sessions`.
@@ -83,7 +90,7 @@ store connection refuses writes, so the writer is still one process:
 - single-operation gate per session, `requestId` idempotency,
 - relays encrypted requests and responses, enforces deadlines,
 - shutdown + pod deletion + relay purge,
-- orphan reaping, crash recovery from SQLite.
+- orphan reaping, crash recovery from Postgres.
 
 ### Session relay (`controller/src/relay.ts`)
 
@@ -164,7 +171,7 @@ spec_hash)`:
 1. `claim` — insert `claimed` (or return `settled`, `in_progress`, `failed`,
    `mismatch`).
 2. settle through the facilitator.
-3. `complete` — in one SQLite transaction: insert payment, insert session, mark
+3. `complete` — in one database transaction: insert payment, insert session, mark
    the intent `settled`.
 
 If the process dies between 2 and 3, a retry finds `claimed`, asks the

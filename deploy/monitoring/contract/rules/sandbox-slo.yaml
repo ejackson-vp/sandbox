@@ -30,7 +30,7 @@ groups:
           description: >-
             The API create route has held a p95 above 500 ms for 10 minutes
             (current {{ $value }} s). Check payment/settlement
-            latency, controller admission and SQLite busy retries before
+            latency, controller admission and database wait time before
             assuming the API process is at fault.
           runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
 
@@ -103,23 +103,8 @@ groups:
           description: >-
             The controller reconcile pass has held a p95 above 1 s for 10
             minutes (current {{ $value }} s). Check
-            `sandbox_reconcile_queue_depth`, Kubernetes API latency and the
-            SQLite busy retry rate.
-          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
-
-      - alert: SandboxSQLiteBusyRetries
-        expr: sum(rate(sandbox_sqlite_busy_retries_total{role="controller"}[5m])) > 0
-        for: 10m
-        labels:
-          severity: warning
-          service: sandbox
-        annotations:
-          summary: "SQLite is retrying writes after SQLITE_BUSY"
-          description: >-
-            The controller has retried SQLite operations for 10 minutes
-            (current rate {{ $value }} retries/s). A single writer is expected;
-            sustained retries mean a competing process, a long transaction or
-            a disk that cannot keep up.
+            `sandbox_reconcile_queue_depth`, Kubernetes API latency and
+            database wait time.
           runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
 
       - alert: SandboxReconciliationPending

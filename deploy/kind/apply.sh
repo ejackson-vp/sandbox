@@ -80,6 +80,12 @@ printf '%s\n' "${MANIFESTS}" \
   | sed "s|GUEST_IMAGE_DIGEST: sha256:dev-unpinned-image|GUEST_IMAGE_DIGEST: ${GUEST_DIGEST}|" \
   | kubectl --context "${CONTEXT}" apply -f -
 
+# The controller exits on a refused database connection and Kubernetes turns
+# that into a crash loop, which reads exactly like a bad image or a missing
+# secret. Wait for the store here so `make up` fails at the database instead.
+# The timeout covers a first-run image pull plus initdb.
+kubectl --context "${CONTEXT}" -n sandbox-system rollout status statefulset/postgres --timeout=600s
+
 # The shipped Service is ClusterIP: nothing outside the cluster should reach the
 # API over plaintext. kind's extraPortMapping (host :8080 -> node :30080) is a
 # local convenience, so opt back into a NodePort here — and only here. Removing

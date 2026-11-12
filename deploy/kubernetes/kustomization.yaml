@@ -5,6 +5,9 @@ resources:
   - 01-runtimeclass.yaml
   - 03-config.yaml
   - 04-rbac.yaml
+  # Postgres comes before the workloads that dial it, so `kubectl kustomize`
+  # renders (and `apply.sh` applies) the Service and StatefulSet first.
+  - 05-postgres.yaml
   - 10-api.yaml
   - 11-controller.yaml
   - 12-relay.yaml

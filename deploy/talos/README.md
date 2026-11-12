@@ -9,10 +9,11 @@ kubectl kustomize deploy/talos   # render only
 kubectl apply -k deploy/talos    # only if you are not running Flux
 ```
 
-This overlay does **not** create the `x402-secrets` Secret: the base ships no
-credentials. Create it in `sandbox-system` before applying — locally with
-`scripts/dev-secrets.sh`, on a real deployment from your secret store. The
-homelab applies it from the private repository (SOPS-encrypted).
+This overlay does **not** create credentials: the base ships no Secrets. The
+controller needs `x402-secrets` and `postgres-credentials` in `sandbox-system`
+before applying — locally `scripts/dev-secrets.sh` writes both (git-ignored), on
+a real deployment they come from your secret store. The homelab applies them
+from the private repository (SOPS-encrypted).
 
 This is the overlay used for a two-node Talos cluster with the
 `kata-containers` system extension. It extends `deploy/kata`, so sandboxes run
@@ -53,7 +54,10 @@ kubectl get storageclass standard
 
 Anything that can provision a `ReadWriteOnce` volume works —
 `local-path-provisioner` is enough for a single node. Without it, sessions can
-be created and executed but `suspend`/`resume` fails.
+be created and executed but `suspend`/`resume` fails. The Postgres StatefulSet
+asks for its own 8 GiB `ReadWriteOnce` volume from the same class, so the store
+is node-pinned too: back it up from the database layer, not by copying the
+directory ([backup-restore.md](../../docs/backup-restore.md)).
 
 On this cluster `standard` is `local-path-provisioner`, so a suspended session's
 workspace is a directory on the node and is **not encrypted**. `local-path` has
