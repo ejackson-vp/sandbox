@@ -15,15 +15,13 @@
  */
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HttpSettlementLookup, UnsupportedSettlementLookup } from "../../shared/src/entries/runtime.js";
-import { Store } from "../../controller/src/store.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { RefundService } from "../../controller/src/refunds.js";
 import { SettlementRecovery } from "../../controller/src/settlement-recovery.js";
 import { postCreate } from "../helpers/create-route.js";
+import { freshStore } from "../helpers/test-store.js";
 
 const PAYMENT_KEY = "a".repeat(64);
 const PAYER = "0x00000000000000000000000000000000000000aa";
@@ -43,14 +41,12 @@ interface Reply {
 }
 
 const servers: http.Server[] = [];
-const dirs: string[] = [];
 let requests: string[] = [];
 
 afterEach(async () => {
   for (const server of servers.splice(0)) {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
   requests = [];
 });
 
@@ -72,14 +68,8 @@ async function facilitator(respond: (paymentKey: string) => Reply): Promise<stri
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
-function freshStore(): Store {
-  const dir = mkdtempSync(join(tmpdir(), "x402-settlement-lookup-"));
-  dirs.push(dir);
-  return new Store(join(dir, "controller.db"));
-}
-
 /** A claimed intent whose owner died before completing the entitlement. */
-async function seedStaleClaim(store: Store): Promise<void> {
+async function seedStaleClaim(store: PostgresStore): Promise<void> {
   const claim = await store.claimPaymentIntent(PAYMENT_KEY, "b".repeat(64), 30_000, REQUIREMENTS);
   if (claim.status !== "claimed") throw new Error("expected claim");
 }
@@ -193,7 +183,7 @@ describe("controller consumer", () => {
       status: 200,
       body: { settled: true, transaction: "mock:tx", payer: PAYER, amount: "50000" },
     }));
-    const store = freshStore();
+    const store = await freshStore();
     await seedStaleClaim(store);
 
     const result = await new SettlementRecovery(
@@ -214,7 +204,7 @@ describe("controller consumer", () => {
 
   it("counts a lookup failure as an error without writing a ledger row", async () => {
     const baseUrl = await facilitator(() => ({ status: 500, body: { error: "boom" } }));
-    const store = freshStore();
+    const store = await freshStore();
     await seedStaleClaim(store);
 
     const result = await new SettlementRecovery(

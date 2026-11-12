@@ -34,6 +34,7 @@ export function config(extra: NodeJS.ProcessEnv = {}): ControllerConfig {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
+    DATABASE_URL: "postgres://user:pw@db:5432/sandbox",
     GUEST_IMAGE: "ghcr.io/example/guest:0.1.0",
     GUEST_IMAGE_DIGEST: digestBase,
     RUNTIME_PROFILES: JSON.stringify(PROFILE_CATALOG),

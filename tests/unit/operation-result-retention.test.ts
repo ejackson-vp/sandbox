@@ -11,17 +11,15 @@
  */
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createControlApi } from "../../controller/src/control-api.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
-import { Store } from "../../controller/src/store.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { MAX_PERSISTED_RESULT_BYTES } from "../../controller/src/store/models.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
 import { seedReadySession } from "./store-contract/fixtures.js";
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const ADMIN_TOKEN = "c".repeat(24);
 const PAYMENT_KEY = "a".repeat(64);
@@ -47,24 +45,14 @@ function missingRelay(hits: string[] = []): RelayClient {
 }
 
 const servers: http.Server[] = [];
-const stores: Store[] = [];
-const dirs: string[] = [];
 
 afterEach(async () => {
   for (const server of servers.splice(0)) {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-  for (const store of stores.splice(0)) store.close();
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
 
-function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "x402-result-retention-"));
-  dirs.push(dir);
-  return dir;
-}
-
-async function startController(relay: RelayClient, store: Store): Promise<number> {
+async function startController(relay: RelayClient, store: PostgresStore): Promise<number> {
   const cfg = loadControllerConfig({
     ADMIN_TOKEN,
     ROLE: "controller",
@@ -72,7 +60,7 @@ async function startController(relay: RelayClient, store: Store): Promise<number
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "p".repeat(24),
-    DB_PATH: join(tempDir(), "controller.db"),
+    DATABASE_URL: testDatabaseUrl(),
   });
   const app = createControlApi({ cfg, store, relay, capacity: {} as CapacityService });
   const server = http.createServer(app);
@@ -83,9 +71,8 @@ async function startController(relay: RelayClient, store: Store): Promise<number
 }
 
 /** A ready session and a controller over the given relay. */
-async function seededController(relay: RelayClient): Promise<{ port: number; store: Store }> {
-  const store = new Store(join(tempDir(), "controller.db"));
-  stores.push(store);
+async function seededController(relay: RelayClient): Promise<{ port: number; store: PostgresStore }> {
+  const store = await freshStore();
   await seedReadySession(store, SESSION_ID, PAYMENT_KEY);
   const port = await startController(relay, store);
   return { port, store };
@@ -128,7 +115,7 @@ async function request(
 
 /** Claim and finish a request as if the guest had answered, with no relay. */
 async function prime(
-  store: Store,
+  store: PostgresStore,
   requestId: string,
   resultEnvelope: string | null,
 ): Promise<void> {

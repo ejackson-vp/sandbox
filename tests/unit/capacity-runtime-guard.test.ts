@@ -6,26 +6,11 @@
  * session that could only fail after READY. The guard is first in `hold`, so it
  * must not touch Kubernetes at all.
  */
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { CapacityService } from "../../controller/src/capacity/service.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
-import { Store } from "../../controller/src/store.js";
-
-const dirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function freshStore(): Store {
-  const dir = mkdtempSync(join(tmpdir(), "x402-runtime-capacity-"));
-  dirs.push(dir);
-  return new Store(join(dir, "controller.db"));
-}
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 function config(extra: NodeJS.ProcessEnv = {}) {
   return loadControllerConfig({
@@ -36,13 +21,14 @@ function config(extra: NodeJS.ProcessEnv = {}) {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
+    DATABASE_URL: testDatabaseUrl(),
     ...extra,
   });
 }
 
-function harness(env: NodeJS.ProcessEnv = {}) {
+async function harness(env: NodeJS.ProcessEnv = {}) {
   const cfg = config(env);
-  const store = freshStore();
+  const store = await freshStore();
   let kubernetesCalls = 0;
   const provisioner = {
     async listNodes() {
@@ -64,7 +50,7 @@ const limits = { cpuMillis: 500, memoryMiB: 512, diskMiB: 256 };
 
 describe("capacity admission rejects an unconfigured runtime profile", () => {
   it("refuses a known profile the controller has no image for, before any cluster read", async () => {
-    const h = harness();
+    const h = await harness();
     const decision = await h.capacity.hold("a".repeat(64), "b".repeat(64), {
       runtime: "python",
       limits,
@@ -79,7 +65,7 @@ describe("capacity admission rejects an unconfigured runtime profile", () => {
   });
 
   it("refuses the same profile at preflight, the advisory 402 path", async () => {
-    const h = harness();
+    const h = await harness();
     expect(await h.capacity.preflight({ runtime: "node", limits })).toMatchObject({
       admitted: false,
       reason: "runtime_profile_unavailable",
@@ -88,7 +74,7 @@ describe("capacity admission rejects an unconfigured runtime profile", () => {
 
   it("admits a configured profile and the default", async () => {
     const digest = `sha256:${"c".repeat(64)}`;
-    const h = harness({
+    const h = await harness({
       RUNTIME_PROFILES: JSON.stringify({
         python: { image: "ghcr.io/example/guest:1-python", digest },
       }),

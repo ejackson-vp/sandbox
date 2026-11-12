@@ -19,7 +19,7 @@
     "typecheck": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && tsc -p api/tsconfig.json --noEmit && tsc -p controller/tsconfig.json --noEmit && tsc -p cli/tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "test": "npm run test:unit && npm run test:property",
     "test:unit": "vitest run tests/unit --fileParallelism",
-    "test:store-contract": "vitest run tests/unit/store-contract-sqlite.test.ts tests/unit/store-contract-postgres.test.ts",
+    "test:store-contract": "vitest run tests/unit/store-contract-postgres.test.ts",
     "test:integration": "vitest run tests/integration",
     "test:security": "vitest run tests/security",
     "test:fuzz": "vitest run tests/fuzz",

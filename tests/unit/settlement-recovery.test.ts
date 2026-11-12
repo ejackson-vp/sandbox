@@ -14,16 +14,14 @@
  * The facilitator here is a stub: no test in this repository talks to a real
  * settlement backend, and none of this has moved real money.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DuplicateEntitlementError,
-  Store,
   type PaymentRecord,
   type SessionRecord,
 } from "../../controller/src/store.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
+import { countRows, freshStore } from "../helpers/test-store.js";
 import { RefundService } from "../../controller/src/refunds.js";
 import { RefundWorker, type RefundExecutor } from "../../controller/src/refund-worker.js";
 import { SettlementRecovery } from "../../controller/src/settlement-recovery.js";
@@ -49,17 +47,6 @@ const SESSION_LIMITS = {
   maxCommandSeconds: 300,
   maxProcesses: 64,
 };
-
-const dirs: string[] = [];
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function freshStore(): Store {
-  const dir = mkdtempSync(join(tmpdir(), "x402-recovery-"));
-  dirs.push(dir);
-  return new Store(join(dir, "controller.db"));
-}
 
 function payment(key: string, payer = PAYER): PaymentRecord {
   return {
@@ -123,7 +110,7 @@ function sessionRecord(id: string, key: string, client: string): SessionRecord {
 }
 
 /** A claimed intent whose owner died, with the requirements recorded. */
-async function seedStaleClaim(store: Store, key: string): Promise<void> {
+async function seedStaleClaim(store: PostgresStore, key: string): Promise<void> {
   const claim = await store.claimPaymentIntent(key, "b".repeat(64), 30_000, REQUIREMENTS);
   if (claim.status !== "claimed") throw new Error("expected claim");
 }
@@ -134,7 +121,7 @@ function lookupReturning(record: { settled: boolean; payer?: string; amount?: st
 
 describe("settlement recovery", () => {
   it("records a settled payment with no entitlement as refundable", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     await seedStaleClaim(store, PAYMENT_KEY);
     const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
 
@@ -157,7 +144,7 @@ describe("settlement recovery", () => {
   });
 
   it("refunds a recovered mock payment immediately", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     await seedStaleClaim(store, PAYMENT_KEY);
 
     await new SettlementRecovery(store, new RefundService(store), lookupReturning({ settled: true }), {
@@ -172,7 +159,7 @@ describe("settlement recovery", () => {
   });
 
   it("leaves an unsettled intent alone: the API still owns the retry", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     await seedStaleClaim(store, PAYMENT_KEY);
 
     const result = await new SettlementRecovery(store, new RefundService(store), lookupReturning({ settled: false }), {
@@ -188,7 +175,7 @@ describe("settlement recovery", () => {
   });
 
   it("is a no-op without a settlement lookup", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     await seedStaleClaim(store, PAYMENT_KEY);
 
     const result = await new SettlementRecovery(store, new RefundService(store), null, {
@@ -202,7 +189,7 @@ describe("settlement recovery", () => {
   });
 
   it("does not duplicate a row that already exists", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     await seedStaleClaim(store, PAYMENT_KEY);
     const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
     const recovery = new SettlementRecovery(store, new RefundService(store), lookup, {
@@ -220,7 +207,7 @@ describe("settlement recovery", () => {
 });
 
 describe("refund worker", () => {
-  async function seedPending(store: Store, key = PAYMENT_KEY): Promise<void> {
+  async function seedPending(store: PostgresStore, key = PAYMENT_KEY): Promise<void> {
     await store.insertUnclaimedLedger({
       paymentKey: key,
       sessionId: `unsettled:${key}`,
@@ -236,7 +223,7 @@ describe("refund worker", () => {
   }
 
   it("executes a pending refund once and records the transaction", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     await seedPending(store);
     const executor: RefundExecutor = { refund: vi.fn(async () => ({ transaction: "0xdeadbeef" })) };
     const worker = new RefundWorker(store, executor, { maxAttempts: 3, retryBaseMs: 1000, limit: 10 });
@@ -258,7 +245,7 @@ describe("refund worker", () => {
   });
 
   it("backs off after a failure and gives up at the attempt limit", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     await seedPending(store);
     const executor: RefundExecutor = {
       refund: vi.fn(async () => {
@@ -287,7 +274,7 @@ describe("refund worker", () => {
   });
 
   it("does nothing without a configured executor", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     await seedPending(store);
     const worker = new RefundWorker(store, null, { maxAttempts: 3, retryBaseMs: 1000, limit: 10 });
 
@@ -297,7 +284,7 @@ describe("refund worker", () => {
   });
 
   it("repairs an unentitled row left SETTLED by a crash", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     await store.insertUnclaimedLedger({
       paymentKey: PAYMENT_KEY,
       sessionId: `unsettled:${PAYMENT_KEY}`,
@@ -318,7 +305,7 @@ describe("refund worker", () => {
 
 describe("double charge", () => {
   it("refunds a second payment for a client key that already owns a session", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     const firstKey = "c".repeat(64);
     const firstClaim = await store.claimPaymentIntent(firstKey, "d".repeat(64), 30_000);
     if (firstClaim.status !== "claimed") throw new Error("expected claim");
@@ -338,8 +325,8 @@ describe("double charge", () => {
     ).rejects.toThrow(DuplicateEntitlementError);
 
     // One session, one charge, and the second charge is already refunded.
-    expect(store.countSessions()).toBe(1);
-    expect(store.countPayments()).toBe(2);
+    expect(await countRows("sessions")).toBe(1);
+    expect(await countRows("payments")).toBe(2);
     const ledger = (await store.getLedgerByPayment(secondKey))!;
     expect(ledger.sessionId).toBe(`duplicate:${secondKey}`);
     expect(ledger.reason).toBe("duplicate_client_nonce");
@@ -352,7 +339,7 @@ describe("double charge", () => {
   });
 
   it("leaves a real-mode duplicate charge REFUND_PENDING", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     const firstKey = "f".repeat(64);
     const firstClaim = await store.claimPaymentIntent(firstKey, "d".repeat(64), 30_000);
     if (firstClaim.status !== "claimed") throw new Error("expected claim");

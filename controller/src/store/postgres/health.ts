@@ -30,7 +30,9 @@ export async function checkPostgresHealth(
     }
     return {
       ok: false,
-      reason: /terminat|closed|ended/i.test(message) ? "closed" : "unavailable",
+      reason: /terminat|closed|ended|after calling end/i.test(message)
+        ? "closed"
+        : "unavailable",
     };
   }
 

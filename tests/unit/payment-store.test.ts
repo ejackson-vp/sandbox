@@ -1,7 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { verifyTypedData } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
@@ -19,7 +16,6 @@ import { formatUsd, parseUsdPrice } from "../../shared/src/entries/money.js";
 import { type SessionLimits, type SessionSpec } from "../../shared/src/entries/protocol.js";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import {
-  Store,
   PaymentClaimLostError,
   type PaymentRecord,
   type SessionRecord,
@@ -28,7 +24,9 @@ import { RefundService } from "../../controller/src/refunds.js";
 import { newOpaqueToken } from "../../controller/src/secrets.js";
 import { mintProxyToken, verifyProxyToken } from "../../controller/src/tokens.js";
 import { extractProxyToken, parseAuthority } from "../../controller/src/egress-proxy.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { limitsFor, paymentFixture, sessionFixture } from "../helpers/store-fixtures.js";
+import { countRows, freshStore } from "../helpers/test-store.js";
 
 class MemoryNonceStore implements MockNonceStore {
   readonly nonces = new Set<string>();
@@ -86,7 +84,7 @@ function paymentRecord(key: string): PaymentRecord {
 }
 
 /** Claim then complete, as the API does. */
-async function seedEntitlement(store: Store, key: string, record: SessionRecord): Promise<void> {
+async function seedEntitlement(store: PostgresStore, key: string, record: SessionRecord): Promise<void> {
   const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
   await store.completeEntitlement(key, claim.token, paymentRecord(key), record);
@@ -190,10 +188,8 @@ describe("mock x402 scheme", () => {
 });
 
 describe("payment intent outbox and entitlements", () => {
-  function openStore() {
-    const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
-    const store = new Store(join(dir, "test.db"));
-    return { store, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
+  async function openStore() {
+    return { store: await freshStore(), cleanup: () => undefined };
   }
 
   it("makes one payment redeemable exactly once and completes idempotently", async () => {
@@ -220,8 +216,8 @@ describe("payment intent outbox and entitlements", () => {
       expect(
         await store.completeEntitlement(key, first.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000002", key)),
       ).toEqual({ sessionId: firstSession, created: false });
-      expect(store.countSessions()).toBe(1);
-      expect(store.countPayments()).toBe(1);
+      expect(await countRows("sessions")).toBe(1);
+      expect(await countRows("payments")).toBe(1);
     } finally {
       cleanup();
     }
@@ -249,7 +245,7 @@ describe("payment intent outbox and entitlements", () => {
           sessionRecord("sbx_000000000000000000000010", key),
         ),
       ).rejects.toThrow(PaymentClaimLostError);
-      expect(store.countSessions()).toBe(0);
+      expect(await countRows("sessions")).toBe(0);
       expect((await store.getPaymentIntent(key))?.status).toBe("claimed");
 
       expect(
@@ -260,7 +256,7 @@ describe("payment intent outbox and entitlements", () => {
       expect(
         await store.completeEntitlement(key, owner.token, paymentRecord(key), sessionRecord("sbx_000000000000000000000012", key)),
       ).toEqual({ sessionId: "sbx_000000000000000000000011", created: false });
-      expect(store.countSessions()).toBe(1);
+      expect(await countRows("sessions")).toBe(1);
     } finally {
       cleanup();
     }
@@ -286,8 +282,7 @@ describe("payment intent outbox and entitlements", () => {
 
 describe("operation gating", () => {
   async function openStore() {
-    const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
-    const store = new Store(join(dir, "test.db"));
+    const store = await freshStore();
     const key = "d".repeat(64);
     const claim = await store.claimPaymentIntent(key, specHash(spec), 30_000);
     if (claim.status !== "claimed") throw new Error("expected claim");
@@ -295,7 +290,7 @@ describe("operation gating", () => {
     await store.setProvisioning("sbx_000000000000000000000003", "pod-x");
     await store.setRelayToken("sbx_000000000000000000000003", "relay-hash");
     await store.setReady("sbx_000000000000000000000003", Date.now(), Date.now() + 60_000, "{}", "guestpk");
-    return { store, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
+    return { store, cleanup: () => undefined };
   }
 
   it("allows one active operation and treats request ids as idempotency keys", async () => {
@@ -343,8 +338,7 @@ describe("operation gating", () => {
   });
 
   it("repairs a refund left SETTLED after a crash", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
-    const store = new Store(join(dir, "test.db"));
+    const store = await freshStore();
     try {
       const key = "e".repeat(64);
       const id = "sbx_000000000000000000000005";
@@ -359,8 +353,7 @@ describe("operation gating", () => {
         sessionId: id,
       });
     } finally {
-      store.close();
-      rmSync(dir, { recursive: true, force: true });
+      await store.close();
     }
   });
 
@@ -423,8 +416,7 @@ describe("operation gating", () => {
   });
 
   it("refuses operations after the lease deadline", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "x402-store-"));
-    const store = new Store(join(dir, "test.db"));
+    const store = await freshStore();
     try {
       const id = "sbx_000000000000000000000004";
       const key = "c".repeat(64);
@@ -434,8 +426,7 @@ describe("operation gating", () => {
       await store.setReady(id, Date.now() - 120_000, Date.now() - 60_000, "{}", "guestpk");
       expect(await store.claimOperation(id, "request-1", "exec")).toMatchObject({ ok: false, code: "lease_expired" });
     } finally {
-      store.close();
-      rmSync(dir, { recursive: true, force: true });
+      await store.close();
     }
   });
 

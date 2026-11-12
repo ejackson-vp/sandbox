@@ -25,6 +25,9 @@ export default defineConfig({
     hookTimeout: 60_000,
     pool: "forks",
     fileParallelism: false,
+    // Postgres is the only store now, so the suite refuses to start without it.
+    // Setup fails with one clear message; teardown drops this run's databases.
+    globalSetup: ["tests/helpers/test-global-setup.ts"],
     // Vitest 5 reads coverage from `test.coverage`; a top-level block is
     // ignored without a warning, which is how the badge job got default
     // reporters and no json-summary.
