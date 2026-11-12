@@ -2,7 +2,7 @@
  * Postgres schema, the same tables and the same ladder as the SQLite migrations.
  *
  * The tables, columns, uniques and indexes are the SQLite ones (see
- * `controller/src/store/schema.ts`, schema v16). Two dialect differences are
+ * `controller/src/store/schema.ts`, schema v17). Two dialect differences are
  * deliberate and are called out where they occur:
  *
  *   - epoch milliseconds are `BIGINT`, because 2026 is past `int4`'s ceiling.
@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS exec_requests (
   state TEXT NOT NULL,
   epoch INTEGER NOT NULL DEFAULT 1,
   payload_hash TEXT,
+  result_envelope TEXT,
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (session_id, id)
@@ -228,6 +229,13 @@ const LADDER: ReadonlyArray<{ from: number; sql: string }> = [
   {
     from: 16,
     sql: "ALTER TABLE exec_requests ADD COLUMN IF NOT EXISTS payload_hash TEXT;",
+  },
+  {
+    // The sealed result outlives the relay cache. Nullable and additive: a row
+    // written before v17 keeps NULL and falls back to the relay lookup, which is
+    // the behaviour it had when it was written.
+    from: 17,
+    sql: "ALTER TABLE exec_requests ADD COLUMN IF NOT EXISTS result_envelope TEXT;",
   },
 ];
 

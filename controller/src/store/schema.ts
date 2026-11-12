@@ -9,7 +9,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { NON_TERMINAL_STATE_SQL } from "./models.js";
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /**
  * Due-time index. The due query filters on exactly the states in
@@ -164,6 +164,7 @@ const BASE_SCHEMA = `
     state TEXT NOT NULL,
     epoch INTEGER NOT NULL DEFAULT 1,
     payload_hash TEXT,
+    result_envelope TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, id)
@@ -300,6 +301,22 @@ function migrateV15toV16(db: DatabaseSync): void {
   db.exec("ALTER TABLE exec_requests ADD COLUMN payload_hash TEXT;");
 }
 
+/**
+ * v16 -> v17: keep the sealed result with its request row.
+ *
+ * The relay cache is 5 minutes and 64 entries per session, so a retry after
+ * eviction used to find a completed request and no result. `result_envelope` is
+ * the client-sealed ciphertext the guest produced: the controller stores it
+ * without a key for it and cannot open it, and `finalizeTermination` clears it
+ * when the session reaches a terminal state (the request row itself stays for
+ * audit). Additive and nullable: existing rows keep NULL, which means "written
+ * before results were persisted" and serves exactly what v16 served, a relay
+ * lookup or `410 result_expired`.
+ */
+function migrateV16toV17(db: DatabaseSync): void {
+  db.exec("ALTER TABLE exec_requests ADD COLUMN result_envelope TEXT;");
+}
+
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = FULL;");
@@ -329,6 +346,7 @@ export function migrate(db: DatabaseSync): void {
       if (version < 14) migrateV13toV14(db);
       if (version < 15) migrateV14toV15(db);
       if (version < 16) migrateV15toV16(db);
+      if (version < 17) migrateV16toV17(db);
       // Future versions append `if (version < N) migrateV(N-1)toV(N)(db);`.
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

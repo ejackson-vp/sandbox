@@ -407,8 +407,9 @@ export class PostgresStore implements StoreBackend {
     sessionId: string,
     requestId: string,
     outcome: "done" | "error" | "abandoned",
+    resultEnvelope?: string | null,
   ): Promise<void> {
-    return this.operations.finishOperation(sessionId, requestId, outcome);
+    return this.operations.finishOperation(sessionId, requestId, outcome, resultEnvelope);
   }
 
   getExecRequest(sessionId: string, requestId: string) {

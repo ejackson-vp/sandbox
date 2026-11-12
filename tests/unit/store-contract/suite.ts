@@ -13,6 +13,7 @@ import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { DuplicateEntitlementError, PaymentClaimLostError } from "../../../controller/src/store.js";
 import type { StoreBackend } from "../../../controller/src/store/backend.js";
 import type { BudgetLimits } from "../../../controller/src/store/budgets.js";
+import { MAX_PERSISTED_RESULT_BYTES } from "../../../controller/src/store/models.js";
 import {
   capacitySnapshot,
   paymentRecord,
@@ -283,6 +284,67 @@ export function describeStoreContract(backend: ContractBackend): void {
       expect(refused[0]).toMatchObject({ code: "idempotency_key_reused" });
       const record = await store.getExecRequest(SESSION_1, "retry-raced");
       expect(["e".repeat(64), "f".repeat(64)]).toContain(record?.payloadHash);
+    });
+
+    it("keeps the sealed result with the request row", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+      const envelope = "c2VhbGVkLXJlc3VsdA==";
+      expect(await store.claimOperation(SESSION_1, "result-kept", "exec")).toMatchObject({ ok: true });
+      await store.finishOperation(SESSION_1, "result-kept", "done", envelope);
+
+      const stored = await store.getExecRequest(SESSION_1, "result-kept");
+      expect(stored?.state).toBe("done");
+      expect(stored?.resultEnvelope).toBe(envelope);
+
+      // A retry is still a duplicate (no second execution), and the result is
+      // still on the row to answer it with after the relay cache evicts it.
+      expect(await store.claimOperation(SESSION_1, "result-kept", "exec")).toMatchObject({
+        ok: false,
+        code: "duplicate",
+      });
+      expect((await store.getExecRequest(SESSION_1, "result-kept"))?.resultEnvelope).toBe(envelope);
+    });
+
+    it("drops a sealed result above the persistence bound and keeps the row usable", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+
+      expect(await store.claimOperation(SESSION_1, "result-at-bound", "exec")).toMatchObject({ ok: true });
+      const atBound = "a".repeat(MAX_PERSISTED_RESULT_BYTES);
+      await store.finishOperation(SESSION_1, "result-at-bound", "done", atBound);
+      expect((await store.getExecRequest(SESSION_1, "result-at-bound"))?.resultEnvelope).toBe(atBound);
+
+      expect(await store.claimOperation(SESSION_1, "result-over-bound", "exec")).toMatchObject({
+        ok: true,
+      });
+      const overBound = "a".repeat(MAX_PERSISTED_RESULT_BYTES + 1);
+      await store.finishOperation(SESSION_1, "result-over-bound", "done", overBound);
+
+      const dropped = await store.getExecRequest(SESSION_1, "result-over-bound");
+      // The operation finished; only the durable copy is refused, so it behaves
+      // exactly like a pre-v17 row (relay cache or `result_expired`).
+      expect(dropped?.state).toBe("done");
+      expect(dropped?.resultEnvelope).toBeNull();
+      // Never truncated into a partial sealed box the client could not open.
+      expect((await store.getSession(SESSION_1))?.activeRequestId).toBeNull();
+    });
+
+    it("clears stored results when the session is finalized and keeps the request rows", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+      expect(await store.claimOperation(SESSION_1, "result-cleared", "exec")).toMatchObject({ ok: true });
+      await store.finishOperation(SESSION_1, "result-cleared", "done", "c2VhbGVk");
+      expect((await store.getExecRequest(SESSION_1, "result-cleared"))?.resultEnvelope).toBe("c2VhbGVk");
+
+      expect(await store.requestTermination(SESSION_1, "client_destroy")).toBe(true);
+      // Still readable while the session is only terminating.
+      expect((await store.getExecRequest(SESSION_1, "result-cleared"))?.resultEnvelope).toBe("c2VhbGVk");
+
+      expect(await store.finalizeTermination(SESSION_1)).toBe("DESTROYED");
+
+      const after = await store.getExecRequest(SESSION_1, "result-cleared");
+      // The row stays for audit; the ciphertext does not outlive the session.
+      expect(after).not.toBeNull();
+      expect(after?.state).toBe("done");
+      expect(after?.resultEnvelope).toBeNull();
     });
 
     it("counts concurrent creates against the durable budget once", async () => {

@@ -268,6 +268,10 @@ export class PgSessionRepository {
    * place. `SELECT … FOR UPDATE` is what makes the read-then-write correct under
    * `READ COMMITTED`: a second finalizer blocks on the row, re-reads the
    * committed state, and returns null instead of overwriting.
+   *
+   * The ciphertext clear is in the same transaction as the finalize, so a
+   * terminal session never keeps a persisted result behind it. The request rows
+   * stay for audit.
    */
   async finalizeTermination(id: string): Promise<SessionState | null> {
     return this.conn.tx(async (tx) => {
@@ -284,6 +288,11 @@ export class PgSessionRepository {
             next_due_ms = $3, updated_at = $4
           WHERE id = $5 AND state = ANY($6::text[]) RETURNING state`,
         [final, now, now + cadenceFor(final), now, id, SOURCE_STATES.terminated],
+      );
+      if ((res.rowCount ?? 0) === 0) return null;
+      await tx.query(
+        "UPDATE exec_requests SET result_envelope = NULL WHERE session_id = $1 AND result_envelope IS NOT NULL",
+        [id],
       );
       return res.rows[0]?.state ?? null;
     });

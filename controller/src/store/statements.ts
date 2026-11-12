@@ -317,8 +317,19 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
         "INSERT INTO exec_requests (id, session_id, op, state, epoch, payload_hash, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)",
       ),
       getRequest: db.prepare("SELECT * FROM exec_requests WHERE session_id = ? AND id = ?"),
+      /**
+       * Finish one pending request and, when the caller has one, keep the sealed
+       * result with it. `COALESCE` leaves an envelope already on the row alone:
+       * the guard is `state = 'pending'`, so a second finish matches nothing
+       * anyway, and a retry that only confirms the outcome must not erase the
+       * result the first finish stored.
+       */
       finishRequest: db.prepare(
-        "UPDATE exec_requests SET state = ?, updated_at = ? WHERE session_id = ? AND id = ? AND state = 'pending'",
+        "UPDATE exec_requests SET state = ?, result_envelope = COALESCE(?, result_envelope), updated_at = ? WHERE session_id = ? AND id = ? AND state = 'pending'",
+      ),
+      /** Terminal cleanup: the rows stay for audit, their ciphertext does not. */
+      clearSessionResultEnvelopes: db.prepare(
+        "UPDATE exec_requests SET result_envelope = NULL WHERE session_id = ? AND result_envelope IS NOT NULL",
       ),
     };
 }

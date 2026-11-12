@@ -129,6 +129,16 @@ the container registry.
   `terminate` fallback is a close ordered after queued frames, so a non-zero
   value for it means the stale-frame guarantee degraded; it also logs
   `relay_reset_fell_back_to_terminate`.
+- Operation results survive the relay cache (schema v17,
+  `exec_requests.result_envelope`). The controller keeps the client-sealed
+  envelope with the request row when it observes it (owning POST, duplicate-retry
+  POST and GET), so a retry with the same `requestId` is answered after the
+  relay's 5 minute / 64 entry cache evicts it instead of returning `410
+  result_expired`. The column is client ciphertext the controller cannot open,
+  is never written above `MAX_PERSISTED_RESULT_BYTES` (1 MiB, larger results are
+  dropped, not truncated, and keep the cache-only behaviour), and is cleared for
+  the session in the same transaction as the terminal finalize. Request rows stay
+  for audit. Additive and nullable: pre-v17 rows serve what they served before.
 
 ### Security
 
@@ -141,6 +151,11 @@ the container registry.
   replays even when the envelope was re-sealed. A client that sends no hash keeps
   the ciphertext binding, and rows written before v16 keep a null hash and accept
   any duplicate.
+- The controller's database now stores client-sealed result ciphertext
+  (`exec_requests.result_envelope`, schema v17). It holds no key for it and
+  cannot open it, the same as the relay, and the column is cleared when the
+  session is finalized. This is a storage addition to the trust boundary, not a
+  new plaintext surface; see [docs/threat-model.md](docs/threat-model.md).
 
 ### Changed
 

@@ -96,8 +96,19 @@ a prerequisite that is not ready leaves the session where it is.
   idempotency_key_reused`. Without the client hash the controller hashes the
   ciphertext instead (schema v16, `exec_requests.payload_hash`) and a re-sealed
   retry is treated as a different payload.
-- Results are cached at the relay for 5 minutes so a client can reconnect with
-  `GET /v1/sessions/{id}/requests/{requestId}` after a disconnect.
+- The result is written to `exec_requests.result_envelope` when the controller
+  observes it, so a retry is answerable for as long as the request row lives
+  (schema v17), not only for the relay's 5 minute cache window. The stored value
+  is the same client-sealed envelope the relay held: the controller has no key
+  for it and cannot open it. One bound applies, `MAX_PERSISTED_RESULT_BYTES`
+  (1 MiB): a larger envelope is not stored at all, never truncated, and the
+  result keeps the cache-only behaviour. `result_envelope` is cleared when the
+  session reaches a terminal state, in the same transaction as the finalize;
+  the request rows themselves stay for audit.
+- Results are cached at the relay for 5 minutes and 64 entries per session so a
+  client can reconnect with `GET /v1/sessions/{id}/requests/{requestId}` after a
+  disconnect. A miss falls back to the stored envelope above; `410
+  result_expired` means neither the relay nor the row still has the result.
 - `DELETE /v1/sessions/{id}/requests/{requestId}` cancels the running command;
   the guest returns a result with `cancelled: true` and the session stays usable.
 - File operations travel through the same single-operation gate.
@@ -117,8 +128,9 @@ a prerequisite that is not ready leaves the session where it is.
 - Suspended sessions have no pod and no relay entry; only the PVC remains.
 - The reconciler reaps pods whose session is unknown or terminal, and pods older
   than `MAX_POD_AGE_MS`, including after a controller crash.
-- The SQLite database stores metadata only (state, timings, hashes, limits) and
-  terminal rows are pruned after 24 h.
+- The SQLite database stores metadata only (state, timings, hashes, limits) plus
+  the client-sealed result envelopes described above, which the controller
+  cannot open and clears at terminal; terminal rows are pruned after 24 h.
 
 ## Crash recovery
 

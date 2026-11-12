@@ -103,9 +103,42 @@ export interface ExecRequestRecord {
    * duplicate against them is accepted.
    */
   payloadHash: string | null;
+  /**
+   * The sealed result the guest produced, kept so a retry can still be answered
+   * after the relay's 5 minute / 64 entry cache evicts it (schema v17). It is
+   * client-sealed ciphertext: the controller stores it with no key for it and
+   * cannot open it. Null when the operation has not finished, when the envelope
+   * exceeded `MAX_PERSISTED_RESULT_BYTES`, and after the session is finalized.
+   */
+  resultEnvelope: string | null;
   epoch: number;
   createdAt: number;
   updatedAt: number;
+}
+
+/**
+ * Largest sealed result kept with the request row.
+ *
+ * The relay holds a result for 5 minutes; this row holds one for the life of
+ * the session, so the ceiling is the only lever on what a single operation can
+ * add to the database. 1 MiB covers ordinary command output many times over
+ * (the tier's `maxOutputBytes` caps stdout/stderr, and base64 adds a third), and
+ * a `file.get` result is the case that can exceed it. An envelope above the
+ * bound is not persisted at all, so that operation keeps the relay-cache-only
+ * behaviour it had before v17. It is never truncated: a partial sealed box
+ * cannot be opened by the client, so storing one would turn a cache miss into a
+ * corrupt result.
+ */
+export const MAX_PERSISTED_RESULT_BYTES = 1024 * 1024;
+
+/**
+ * The value to store in `exec_requests.result_envelope`, or null when there is
+ * nothing to store. Applied at the write site in both adapters so the bound is
+ * one decision, not two.
+ */
+export function persistableResultEnvelope(envelope: string | null | undefined): string | null {
+  if (!envelope) return null;
+  return Buffer.byteLength(envelope, "utf8") > MAX_PERSISTED_RESULT_BYTES ? null : envelope;
 }
 
 export type IntentStatus = "claimed" | "settled" | "failed";
