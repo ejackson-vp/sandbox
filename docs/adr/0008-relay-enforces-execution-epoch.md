@@ -31,7 +31,7 @@ The relay is the execution-epoch authority for a session.
   command running, the relay resets the guest connection with a TCP reset, so
   bytes the guest has not read are discarded rather than delivered after a
   close frame. The link loss kills the command it was carrying (the supervisor
-  aborts and drains it, then reconnects; see ADR 0011), and the fence clears.
+  aborts and drains it, then reconnects; see ADR 0012), and the fence clears.
 - The reset needs the TCP socket captured by the upgrade handler. `attach`
   accepts a nullable socket, and when it is missing the relay falls back to
   `ws.terminate()`, which is a close ordered after the queued frame. The link
@@ -52,7 +52,7 @@ started by an earlier controller generation.
   on idle or disconnect.
 - **A withdrawn frame ends the link, not the session.** The reset is a real
   relay-link loss: the supervisor aborts the command the link was carrying and
-  reconnects to the same registration (ADR 0011). The session keeps its lease,
+  reconnects to the same registration (ADR 0012). The session keeps its lease,
   its Pod and its workspace; the withdrawn frame is gone with the socket. The
   fence may clear on the disconnected branch, because the link loss killed the
   command; the guest then reconnects and reports its slot idle. This is asserted
@@ -60,7 +60,7 @@ started by an earlier controller generation.
 - **The session is not refunded and does not need to be.** It keeps running:
   the lease is unchanged, the interrupted request stays `outcome_unknown`, and a
   new operation runs under the bumped epoch. Only a guest that cannot reconnect
-  inside the relay-loss grace ends with `failure:relay_lost` (ADR 0011).
+  inside the relay-loss grace ends with `failure:relay_lost` (ADR 0012).
 - The controller logs `operation_fence_guest_reset` with the session, request,
   epoch and number of withdrawn frames, so an operator can connect a guest
   reconnect to a recovery reset. The relay logs `relay_epoch_raised` with `reset`
@@ -75,7 +75,7 @@ started by an earlier controller generation.
 Guest-side reconnect was implemented after this record: the supervisor keeps the
 relay URL/token, abandons and drains the operation the link was carrying, then
 re-dials and re-hellos with the same session identity, key and token. See
-[ADR 0011](0011-guest-reconnects-after-relay-loss.md). "A command cannot survive
+[ADR 0012](0012-guest-reconnects-after-relay-loss.md). "A command cannot survive
 the link" still holds, because the link loss kills it; a disconnected guest is no
 longer proof that the command is gone, so `OperationFence` holds a relay-recovery
 fence until the reconnected guest reports idle.

@@ -1,4 +1,4 @@
-# 0011. A guest reconnects after a relay link loss
+# 0012. A guest reconnects after a relay link loss
 
 Status: accepted
 

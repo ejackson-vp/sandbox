@@ -5,23 +5,31 @@
  * applies it. A real mode leaves `REFUND_PENDING`, and the worker below resolves
  * it against an operator-configured webhook.
  *
- * The guarantee is **effectively-once**, not exactly-once:
+ * The protocol is the shared durable-call contract, not a refund-only idea
+ * (ADR 0011, `@x402s/shared/durable`):
  *
  *  - **Claim before sending.** A pass claims due rows in one statement
  *    (`REFUND_PENDING` past its backoff, or `REFUND_SENDING` past its lease) and
  *    fences them with a token. Two workers get disjoint rows; a crash leaves the
- *    row `REFUND_SENDING` and the next pass reclaims it after the lease.
- *  - **Stable idempotency key.** Every send carries `refund:<paymentKey>`, both
- *    as an `Idempotency-Key` header and in the body. The provider contract is
- *    that the same key returns the original transaction and moves no funds
+ *    row `REFUND_SENDING` and the next pass reclaims it after the lease. The
+ *    lease arithmetic and the claim rule live in `shared/src/durable/claim.ts`;
+ *    the SQL only compares the cutoff it is given.
+ *  - **Stable idempotency key.** Every send carries `refundKey(paymentKey)`,
+ *    both as an `Idempotency-Key` header and in the body. The provider contract
+ *    is that the same key returns the original transaction and moves no funds
  *    again, which is what makes a resend after an ambiguous timeout safe.
  *  - **Fenced completion.** `SENDING -> REFUNDED` requires the current token, so
- *    a stalled owner that was reclaimed cannot record its transaction.
+ *    a stalled owner that was reclaimed cannot record its transaction. The
+ *    local short-circuit is `isHeldBy`; the real check is the SQL guard.
+ *  - **Unknown is not failure.** A timeout, 5xx or unreadable answer is
+ *    `unknown` (`shared/src/durable/outcome.ts`), records no attempt, and is
+ *    retried when the lease expires. Only a definite refusal consumes the
+ *    attempt budget.
  *
  * Without provider dedupe the key is a request, not a proof; a provider that
  * ignores it breaks the guarantee, and a crash after the provider paid but
  * before `markRefunded` is exactly the window the key exists to close. See
- * docs/payment-ledger.md.
+ * docs/payment-ledger.md and docs/adr/0011-durable-external-calls.md.
  *
  * The worker only sends funds through the webhook: there is no on-chain signer
  * in this process, so a compromised controller cannot drain the treasury by
@@ -30,6 +38,21 @@
  */
 import { randomBytes } from "node:crypto";
 import { log, metrics } from "@x402s/shared/runtime";
+import {
+  asClaimToken,
+  classifyStatus,
+  definiteFailure,
+  leaseCoversCallTimeout,
+  leaseCutoffMs,
+  ok,
+  refundKey,
+  refundRetryPolicy,
+  runClaimed,
+  unknown,
+  type ClaimToken,
+  type ExternalOutcome,
+  type RetryPolicy,
+} from "@x402s/shared/durable";
 import type { PaymentLedgerRecord } from "./store/models.js";
 import type { RefundWorkerStore } from "./store/ports.js";
 
@@ -82,6 +105,8 @@ interface RefundWorkerOptions {
    * waiting, which is safe (same key) but noisier.
    */
   claimLeaseMs?: number;
+  /** Timeout the executor applies to one call; used to check the lease. */
+  callTimeoutMs?: number;
   now?: () => number;
 }
 
@@ -107,7 +132,9 @@ interface RefundWorkerResult {
  * Contract: `200 { "transaction": "<id>" }` means funds were sent. Any other
  * 4xx is a definite refusal. A 5xx, 408, 429, network failure or timeout is
  * ambiguous and raises `RefundSendUnknownError`, because the provider may have
- * paid before the answer was lost.
+ * paid before the answer was lost. The status split is
+ * `classifyStatus` in `shared/src/durable/outcome.ts`, so the worker and the
+ * executor cannot disagree about which answers are refusals.
  */
 export class HttpRefundExecutor implements RefundExecutor {
   constructor(
@@ -136,10 +163,10 @@ export class HttpRefundExecutor implements RefundExecutor {
     }
     if (!res.ok) {
       const message = `refund webhook answered ${res.status}`;
-      if (res.status >= 500 || res.status === 408 || res.status === 429) {
-        throw new RefundSendUnknownError(message);
-      }
-      throw new Error(message);
+      // Never downgrade an ambiguous status to a refusal: that would spend the
+      // attempt budget on work that may already have been paid.
+      if (classifyStatus(res.status) === "definite_failure") throw new Error(message);
+      throw new RefundSendUnknownError(message);
     }
     const body = (await res.json().catch(() => undefined)) as { transaction?: unknown } | undefined;
     if (typeof body?.transaction !== "string" || body.transaction === "") {
@@ -149,19 +176,50 @@ export class HttpRefundExecutor implements RefundExecutor {
   }
 }
 
+/**
+ * Run one provider call and classify it against the shared algebra. The
+ * executor's own protocol is unchanged: a resolved transaction is `ok`,
+ * `RefundSendUnknownError` is ambiguous, and any other throw is a refusal the
+ * provider answered.
+ */
+async function sendRefund(
+  executor: RefundExecutor,
+  request: RefundRequest,
+): Promise<ExternalOutcome<{ transaction: string }>> {
+  try {
+    return ok(await executor.refund(request));
+  } catch (err) {
+    const message = (err as Error).message;
+    return err instanceof RefundSendUnknownError ? unknown(message) : definiteFailure(message);
+  }
+}
+
 export class RefundWorker {
   private readonly now: () => number;
-  private readonly retryMaxMs: number;
-  private readonly claimLeaseMs: number;
+  private readonly retry: RetryPolicy;
+  private readonly limit: number;
 
   constructor(
     private readonly store: RefundWorkerStore,
     private readonly executor: RefundExecutor | null,
-    private readonly opts: RefundWorkerOptions,
+    opts: RefundWorkerOptions,
   ) {
     this.now = opts.now ?? (() => Date.now());
-    this.retryMaxMs = opts.retryMaxMs ?? 3_600_000;
-    this.claimLeaseMs = opts.claimLeaseMs ?? 60_000;
+    this.limit = opts.limit;
+    this.retry = refundRetryPolicy({
+      maxAttempts: opts.maxAttempts,
+      baseDelayMs: opts.retryBaseMs,
+      ...(opts.retryMaxMs !== undefined ? { maxDelayMs: opts.retryMaxMs } : {}),
+      ...(opts.claimLeaseMs !== undefined ? { leaseMs: opts.claimLeaseMs } : {}),
+      ...(opts.callTimeoutMs !== undefined ? { callTimeoutMs: opts.callTimeoutMs } : {}),
+    });
+    if (!leaseCoversCallTimeout(this.retry)) {
+      // Safe (the key makes a resend a no-op) but noisier than it needs to be.
+      log.warn("payment_refund_lease_below_timeout", {
+        claimLeaseMs: this.retry.leaseMs,
+        callTimeoutMs: this.retry.callTimeoutMs,
+      });
+    }
   }
 
   /**
@@ -182,15 +240,18 @@ export class RefundWorker {
     if (!this.executor) {
       return { attempted: 0, refunded: 0, failed: 0, unknown: 0, exhausted: 0, reclaimed: 0, skipped: true };
     }
+    const executor = this.executor;
 
-    // One token fences this pass. It is matched together with the payment key,
-    // so a batch sharing it is still a per-row fence.
-    const claimToken = randomBytes(16).toString("hex");
+    // One token fences this pass: 128 random bits, handed to `asClaimToken` so
+    // the port cannot receive an arbitrary string by accident. It is matched
+    // together with the payment key, so a batch sharing it is still a per-row
+    // fence.
+    const claimToken = asClaimToken(randomBytes(16).toString("hex"));
     const claims = await this.store.claimRefunds({
       nowMs: now,
-      leaseCutoffMs: now - this.claimLeaseMs,
-      limit: this.opts.limit,
-      maxAttempts: this.opts.maxAttempts,
+      leaseCutoffMs: leaseCutoffMs(now, this.retry.leaseMs),
+      limit: this.limit,
+      maxAttempts: this.retry.maxAttempts,
       claimToken,
     });
 
@@ -209,6 +270,18 @@ export class RefundWorker {
         });
         continue;
       }
+      let token: ClaimToken;
+      try {
+        token = asClaimToken(rowToken);
+      } catch (err) {
+        // The claim statement always writes a valid fence, so this is a manual
+        // or corrupt row. Skip it rather than abort every other refund.
+        log.error("payment_refund_claim_token_invalid", {
+          paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
+          error: (err as Error).message,
+        });
+        continue;
+      }
       if (wasReclaimed) {
         reclaimed += 1;
         metrics
@@ -220,77 +293,18 @@ export class RefundWorker {
         });
       }
 
-      let transaction: string;
-      try {
-        ({ transaction } = await this.executor.refund(requestOf(ledger)));
-      } catch (err) {
-        const message = (err as Error).message;
-        if (err instanceof RefundSendUnknownError) {
-          // No release: the row stays SENDING, and the lease makes it due again.
-          // Retrying with the same key is what the provider dedupes.
-          unknown += 1;
-          metrics
-            .counter("sandbox_refund_worker_total", "Refund worker attempts by result")
-            .inc({ result: "unknown" });
-          log.warn("payment_refund_outcome_unknown", {
-            paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
-            error: message,
-          });
-          continue;
-        }
-        const attempts = ledger.refundAttempts + 1;
-        const backoff = this.backoffFor(ledger.refundAttempts);
-        const released = await this.store.releaseRefundClaim(
-          ledger.paymentKey,
-          rowToken,
-          message,
-          now + backoff,
-        );
-        if (!released) {
-          // Reclaimed before the release landed. The new owner owns the retry and
-          // this pass recorded nothing, so it must not count an attempt.
-          metrics
-            .counter("sandbox_refund_worker_total", "Refund worker attempts by result")
-            .inc({ result: "claim_lost" });
-          log.warn("payment_refund_claim_lost", {
-            paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
-            error: message,
-          });
-          continue;
-        }
-        const finalAttempt = attempts >= this.opts.maxAttempts;
-        if (finalAttempt) exhausted += 1;
-        else failed += 1;
-        metrics
-          .counter("sandbox_refund_worker_total", "Refund worker attempts by result")
-          .inc({ result: finalAttempt ? "exhausted" : "failed" });
-        if (finalAttempt) {
-          // PENDING at the attempt limit is terminal for this worker: the claim
-          // query never selects it again, and it stays visible to the operator
-          // endpoint and the pending gauge.
-          log.error("payment_refund_exhausted", {
-            paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
-            attempts,
-            error: message,
-          });
-        } else {
-          log.warn("payment_refund_attempt_failed", {
-            paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
-            attempts,
-            retryInMs: backoff,
-            error: message,
-          });
-        }
-        continue;
-      }
+      const result = await runClaimed({
+        policy: this.retry,
+        attemptsSoFar: ledger.refundAttempts,
+        nowMs: now,
+        call: () => sendRefund(executor, requestOf(ledger)),
+        complete: (value) => this.store.completeRefundClaim(ledger.paymentKey, token, value.transaction),
+        fail: (failure, retry) =>
+          this.store.releaseRefundClaim(ledger.paymentKey, token, failure.reason, retry.nextAttemptAtMs),
+      });
 
-      try {
-        const changed = await this.store.completeRefundClaim(
-          ledger.paymentKey,
-          rowToken,
-          transaction,
-        );
-        if (changed) {
+      switch (result.kind) {
+        case "completed":
           refunded += 1;
           metrics
             .counter("sandbox_refunds_total", "Payment refund outcomes")
@@ -301,31 +315,78 @@ export class RefundWorker {
           log.info("payment_refunded", {
             paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
             amount: ledger.amount,
-            transaction,
+            transaction: result.value.transaction,
           });
-        } else {
-          // Reclaimed while this pass was sending. The new owner sends the same
-          // key and the provider returns this transaction, so no second transfer.
+          break;
+
+        case "unknown":
+          // No release: the row stays SENDING, and the lease makes it due again.
+          // Retrying with the same key is what the provider dedupes.
+          unknown += 1;
+          metrics
+            .counter("sandbox_refund_worker_total", "Refund worker attempts by result")
+            .inc({ result: "unknown" });
+          log.warn("payment_refund_outcome_unknown", {
+            paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
+            error: result.failure.reason,
+          });
+          break;
+
+        case "record_failed":
+          // The send happened but recording it did not. Leaving the row SENDING
+          // is correct: the reclaim resends with the same key and the provider
+          // answers with the original transaction.
+          unknown += 1;
+          metrics
+            .counter("sandbox_refund_worker_total", "Refund worker attempts by result")
+            .inc({ result: "unknown" });
+          log.error("payment_refund_record_failed", {
+            paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
+            error: result.failure.reason,
+          });
+          break;
+
+        case "refused": {
+          const { attempts, exhausted: finalAttempt } = result.retry;
+          if (finalAttempt) exhausted += 1;
+          else failed += 1;
+          metrics
+            .counter("sandbox_refund_worker_total", "Refund worker attempts by result")
+            .inc({ result: finalAttempt ? "exhausted" : "failed" });
+          if (finalAttempt) {
+            // PENDING at the attempt limit is terminal for this worker: the
+            // claim query never selects it again, and it stays visible to the
+            // operator endpoint and the pending gauge.
+            log.error("payment_refund_exhausted", {
+              paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
+              attempts,
+              error: result.failure.reason,
+            });
+          } else {
+            log.warn("payment_refund_attempt_failed", {
+              paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
+              attempts,
+              retryInMs: result.retry.nextAttemptAtMs - now,
+              error: result.failure.reason,
+            });
+          }
+          break;
+        }
+
+        case "claim_lost":
+          // Reclaimed while this pass was sending or releasing. The new owner
+          // sends the same key, so the provider returns the original
+          // transaction; this pass must not count anything, and must not count
+          // an attempt it did not record.
           metrics
             .counter("sandbox_refund_worker_total", "Refund worker attempts by result")
             .inc({ result: "claim_lost" });
           log.warn("payment_refund_claim_lost", {
             paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
-            transaction,
+            ...(result.stage === "complete" ? { transaction: result.value.transaction } : {}),
+            ...(result.stage === "fail" ? { error: result.failure.reason } : {}),
           });
-        }
-      } catch (err) {
-        // The send happened but recording it did not. Leaving the row SENDING is
-        // correct: the reclaim resends with the same key and the provider answers
-        // with the original transaction.
-        unknown += 1;
-        metrics
-          .counter("sandbox_refund_worker_total", "Refund worker attempts by result")
-          .inc({ result: "unknown" });
-        log.error("payment_refund_record_failed", {
-          paymentKeyPrefix: ledger.paymentKey.slice(0, 12),
-          error: (err as Error).message,
-        });
+          break;
       }
     }
 
@@ -338,10 +399,6 @@ export class RefundWorker {
       reclaimed,
       skipped: false,
     };
-  }
-
-  private backoffFor(attempts: number): number {
-    return Math.min(this.retryMaxMs, this.opts.retryBaseMs * 2 ** attempts);
   }
 }
 
@@ -357,6 +414,6 @@ function requestOf(row: PaymentLedgerRecord): RefundRequest {
     reason: row.reason,
     // The claim writes this column; the fallback is the same value, so a row
     // that predates the column still presents a stable key.
-    idempotencyKey: row.refundIdempotencyKey ?? `refund:${row.paymentKey}`,
+    idempotencyKey: row.refundIdempotencyKey ?? refundKey(row.paymentKey).value,
   };
 }

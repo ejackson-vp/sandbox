@@ -12,7 +12,9 @@
  * is a single statement: a `FOR UPDATE SKIP LOCKED` sub-select picks the rows,
  * and the outer UPDATE fences them with one fresh token. Two workers running it
  * concurrently get disjoint sets, and neither waits behind the other (see
- * `claimRefunds`).
+ * `claimRefunds`). The rule it implements is the shared durable-call contract
+ * (ADR 0011): the arithmetic lives in `shared/src/durable/claim.ts`, and this
+ * adapter only compares the cutoff it is given.
  */
 import {
   mapIntent,
@@ -24,6 +26,7 @@ import {
   type RefundClaimRequest,
   type UnclaimedLedgerEntry,
 } from "../models.js";
+import { keyPrefix, type ClaimToken } from "@x402s/shared/durable";
 import type { PgConnection } from "./pg.js";
 
 export class PgLedgerRepository {
@@ -122,6 +125,9 @@ export class PgLedgerRepository {
    *
    * A `REFUND_SENDING` row with no `refund_claimed_at` is treated as due: a row
    * that somehow lost its timestamp must not be stuck forever.
+   *
+   * The prefix is a parameter rather than a literal so the key here and
+   * `shared/src/durable/keys.ts:refundKey` cannot drift apart.
    */
   async claimRefunds(request: RefundClaimRequest): Promise<ClaimedRefund[]> {
     const res = await this.conn.write(
@@ -143,7 +149,7 @@ export class PgLedgerRepository {
           SET status = 'REFUND_SENDING',
               refund_claim_token = $5,
               refund_claimed_at = $1,
-              refund_idempotency_key = COALESCE(l.refund_idempotency_key, 'refund:' || l.payment_key),
+              refund_idempotency_key = COALESCE(l.refund_idempotency_key, $6 || l.payment_key),
               updated_at = $1
          FROM due
         WHERE l.payment_key = due.payment_key
@@ -154,6 +160,7 @@ export class PgLedgerRepository {
         request.limit,
         request.maxAttempts,
         request.claimToken,
+        keyPrefix("refund"),
       ],
     );
     return res.rows.map((row) => ({
@@ -169,7 +176,7 @@ export class PgLedgerRepository {
    */
   async completeRefundClaim(
     paymentKey: string,
-    claimToken: string,
+    claimToken: ClaimToken,
     transaction: string,
   ): Promise<boolean> {
     const res = await this.conn.write(
@@ -189,7 +196,7 @@ export class PgLedgerRepository {
    */
   async releaseRefundClaim(
     paymentKey: string,
-    claimToken: string,
+    claimToken: ClaimToken,
     error: string,
     nextAttemptAt: number,
   ): Promise<boolean> {

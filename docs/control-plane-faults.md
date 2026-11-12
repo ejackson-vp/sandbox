@@ -274,7 +274,7 @@ supervisor exited with its link, the Pod went terminal, and the reconciler faile
 the session with `failure:guest_exited`. A `READY` session had already been paid
 for, so the customer lost the remaining lease.
 
-Now the guest reconnects (ADR 0011), and the controller treats a relay generation
+Now the guest reconnects (ADR 0012), and the controller treats a relay generation
 change as a recovery boundary:
 
 - the in-flight request becomes `outcome_unknown` and `sessions.exec_epoch` is
@@ -480,13 +480,13 @@ it:
    discarded). The guest keeps its own high-water mark as defence in depth, so
    a request forwarded by the previous controller generation can never start
    after recovery. A reset is a real link loss: the supervisor aborts the
-   command the link was carrying and reconnects (ADR 0011), so the session keeps
+   command the link was carrying and reconnects (ADR 0012), so the session keeps
    its lease and the withdrawn frame never starts.
 3. The guest reports its active request id and epoch on hello, when it takes the
    single slot, and when it releases it. `OperationFence` releases the gate only
    when the relay reports the guest idle, or when no guest is connected and the
    session was not fenced by a relay loss. A guest that lost its relay link is
-   expected back (ADR 0011), so its gate waits for the reconnected guest's idle
+   expected back (ADR 0012), so its gate waits for the reconnected guest's idle
    report. A connected guest that has never reported status keeps the gate
    closed: failing closed is the contract.
 4. `GET /requests/{id}` returns `409 outcome_unknown` for a fenced request; an

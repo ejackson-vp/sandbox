@@ -101,7 +101,7 @@ An encrypted RPC switch, not a proxy or a tunnel:
 - a registration is in memory and belongs to one relay process, so a restart
   drops it. The controller re-registers a `READY`/`ACTIVE` session on the new
   generation with the token hash it already has, and the guest reconnects to
-  the same registration (`docs/adr/0011-guest-reconnects-after-relay-loss.md`),
+  the same registration (`docs/adr/0012-guest-reconnects-after-relay-loss.md`),
 - frames: `request`/`cancel`/`shutdown` down, `response`/`error` up,
 - correlates opaque envelopes by id, caches responses for 5 minutes,
 - rejects >8 pending requests per session and >24 MiB frames,
