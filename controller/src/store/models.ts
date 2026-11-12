@@ -2,6 +2,7 @@
  * Persistence models and row mappers. Kept free of any SQL client so the
  * controller and tests can share the shapes.
  */
+import type { ClaimToken } from "@x402s/shared/durable";
 import { DEFAULT_RUNTIME, type RuntimeName } from "@x402s/shared/runtimes";
 import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared/protocol";
 
@@ -161,15 +162,16 @@ export interface RefundClaimRequest {
   nowMs: number;
   /**
    * A `REFUND_SENDING` row claimed at or before this instant has an expired
-   * lease and is due again. The caller computes it as `now - leaseMs`, so the
-   * lease policy lives with the worker and the store only compares timestamps.
+   * lease and is due again. The caller computes it with
+   * `@x402s/shared/durable:leaseCutoffMs`, so the lease policy lives with the
+   * worker and the store only compares timestamps.
    */
   leaseCutoffMs: number;
   limit: number;
   /** Rows at or above this many attempts are never claimed again. */
   maxAttempts: number;
-  /** Fence written onto every row this pass claims. */
-  claimToken: string;
+  /** Fence written onto every row this pass claims (ADR 0011). */
+  claimToken: ClaimToken;
 }
 
 export interface PaymentLedgerRecord {

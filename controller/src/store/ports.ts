@@ -14,6 +14,7 @@ import type {
   StoreHealth,
 } from "./models.js";
 import type { ReservationStore } from "../capacity/reservation-store.js";
+import type { ClaimToken } from "@x402s/shared/durable";
 import type { BudgetDecision, BudgetLimits } from "./budget-decision.js";
 
 /**
@@ -164,11 +165,11 @@ export interface RefundWorkerStore {
    */
   claimRefunds(request: RefundClaimRequest): Promise<ClaimedRefund[]>;
   /** Provider paid: SENDING -> REFUNDED, only for the claim owner. */
-  completeRefundClaim(paymentKey: string, claimToken: string, transaction: string): Promise<boolean>;
+  completeRefundClaim(paymentKey: string, claimToken: ClaimToken, transaction: string): Promise<boolean>;
   /** Provider declined: SENDING -> PENDING with one failed attempt counted. */
   releaseRefundClaim(
     paymentKey: string,
-    claimToken: string,
+    claimToken: ClaimToken,
     error: string,
     nextAttemptAt: number,
   ): Promise<boolean>;

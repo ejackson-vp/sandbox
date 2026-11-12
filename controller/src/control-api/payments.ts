@@ -4,6 +4,7 @@ import { resolveSessionSpec, specHash as computeSpecHash } from "@x402s/shared/p
 import type { PaymentIntentStatus, SessionSpec, SessionState } from "@x402s/shared/protocol";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { log, metrics } from "@x402s/shared/runtime";
+import { isHeldBy } from "@x402s/shared/durable";
 import {
   DuplicateEntitlementError,
   PaymentAlreadyRedeemedError,
@@ -106,8 +107,8 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     }
     // Early fence: never spend capacity or validate a spec for an owner whose
     // claim was already reclaimed. The store re-checks inside the settlement
-    // transaction, which is what actually makes this safe.
-    if (intent.status !== "claimed" || intent.claimToken === null || intent.claimToken !== body.claimToken) {
+    // transaction with the same predicate, which is what makes this safe.
+    if (intent.status !== "claimed" || !isHeldBy(intent.claimToken, body.claimToken)) {
       res.status(409).json({ error: "stale_claim", message: "this intent is not held by the presented claim" });
       return;
     }

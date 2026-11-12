@@ -35,6 +35,10 @@
     "./ip": {
       "types": "./dist/entries/ip.d.ts",
       "default": "./dist/entries/ip.js"
+    },
+    "./durable": {
+      "types": "./dist/entries/durable.d.ts",
+      "default": "./dist/entries/durable.js"
     }
   },
   "scripts": {

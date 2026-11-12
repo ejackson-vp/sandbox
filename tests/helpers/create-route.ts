@@ -89,11 +89,18 @@ interface CreateResult {
  * Post a paid create with a valid header and commitment. `patch` runs before
  * the handler is built so a test can change one controller answer or one body
  * field without rebuilding the harness. `opts.settlementLookup` replaces the
- * inert default when a test exercises the recovery path.
+ * inert default when a test exercises the recovery path, and `opts.resourceServer`
+ * replaces the inert stub when a test exercises verify/settle.
  */
 export async function postCreate(
   patch: (ctx: { controller: ControllerStub; body: Record<string, unknown> }) => void = () => undefined,
-  opts: { settlementLookup?: SettlementLookup } = {},
+  opts: {
+    settlementLookup?: SettlementLookup;
+    resourceServer?: {
+      verifyPayment?: (...args: unknown[]) => Promise<unknown>;
+      settlePayment?: (...args: unknown[]) => Promise<unknown>;
+    };
+  } = {},
 ): Promise<CreateResult> {
   const account = privateKeyToAccount(generatePrivateKey());
   const controller = admittingController();
@@ -161,7 +168,7 @@ export async function postCreate(
       intentStaleMs: 30_000,
     },
     controller,
-    resourceServer: {},
+    resourceServer: opts.resourceServer ?? {},
     settlementLookup: opts.settlementLookup ?? { supported: false, lookup: async () => null },
     requirementFor: async () => REQUIREMENT,
     payment402,

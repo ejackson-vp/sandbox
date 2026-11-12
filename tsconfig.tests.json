@@ -29,6 +29,7 @@
       "@x402s/shared/runtime": ["./shared/src/entries/runtime.ts"],
       "@x402s/shared/env": ["./shared/src/entries/env.ts"],
       "@x402s/shared/ip": ["./shared/src/entries/ip.ts"],
+      "@x402s/shared/durable": ["./shared/src/entries/durable.ts"],
       "@x402s/sdk": ["./sdk/src/index.ts"]
     }
   },

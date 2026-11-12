@@ -23,6 +23,7 @@ import {
   paymentAuthorizer,
 } from "@x402s/shared/crypto";
 import { PAYMENT_VERSION, paymentKey } from "@x402s/shared/payment";
+import { classifyThrown, settlementKey, toFailure } from "@x402s/shared/durable";
 import type { CreateSessionRequest, SessionSpec } from "@x402s/shared/protocol";
 import {
   LATENCY_BUCKETS,
@@ -352,6 +353,37 @@ export async function claimPaymentIntent(
 }
 
 /**
+ * Facilitator error reasons that mean "we do not know", never "we refused".
+ *
+ * `settlement_pending` is the x402 mechanism reporting that it broadcast a
+ * transaction and could not confirm it: a transfer may exist, so the attempt
+ * must not be recorded as a definite failure (ADR 0011).
+ */
+const AMBIGUOUS_SETTLE_REASONS: ReadonlySet<string> = new Set(["settlement_pending", "settlement_timeout"]);
+
+function settleVerdict(errorReason: string | undefined): "definite_failure" | "unknown" {
+  return errorReason !== undefined && AMBIGUOUS_SETTLE_REASONS.has(errorReason)
+    ? "unknown"
+    : "definite_failure";
+}
+
+/**
+ * An unknown settlement is not a failure. With a settlement lookup the intent
+ * stays `claimed`, which is what lets `SettlementRecovery` ask the facilitator
+ * whether the payment settled and record the debt if it did. Without a lookup
+ * nothing could ever resolve it, so the intent is failed exactly as before: a
+ * terminal row an operator can see beats a claim that ages out into nothing.
+ */
+async function deferUnknownSettlement(
+  deps: CreateSessionUseCaseDeps,
+  key: string,
+  reason: string,
+): Promise<void> {
+  if (deps.settlementLookup.supported) return;
+  await deps.controller.failIntent(key, reason).catch(() => undefined);
+}
+
+/**
  * Verify, check the controller is up, then settle. A settlement failure keeps
  * the capacity hold until its TTL so recovery cannot over-allocate.
  *
@@ -408,10 +440,19 @@ export async function verifyAndSettle(
       .histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS)
       .observe(timings.settleMs / 1000);
   } catch (err) {
-    // Settlement may have succeeded even though the call failed. Keep the
-    // hold until its TTL so recovery cannot over-allocate capacity.
-    log.warn("payment_settle_error", { error: (err as Error).message });
-    await deps.controller.failIntent(key, "settle_error").catch(() => undefined);
+    // The facilitator may have submitted the transfer before the answer was
+    // lost. A thrown settle is `unknown`, never a refusal (ADR 0011), so it is
+    // not recorded as a failed attempt and the intent is not failed while a
+    // settlement lookup can still resolve it. Keep the hold until its TTL so
+    // recovery cannot over-allocate capacity.
+    const failure = toFailure(err);
+    log.warn("payment_settle_error", {
+      paymentKeyPrefix: key.slice(0, 12),
+      operation: settlementKey(key).kind,
+      outcome: classifyThrown(err).kind,
+      error: failure.reason,
+    });
+    await deferUnknownSettlement(deps, key, "settle_error");
     return { ok: false, result: paymentRequired(requirement, "payment_settle_failed") };
   }
 
@@ -428,6 +469,18 @@ export async function verifyAndSettle(
       } catch {
         /* fall through */
       }
+    }
+    // The facilitator answered, but an answer that says "broadcast, not yet
+    // confirmed" is not a refusal. Same rule as a thrown call: keep the intent
+    // claimed for recovery and the hold until its TTL.
+    if (settleVerdict(settle.errorReason) === "unknown") {
+      log.warn("payment_settle_unknown", {
+        paymentKeyPrefix: key.slice(0, 12),
+        operation: settlementKey(key).kind,
+        reason: settle.errorReason,
+      });
+      await deferUnknownSettlement(deps, key, settle.errorReason ?? "settlement_pending");
+      return { ok: false, result: paymentRequired(requirement, "payment_settle_failed") };
     }
     await deps.controller.failIntent(key, settle.errorReason ?? "settlement_rejected").catch(() => undefined);
     await deps.controller.releaseCapacity(key);

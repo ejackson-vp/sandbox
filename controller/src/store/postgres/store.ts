@@ -31,6 +31,7 @@ import {
 } from "../models.js";
 import { boundedFailureReason } from "../failure-reasons.js";
 import type { BudgetDecision, BudgetLimits } from "../budget-decision.js";
+import type { ClaimToken } from "@x402s/shared/durable";
 import type { ReservationStore } from "../../capacity/reservation-store.js";
 import type { StoreBackend } from "../backend.js";
 import { migratePostgres } from "./schema.js";
@@ -238,13 +239,13 @@ export class PostgresStore implements StoreBackend {
     return this.ledgerRepo.claimRefunds(request);
   }
 
-  completeRefundClaim(paymentKey: string, claimToken: string, transaction: string): Promise<boolean> {
+  completeRefundClaim(paymentKey: string, claimToken: ClaimToken, transaction: string): Promise<boolean> {
     return this.ledgerRepo.completeRefundClaim(paymentKey, claimToken, transaction);
   }
 
   releaseRefundClaim(
     paymentKey: string,
-    claimToken: string,
+    claimToken: ClaimToken,
     error: string,
     nextAttemptAt: number,
   ): Promise<boolean> {
