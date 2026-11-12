@@ -24,8 +24,8 @@ import {
 import { createRelay, type RelayServer, type RelayTlsOptions } from "../../controller/src/relay.js";
 import { RelayClient, type RelayClientTlsOptions } from "../../controller/src/relay-client.js";
 
-export const DEV_SEED = "qSgP+dPwGhb/58O0ZD/dSqCMovhhWNIQbT3MeTD35WY=";
-export const DEV_KEY_ID = "x402-dev-attestation-key-INSECURE-DEV-ONLY";
+const DEV_SEED = "qSgP+dPwGhb/58O0ZD/dSqCMovhhWNIQbT3MeTD35WY=";
+const DEV_KEY_ID = "x402-dev-attestation-key-INSECURE-DEV-ONLY";
 
 /**
  * The successful result shape for one operation verb.
@@ -61,7 +61,7 @@ function processState(pid: number): string {
   }
 }
 
-export interface GuestOptions {
+interface GuestOptions {
   port: number;
   /**
    * When set, the control routes move to an mTLS listener on `controlPort` and

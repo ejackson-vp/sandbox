@@ -27,7 +27,7 @@ export interface ContractBackend {
 
 const MiB = 1024 * 1024;
 
-export const LIMITS = {
+const LIMITS = {
   cpuMillis: 1000,
   memoryMiB: 1024,
   diskMiB: 1024,
