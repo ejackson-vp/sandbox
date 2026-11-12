@@ -326,6 +326,35 @@ export function describeStoreContract(backend: ContractBackend): void {
       expect(active[0]!.paymentKey).toBe(KEY_A);
     });
 
+    it("renews a live hold without resizing it", async () => {
+      const snapshot = capacitySnapshot();
+      const first = await store.reservations.admit(snapshot, RESOURCE_REQUEST, {
+        paymentKey: KEY_A,
+        specHash: "4".repeat(64),
+        state: "HELD",
+      });
+      expect(first.admitted).toBe(true);
+
+      // A retry of the same identity cannot shrink (or grow) what capacity
+      // accounting already sold; the held vectors win over the retry's hints.
+      const smaller = {
+        ...RESOURCE_REQUEST,
+        baseline: { ...RESOURCE_REQUEST.baseline, cpuMillicores: 1 },
+        peak: { ...RESOURCE_REQUEST.peak, cpuMillicores: 1 },
+      };
+      const renewed = await store.reservations.admit(snapshot, smaller, {
+        paymentKey: KEY_A,
+        specHash: "4".repeat(64),
+        state: "HELD",
+      });
+      expect(renewed.admitted).toBe(true);
+      if (!renewed.admitted) return;
+      expect(renewed.reservation.baseline.cpuMillicores).toBe(
+        RESOURCE_REQUEST.baseline.cpuMillicores,
+      );
+      expect(renewed.reservation.peak.cpuMillicores).toBe(RESOURCE_REQUEST.peak.cpuMillicores);
+    });
+
     it("refuses writes while this process is not the writer", async () => {
       await store.setWritesBlocked(true);
       try {

@@ -92,6 +92,40 @@ export class PgReservationRepository implements ReservationStore {
     );
   }
 
+  /**
+   * Extend a live hold without changing its resources. A renew is a retry of
+   * the same identity, so the vectors already sold to capacity accounting stay,
+   * not the retry's hints. SQLite does the same in `renewHold`.
+   */
+  private async renewHeld(
+    tx: Tx,
+    held: ReservationRecord,
+    expiresAt: number | null,
+    now: number,
+    specHash: string | null,
+  ): Promise<void> {
+    await tx.query(
+      `UPDATE reservations
+          SET spec_hash = $1, node_id = $2, state = 'HELD', baseline_cpu_millis = $3,
+              baseline_memory_bytes = $4, baseline_storage_bytes = $5, peak_cpu_millis = $6,
+              peak_memory_bytes = $7, peak_storage_bytes = $8, expires_at = $9, updated_at = $10
+        WHERE id = $11`,
+      [
+        specHash,
+        held.nodeId,
+        held.baseline.cpuMillicores,
+        held.baseline.memoryBytes,
+        held.baseline.storageBytes,
+        held.peak.cpuMillicores,
+        held.peak.memoryBytes,
+        held.peak.storageBytes,
+        expiresAt,
+        now,
+        held.id,
+      ],
+    );
+  }
+
   private async attach(
     tx: Tx,
     id: string,
@@ -150,15 +184,7 @@ export class PgReservationRepository implements ReservationStore {
       }
       case "renew": {
         const held = plan.outcome.existing;
-        await this.updateHeld(
-          tx,
-          held.id,
-          request,
-          held.nodeId,
-          now,
-          plan.outcome.expiresAt,
-          held.specHash ?? opts.specHash ?? null,
-        );
+        await this.renewHeld(tx, held, plan.outcome.expiresAt, now, held.specHash ?? opts.specHash ?? null);
         const refreshed = await this.findExisting(tx, opts);
         if (refreshed) return { admitted: true, reservation: refreshed };
         break;
