@@ -9,7 +9,7 @@ import {
 import { clientCommitmentMessage } from "../../shared/src/entries/crypto.js";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
-export function createMockPayingClient(account = privateKeyToAccount(generatePrivateKey())) {
+function createMockPayingClient(account = privateKeyToAccount(generatePrivateKey())) {
   const client = x402Client.fromConfig({
     schemes: [{ network: MOCK_NETWORK, client: new MockExactClientScheme(account) }],
     spendControls: false,
@@ -18,7 +18,7 @@ export function createMockPayingClient(account = privateKeyToAccount(generatePri
   return { client, http, account, address: account.address };
 }
 
-export interface PaymentChallenge {
+interface PaymentChallenge {
   paymentRequired: unknown;
   requirement: {
     scheme: string;
@@ -106,7 +106,7 @@ export async function createSessionPayment(
  * placeholder: a test that signs a commitment without the server's nonce is
  * testing a protocol the server no longer speaks.
  */
-export function challengeNonceOf(challenge: PaymentChallenge): string {
+function challengeNonceOf(challenge: PaymentChallenge): string {
   const nonce = challenge.requirement.extra["challengeNonce"];
   if (typeof nonce !== "string" || !/^cn_[0-9a-f]{32}$/.test(nonce)) {
     throw new Error("challenge carries no challengeNonce; #47 is not active on this server");

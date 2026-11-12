@@ -26,7 +26,7 @@ import { createSessionHandler } from "../../api/src/routes/create-session.js";
 
 export const CHALLENGE_NONCE = `cn_${"a".repeat(32)}`;
 
-export const REQUIREMENT = {
+const REQUIREMENT = {
   scheme: "exact",
   network: MOCK_NETWORK,
   asset: "mock:usdc",
@@ -37,7 +37,7 @@ export const REQUIREMENT = {
 };
 
 /** Everything the handler may call on the controller, defaulted to "admit". */
-export interface ControllerStub {
+interface ControllerStub {
   preflightCapacity: ReturnType<typeof vi.fn>;
   holdCapacity: ReturnType<typeof vi.fn>;
   claimIntent: ReturnType<typeof vi.fn>;
@@ -51,7 +51,7 @@ export interface ControllerStub {
   healthz: ReturnType<typeof vi.fn>;
 }
 
-export function admittingController(): ControllerStub {
+function admittingController(): ControllerStub {
   return {
     preflightCapacity: vi.fn(async () => ({ admitted: true as const, reservationId: "r" })),
     holdCapacity: vi.fn(async () => ({ admitted: true as const, nodeId: "n", reservation: { nodeId: "n" } })),
@@ -77,7 +77,7 @@ export function admittingController(): ControllerStub {
   };
 }
 
-export interface CreateResult {
+interface CreateResult {
   status: number;
   body: { error?: string; [key: string]: unknown };
   controller: ControllerStub;

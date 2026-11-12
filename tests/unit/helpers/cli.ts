@@ -88,7 +88,7 @@ export function fileEntry(overrides: Partial<FileEntry> = {}): FileEntry {
   return { path: "a.txt", size: 5, mode: 0o644, isDir: false, mtimeMs: 0, ...overrides };
 }
 
-export function putResult(path: string, data: Uint8Array): FilePutResult {
+function putResult(path: string, data: Uint8Array): FilePutResult {
   return { ...base, ok: true, op: "file.put", path, bytesWritten: data.byteLength, filesWritten: 1 };
 }
 
@@ -107,7 +107,7 @@ export function listResult(path: string, entries: FileEntry[]): FileListResult {
   };
 }
 
-export function statResult(entry: FileEntry): FileStatResult {
+function statResult(entry: FileEntry): FileStatResult {
   return { ...base, ok: true, op: "file.stat", entry };
 }
 

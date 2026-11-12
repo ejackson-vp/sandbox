@@ -20,7 +20,7 @@ export const digestBase = `sha256:${"a".repeat(64)}`;
 export const digestPython = `sha256:${"b".repeat(64)}`;
 export const digestNode = `sha256:${"c".repeat(64)}`;
 
-export const PROFILE_CATALOG = {
+const PROFILE_CATALOG = {
   python: { image: "ghcr.io/example/guest:0.1.0-python", digest: digestPython },
   node: { image: "ghcr.io/example/guest:0.1.0-node", digest: digestNode },
 };
@@ -43,7 +43,7 @@ export function config(extra: NodeJS.ProcessEnv = {}): ControllerConfig {
   });
 }
 
-export interface WarmHarness {
+interface WarmHarness {
   cfg: ControllerConfig;
   manager: WarmPoolManager;
   /** Live warm pods, mutated by deletes and creates. */
@@ -58,7 +58,7 @@ export interface WarmHarness {
   reconcile(): Promise<void>;
 }
 
-export interface HarnessOptions {
+interface HarnessOptions {
   env?: NodeJS.ProcessEnv;
   /** Start the fake clock well past the idle grace so pools look idle. */
   startAt?: number;

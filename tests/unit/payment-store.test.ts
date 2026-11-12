@@ -28,6 +28,7 @@ import { RefundService } from "../../controller/src/refunds.js";
 import { newOpaqueToken } from "../../controller/src/secrets.js";
 import { mintProxyToken, verifyProxyToken } from "../../controller/src/tokens.js";
 import { extractProxyToken, parseAuthority } from "../../controller/src/egress-proxy.js";
+import { limitsFor, paymentFixture, sessionFixture } from "../helpers/store-fixtures.js";
 
 class MemoryNonceStore implements MockNonceStore {
   readonly nonces = new Set<string>();
@@ -59,76 +60,29 @@ function facilitator(store = new MemoryNonceStore()) {
   return { scheme, store };
 }
 
-const limits: SessionLimits = {
-  cpuMillis: 1000,
-  memoryMiB: 1024,
-  diskMiB: 1024,
-  maxOutputBytes: 262144,
-  maxFileBytes: 8 * 1024 * 1024,
-  maxCommandSeconds: 300,
-  maxProcesses: 256,
-};
+const limits: SessionLimits = limitsFor("unit");
 
 const spec: SessionSpec = { tier: "standard", durationSeconds: 300, limits, runtime: "base" };
 
 function sessionRecord(id: string, key: string): SessionRecord {
-  const now = Date.now();
-  return {
+  return sessionFixture({
     id,
-    capabilityHash: "a".repeat(64),
-    capabilityExpiresAt: now + 3_600_000,
+    paymentKey: key,
     clientPublicKey: "pk",
     clientNonce: "nonce",
     tier: "standard",
     durationSeconds: 300,
     limits,
-    state: "PAID",
-    createdAt: now,
-    paidAt: now,
-    readyAt: null,
-    leaseExpiresAt: null,
-    terminatingAt: null,
-    destroyedAt: null,
-    terminationReason: null,
-    failureCode: null,
-    failureMessage: null,
-    attestationJson: null,
-    guestPublicKey: null,
-    paymentKey: key,
-    podName: null,
-    runtimeClass: "x402-sandbox",
-    executionMode: "dev",
-    relayTokenHash: null,
-    activeRequestId: null,
-    execEpoch: 1,
-    relayPurgedAt: null,
-    destroyRequested: 0,
-    timingsJson: null,
-    idlePolicyJson: null,
-    maxLifetimeSeconds: null,
-    suspendedAt: null,
-    resumeCount: 0,
-    lastActivityAt: null,
-    workspacePvc: null,
-    baselineCpuMillis: null,
-    baselineMemoryMib: null,
-    nodeName: null,
-    updatedAt: now,
-  };
+  });
 }
 
 function paymentRecord(key: string): PaymentRecord {
-  return {
+  return paymentFixture({
     paymentKey: key,
     network: MOCK_NETWORK,
-    scheme: "exact",
-    asset: "mock:usdc",
-    amount: "50000",
-    payTo: requirements.payTo,
     payer: "0x0000000000000000000000000000000000000001",
     transaction: "mock:tx",
-    mode: "mock",
-  };
+  });
 }
 
 /** Claim then complete, as the API does. */

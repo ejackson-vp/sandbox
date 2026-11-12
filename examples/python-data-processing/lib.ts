@@ -1,5 +1,5 @@
-export const CATEGORIES = ["alpha", "beta", "gamma", "delta", "epsilon"];
-export const FILTER = 500;
+const CATEGORIES = ["alpha", "beta", "gamma", "delta", "epsilon"];
+const FILTER = 500;
 
 export interface Summary {
   rows: number;
