@@ -152,7 +152,7 @@ test-workloads:
 # Suites CI used to skip: transfer protocol, workload fixtures, browser
 # compatibility (skips without its image). No cluster or guest binary needed.
 test-portable:
-	npx vitest run tests/transfers tests/workloads tests/compatibility
+	npm run test:portable
 
 demo-sse:
 	npx tsx scripts/sse-demo.ts
@@ -172,7 +172,7 @@ fmt:
 test: test-unit test-integration
 
 test-unit:
-	npx vitest run tests/unit
+	npm run test:unit
 
 test-integration: cli guest
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest npx vitest run tests/integration
@@ -193,7 +193,7 @@ lint-structure:
 	npm run lint:structure
 
 test-property:
-	npx vitest run tests/property
+	npm run test:property
 
 # The guest's own suite. Without it a guard in guest/internal/files or the
 # envelope parser can be removed with every TypeScript gate still green.
@@ -205,11 +205,14 @@ vet-go:
 	cd guest && go vet ./...
 	@out=$$(cd guest && gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
-# Markdown lint always; link check when lychee is installed (CI always runs it).
+# Mirrors .github/workflows/docs.yml: same glob set, same lychee flags. The
+# local target used to lint a smaller set and skip fragment checks, so a broken
+# anchor could pass here and fail in CI.
 docs-check:
-	npx --yes markdownlint-cli2 "*.md" "docs/**/*.md"
+	npx --yes markdownlint-cli2 "*.md" "docs/**/*.md" "deploy/**/*.md" "security-review/**/*.md" ".github/**/*.md"
 	@if command -v lychee >/dev/null 2>&1; then \
-		lychee --offline --no-progress --exclude-path node_modules "*.md" "docs/**/*.md"; \
+		lychee --offline --no-progress --include-fragments --exclude-path node_modules \
+			"*.md" "docs/**/*.md" "deploy/**/*.md" "security-review/**/*.md"; \
 	else \
 		echo "lychee not installed: skipping link check (CI runs it)"; \
 	fi

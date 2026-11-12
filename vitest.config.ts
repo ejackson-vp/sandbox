@@ -43,6 +43,14 @@ export default defineConfig({
         "cli/src/**/*.ts",
       ],
       exclude: ["**/*.d.ts", "**/*.test.ts"],
+      // A floor under the badge, so a drop fails the build instead of only
+      // shrinking a number nobody watches. Set ~4 points below the current
+      // totals (59.4 / 52.6 / 53.2) to leave room for normal movement.
+      thresholds: {
+        lines: 55,
+        branches: 45,
+        functions: 45,
+      },
     },
   },
 });

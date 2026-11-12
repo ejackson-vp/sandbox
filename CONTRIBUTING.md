@@ -4,10 +4,33 @@
 
 ```bash
 npm ci
-make verify         # build, typecheck, structure lint, unit + property, go tests
+npm test            # unit + property, no cluster or guest binary
+make verify         # build, typecheck, structure lint, unit, property, portable, go tests
 make test           # adds integration tests against the real guest binary
-npm run test:coverage   # unit + property under coverage (CI badge source)
+npm run test:coverage   # unit + property under coverage (CI badge and floor source)
 ```
+
+Each command, and what it deliberately leaves out:
+
+| Command | Covers |
+| --- | --- |
+| `npm test` | `tests/unit` and `tests/property` with `--fileParallelism`. Fast, hermetic, the same set the badge measures. |
+| `npm run test:unit` | `tests/unit`: store, controller, API and CLI behaviour on SQLite. |
+| `npm run test:property` | `tests/property`: `fast-check` invariants. |
+| `npm run test:portable` | `tests/transfers`, `tests/workloads`, `tests/compatibility`. No cluster; the browser case skips without its image. |
+| `make verify` | Build, typecheck, structure lint, unit, property, portable, `go test`, `go vet`. What a reviewer runs. |
+| `make test` | `tests/unit` plus `tests/integration` against a real guest binary. Needs `make guest` first. |
+| `make security-test` | `tests/security`. Needs a kind cluster with Cilium (`make up`). |
+
+`npm test` deliberately excludes `tests/integration` and `tests/security`: both
+need a guest binary or a live cluster, so including them is what made `npm test`
+fail on a fresh clone. `fileParallelism` is opt-in per script for the same
+reason: the global default in `vitest.config.ts` stays serial because the
+integration suite SIGSTOPs a real guest process and the security suite drives
+real sockets, and running those files concurrently flakes (#128, #145). The unit
+and property files share no process, port or fixture, so they parallelise: 915
+tests in ~4 s instead of ~24 s, verified three times under
+`--sequence.shuffle`.
 
 Coverage covers the shipped TypeScript (`shared`, `sdk`, `api`, `controller`,
 `cli`), not tests or the Go guest. It measures the **unit and property** suites
@@ -15,8 +38,10 @@ only: integration runs once per push in its own CI job, and instrumenting a
 second concurrent copy of that timing-sensitive suite is what made #128 flake
 (#145). The lines only integration reaches, mostly the controller lifecycle and
 reconciler paths, are therefore not in the badge. CI publishes the number to the
-`badges` branch, which is what the README badge reads; there is no fixed
-threshold yet, so a drop shows up as a smaller badge rather than a red build.
+`badges` branch, which is what the README badge reads. `vitest.config.ts` also
+sets a floor of 55% lines / 45% branches / 45% functions, a few points under the
+current totals, so a real drop fails `npm run test:coverage` and the `unit` job
+instead of only shrinking a badge nobody watches.
 
 `npm run typecheck` also compiles `tests/` and `scripts/` through
 `tsconfig.tests.json`. Vitest strips types with esbuild and never checks them, so
@@ -124,8 +149,14 @@ fatal and is not retried. A retry is recorded in the job summary.
 Docs are part of the product surface, so they are linted in CI:
 
 ```bash
-make docs-check     # markdownlint, plus internal link check if lychee is installed
+make docs-check     # markdownlint + internal link check, same globs and flags as CI
 ```
+
+`make docs-check` mirrors `.github/workflows/docs.yml`: the same glob set
+(`*.md`, `docs/`, `deploy/`, `security-review/`, `.github/`) and the same lychee
+flags, `--offline --include-fragments`. Fragment checking matters: without it a
+link to a heading that was renamed passes locally and fails in CI. The link check
+is skipped with a notice when lychee is not installed.
 
 - Put a document in `docs/` and link it from [docs/README.md](docs/README.md).
   An unlinked doc is a dead end.
