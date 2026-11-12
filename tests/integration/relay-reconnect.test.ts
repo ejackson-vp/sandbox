@@ -82,6 +82,7 @@ function sessionRecord(
   key: string,
   clientPublicKey: string,
   clientNonce: string,
+  durationSeconds: number,
 ): SessionRecord {
   const now = Date.now();
   return {
@@ -92,7 +93,7 @@ function sessionRecord(
     clientNonce,
     clientSigner: null,
     tier: "custom",
-    durationSeconds: 180,
+    durationSeconds,
     limits,
     state: "PAID",
     createdAt: now,
@@ -181,7 +182,12 @@ async function startRelay(port: number): Promise<RelayServer> {
   return relay;
 }
 
-async function scenario(graceMs: number, suffix: string): Promise<Run> {
+async function scenario(
+  graceMs: number,
+  suffix: string,
+  opts: { leaseSeconds?: number } = {},
+): Promise<Run> {
+  const durationSeconds = opts.leaseSeconds ?? 180;
   const relayPort = testPort(18892);
   const controlPort = testPort(18893);
   const workDir = mkdtempSync(join(tmpdir(), "x402-relay-reconnect-"));
@@ -240,7 +246,7 @@ async function scenario(graceMs: number, suffix: string): Promise<Run> {
     paymentKey,
     claim.token,
     paymentRecord(paymentKey),
-    sessionRecord(sessionId, paymentKey, toBase64(clientKeys.publicKey), clientNonce),
+    sessionRecord(sessionId, paymentKey, toBase64(clientKeys.publicKey), clientNonce, durationSeconds),
   );
 
   reconciler.start();
@@ -469,5 +475,38 @@ describe("a relay restart does not kill a paid session", () => {
     // It delivered service (READY), so the refund policy, not this path, decides
     // compensation. The reason is the contract this test owns.
     expect(terminal!.readyAt).not.toBeNull();
+  }, 60_000);
+
+  it("keeps relay_lost inside a short lease, before the lease check, and refunds it", async () => {
+    // 5s lease, 60s grace: without the lease bound the lease would expire first
+    // and the session would end `lease_expired`, which the refund policy does
+    // not compensate even though the relay loss caused the interruption.
+    const run = await scenario(60_000, "shortlease", { leaseSeconds: 5 });
+    active.push(run);
+
+    expect(run.provisioner.signalPod(run.podName, "SIGSTOP")).toBe(true);
+    await run.restartRelay();
+
+    const terminal = await waitFor(
+      () => run.store.getSession(run.sessionId),
+      (session) => ["FAILED", "EXPIRED", "DESTROYED"].includes(session?.state ?? ""),
+      "short-lease session terminal",
+      30_000,
+    );
+    expect(terminal!.state).toBe("FAILED");
+    // The reason, not the lease, is what the refund policy keys on.
+    expect(terminal!.terminationReason).toBe("failure:relay_lost");
+    expect(terminal!.failureCode).toBe("relay_lost");
+    expect(terminal!.readyAt).not.toBeNull();
+
+    // The policy is on main now, so assert the real ledger, not the reason.
+    const ledger = await waitFor(
+      () => run.store.getLedgerBySession(run.sessionId),
+      (entry) => entry?.status === "REFUNDED",
+      "ledger refunded",
+      15_000,
+    );
+    expect(ledger!.status).toBe("REFUNDED");
+    expect(ledger!.refundTransaction ?? "").toMatch(/^mock:refund:/);
   }, 60_000);
 });

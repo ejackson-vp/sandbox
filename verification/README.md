@@ -58,7 +58,7 @@ sizing.
 |---|---|---|
 | Session lifecycle | `SOURCE_STATES`, `transition()` | `state` over the 12 states, one action per event, with the same source states and the same `hasPod`/`hasRelay`/`hasPvc` guards |
 | Payment intent | `claimPaymentIntent`, `completeEntitlement`, `recoverInterruptedOperations` | `intent`, `intentEpoch`, `settledTo`, `charges`; a claim is reclaimable only from an older controller epoch |
-| Ledger and refunds | `payment_ledger`, `RefundService` | `charges` (one row per key), `refund` in `none -> pending -> refunded`, set only for a terminal session that was never READY |
+| Ledger and refunds | `payment_ledger`, `RefundService` | `charges` (one row per key), `refund` in `none -> pending -> refunded`, set for a terminal session that was never READY, or for one ended by the relay-loss grace (`final = RELAY_LOST`) |
 | Operation slot | `claimOperation`, `finishOperation` | `slots` (controller gate) and `guest` (the guest's own gate), keyed by request id; `slotEpoch` is the epoch the gate was claimed in |
 | Execution-epoch fence | `recoverInterruptedOperations`, `recoverSessionOperation`, `listFencedSessions`, `clearFencedGate`, `OperationFence.reconcile`, `relay/registry.ts` `raiseEpoch`/`request`, `guest/supervisor.go` `admitEpoch`/`publishStatus` | `execEpoch`, `fence`, `fenceReq`, `guestStatus`, `guestEpoch`, `admittedEpoch`, `startGen`, `relayPending`: recovery (controller restart or relay restart) bumps the epoch and holds the gate; only `FenceRelease` clears it, on the reconnected guest's idle status or on a session with no registration left; the relay refuses and withdraws frames below `execEpoch`, and the guest rejects a frame below its own high-water |
 | Capacity reservation | `admit`, `attachToSession`, `resume`, `beginRelease`, `confirmRelease` | `reservations` over `NONE/ATTACHED/ALLOCATED/SUSPENDED/RELEASING/RELEASED`, plus `usedCompute` |
@@ -125,7 +125,7 @@ and `StaleEpoch` variants.
 | I11 | `ReadyImpliesPod` | `READY`/`ACTIVE`/`SUSPENDING` imply a recorded Pod. | The `guest_ready` invariant in the transition table. A relay registration is deliberately excluded: a relay restart drops it for as long as the reconnect takes, and `RelayGraceExpired` bounds that window. |
 | I12 | `SuspendedImpliesCheckpoint` | `SUSPENDED` implies a PVC, no Pod, no relay and no connected guest. | A suspended session can actually be resumed. |
 | I13 | `ReservationBoundToPayment` | A live reservation is bound to a payment key. | Reservations cannot be orphaned from the money that paid for them. |
-| I14 | `RefundOnlyWhenNoService` | A refund exists only for a terminal session that was never READY. | A delivered session is never refunded. |
+| I14 | `RefundOnlyWhenNoServiceOrRelayLoss` | A refund exists only for a terminal session that was never READY, or for one whose service was cut short by relay loss (`final = RELAY_LOST`). | A delivered session is not refunded, and the one deliberate exception is the relay-loss outcome the refund policy compensates. |
 | I15 | `NoEntitlementWithoutPayment` | A session row that exists has a payment key. | Settlement and entitlement stay joined. |
 | I16 | `FenceHoldsTheGate` | A held fence names exactly the request that still holds the gate. | Recovery cannot quietly replace the fenced request. |
 | I17 | `NoNewCommandOverlapsFence` | While a fence is held, the only command in flight at the guest is the fenced request. | A new command can never overlap the old one, even across recovery. |
@@ -239,6 +239,17 @@ longer admits the bug) or if it is rejected by an unexpected invariant.
   nondeterministic because the grace is time. This is the property the old
   `RelayLost` action removed: it failed the session on a relay loss, which is
   exactly the bug ADR 0011 fixes.
+- **Relay loss cannot be a lease expiry, and its refund is a distinct final
+  value.** `ExpireLease` is disabled for a READY/ACTIVE session whose link is
+  lost, because relay recovery declares the loss at `min(grace,
+  leaseExpiresAt - 1 s)` and `enforceLease` cannot fire before
+  `leaseExpiresAt + leaseGraceMs`; the implementation also attributes a late
+  overrun to `relay_lost` while the loss window is open. The real-time margin is
+  not modelled, only the ordering guard. `final` carries `RELAY_LOST` as a value
+  that `Finalize` writes as `FAILED`, so `MarkRefundPending` and
+  `RefundOnlyWhenNoServiceOrRelayLoss` can express the policy: a READY session
+  ended by relay loss is refundable, a client destroy or ordinary lease expiry is
+  not.
 - **The fence release condition needs strong fairness to be checkable.** A guest
   that reconnects and drops again makes `FenceRelease` alternately enabled and
   disabled, so weak fairness admits a fair cycle that never releases the gate.
@@ -260,7 +271,9 @@ one worker) and reference this directory.
 ## Not modeled
 
 - More than one controller replica, Postgres/DynamoDB, leader election.
-- Real time: TTL arithmetic, clock skew, lease refresh, the relay-loss grace.
+- Real time: TTL arithmetic, clock skew, lease refresh, the relay-loss grace and
+  the lease margin (`leaseExpiresAt - 1 s`) that makes relay loss win over a
+  lease expiry. The model keeps the ordering as a guard instead.
 - The relay's response cache and request/response framing (covered by unit
   tests in `controller/src/relay/`).
 - Kubernetes scheduler behaviour, node placement, warm pool.
@@ -288,7 +301,7 @@ The spec is organised to mirror the code:
 | `StartOp`, `DispatchOp`, `GuestResponse`, `GuestDone`, `FinishOp` | `store.ts`, `relay/` |
 | `GuestConnect`, `GuestDisconnect`, `GuestReady`, `RelayRestart`, `ReregisterRelay` | `relay/registry.ts`, `relay/ws.ts`, `relay-recovery.ts`, `guest/supervisor.go` (reconnect loop) |
 | `RecoverInterruptedOps`, `FenceRelease`, `RejectStaleFrame` | `store.ts` (`recoverInterruptedOperations`, `clearFencedGate`), `operation-fence.ts`, `relay/registry.ts` (`raiseEpoch`, `request`), `guest/supervisor.go` (`admitEpoch`) |
-| `RequestDestroy`, `ExpireLease`, `RelayGraceExpired`, `ProvisioningTimeout` | `reconciler.ts`, `termination.ts`, `relay-recovery.ts` |
+| `RequestDestroy`, `ExpireLease`, `RelayGraceExpired`, `ProvisioningTimeout` | `reconciler.ts`, `termination.ts`, `relay-recovery.ts`, `refunds.ts` |
 | `KillGuest`, `DeleteWorkspace`, `PurgeRelay`, `BeginRelease`, `ConfirmRelease`, `Finalize` | `termination.ts`, `capacity/reservations.ts` |
 
 If you change `SOURCE_STATES` or an admission guard, change the corresponding

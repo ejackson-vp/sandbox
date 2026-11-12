@@ -43,7 +43,10 @@ function session(overrides: Partial<FakeSession> & Pick<FakeSession, "id">): Fak
   };
 }
 
-function harness(sessions: FakeSession[], opts: { now?: number; limit?: number } = {}) {
+function harness(
+  sessions: FakeSession[],
+  opts: { now?: number; limit?: number; graceMs?: number } = {},
+) {
   const byId = new Map(sessions.map((entry) => [entry.id, entry]));
   const relay = {
     generation: "gen-a",
@@ -104,7 +107,11 @@ function harness(sessions: FakeSession[], opts: { now?: number; limit?: number }
   } as unknown as RelayRecoveryStore;
 
   let now = opts.now ?? 1_000_000;
-  const cfg = { relayLossGraceMs: 5_000, relayRegistrationTimeoutMs: 1_000, scanLimit: opts.limit };
+  const cfg = {
+    relayLossGraceMs: opts.graceMs ?? 5_000,
+    relayRegistrationTimeoutMs: 1_000,
+    scanLimit: opts.limit,
+  };
   const recovery = new RelayRecovery(
     cfg,
     store,
@@ -123,6 +130,9 @@ function harness(sessions: FakeSession[], opts: { now?: number; limit?: number }
     sessions: byId,
     advance(ms: number) {
       now += ms;
+    },
+    nowValue() {
+      return now;
     },
   };
 }
@@ -250,6 +260,47 @@ describe("relay generation recovery", () => {
       "sbx_a",
       "sbx_b",
       "sbx_c",
+    ]);
+  });
+
+  it("declares relay_lost at the lease bound when the grace outlives the lease", async () => {
+    const start = 1_000_000;
+    const leaseExpiresAt = start + 5_000;
+    const h = harness([session({ id: "sbx_short", leaseExpiresAt })], {
+      now: start,
+      graceMs: 60_000,
+    });
+    h.relay.unreachable.add("sbx_short");
+
+    // The loss is noticed, but the guest still has time: no termination yet,
+    // even though the grace alone would wait a full minute.
+    expect(await h.recovery.reconcile()).toMatchObject({ lost: 0 });
+    h.advance(3_900);
+    expect(await h.recovery.reconcile()).toMatchObject({ lost: 0 });
+    expect(h.terminated).toEqual([]);
+
+    // One second before the lease, which is before enforceLease may request
+    // `lease_expired` (leaseExpiresAt + leaseGraceMs).
+    h.advance(100);
+    expect(await h.recovery.reconcile()).toMatchObject({ lost: 1 });
+    expect(h.terminated).toEqual([
+      { id: "sbx_short", reason: "failure:relay_lost", code: "relay_lost" },
+    ]);
+    expect(h.nowValue()).toBeLessThan(leaseExpiresAt);
+  });
+
+  it("declares relay_lost on the pass that notices an already-expiring lease", async () => {
+    const start = 1_000_000;
+    const h = harness([session({ id: "sbx_tiny", leaseExpiresAt: start + 500 })], {
+      now: start,
+      graceMs: 60_000,
+    });
+    h.relay.unreachable.add("sbx_tiny");
+    // The lease is inside the margin, so waiting for the grace would lose the
+    // session to lease_expired first.
+    expect(await h.recovery.reconcile()).toMatchObject({ lost: 1 });
+    expect(h.terminated).toEqual([
+      { id: "sbx_tiny", reason: "failure:relay_lost", code: "relay_lost" },
     ]);
   });
 

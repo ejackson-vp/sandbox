@@ -283,11 +283,16 @@ change as a recovery boundary:
   already has,
 - `OperationFence` holds the gate until the reconnected guest reports its slot
   idle, then the next operation is admitted under the bumped epoch,
-- a guest that does not come back inside `RELAY_LOSS_GRACE_MS` (default 90 s)
-  ends the session with `failure:relay_lost`, which the refund policy can treat
-  differently from a crashed guest. An unreachable relay starts the same clock:
-  the scan cannot tell a replacement from a control-plane stall, and a relay
-  that cannot answer for the grace cannot serve the paid session.
+- a guest that does not come back ends the session with `failure:relay_lost` at
+  whichever comes first: the end of `RELAY_LOSS_GRACE_MS` (default 90 s) or 1 s
+  before the lease deadline. The lease bound matters for a short lease: a 60 s
+  session with a 90 s grace would otherwise be `lease_expired`, which the refund
+  policy does not compensate. An unreachable relay starts the same clock: the
+  scan cannot tell a replacement from a control-plane stall, and a relay that
+  cannot answer for the grace cannot serve the paid session.
+- the refund policy (main) refunds a `READY` session ended by `relay_lost` in
+  full, and the integration cases assert the mock ledger is `REFUNDED`, not just
+  the reason.
 
 The lease, the Pod, the workspace and the reservations are unchanged in the
 survivor path. A retry of the interrupted request id is `409
@@ -304,7 +309,9 @@ processes on the same address, a real Postgres store and the real reconciler:
   persists, a retry of the old request id is `409 outcome_unknown`, and a new
   exec succeeds under epoch 2 with no duplicate execution of the old command;
 - a guest that cannot reconnect (frozen with `SIGSTOP`) ends the session `FAILED`
-  with `failure:relay_lost` once the grace expires.
+  with `failure:relay_lost` once the grace expires, and a 5 s lease with a 60 s
+  grace still ends `relay_lost` (never `lease_expired`) with the ledger
+  `REFUNDED`.
 
 `tests/unit/relay-recovery.test.ts` pins detection (once per change), the
 READY/ACTIVE registration set, the idle hold and the grace outcome;
@@ -440,7 +447,7 @@ when `API_URL` is loopback, so no manual forwarding is needed.
 | Duplicate destroy | `accepts duplicate destroys and still reaches a single terminal state` | one terminal `DESTROYED` row, no Pod left |
 | In-flight operation at controller crash | `fences an operation interrupted by a controller crash`, `keeps the gate closed until the guest finishes, then admits the next operation`, `recovery withdraws a stale frame the guest has not observed` | request becomes `outcome_unknown`; the gate stays closed until the guest reports its slot idle; no new operation is forwarded while fenced; the relay refuses and withdraws a frame below the recovery epoch; the next operation runs under a higher execution epoch |
 | Relay restart with an exec in flight | `fences the in-flight exec as outcome_unknown and keeps the session READY` | the request becomes `outcome_unknown` with no result; the epoch is bumped once; the session stays `READY` with the same lease; the guest reconnects to the replacement relay; a retry of the old id is `409 outcome_unknown`; a new exec succeeds and the workspace file persists |
-| Relay restart and the guest cannot reconnect | `ends the session with relay_lost when the guest cannot reconnect inside the grace` | the session becomes `FAILED` with `failure:relay_lost` (not `guest_exited`) once `RELAY_LOSS_GRACE_MS` passes; the reason is what the refund policy consumes |
+| Relay restart and the guest cannot reconnect | `ends the session with relay_lost when the guest cannot reconnect inside the grace`, `keeps relay_lost inside a short lease, before the lease check, and refunds it` | the session becomes `FAILED` with `failure:relay_lost` (not `guest_exited`, not `lease_expired`) at the grace or 1 s before the lease, and the mock ledger reaches `REFUNDED` |
 | Replayed relay request | `does not re-execute a completed request and keeps the first response` | retry sees the cached outcome; the guest receives one request; a delayed duplicate response cannot replace the first |
 | Retry of an in-flight relay request | `treats a retry of an in-flight request as pending without re-forwarding` | guest receives one frame |
 | Late success after a guest error | `keeps a guest error terminal for late and duplicate responses` | late/duplicate responses cannot turn the recorded error into success |

@@ -46,6 +46,18 @@ export const RELAY_SCAN_LIMIT = 500;
 /** Map entries unseen for this long are dropped (a terminated session's). */
 const FORGET_AFTER_MS = 600_000;
 
+/**
+ * How far before the lease deadline relay loss must be decided.
+ *
+ * `enforceLease` cannot request `lease_expired` before `leaseExpiresAt +
+ * leaseGraceMs` (2 s by default), so firing `relay_lost` at
+ * `leaseExpiresAt - margin` leaves at least the margin plus the lease grace
+ * between the two. The grace alone is not enough: a 60 s lease with a 90 s
+ * grace would otherwise end as `lease_expired`, which the refund policy does
+ * not compensate, even though the relay loss caused the interruption.
+ */
+const RELAY_LOSS_LEASE_MARGIN_MS = 1_000;
+
 export interface RelayRecoveryResult {
   /** Sessions inspected this pass. */
   scanned: number;
@@ -258,8 +270,32 @@ export class RelayRecovery {
     }
   }
 
+  /**
+   * Whether this session is inside a relay-loss window right now, i.e. its
+   * guest is expected back and the controller has started the clock. The lease
+   * check uses it to attribute an overrun that happens while the link is lost to
+   * `relay_lost`, so a delayed scan cannot turn the same interruption into
+   * `lease_expired`.
+   */
+  awaitingReconnect(sessionId: string): boolean {
+    return this.lostAt.has(sessionId);
+  }
+
   private markLost(sessionId: string, now: number): void {
     if (!this.lostAt.has(sessionId)) this.lostAt.set(sessionId, now);
+  }
+
+  /**
+   * The moment relay loss may be declared: whichever comes first, the end of
+   * the grace or just before the lease deadline. Both are "the guest had its
+   * chance and the session has no time left", and the earlier one is what keeps
+   * the reason `relay_lost` instead of a lease expiry the refund policy ignores.
+   */
+  private lossDeadline(session: SessionRecord, since: number): number {
+    const graceDeadline = since + this.cfg.relayLossGraceMs;
+    const lease = session.leaseExpiresAt;
+    if (lease === null) return graceDeadline;
+    return Math.min(graceDeadline, lease - RELAY_LOSS_LEASE_MARGIN_MS);
   }
 
   private async expireIfLost(
@@ -269,7 +305,12 @@ export class RelayRecovery {
   ): Promise<void> {
     const since = this.lostAt.get(session.id);
     if (since === undefined) return;
-    if (now - since < this.cfg.relayLossGraceMs) return;
+    // Whichever comes first: the grace, or the end of the lease. A lease that is
+    // already inside the margin declares the loss on this pass; it must not wait
+    // for a grace the session will never see. While the lease has time and the
+    // grace has not run, the guest is still allowed to reconnect.
+    const deadline = this.lossDeadline(session, since);
+    if (now < deadline) return;
     if (this.expiring.has(session.id)) return;
     let ended = false;
     try {
@@ -296,6 +337,9 @@ export class RelayRecovery {
       log.warn("sandbox_relay_lost", {
         sessionId: session.id,
         graceMs: now - since,
+        leaseBound: session.leaseExpiresAt !== null &&
+          session.leaseExpiresAt - RELAY_LOSS_LEASE_MARGIN_MS < since + this.cfg.relayLossGraceMs,
+        leaseExpiresAt: session.leaseExpiresAt,
       });
     }
   }

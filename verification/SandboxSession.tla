@@ -98,7 +98,10 @@ RStates == {"NONE", "ATTACHED", "ALLOCATED", "SUSPENDED", "RELEASING", "RELEASED
 \* capacity is returned only once the Pod object is observed gone.
 ComputingRStates == {"ATTACHED", "ALLOCATED", "RELEASING"}
 
-Finals == {"NONE", "DESTROYED", "EXPIRED", "FAILED"}
+\* `final` is the terminal outcome chosen at termination. It matches `state`
+\* except for RELAY_LOST: that is written as FAILED, but the reason is what the
+\* refund policy keys on, so it is a distinct value here.
+Finals == {"NONE", "DESTROYED", "EXPIRED", "FAILED", "RELAY_LOST"}
 
 \* Session execution epochs. The store's exec_epoch starts at 1 and is bumped
 \* once for a session that had an operation in flight across either a controller
@@ -309,15 +312,19 @@ ChargeSession(s, p) ==
                  relayPending, fence, fenceReq, recovered, startGen>>
 
 \* refunds.ts: a settled session that never reached READY gets a refund
-\* obligation; mock mode settles it immediately, real modes wait for an
-\* operator. Recording the obligation is what makes the outcome explicit.
+\* obligation, and so does a READY session ended by the relay-loss grace: the
+\* paid time after the loss was undeliverable. A client destroy or an ordinary
+\* lease expiry after READY stays settled. Mock mode settles immediately, real
+\* modes wait for the worker. Recording the obligation is what makes the
+\* outcome explicit.
 MarkRefundPending(p) ==
   /\ refund[p] = "none"
   /\ charges[p] = 1
   /\ \E s \in Sessions :
        /\ settledTo[p] = s
        /\ state[s] \in TerminalStates
-       /\ ~everReady[s]
+       /\ \/ ~everReady[s]
+          \/ final[s] = "RELAY_LOST"
   /\ refund' = [refund EXCEPT ![p] = "pending"]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, reservations, resPayment, pod, creating, pvc, relay,
@@ -548,8 +555,16 @@ RequestDestroy(s) ==
                  fenceReq, recovered, startGen>>
 
 \* lease_expired, max lifetime or suspended expiry.
+\*
+\* A READY/ACTIVE session whose relay link is lost is not lease-expired: relay
+\* recovery declares the loss at min(lostAt + grace, leaseExpiresAt - margin),
+\* which is before `enforceLease` may run (leaseExpiresAt + leaseGraceMs), and
+\* this guard is the abstraction of that ordering. The reason matters: the
+\* refund policy compensates `relay_lost`, not an ordinary lease expiry.
 ExpireLease(s) ==
   /\ state[s] \in LeaseExpirableStates
+  /\ \/ state[s] \notin ReadyStates
+     \/ (relay[s] /\ guestConnected[s])
   /\ state' = [state EXCEPT ![s] = "TERMINATING"]
   /\ final' = [final EXCEPT ![s] = "EXPIRED"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
@@ -578,7 +593,7 @@ RelayGraceExpired(s) ==
   /\ relayPending' = [relayPending EXCEPT ![s] = 0]
   /\ fence' = [fence EXCEPT ![s] = "none"]
   /\ fenceReq' = [fenceReq EXCEPT ![s] = "none"]
-  /\ final' = [final EXCEPT ![s] = "FAILED"]
+  /\ final' = [final EXCEPT ![s] = "RELAY_LOST"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, slotEpoch,
                  epoch, execEpoch, recovered, startGen>>
@@ -673,7 +688,8 @@ Finalize(s) ==
   /\ slots[s] = {}
   /\ guest[s] = {}
   /\ fence[s] = "none"
-  /\ state' = [state EXCEPT ![s] = final[s]]
+  /\ state' = [state EXCEPT ![s] =
+        IF final[s] = "RELAY_LOST" THEN "FAILED" ELSE final[s]]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
                  slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
@@ -1056,12 +1072,15 @@ ReservationBoundToPayment ==
   \A s \in Sessions :
     reservations[s] \in (ComputingRStates \cup {"SUSPENDED"}) => resPayment[s] # "none"
 
-\* I14. A refund is only ever issued for a session that delivered no service.
-RefundOnlyWhenNoService ==
+\* I14. A refund is only ever issued for a session that delivered no service, or
+\* for one whose service was cut short by relay loss. A client destroy and an
+\* ordinary lease expiry after READY stay settled.
+RefundOnlyWhenNoServiceOrRelayLoss ==
   \A p \in Payments :
     refund[p] # "none" =>
       \E s \in Sessions :
-        settledTo[p] = s /\ state[s] \in TerminalStates /\ ~everReady[s]
+        settledTo[p] = s /\ state[s] \in TerminalStates
+          /\ (~everReady[s] \/ final[s] = "RELAY_LOST")
 
 \* I15. A session that was never charged has no reservation and no workload.
 NoEntitlementWithoutPayment ==

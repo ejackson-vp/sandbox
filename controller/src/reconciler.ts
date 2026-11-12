@@ -542,8 +542,28 @@ export class Reconciler {
     if (deadline === null) return;
     const now = this.ctx.now();
     if (now > deadline + this.ctx.cfg.leaseGraceMs) {
-      await this.ctx.store.requestTermination(session.id, "lease_expired");
-      log.warn("sandbox_lease_expired", { sessionId: session.id, state: session.state, overrunMs: now - deadline });
+      // The lease is over. If the session is inside a relay-loss window, the
+      // reason is the relay loss: the guest had no link to run anything on, and
+      // the refund policy compensates `relay_lost` but not an ordinary lease
+      // expiry. Relay recovery normally decides this a second before the lease
+      // (RELAY_LOSS_LEASE_MARGIN_MS); this is the backstop for a delayed scan.
+      const relayLost = this.relayRecovery.awaitingReconnect(session.id);
+      await this.ctx.store.requestTermination(
+        session.id,
+        relayLost ? "failure:relay_lost" : "lease_expired",
+        relayLost
+          ? {
+              code: "relay_lost",
+              message: "the lease ended while the guest was disconnected after a relay loss",
+            }
+          : undefined,
+      );
+      log.warn("sandbox_lease_expired", {
+        sessionId: session.id,
+        state: session.state,
+        overrunMs: now - deadline,
+        ...(relayLost ? { reason: "relay_lost" } : {}),
+      });
     }
   }
 

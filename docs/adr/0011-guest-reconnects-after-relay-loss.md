@@ -45,9 +45,12 @@ Three changes, one per hop:
    `sessions.exec_epoch` in one guarded transaction (`pending ->
    outcome_unknown` is the guard, so this is exactly once), re-registers the
    session, and tells `OperationFence` to hold the gate until the reconnected
-   guest reports its slot idle. A guest that does not come back inside
-   `RELAY_LOSS_GRACE_MS` (default 90 s) ends the session with
-   `failure:relay_lost`.
+   guest reports its slot idle. A guest that does not come back ends the session
+   with `failure:relay_lost` at whichever comes first: the end of
+   `RELAY_LOSS_GRACE_MS` (default 90 s) or 1 s before the lease deadline. Any
+   overrun the lease check notices while a relay-loss window is open is
+   attributed to `relay_lost` too, so a delayed scan cannot turn the same
+   interruption into `lease_expired`.
 
 The epoch floor is republished to the replacement relay before the fence may
 release, so a frame from the superseded generation is still refused, and a retry
@@ -62,8 +65,15 @@ of the interrupted request id is `409 outcome_unknown` from the request row.
   is a defined `409 outcome_unknown`, and a new request id runs normally.
 - A guest that cannot reconnect is now a distinct outcome
   (`failure:relay_lost`) instead of looking like a crashed guest
-  (`failure:guest_exited`). The refund policy can treat it separately; this
-  change only produces the reason.
+  (`failure:guest_exited`). The refund policy treats it separately: a session
+  ended by relay loss is refunded in full even though it reached READY, because
+  the paid time after the loss was undeliverable. A client destroy and an
+  ordinary lease expiry after READY are not refunded.
+- The relay-loss deadline is bounded by the lease. A 60 s lease with a 90 s
+  grace would otherwise end as `lease_expired`, which the refund policy does not
+  compensate, so the loss is declared at `leaseExpiresAt - 1 s`. That is before
+  `enforceLease` may run (`leaseExpiresAt + leaseGraceMs`), so relay loss wins
+  the race by at least the margin plus the lease grace.
 - Re-registration replays no credential: the token hash on the session row is
   reused. A create retry that already booted a pod therefore adopts it before
   `register_relay` can mint a new token, or the running guest would be locked
@@ -82,11 +92,25 @@ of the interrupted request id is `409 outcome_unknown` from the request row.
   registration is gone. It is never executed twice and the client retries.
 - **An unreachable relay also starts the grace.** The scan cannot tell "the
   relay was replaced" from "the control plane is stalled", so a relay that does
-  not answer for `RELAY_LOSS_GRACE_MS` ends live sessions with `relay_lost`. The
-  trade-off is deliberate: the alternative is to keep consuming a paid lease
-  that cannot do any work, with no distinct reason for the refund policy. A
-  pause shorter than the grace (the fault matrix uses 3 s) is absorbed, and the
-  grace is configurable.
+  not answer for `RELAY_LOSS_GRACE_MS` (or until the lease bound) ends live
+  sessions with `relay_lost`. The trade-off is deliberate: the alternative is to
+  keep consuming a paid lease that cannot do any work, with no distinct reason
+  for the refund policy. A pause shorter than the grace (the fault matrix uses
+  3 s) is absorbed, and the grace is configurable.
+- **The lease bound is a real-time bound.** Relay recovery and lease enforcement
+  run on different timers. The margin makes relay loss win for any pass that runs
+  in the window, and the lease path attributes a late overrun to `relay_lost`
+  while the loss window is open, but a process stalled across both windows can
+  still record `lease_expired`. The TLA model abstracts the ordering as a guard
+  (`ExpireLease` is disabled while the link is lost); it does not model the
+  margin.
+- **A controller restart can beat the first relay-loss scan.** The lease
+  attribution reads an in-memory loss window, which a fresh process has not
+  populated yet. If the controller restarts with the relay also lost and the
+  lease already over, the first readiness tick can record `lease_expired` before
+  the first housekeeping scan observes the loss. The window is one pass, and
+  startup recovery already fences the operation; the refund policy sees an
+  ordinary lease expiry for that session.
 - **Fence release on a same-relay reset.** When the relay withdraws a frame by
   resetting the socket and no generation change follows, the fence may release
   on the disconnected branch, before the guest reconnects. That is sound, because
@@ -111,6 +135,7 @@ of the interrupted request id is `409 outcome_unknown` from the request row.
 - **A persistent relay registry.** A different deployment (shared store,
   sticky routing), and it would still not survive the guest's socket dropping.
   The reconnect path is needed either way.
-- **Fail the session and refund it.** Simpler, but it ends a paid session for an
-  infrastructure restart the customer did not cause, and a partial refund is a
-  policy question this path only has to make answerable.
+- **Fail the session and refund it immediately on a relay restart.** Simpler,
+  but it ends a paid session, and its workspace and open work, for a restart the
+  customer did not cause. It is the fallback only when the guest cannot
+  reconnect; the refund policy then compensates it in full.
