@@ -100,7 +100,8 @@ sdk/src/operations.ts           exec + filesystem operations
 sdk/src/data-plane.ts           services, HTTP, SSE/chunked, WebSocket
 
 api/src/server.ts               composition, middleware, pricing/health/images
-api/src/routes/create-session.ts x402 handshake, verify, settle, entitlement
+api/src/use-cases/create-session.ts x402 handshake, verify, settle, entitlement
+api/src/routes/create-session.ts HTTP mapping for the create-session use case
 api/src/routes/sessions.ts      status, operations, data plane, lifecycle
 api/src/schemas.ts              request schemas + plaintext guard
 api/src/status.ts               controller view -> public wire status

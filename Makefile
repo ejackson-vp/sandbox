@@ -149,6 +149,11 @@ test-control-faults:
 test-workloads:
 	npx vitest run tests/workloads tests/compatibility
 
+# Suites CI used to skip: transfer protocol, workload fixtures, browser
+# compatibility (skips without its image). No cluster or guest binary needed.
+test-portable:
+	npx vitest run tests/transfers tests/workloads tests/compatibility
+
 demo-sse:
 	npx tsx scripts/sse-demo.ts
 
@@ -173,7 +178,7 @@ test-integration: cli guest
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest npx vitest run tests/integration
 
 # Everything a reviewer can run without a cluster.
-verify: build typecheck lint-structure test-unit test-property test-go
+verify: build typecheck lint-structure test-unit test-property test-portable test-go vet-go
 
 # Exhaustive-over-interleavings check of the session lifecycle, payment intent,
 # single-operation slot and capacity reservation. TLC is pinned; the first run
@@ -194,6 +199,11 @@ test-property:
 # envelope parser can be removed with every TypeScript gate still green.
 test-go:
 	cd guest && go test ./...
+
+# go test runs only a subset of vet checks; struct tags are not in it.
+vet-go:
+	cd guest && go vet ./...
+	@out=$$(cd guest && gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 # Markdown lint always; link check when lychee is installed (CI always runs it).
 docs-check:

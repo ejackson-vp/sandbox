@@ -7,7 +7,7 @@
  *
  * `STORE_BACKEND` defaults to `sqlite`, which keeps `make dev-local` and every
  * existing test on the file-backed adapter. `postgres` requires `DATABASE_URL`
- * (validated in `config.ts`, so the process refuses to start rather than falling
+ * (validated in `store-selection.ts`, so the process refuses to start rather than falling
  * back). The `writer` argument is the leadership decision: a replica that does
  * not hold the lease opens read-only, and on Postgres that means it does not
  * take the advisory lock and does not migrate.

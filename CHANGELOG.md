@@ -184,6 +184,18 @@ the container registry.
   acquisition (which runs startup recovery) are awaited before the thing they
   gate. The operation gate and recovery moved to `controller/src/store/operations.ts`
   so `Store` stays inside the module size limit.
+- CI runs `go vet` and `gofmt` on the guest, and the transfer, workload and
+  browser-compatibility suites, which no job ran before. The release gate now
+  matches `ci.yml`, including the test typecheck and profile-pin check.
+
+### Fixed
+
+- Guest results carry `truncated` again. `Result.Truncated` and
+  `Result.BodyTruncated` shared the `truncated` JSON tag, so `encoding/json`
+  dropped both and neither exec stdout/stderr truncation nor HTTP body
+  truncation ever reached the SDK. The field is now one op-dependent value, a
+  golden marshal test pins both shapes, and CI runs `go vet`, which catches
+  duplicate tags.
 
 ## 0.1.22
 

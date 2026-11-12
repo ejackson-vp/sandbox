@@ -54,6 +54,9 @@ jobs:
       - run: ./guest/check-profiles.sh
       - run: npm run test:unit
       - run: npm run test:property
+      # Portable suites that no other job runs. They need no cluster or guest
+      # binary; the browser compatibility case skips without its image.
+      - run: npm run test:portable
 
   # The store contract over Postgres: the same suite `unit` runs on SQLite,
   # against the backend ADR 0010 targets. `unit` skips the Postgres half when
@@ -150,6 +153,15 @@ jobs:
       - name: go tests
         working-directory: guest
         run: go test ./...
+      # go test runs only a subset of vet checks. The struct-tag check is not in
+      # it, which is how two fields with the same JSON tag shipped and silently
+      # dropped the field from every result.
+      - name: go vet
+        working-directory: guest
+        run: go vet ./...
+      - name: gofmt
+        working-directory: guest
+        run: test -z "$(gofmt -l .)"
       # The only run of this suite per push. It SIGSTOPs a real guest process
       # and uses real sockets, so a second concurrent run doubles the runner
       # load and flakes (#145, #128). Coverage must not re-run it.
