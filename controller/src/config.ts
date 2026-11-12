@@ -72,7 +72,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
   return {
     role,
     ...parseServer(env, admin, tokens, security),
-    ...parseStore(env),
+    ...parseStore(env, role),
     ...parseKubernetes(env, cluster, execution, runtimeProfiles),
     ...parseRelayServices(env, role),
     ...parseProvisioning(env),

@@ -1,16 +1,25 @@
 /**
  * The durable store location.
  *
- * Postgres is the only backend, so `DATABASE_URL` is required and there is no
- * fallback to a local file. A controller that cannot say where its state lives
- * must not start: the error names the variable, because that is the one thing an
- * operator can fix.
+ * Postgres is the only backend, so the controller requires `DATABASE_URL` and
+ * there is no fallback to a local file. A controller that cannot say where its
+ * state lives must not start: the error names the variable, because that is the
+ * one thing an operator can fix.
+ *
+ * Only the roles that open the store are asked for it. A relay or a proxy writes
+ * nothing to the database and their Deployments do not mount the database
+ * Secret, so the field is left empty there rather than failing their startup.
+ * The same gate applies to the retired SQLite settings: they are only refused on
+ * a role that would have used them.
  */
+import type { Role } from "./role.js";
 import type { ControllerConfig } from "./types.js";
 
 type StoreSettings = Pick<ControllerConfig, "databaseUrl">;
 
-export function parseStore(env: NodeJS.ProcessEnv): StoreSettings {
+export function parseStore(env: NodeJS.ProcessEnv, role: Role): StoreSettings {
+  if (role !== "controller" && role !== "all") return { databaseUrl: "" };
+
   const databaseUrl = env.DATABASE_URL?.trim();
   if (!databaseUrl) {
     throw new Error(
