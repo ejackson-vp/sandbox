@@ -10,7 +10,7 @@ concrete next step.
 | --- | --- | --- | --- |
 | 1 | **No hardware attestation** | dev/Kata evidence is signed by a published key | out of scope for this repository; it needs TEE hardware and an independent verifier |
 | 2 | **Shared host kernel in dev mode** | container escape is possible for hostile code | require Kata minimum; validate before launch |
-| 3 | **SQLite single writer on a ReadWriteOnce volume** | one writer holds the lease and the standby opens the store `query_only`, so two reconcilers cannot diverge. A replacement pod still waits for the volume it cannot mount from another node, so what ships is single-node HA: 0.25s takeover on graceful release, 10.10s for a stale holder | The Postgres adapter behind the store ports is implemented and contract-tested against both backends (`STORE_BACKEND=postgres`, `DATABASE_URL`, [ADR 0010](adr/0010-controller-ha-storage.md), #25). Still missing before it can ship: the deployment default and its `pg_dump` backup path, and a run that proves failover without a volume detach |
+| 3 | **The database is a single Postgres pod** | one primary on a `ReadWriteOnce` volume, pinned to the control-plane node like the rest of the control plane. Losing the node loses the store until the pod is rescheduled and the volume reattached (30s to 2min on most clouds), so this is not database HA, and nothing in this repository backs it up | move the store onto CloudNativePG (streaming replicas + PITR) or pgBackRest, and record a failover that does not wait for a volume detach. [ADR 0010](adr/0010-controller-ha-storage.md), [backup-restore.md](backup-restore.md) |
 | 4 | **Relay is an in-memory registry per pod** | a restart loses pending ciphertext and sessions in flight; replicas hold disjoint sessions, addressed by deterministic shard affinity and enforced in the token, so N>1 no longer splits a session | Redis/NATS with per-session queues and TTLs (ciphertext only) if a relay restart must stop interrupting sessions |
 | 5 | **Settlement recovery needs a facilitator lookup** | the controller can now reconcile a settled-but-unentitled payment into a refundable ledger row, but only if the facilitator exposes `GET /settlements/:paymentKey`. Testnet's public facilitator does not, so that window still answers `409 reconciliation_pending` | use a facilitator with a settlement lookup or a webhook, and record the run that proves it |
 | 6 | **Real refunds have never run** | mock mode auto-refunds; a real mode records `REFUND_PENDING` and the refund worker sends it to an operator-configured webhook. Nothing in this repository has moved testnet funds, and the webhook contract is defined here rather than by a facilitator | a settlement-sandbox end-to-end run: settle, kill the controller, prove the refund executes. See [payment-ledger.md](payment-ledger.md) |
@@ -20,7 +20,7 @@ concrete next step.
 | 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |
 | 11 | **Suspend/resume pricing undefined** | a resume starts a fresh lease in the mock model | bill active time + storage, or charge per resume; decide before charging real money |
 | 12 | **Checkpoints are node-pinned** | local-path PVCs cannot resume after node loss; `resume_unavailable` is fail-fast, not HA | RWX/network storage or Firecracker snapshot/restore before promising node-failure recovery |
-| 13 | **Checkpoint storage has no backup/replication** | deleting or corrupting the PVC makes the session unrecoverable (`checkpoint_missing`); the SQLite backups do **not** contain workspaces, so a restore does not bring sessions back | encrypted object-store checkpoint (same follow-up as item 9), or storage-level snapshots/backups with their own retention. Document the RPO/RTO for checkpoint data separately from the ledger |
+| 13 | **Checkpoint storage has no backup/replication** | deleting or corrupting the PVC makes the session unrecoverable (`checkpoint_missing`); the database backups do **not** contain workspaces, so a restore does not bring sessions back | encrypted object-store checkpoint (same follow-up as item 9), or storage-level snapshots/backups with their own retention. Document the RPO/RTO for checkpoint data separately from the ledger |
 
 ## 2. Security hardening backlog
 
@@ -96,13 +96,13 @@ concrete next step.
 ## 3. Reliability / operations
 
 - Controller HA beyond one node. Leader election, the writer guard and the
-  measured failover are in place, and the store now has a Postgres adapter with
-  the same invariants under `READ COMMITTED` (`STORE_BACKEND=postgres`), proved
-  by one contract suite run against both backends. What still ships is SQLite on
-  a ReadWriteOnce volume, so a second replica stays `Pending` and single-node HA
-  is the deployment ([ADR 0010](adr/0010-controller-ha-storage.md)). Remaining:
-  switch the manifest and its volume, add the `pg_dump` backup branch, and record
-  a failover that does not wait for a volume detach.
+  measured failover are in place, and the store is Postgres with the same
+  invariants under `READ COMMITTED`, proved by the store contract suite. The
+  controller has no database volume any more, so a second replica no longer
+  waits on a PVC. What is still single-node is the database itself: one primary
+  StatefulSet, no streaming replica, no PITR ([ADR 0010](adr/0010-controller-ha-storage.md)).
+  Remaining: move the store onto CloudNativePG or pgBackRest and record a
+  failover with the Postgres backend.
 - Persist relay state so a relay restart does not fail paid sessions (or fail and
   refund them cleanly).
 - Metrics: sessions created/expired/failed, provisioning latency, operation
@@ -123,12 +123,12 @@ concrete next step.
 - Alerts: `deploy/monitoring/contract/rules/sandbox-slo.yaml` implements the
   issue #38
   set — create p95, provisioning timeout rate, queue wait, relay pending,
-  reconcile p95, SQLite busy retries, create-route 409s (the current proxy for
+  reconcile p95, create-route 409s (the current proxy for
   `reconciliation_pending`), warm pool empty — plus target-down and
   blast-radius. `reconciliation_pending` is not yet a per-code counter, and the
   warm-pool rule is inactive while `WARM_POOL_SIZE=0`. Settlement-failure,
-  PVC-full and orphan-pod alerts are still not implemented. The rule file
-  carries no receiver and the homelab stack evaluates with
+  PVC-full, orphan-pod and database alerts are still not implemented. The rule
+  file carries no receiver and the homelab stack evaluates with
   `-notifier.blackhole`: alert state is visible, nothing is paged.
 - Incident procedures: egress abuse, orphan Pod/PVC cleanup, relay compromise and
   secret rotation each have a runbook under `docs/runbooks/`, plus a
@@ -146,8 +146,11 @@ concrete next step.
   [lifecycle.md](lifecycle.md#clock-assumptions) for what a step does and does
   not affect. Alert on any `clock_skew_detected` line, because the sessions it
   names may have ended early.
-- Backup/restore of the SQLite metadata (sessions are disposable; payment records
-  are not).
+- Backup/restore of the Postgres metadata (sessions are disposable; payment
+  records are not). The controller does not back anything up: the database layer
+  owns backups, PITR, encryption and retention, and the restore drill runs the
+  store contract suite against the restored copy.
+  See [backup-restore.md](backup-restore.md).
 
 ## 4. Session product policy
 

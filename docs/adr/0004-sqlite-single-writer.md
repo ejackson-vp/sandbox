@@ -1,6 +1,11 @@
 # 0004. SQLite as the single writer, with an outbox
 
-Status: accepted
+Status: superseded by [0010](0010-controller-ha-storage.md) (2026-11-12).
+
+> The outbox and the conditional `WHERE state = ...` guards survive this record;
+> the storage choice does not. The controller now opens Postgres and SQLite has
+> been removed, so read every "SQLite" below as the state of the system up to
+> 2026-11-12. [0010](0010-controller-ha-storage.md) is the standing decision.
 
 ## Context
 

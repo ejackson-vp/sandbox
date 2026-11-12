@@ -24,6 +24,11 @@ quote for this deployment.
 > treat this table as the baseline, not a current promise.
 > [Issue #116](https://github.com/ejackson-vp/sandbox/issues/116) tracks the
 > regression.
+>
+> `0.1.16` still ran the controller on SQLite. The store is Postgres now
+> ([ADR 0010](adr/0010-controller-ha-storage.md)); the numbers below are
+> dominated by guest provisioning, but the controller-side timings have not been
+> re-measured on the Postgres path.
 
 ## Method
 

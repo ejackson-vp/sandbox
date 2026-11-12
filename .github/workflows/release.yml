@@ -37,6 +37,24 @@ jobs:
   # failed and skipped the image build. Main pushes still run the full ci.yml.
   test:
     runs-on: ubuntu-latest
+    # Same Postgres 17 service as the `unit` job in ci.yml: the controller store
+    # is Postgres only (ADR 0010), and the store contract skips when DATABASE_URL
+    # is unset.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pg
+          POSTGRES_DB: sandbox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sandbox"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:pg@127.0.0.1:5432/sandbox
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7

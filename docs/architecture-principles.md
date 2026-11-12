@@ -6,13 +6,12 @@ grows (Kata, Firecracker, autoscaling). It is deliberately small.
 ## Functional core, imperative shell
 
 - **Pure decisions** live in `shared/src/domain/` and `shared/src/fp.ts`: no
-  clock, no I/O, no Kubernetes, no SQLite.
+  clock, no I/O, no Kubernetes, no database.
 - **Use cases** orchestrate ports; they are allowed to do I/O and are kept short.
 - **Ports are asynchronous.** Every method on a store port returns a `Promise`,
-  including the SQLite adapter, which is synchronous underneath (ADR 0010). A
-  port method is an interleaving point, so a decision that must be atomic belongs
-  inside one adapter statement or transaction, never in a read-then-write pair in
-  a use case.
+  including the Postgres adapter. A port method is an interleaving point, so a
+  decision that must be atomic belongs inside one adapter statement or
+  transaction, never in a read-then-write pair in a use case.
 - **Adapters** own the messy details (SQL, Kubernetes, WebSocket/relay, HTTP).
 - **The scheduler** (`Reconciler.tick`) lists work and dispatches; it should not
   contain policy.
@@ -44,18 +43,18 @@ the truth.
 
 | State | Component | Why a second replica is unsafe |
 |---|---|---|
-| SQLite, the single writer | controller | Two reconcilers schedule the same rows. The `WHERE state = …` guards stop one effect applying twice; they do not stop two schedulers disagreeing about which effect to run. |
+| The store, one writer | controller | Two reconcilers schedule the same rows. The `WHERE state = …` guards stop one effect applying twice; they do not stop two schedulers disagreeing about which effect to run. |
 | Guest registry, in memory | relay | A session is pinned to the pod holding its socket. A second registry means guests registered where the controller is not looking. |
 | Rate-limit buckets, in memory | api | Limits are per replica, so N replicas multiply every limit by N. This is a known limitation of the single-replica deployment, not a guarded invariant. |
 
 The first two are enforced three ways, deliberately:
 
 - **Code.** ADR 0009: the controller takes a Kubernetes Lease, only the leader
-  reconciles, and a standby's store connection is `query_only` so a leaked write
-  throws instead of diverging. The relay refuses to start when its pod ordinal is
-  outside `RELAY_REPLICAS`, or when the replica count is above 1 and it has no
-  ordinal to pin itself to, so a scaled StatefulSet fails closed instead of
-  serving from a registry the controller is not addressing.
+  reconciles, and a standby refuses writes without the Postgres advisory lock so
+  a leaked write throws instead of diverging. The relay refuses to start when its
+  pod ordinal is outside `RELAY_REPLICAS`, or when the replica count is above 1
+  and it has no ordinal to pin itself to, so a scaled StatefulSet fails closed
+  instead of serving from a registry the controller is not addressing.
 - **Manifest.** `replicas: 1` for the controller Deployment and the relay
   StatefulSet, with a rollout that cannot run two pods against one resource:
   `strategy: Recreate` (or `RollingUpdate` with `maxSurge: 0`) for the
@@ -66,11 +65,11 @@ The first two are enforced three ways, deliberately:
   rollout.
 
 This does not make the deployment highly available. ADR 0010 is the record: the
-store port now has a second adapter (Postgres) with the same invariants, proved
-by one contract suite over both backends, but the shipped deployment still runs
-SQLite on a `ReadWriteOnce` volume, so it is still one writer on one node (#25).
-The guard exists so that nobody scales the manifest into a failure the code
-cannot see.
+store is Postgres with the same invariants, proved by the store contract suite
+under `READ COMMITTED`, and the controller holds no database volume. Only one
+writer reconciles because the Lease says so, not because a volume would refuse a
+second mount. The guard exists so that nobody scales the manifest into a failure
+the code cannot see.
 
 ## DDIA ideas in practice
 
@@ -116,7 +115,7 @@ controller/src/snapshotter.ts   checkpoint port; no-op locally, Firecracker/Kata
 controller/src/store/           models + schema, SQL repositories; Store is the SQL adapter facade over async ports
 controller/src/k8s-types.ts     provisioner contract and pod specs
 controller/src/k8s-null.ts      no-op provisioner for unit tests
-controller/src/capacity/        pure admission, placement, snapshot builder, reservation port + SQLite adapter
+controller/src/capacity/        pure admission, placement, snapshot builder, reservation port + SQL adapter
 
 guest/main.go                   entrypoint + session/warm lifecycle
 guest/config.go                 env/bootstrap configuration
@@ -161,7 +160,7 @@ Completed slices:
 - `Snapshotter` checkpoint port with a no-op local adapter, wired into
   suspend/resume/termination.
 - Capacity admission: integer baseline reservations, least-allocated placement,
-  SQLite `BEGIN IMMEDIATE` holds, pre-settlement capacity holds, suspend/resume
+  transaction-level reservation holds, pre-settlement capacity holds, suspend/resume
   re-acquisition, and a constrained-capacity demo.
 
 Next slices:
@@ -185,7 +184,7 @@ Next slices:
 - **Go table tests** for pure validators (`guest/target_test.go`).
 - **E2E** (local process + kind) for effects: lifecycle, services, HTTP/SSE/WS,
   payment flow, faults, portability.
-- **Avoid** mocking K8s/SQLite in unit tests. If behavior needs a boundary, test
+- **Avoid** mocking K8s or the database in unit tests. If behavior needs a boundary, test
   it end-to-end or make the policy pure and property-test that.
 - Every refactor slice must keep the existing suite green and run a benchmark
   smoke; no big-bang rewrites.

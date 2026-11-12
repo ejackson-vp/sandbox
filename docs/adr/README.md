@@ -9,7 +9,7 @@ were rejected, and the cost we accepted.
 | [0001](0001-capability-from-payment.md) | Derive the session capability from the settled payment | accepted |
 | [0002](0002-ciphertext-only-control-plane.md) | The control plane handles ciphertext only | accepted |
 | [0003](0003-guest-initiated-relay.md) | The guest dials out to a relay; no ingress | accepted |
-| [0004](0004-sqlite-single-writer.md) | SQLite as the single writer, with an outbox | accepted |
+| [0004](0004-sqlite-single-writer.md) | SQLite as the single writer, with an outbox | superseded by 0010 |
 | [0005](0005-kata-isolation-boundary.md) | Kata microVMs as the isolation boundary | accepted |
 | [0006](0006-immutable-lease.md) | The lease is immutable and enforced in three places | accepted |
 | [0007](0007-checkpoint-at-rest-plaintext.md) | Checkpoint workspaces are plaintext, and stay documented as such | accepted |

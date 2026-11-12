@@ -1,25 +1,7 @@
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: controller-data
-  namespace: sandbox-system
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 1Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: controller-backups
-  namespace: sandbox-system
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 1Gi
----
+# The controller keeps no local volume. Durable state is Postgres
+# (05-postgres.yaml); the container's only writable path is /tmp, on emptyDir.
+# The backup volume is gone too: backups are the database layer's job, not the
+# controller's (docs/backup-restore.md).
 apiVersion: v1
 kind: Service
 metadata:
@@ -48,8 +30,9 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    # Recreate, not RollingUpdate: the SQLite volume is ReadWriteOnce, so a
-    # second replica can only co-mount it on a single-node cluster (docs/adr/0009).
+    # Recreate, not RollingUpdate: one writer still reconciles (ADR 0009), so a
+    # rollout that surged a second pod would only add a standby that reports
+    # not-ready. The storage no longer forces this; the lease does.
     type: Recreate
   selector:
     matchLabels: {app: controller}
@@ -91,7 +74,13 @@ spec:
             - {name: ROLE, value: "controller"}
             - {name: X402_CONTROLLER_PORT, value: "3001"}
             - {name: SERVICE_NAME, value: "controller"}
-            - {name: DB_PATH, value: "/data/controller.db"}
+            # Postgres is the only backend (ADR 0010). The URL carries the same
+            # password the server initialised with; both come from
+            # `postgres-credentials`, so they cannot drift.
+            - {name: STORE_BACKEND, value: "postgres"}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: postgres-credentials, key: database-url}
             - {name: KUBERNETES_ENABLED, value: "true"}
             # Single-writer election (docs/adr/0009). The Lease is the only thing
             # that decides which replica reconciles; the rest are standbys and
@@ -120,9 +109,6 @@ spec:
             - name: PROXY_TOKEN_SECRET
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: proxy-token-secret}
-            - name: BACKUP_ENCRYPTION_KEY
-              valueFrom:
-                secretKeyRef: {name: x402-secrets, key: backup-encryption-key, optional: true}
             - name: DEV_ATTESTATION_KEY
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: dev-attestation-key}
@@ -139,8 +125,6 @@ spec:
             limits: {cpu: "500m", memory: "256Mi", ephemeral-storage: "64Mi"}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
-            - {name: data, mountPath: /data}
-            - {name: backups, mountPath: /backups}
             - {name: tls, mountPath: /tls, readOnly: true}
             # Client identity for the relay's mTLS control listener.
             - {name: relay-tls, mountPath: /relay-tls, readOnly: true}
@@ -163,12 +147,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: "64Mi"}
-        - name: data
-          persistentVolumeClaim:
-            claimName: controller-data
-        - name: backups
-          persistentVolumeClaim:
-            claimName: controller-backups
         - name: tls
           secret:
             secretName: controller-tls

@@ -9,9 +9,9 @@ the node.
 kubectl apply -k deploy/kata
 ```
 
-The overlay does not create credentials. Create the `x402-secrets` Secret in
-`sandbox-system` first — locally with `scripts/dev-secrets.sh`, otherwise from
-your secret store.
+The overlay does not create credentials. Create the `x402-secrets` and
+`postgres-credentials` Secrets in `sandbox-system` first — locally with
+`scripts/dev-secrets.sh`, otherwise from your secret store.
 
 ## Requirements
 

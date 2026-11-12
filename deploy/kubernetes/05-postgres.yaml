@@ -1,0 +1,139 @@
+# ---------------------------------------------------------------------------
+# Postgres 17: the controller's durable store (ADR 0010).
+#
+# One primary on a ReadWriteOnce volume, pinned to the control-plane node like
+# the rest of the control plane. The controller still holds the Kubernetes Lease
+# (ADR 0009), so this is one writer's database, not a shared cluster: taking the
+# node out of service is a restore, not a failover. HA, logical/physical backups
+# and PITR are owned by the database layer (CloudNativePG or pgBackRest), not by
+# the controller; docs/backup-restore.md describes that split. Nothing here
+# copies the data directory.
+#
+# Credentials come from `postgres-credentials`, which scripts/dev-secrets.sh
+# generates locally and a deployed environment injects from its own store. The
+# `database-url` key is the same password rendered as a URL, so the controller
+# and the server cannot drift apart.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: sandbox-system
+  labels: {app: postgres}
+spec:
+  # Headless: the StatefulSet owns one stable identity (`postgres-0`) and the
+  # controller dials the DNS name, so there is no need for a virtual IP. A
+  # client that resolves the name gets the pod that holds the volume.
+  clusterIP: None
+  selector: {app: postgres}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: sandbox-system
+  labels: {app: postgres}
+spec:
+  replicas: 1
+  serviceName: postgres
+  # One ordinal, one volume. `OrderedReady` keeps a replacement pod from
+  # starting before the old one has released the ReadWriteOnce volume.
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      # The database is the last thing a drain should kill: it gets the full
+      # termination window to checkpoint and shut down cleanly.
+      terminationGracePeriodSeconds: 120
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        # The official image's `postgres` user. fsGroup makes the mounted
+        # volume group-writable for the same id.
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: postgres
+          # Upstream tag, matched to the adapter's supported major. Pin by
+          # digest in a deployed environment; kind cannot pull a digest it has
+          # not cached, and the release workflow does not build this image.
+          image: postgres:17
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: {name: postgres-credentials, key: database}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: {name: postgres-credentials, key: username}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: postgres-credentials, key: password}
+            # A subdirectory of the mount keeps initdb away from the volume
+            # root: local-path and most CSI drivers leave `lost+found` there,
+            # and initdb refuses a non-empty directory.
+            - {name: PGDATA, value: "/var/lib/postgresql/data/pgdata"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "100m", memory: "256Mi"}
+            limits: {cpu: "1", memory: "1Gi"}
+          # The root filesystem stays writable because the entrypoint writes
+          # outside PGDATA during initdb. The container is still non-root,
+          # unprivileged and seccomp-confined; only the data directory is
+          # persistent.
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          # No livenessProbe on purpose: a database that is slow to recover
+          # answers `pg_isready` late, and a restart cannot fix a corrupt or
+          # replaying volume. The controller's own readiness probe is the
+          # signal that the store is unusable.
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 8Gi
