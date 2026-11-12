@@ -10,4 +10,4 @@
  * never recreate those tables. The ladder is additive and idempotent, and a
  * database from a newer build is refused rather than silently downgraded.
  */
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;

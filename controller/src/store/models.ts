@@ -143,7 +143,34 @@ export function persistableResultEnvelope(envelope: string | null | undefined): 
 
 export type IntentStatus = "claimed" | "settled" | "failed";
 
-export type LedgerStatus = "SETTLED" | "REFUND_PENDING" | "REFUNDED";
+export type LedgerStatus = "SETTLED" | "REFUND_PENDING" | "REFUND_SENDING" | "REFUNDED";
+
+/**
+ * A refund the worker has claimed and not yet resolved (#31). `reclaimed` is
+ * true when the row was already `REFUND_SENDING`: its previous owner's lease
+ * expired, so this owner found it on the stale-lease path. The worker counts it
+ * separately, and the resend reuses the stored idempotency key.
+ */
+export interface ClaimedRefund {
+  ledger: PaymentLedgerRecord;
+  reclaimed: boolean;
+}
+
+/** What a refund claim pass asks the store for. */
+export interface RefundClaimRequest {
+  nowMs: number;
+  /**
+   * A `REFUND_SENDING` row claimed at or before this instant has an expired
+   * lease and is due again. The caller computes it as `now - leaseMs`, so the
+   * lease policy lives with the worker and the store only compares timestamps.
+   */
+  leaseCutoffMs: number;
+  limit: number;
+  /** Rows at or above this many attempts are never claimed again. */
+  maxAttempts: number;
+  /** Fence written onto every row this pass claims. */
+  claimToken: string;
+}
 
 export interface PaymentLedgerRecord {
   paymentKey: string;
@@ -162,6 +189,15 @@ export interface PaymentLedgerRecord {
   refundAttempts: number;
   refundLastError: string | null;
   refundNextAttemptAt: number | null;
+  /** Fence held by the worker while the row is `REFUND_SENDING`. */
+  refundClaimToken: string | null;
+  /** When the current `REFUND_SENDING` lease was taken, in epoch ms. */
+  refundClaimedAt: number | null;
+  /**
+   * Stable provider idempotency key, `refund:<paymentKey>`. Set when the row is
+   * first claimed and never rewritten, so every retry presents the same key.
+   */
+  refundIdempotencyKey: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -452,6 +488,9 @@ export function mapLedger(r: Record<string, unknown>): PaymentLedgerRecord {
     refundAttempts: (r.refund_attempts as number | null) ?? 0,
     refundLastError: (r.refund_last_error as string | null) ?? null,
     refundNextAttemptAt: (r.refund_next_attempt_at as number | null) ?? null,
+    refundClaimToken: (r.refund_claim_token as string | null) ?? null,
+    refundClaimedAt: (r.refund_claimed_at as number | null) ?? null,
+    refundIdempotencyKey: (r.refund_idempotency_key as string | null) ?? null,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
   };

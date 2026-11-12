@@ -259,16 +259,19 @@ describe("refund worker", () => {
     });
 
     const first = await worker.run();
-    expect(first).toMatchObject({ attempted: 1, refunded: 0, failed: 1 });
+    expect(first).toMatchObject({ attempted: 1, refunded: 0, failed: 0, exhausted: 1 });
     const after = (await store.getLedgerByPayment(PAYMENT_KEY))!;
     expect(after.status).toBe("REFUND_PENDING");
     expect(after.refundAttempts).toBe(1);
     expect(after.refundLastError).toBe("treasury offline");
+    // The claim is released, so no token is left behind.
+    expect(after.refundClaimToken).toBeNull();
 
-    // Attempts are exhausted: the row is skipped, not retried forever, and stays
-    // visible to the operator endpoint and the pending gauge.
+    // Attempts are exhausted: the row is not claimed again, so it is never sent
+    // to the provider a second time, and it stays visible to the operator
+    // endpoint and the pending gauge.
     const second = await worker.run();
-    expect(second).toMatchObject({ refunded: 0, failed: 0, exhausted: 1 });
+    expect(second).toMatchObject({ attempted: 0, refunded: 0, failed: 0, exhausted: 0 });
     expect(executor.refund).toHaveBeenCalledTimes(1);
     expect((await store.getLedgerByPayment(PAYMENT_KEY))?.status).toBe("REFUND_PENDING");
   });

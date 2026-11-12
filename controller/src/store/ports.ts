@@ -1,12 +1,14 @@
 import type {
   ChallengeBurnResult,
   ClaimOperationResult,
+  ClaimedRefund,
   ExecRequestRecord,
   IntentClaimResult,
   LedgerStatus,
   PaymentIntentRecord,
   PaymentLedgerRecord,
   PaymentRecord,
+  RefundClaimRequest,
   SessionRecord,
   SessionState,
   StoreHealth,
@@ -116,6 +118,7 @@ export interface TerminationStore {
   ): Promise<boolean>;
   // RefundService shares this store.
   getLedgerBySession(sessionId: string): Promise<PaymentLedgerRecord | null>;
+  listRelayLostSettled(): Promise<PaymentLedgerRecord[]>;
   listUnclaimedSettled(): Promise<PaymentLedgerRecord[]>;
   listUnrefundedTerminalBeforeReady(): Promise<PaymentLedgerRecord[]>;
   markRefundPending(paymentKey: string, reason: string): Promise<boolean>;
@@ -142,6 +145,8 @@ export interface LifecycleStore {
 export interface RefundStore {
   getLedgerBySession(sessionId: string): Promise<PaymentLedgerRecord | null>;
   getSession(id: string): Promise<SessionRecord | null>;
+  /** Terminal relay-loss rows still settled: paid time that was lost (#31). */
+  listRelayLostSettled(): Promise<PaymentLedgerRecord[]>;
   /** Settled rows with no session: unentitled or duplicate charges (#31). */
   listUnclaimedSettled(): Promise<PaymentLedgerRecord[]>;
   listUnrefundedTerminalBeforeReady(): Promise<PaymentLedgerRecord[]>;
@@ -152,9 +157,21 @@ export interface RefundStore {
 /** Automated refund execution (#31). */
 export interface RefundWorkerStore {
   countLedgerByStatus(status: LedgerStatus): Promise<number>;
-  listRefundPendingDue(nowMs: number, limit: number): Promise<PaymentLedgerRecord[]>;
-  markRefunded(paymentKey: string, transaction: string, reason: string): Promise<boolean>;
-  recordRefundAttempt(paymentKey: string, error: string, nextAttemptAt: number): Promise<boolean>;
+  /**
+   * Durably claim due refunds before sending. Two callers never receive the
+   * same row, and a row whose previous claim lease expired is reclaimed with a
+   * fresh token (see `PgLedgerRepository.claimRefunds`).
+   */
+  claimRefunds(request: RefundClaimRequest): Promise<ClaimedRefund[]>;
+  /** Provider paid: SENDING -> REFUNDED, only for the claim owner. */
+  completeRefundClaim(paymentKey: string, claimToken: string, transaction: string): Promise<boolean>;
+  /** Provider declined: SENDING -> PENDING with one failed attempt counted. */
+  releaseRefundClaim(
+    paymentKey: string,
+    claimToken: string,
+    error: string,
+    nextAttemptAt: number,
+  ): Promise<boolean>;
 }
 
 /** Settlement recovery for the settle-then-crash window (#31). */

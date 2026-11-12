@@ -2,17 +2,23 @@
 
 Status: durable ledger, terminal-refund policy, settlement reconciliation and
 an opt-in refund worker are implemented. Mock payments refund automatically;
-real payment modes leave an explicit `REFUND_PENDING` until an operator-configured
-refund endpoint resolves it, or the attempts run out. No partial refunds or
-customer credits yet. **None of the real-money path has been executed against a
-real facilitator or a real chain**: see [Limits](#limits).
+real payment modes leave an explicit `REFUND_PENDING` until an
+operator-configured refund endpoint resolves it, or the attempts run out. Refund
+execution is **effectively-once**: a durable claim plus a stable provider
+idempotency key, not exactly-once. No partial refunds or customer credits yet.
+**None of the real-money path has been executed against a real facilitator or a
+real chain**: see [Limits](#limits).
 
 ## States
 
 ```text
-SETTLED ──> REFUND_PENDING ──> REFUNDED
+SETTLED ──> REFUND_PENDING ──> REFUND_SENDING ──> REFUNDED
    └──────────────────────────> REFUNDED   (mock auto-refund or manual)
 ```
+
+`REFUND_SENDING` is the worker's claim: the row is owned by one pass until the
+provider answers or the claim lease expires. See
+[Refund worker](#refund-worker) for the transitions out of it.
 
 A ledger row is written in the **same database transaction** as the payment,
 session and payment-intent settlement in `Store.completeEntitlement`. There is
@@ -23,11 +29,13 @@ never a session without a ledger row, or a ledger row without its entitlement.
 | `payment_key` | x402 payment key; primary key |
 | `session_id` | session that consumed the payment; unique |
 | `payer`, `amount`, `asset`, `network`, `mode` | payment identity |
-| `status` | `SETTLED`, `REFUND_PENDING`, `REFUNDED` |
+| `status` | `SETTLED`, `REFUND_PENDING`, `REFUND_SENDING`, `REFUNDED` |
 | `reason` | why a refund was requested |
 | `refund_tx` | mock transaction id or operator-supplied real transaction id |
 | `settlement_nonce` | EIP-3009 authorisation nonce, so a refund can be keyed by it |
 | `refund_attempts`, `refund_last_error`, `refund_next_attempt_at` | refund worker retry state |
+| `refund_claim_token`, `refund_claimed_at` | owner and lease of the current `REFUND_SENDING` claim |
+| `refund_idempotency_key` | stable provider key, `refund:<payment_key>` (schema v18) |
 
 ## Claim fencing and idempotent completion
 
@@ -83,7 +91,7 @@ the `409 reconciliation_pending` behaviour is unchanged.
 
 ## Refund policy
 
-A refund is considered only when the session reaches a terminal state with
+A refund is considered when the session reaches a terminal state with
 `ready_at = NULL`:
 
 - provisioning failure, queue timeout, provisioning timeout,
@@ -91,7 +99,11 @@ A refund is considered only when the session reaches a terminal state with
 - client destroy before READY.
 
 Once a session has reached READY, the ledger stays `SETTLED`; the customer
-received service, and any exception is a manual review.
+received service, and any exception is a manual review. There is one deliberate
+exception: a session terminated by the relay-continuity branch as
+`failure:relay_lost` is refunded in full even though it reached READY, because
+the paid time after the loss was undeliverable. A client destroy or an ordinary
+lease expiry after READY is not refunded.
 
 `RefundService` is invoked after `finalizeTermination`:
 
@@ -101,9 +113,9 @@ received service, and any exception is a manual review.
 
 All transitions are conditional in SQL, so retries and repeated termination
 paths cannot refund twice. Housekeeping also scans terminal-before-READY
-sessions whose ledger is still `SETTLED`, and settlement rows with no session
-(`unsettled:*`, `duplicate:*`), repairing a crash between the write and the
-policy.
+sessions whose ledger is still `SETTLED`, terminal `relay_lost` sessions whose
+ledger is still `SETTLED`, and settlement rows with no session (`unsettled:*`,
+`duplicate:*`), repairing a crash between the write and the policy.
 
 ## Double charges
 
@@ -134,21 +146,94 @@ stopping.
 |---|---:|---|
 | `REFUND_WEBHOOK_URL` | empty | operator endpoint that sends the funds; empty disables the worker |
 | `REFUND_WEBHOOK_TOKEN` | empty | bearer token for that endpoint |
-| `REFUND_MAX_ATTEMPTS` | `10` | give up after this many failures |
+| `REFUND_MAX_ATTEMPTS` | `10` | stop after this many refused attempts |
 | `REFUND_RETRY_BASE_MS` | `60000` | first retry delay, doubled per attempt (capped at 1 h) |
+| `REFUND_CLAIM_LEASE_MS` | `60000` | how long one pass owns a claim; must exceed the webhook timeout |
+
+### Claim before sending
+
+A pass never sends a row it does not own. It claims up to `limit` due rows in one
+statement:
+
+```sql
+WITH due AS (
+  SELECT payment_key, status FROM payment_ledger
+   WHERE refund_attempts < $max_attempts
+     AND ( (status = 'REFUND_PENDING'
+            AND (refund_next_attempt_at IS NULL OR refund_next_attempt_at <= $now))
+        OR (status = 'REFUND_SENDING'
+            AND (refund_claimed_at IS NULL OR refund_claimed_at <= $lease_cutoff)) )
+   ORDER BY updated_at ASC LIMIT $limit
+   FOR UPDATE SKIP LOCKED
+)
+UPDATE payment_ledger l
+   SET status = 'REFUND_SENDING', refund_claim_token = $token,
+       refund_claimed_at = $now,
+       refund_idempotency_key = COALESCE(l.refund_idempotency_key,
+                                         'refund:' || l.payment_key),
+       updated_at = $now
+  FROM due WHERE l.payment_key = due.payment_key
+RETURNING l.*, due.status AS previous_status;
+```
+
+`FOR UPDATE SKIP LOCKED` makes two workers disjoint: the loser skips locked rows
+instead of waiting, so exactly one pass owns a row. `previous_status` tells the
+worker whether it took the row from `REFUND_PENDING` or reclaimed an expired
+`REFUND_SENDING` lease.
+
+### State machine
+
+| From | Event | To | Effect |
+|---|---|---|---|
+| `REFUND_PENDING` | claim, backoff elapsed | `REFUND_SENDING` | fresh token, lease, idempotency key |
+| `REFUND_SENDING` | claim, lease expired | `REFUND_SENDING` | new token and lease, same key |
+| `REFUND_SENDING` | provider paid | `REFUNDED` | `refund_tx`, only if the token matches |
+| `REFUND_SENDING` | provider refused (4xx) | `REFUND_PENDING` | attempts + 1, backoff, token cleared |
+| `REFUND_SENDING` | timeout, 5xx, no transaction | `REFUND_SENDING` | unchanged, retried when the lease expires |
+| `REFUND_PENDING` | attempts at `REFUND_MAX_ATTEMPTS` | `REFUND_PENDING` | never claimed again, stays visible |
+| `SETTLED` | mock refund or operator | `REFUNDED` | direct path, not the worker |
+| `REFUNDED` | any | `REFUNDED` | terminal; the claim query cannot select it |
+
+A refused attempt at the limit is terminal for the worker: the row stays
+`REFUND_PENDING` with `refund_attempts` at the limit and `refund_last_error` set,
+and shows up in the operator endpoint and the pending gauge. The manual refund
+endpoint deliberately refuses `REFUND_SENDING`; that row belongs to a worker
+that may be mid-send.
+
+A restart needs no separate recovery: the claim query already treats an expired
+`REFUND_SENDING` lease as due, and `RefundService.reconcile` repairs terminal
+`relay_lost` rows still `SETTLED`. There is one send path.
+
+### Provider contract and effectively-once
 
 `POST $REFUND_WEBHOOK_URL` with
-`{paymentKey, settlementNonce, payer, amount, asset, network, mode, reason}` and
-expects `200 {"transaction":"<id>"}`. The endpoint holds the signing authority;
-this process does not, so a compromised controller cannot move funds by itself.
-Every transition is conditional on `status = 'REFUND_PENDING'`, so a retry or a
-second worker cannot refund twice. A row that exhausts its attempts stays
-`REFUND_PENDING` with `refund_last_error` set, and shows up in the operator
-endpoint and the pending gauge.
+`{paymentKey, settlementNonce, payer, amount, asset, network, mode, reason, idempotencyKey}`
+and `Idempotency-Key: refund:<paymentKey>`, expecting
+`200 {"transaction":"<id>"}`. The endpoint holds the signing authority; this
+process does not, so a compromised controller cannot move funds by itself.
+
+**The provider must key on `Idempotency-Key`**: the same key returns the original
+transaction and moves no funds again. That property, plus the durable claim, is
+the whole guarantee. It is effectively-once:
+
+- a crash after the provider paid but before `REFUNDED` is written leaves the row
+  `REFUND_SENDING`; the reclaim resends the same key and the provider returns the
+  original transaction;
+- a timeout is treated as unknown, not as a failure, because the provider may
+  have paid before the answer was lost;
+- a stalled pass that was reclaimed cannot record its transaction: completion is
+  conditional on the claim token.
+
+What it does not survive: a provider that ignores the key (two transfers), or a
+row whose key is changed between attempts (do not do that). Exact-once across an
+unreliable network is not achievable from this side.
 
 Metrics: `sandbox_refunds_total{mode,result}` (policy outcomes),
-`sandbox_refund_worker_total{result}` (attempted/failed/exhausted),
-`sandbox_refunds_pending` (gauge), `sandbox_settlement_recovery_total{result}`.
+`sandbox_refund_worker_total{result}` (`refunded`, `failed`, `unknown`,
+`exhausted`, `reclaimed`, `claim_lost`), `sandbox_refunds_pending` and
+`sandbox_refunds_sending` (gauges), `sandbox_settlement_recovery_total{result}`.
+Logs carry a 12-character payment key prefix, never the full key; the
+idempotency key contains the payment key, so it is not logged either.
 
 ## Operator endpoints
 
@@ -176,7 +261,8 @@ curl -H "x-internal-token: $ADMIN" \
 ```
 
 The manual endpoint refuses to refund a `SETTLED` ledger whose session reached
-READY unless it is already `REFUND_PENDING`.
+READY unless it is already `REFUND_PENDING`, and refuses a `REFUND_SENDING` row:
+a worker owns that claim and may be mid-send.
 
 ## Limits
 
@@ -184,13 +270,25 @@ READY unless it is already `REFUND_PENDING`.
   worker are exercised against stubs and the mock facilitator. No test in this
   repository has moved testnet funds, and `REFUND_WEBHOOK_URL` has no
   implementation in this repository.
-- The refund endpoint protocol (`POST` with a `{transaction}` reply) is a
-  contract this repository defines, not one a facilitator provides. A real
-  facilitator with a refund API needs an adapter.
+- The refund endpoint protocol (`POST` with a `{transaction}` reply and
+  `Idempotency-Key` dedupe) is a contract this repository defines, not one a
+  facilitator provides. A real facilitator with a refund API needs an adapter,
+  and effectively-once depends on that adapter honouring the key. A provider that
+  ignores it can still be paid twice across a crash; the ledger cannot detect
+  that.
 - Recovery depends on a settlement lookup the facilitator must expose. Testnet's
   public facilitator does not, so testnet still answers `409
   reconciliation_pending` and the money is only visible to a human who reconciles
   the on-chain transfer.
+- An ambiguous refund outcome (timeout, 5xx, no transaction id) does not count an
+  attempt: the row stays `REFUND_SENDING` and is retried each time its lease
+  expires, with the same key, indefinitely. `REFUND_MAX_ATTEMPTS` bounds definite
+  refusals only. That is deliberate, because giving up on a payment that may have
+  moved is worse than a visible `sandbox_refunds_sending` gauge that stays above
+  zero; an operator still has to reconcile that row.
+- The claim lease bounds duplicate sends only against a *slow* pass. A pass whose
+  provider call outlives `REFUND_CLAIM_LEASE_MS` is safe only because the resend
+  reuses the key, not because the lease prevented it.
 - No partial refunds, prorating, credits, or a per-payer spend ledger beyond the
   admission budget ([admission-control.md](admission-control.md)).
 - The ledger records the payment amount, not fees or net settlement.
