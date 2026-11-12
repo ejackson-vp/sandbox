@@ -52,11 +52,19 @@ jobs:
       # The published profile set is guest/profiles/runtime-images.conf; the
       # release workflow builds exactly those and nothing else.
       - run: ./guest/check-profiles.sh
-      - run: npm run test:unit
-      - run: npm run test:property
+      # Unit and property run once, under instrumentation: the coverage floor in
+      # vitest.config.ts fails the build on a regression, and the json-summary
+      # here is what `coverage-badge` publishes. Running them twice (plain, then
+      # covered) measured the same files twice for no extra signal.
+      - run: npm run test:coverage
       # Portable suites that no other job runs. They need no cluster or guest
       # binary; the browser compatibility case skips without its image.
       - run: npm run test:portable
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
 
   # The store contract over Postgres: the same suite `unit` runs on SQLite,
   # against the backend ADR 0010 targets. `unit` skips the Postgres half when
@@ -170,39 +178,21 @@ jobs:
           GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
         run: npm run test:integration
 
-  # The README coverage badge is measured, not hand-maintained. This job runs
-  # the portable suites (unit, property) under instrumentation and publishes the
-  # json-summary; the separate job below turns it into a badge.
+  # The README coverage badge is measured, not hand-maintained. The `unit` job
+  # above runs the portable suites (unit, property) under instrumentation and
+  # uploads the json-summary; this job turns it into a badge.
   #
-  # Integration is deliberately excluded: it already runs once in `integration`
-  # above, and instrumenting a second concurrent copy is what made #128 and the
+  # Integration is deliberately excluded: it already runs once in `integration`,
+  # and instrumenting a second concurrent copy is what made #128 and the
   # `stale-frame-recovery` test flake. The cost is the line coverage only those
   # tests reach (the controller lifecycle/reconciler paths); see CONTRIBUTING.md.
-  coverage:
-    name: coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - name: coverage (unit + property)
-        run: npm run test:coverage
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: coverage-report
-          path: coverage/
-          retention-days: 14
-
+  #
   # Writes exactly one JSON file to the `badges` branch, which the README badge
   # reads. Main pushes only, and it never checks out or runs PR code: the
   # artifact is produced by the trusted run, this job only publishes it.
   coverage-badge:
     name: coverage badge
-    needs: coverage
+    needs: unit
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

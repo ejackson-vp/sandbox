@@ -51,8 +51,9 @@ jobs:
       - run: npx tsc -p tsconfig.tests.json --noEmit
       - run: npm run lint:structure
       - run: ./guest/check-profiles.sh
-      - run: npm run test:unit
-      - run: npm run test:property
+      # Same list as the `unit` job in ci.yml, coverage included: the floor in
+      # vitest.config.ts is a gate, so it has to hold for a release too.
+      - run: npm run test:coverage
       - run: npm run test:portable
 
   # Build and push the staging tag only. The semver/major.minor/latest tags are

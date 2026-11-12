@@ -205,11 +205,14 @@ vet-go:
 	cd guest && go vet ./...
 	@out=$$(cd guest && gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
-# Markdown lint always; link check when lychee is installed (CI always runs it).
+# Mirrors .github/workflows/docs.yml: same glob set, same lychee flags. The
+# local target used to lint a smaller set and skip fragment checks, so a broken
+# anchor could pass here and fail in CI.
 docs-check:
-	npx --yes markdownlint-cli2 "*.md" "docs/**/*.md"
+	npx --yes markdownlint-cli2 "*.md" "docs/**/*.md" "deploy/**/*.md" "security-review/**/*.md" ".github/**/*.md"
 	@if command -v lychee >/dev/null 2>&1; then \
-		lychee --offline --no-progress --exclude-path node_modules "*.md" "docs/**/*.md"; \
+		lychee --offline --no-progress --include-fragments --exclude-path node_modules \
+			"*.md" "docs/**/*.md" "deploy/**/*.md" "security-review/**/*.md"; \
 	else \
 		echo "lychee not installed: skipping link check (CI runs it)"; \
 	fi

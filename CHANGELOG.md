@@ -187,6 +187,14 @@ the container registry.
 - CI runs `go vet` and `gofmt` on the guest, and the transfer, workload and
   browser-compatibility suites, which no job ran before. The release gate now
   matches `ci.yml`, including the test typecheck and profile-pin check.
+- The verification loop got faster without losing a gate. The unit, property,
+  coverage and portable suites opt into `--fileParallelism` (915 unit tests:
+  ~24 s serial, ~4 s parallel, still serial by default for integration and
+  security), the duplicate `coverage` CI job is folded into `unit`, which now
+  runs `test:coverage` once and enforces a 55% lines / 45% branches / 45%
+  functions floor, `npm test` is unit + property instead of everything, and
+  `make docs-check` lints and link-checks the same globs with the same lychee
+  flags as `docs.yml`, fragments included.
 
 ### Fixed
 
