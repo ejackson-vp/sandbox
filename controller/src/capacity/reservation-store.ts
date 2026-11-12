@@ -28,7 +28,7 @@ export interface ReservationRecord extends CapacityReservation {
 }
 
 export type ReservationAdmission =
-  | { admitted: true; reservation: ReservationRecord; reused: boolean }
+  | { admitted: true; reservation: ReservationRecord }
   | Extract<AdmissionDecision, { admitted: false }>;
 
 export interface AdmitOptions {
