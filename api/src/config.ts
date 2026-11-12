@@ -17,8 +17,9 @@ import {
   type PlatformLimits,
   type TierTable,
 } from "@x402s/shared/payment";
+import { DEFAULT_METRICS_PORT } from "@x402s/shared/runtime";
 
-export type PaymentMode = "mock" | "testnet";
+type PaymentMode = "mock" | "testnet";
 
 const MAINNET_NETWORKS = new Set(["eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"]);
 const TESTNET_NETWORKS = new Set(["eip155:84532", "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"]);
@@ -209,7 +210,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   return {
     port,
     // Dedicated scrape listener, never the public ingress port.
-    metricsPort: int(env.METRICS_PORT, 9100, 0, 65535),
+    metricsPort: int(env.METRICS_PORT, DEFAULT_METRICS_PORT, 0, 65535),
     metricsHost: env.METRICS_HOST ?? "0.0.0.0",
     ...payment,
     ...credentials,

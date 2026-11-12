@@ -9,7 +9,7 @@
 import { loadPlatformLimits, loadTiers, type TierTable } from "@x402s/shared/payment";
 import type { ControllerConfig } from "./types.js";
 
-export type LimitTables = Pick<ControllerConfig, "tiers" | "platformLimits">;
+type LimitTables = Pick<ControllerConfig, "tiers" | "platformLimits">;
 
 export function parseTierTable(env: NodeJS.ProcessEnv): TierTable {
   return loadTiers(env);

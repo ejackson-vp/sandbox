@@ -20,10 +20,8 @@
 import type { Tx } from "./pg.js";
 import { SCHEMA_VERSION } from "../schema.js";
 
-export { SCHEMA_VERSION };
-
 /** DDL statements are applied under one transaction-scoped advisory lock. */
-export const MIGRATION_LOCK_KEY = 8_402_000;
+const MIGRATION_LOCK_KEY = 8_402_000;
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS payments (
@@ -179,7 +177,7 @@ CREATE INDEX IF NOT EXISTS exec_requests_session ON exec_requests(session_id);
  * The due index is created separately because the predicate is built from the
  * same constant as the query it serves.
  */
-export function dueIndexSql(nonTerminalStatesSql: string): string {
+function dueIndexSql(nonTerminalStatesSql: string): string {
   return `CREATE INDEX IF NOT EXISTS sessions_due ON sessions(next_due_ms NULLS FIRST)
     WHERE state IN (${nonTerminalStatesSql});`;
 }
@@ -233,7 +231,7 @@ const LADDER: ReadonlyArray<{ from: number; sql: string }> = [
   },
 ];
 
-export interface MigrationResult {
+interface MigrationResult {
   from: number;
   to: number;
 }

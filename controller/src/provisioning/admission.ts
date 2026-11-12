@@ -25,7 +25,7 @@ import type { ProvisioningStore } from "../store/ports.js";
 type AdmissionStore = Pick<ProvisioningStore, "mergeTimings" | "requestTermination" | "setWorkspacePvc">;
 
 /** The narrow view of the reconciler that admission is allowed to use. */
-export interface AdmissionRuntime {
+interface AdmissionRuntime {
   readonly cfg: ControllerConfig;
   readonly store: AdmissionStore;
   readonly provisioner: Pick<Provisioner, "createWorkspacePvc" | "workspacePvcExists">;

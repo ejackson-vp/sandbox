@@ -22,8 +22,9 @@ export async function openStore(
   options: { writer: boolean },
 ): Promise<StoreBackend> {
   if (cfg.storeBackend === "postgres") {
-    if (!cfg.databaseUrl) throw new Error("STORE_BACKEND=postgres requires DATABASE_URL");
-    return PostgresStore.open(cfg.databaseUrl, {
+    // `parseStoreSelection` refuses postgres without DATABASE_URL, so a parsed
+    // config always has one here.
+    return PostgresStore.open(cfg.databaseUrl!, {
       writer: options.writer,
       budgetWindowMs: cfg.budgetWindowMs,
     });

@@ -14,7 +14,7 @@ import type { ReadinessReport } from "@x402s/shared/protocol";
 
 export type SessionView = ControllerSessionView;
 
-export interface OperationResult {
+interface OperationResult {
   state: SessionState;
   requestId: string;
   envelope?: string;
@@ -32,7 +32,7 @@ export class ControllerError extends Error {
   }
 }
 
-export type IntentClaim =
+type IntentClaim =
   | { status: "claimed"; recovered: boolean; token: string; expiresAt: number }
   | { status: "settled"; sessionId: string }
   | { status: "in_progress" }
@@ -40,7 +40,7 @@ export type IntentClaim =
   | { status: "mismatch" };
 
 /** Server-issued single-use challenge value (#47). */
-export interface ChallengeNonce {
+interface ChallengeNonce {
   nonce: string;
   expiresAt: number;
 }
@@ -50,13 +50,13 @@ export interface ChallengeNonce {
  * `ChallengeBurnResult`; declared here because the API does not import the
  * controller workspace.
  */
-export type ChallengeBurnStatus = "burned" | "replay" | "expired" | "unknown" | "reused";
+type ChallengeBurnStatus = "burned" | "replay" | "expired" | "unknown" | "reused";
 
 /**
  * Durable create-budget decision (#48). Mirrors the controller's
  * `BudgetDecision`; the API does not import the controller workspace.
  */
-export interface BudgetRemaining {
+interface BudgetRemaining {
   payerCreates: number | null;
   payerSpend: string | null;
   /** null means unlimited (the corresponding limit is 0). */
@@ -84,7 +84,7 @@ export type CapacityDecision =
       requested: { cpuMillicores: number; memoryBytes: number; storageBytes: number };
     };
 
-export interface CompleteIntentBody extends EntitlementRequest {
+interface CompleteIntentBody extends EntitlementRequest {
   /** Ownership token returned by the intent claim; required to settle. */
   claimToken: string;
   timings?: {

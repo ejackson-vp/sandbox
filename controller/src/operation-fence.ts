@@ -30,7 +30,7 @@ import { log } from "@x402s/shared/runtime";
 import type { RelayClient } from "./relay-client.js";
 import type { FenceStore } from "./store/ports.js";
 
-export interface FenceReconcileResult {
+interface FenceReconcileResult {
   /** Fenced gates released because the guest reported the request finished. */
   cleared: number;
   /** Gates still held because the guest reports an active operation. */

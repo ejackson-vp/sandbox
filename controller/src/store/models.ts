@@ -201,7 +201,7 @@ export type IntentClaimResult =
  * `sessions_due` partial index are both built from this list, so the index
  * predicate can never drift away from the query it serves.
  */
-export const NON_TERMINAL_STATES = [
+const NON_TERMINAL_STATES = [
   "PAID",
   "PROVISIONING",
   "READY",

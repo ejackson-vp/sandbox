@@ -59,7 +59,7 @@ export interface RelayServer {
   collectMetrics(): void;
 }
 
-export interface RelayOptions {
+interface RelayOptions {
   adminToken: string;
   maxSessions?: number;
   responseTtlMs?: number;

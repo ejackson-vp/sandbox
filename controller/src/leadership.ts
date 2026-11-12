@@ -10,7 +10,7 @@
  */
 import { log } from "@x402s/shared/runtime";
 
-export type LeadershipListener = (isLeader: boolean) => void;
+type LeadershipListener = (isLeader: boolean) => void;
 
 export interface Leadership {
   /** Identity written into the Lease; also what the logs call this replica. */
@@ -101,7 +101,7 @@ export class SoloLeadership extends BaseLeadership {
  * still in flight then fails loudly on the guard instead of writing after
  * another replica may already own the lease.
  */
-export interface LeadershipHooks {
+interface LeadershipHooks {
   /**
    * Enable writes and run anything else only a writer may do. Runs first.
    *

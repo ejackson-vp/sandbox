@@ -20,7 +20,7 @@ export const WARM_IMAGE_DIGEST_ANNOTATION = "x402.io/image-digest";
 export const WARM_RUNTIME_ANNOTATION = "x402.io/runtime";
 export const WARM_RUNTIME_LABEL = "x402.io/runtime";
 
-export interface WarmPoolIdentityInput {
+interface WarmPoolIdentityInput {
   /** Profile name, `base` for the default guest image. */
   runtime: string;
   imageDigest: string;

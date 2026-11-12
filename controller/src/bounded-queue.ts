@@ -9,7 +9,7 @@
  * Deliberately small and dependency-free: ordering and fairness belong to the
  * caller (a reconcile pass), not to a general-purpose scheduler.
  */
-export interface BoundedRunOptions {
+interface BoundedRunOptions {
   /** Maximum items in flight at once. Values below 1 are treated as 1. */
   concurrency: number;
   /** Clock used for queue-wait accounting; injectable for tests. */

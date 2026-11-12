@@ -14,7 +14,7 @@
  */
 import type { ControlApiStore, MetricsStore, ReconcilerStore } from "./ports.js";
 
-export interface StoreBackendProcess {
+interface StoreBackendProcess {
   /** True when this process is deliberately not the writer. */
   readonly writesAreBlocked: boolean;
   /**

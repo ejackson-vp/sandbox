@@ -8,7 +8,7 @@
 import { parseStoreSelection } from "../store-selection.js";
 import type { ControllerConfig } from "./types.js";
 
-export type StoreSettings = Pick<ControllerConfig, "dbPath" | "storeBackend" | "databaseUrl">;
+type StoreSettings = Pick<ControllerConfig, "dbPath" | "storeBackend" | "databaseUrl">;
 
 export function parseStore(env: NodeJS.ProcessEnv, backupDir: string): StoreSettings {
   return {

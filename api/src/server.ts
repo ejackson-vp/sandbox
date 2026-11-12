@@ -52,7 +52,7 @@ async function retry<T>(fn: () => Promise<T>, timeoutMs: number, label: string):
   throw new Error(`${label} did not become available: ${(lastErr as Error)?.message ?? "timeout"}`);
 }
 
-export interface ApiDeps {
+interface ApiDeps {
   config: ApiConfig;
   controller: ControllerClient;
   /** Injectable for tests: bypasses HTTP facilitator setup. */

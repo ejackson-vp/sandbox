@@ -16,7 +16,7 @@ import type { ApiConfig } from "../config.js";
 import { operationSchema, payloadHashSchema, requestIdSchema, rejectPlaintextBodies } from "../schemas.js";
 import { toStatus } from "../status.js";
 
-export interface SessionsDeps {
+interface SessionsDeps {
   config: ApiConfig;
   controller: ControllerClient;
 }

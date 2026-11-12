@@ -18,7 +18,7 @@ export type Endpoint = { host: string; port: number };
 export type EndpointPair = { relay: Endpoint | null; proxy: Endpoint | null };
 
 /** What address resolution needs: placement config plus the Service lookup. */
-export interface EndpointRuntime {
+interface EndpointRuntime {
   readonly cfg: DataPlanePlacement & {
     relayServiceName: string;
     proxyServiceName: string;

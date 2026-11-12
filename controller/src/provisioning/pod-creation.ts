@@ -34,7 +34,7 @@ type PodCreationStore = Pick<
 >;
 
 /** The narrow view of the reconciler that pod construction is allowed to use. */
-export interface PodCreationRuntime {
+interface PodCreationRuntime {
   readonly cfg: ControllerConfig;
   readonly store: PodCreationStore;
   readonly provisioner: Pick<

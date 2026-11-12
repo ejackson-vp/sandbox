@@ -10,9 +10,9 @@
  * `pg_dump` branch ADR 0010 describes exists. A backup that silently backed up
  * nothing would be worse than a startup error.
  */
-export type StoreBackendName = "sqlite" | "postgres";
+type StoreBackendName = "sqlite" | "postgres";
 
-export interface StoreSelection {
+interface StoreSelection {
   storeBackend: StoreBackendName;
   databaseUrl: string | null;
 }

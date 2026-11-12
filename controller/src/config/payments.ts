@@ -15,7 +15,7 @@ import { envInt as int } from "@x402s/shared/env";
 import { atomicAmount } from "../settlement-config.js";
 import type { ControllerConfig } from "./types.js";
 
-export type PaymentLimitSettings = Pick<
+type PaymentLimitSettings = Pick<
   ControllerConfig,
   | "challengeNonceTtlMs"
   | "challengeNonceMaxActive"

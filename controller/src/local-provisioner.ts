@@ -30,7 +30,7 @@ interface LocalPod {
   runtime?: string;
 }
 
-export interface LocalProvisionerOptions {
+interface LocalProvisionerOptions {
   binary: string;
   relayHost: string;
   relayPort: number;

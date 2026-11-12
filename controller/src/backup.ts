@@ -22,23 +22,23 @@ const TAG_BYTES = 16;
 const HEADER_BYTES = MAGIC.length + IV_BYTES;
 const CHUNK_BYTES = 64 * 1024;
 
-export interface BackupCounts {
+interface BackupCounts {
   sessions: number;
   payments: number;
   paymentLedger: number;
   paymentIntents: number;
 }
 
-export interface VerifyOptions {
+interface VerifyOptions {
   /** Assert that this payment and its ledger row survived the backup. */
   paymentKey?: string;
 }
 
-export interface BackupStore {
+interface BackupStore {
   backupTo(path: string): Promise<void>;
 }
 
-export interface BackupServiceOptions {
+interface BackupServiceOptions {
   store: BackupStore;
   dir: string;
   key: Buffer | null;
@@ -288,7 +288,7 @@ export class BackupService {
   }
 }
 
-export interface RestoreOptions extends VerifyOptions {
+interface RestoreOptions extends VerifyOptions {
   force?: boolean;
 }
 

@@ -12,7 +12,7 @@ import { budgetReserveSchema } from "../control-api-schemas.js";
 import type { BudgetLimits } from "../store/budgets.js";
 import type { ControlApiDeps } from "./types.js";
 
-export function budgetLimitsFrom(cfg: ControlApiDeps["cfg"]): BudgetLimits {
+function budgetLimitsFrom(cfg: ControlApiDeps["cfg"]): BudgetLimits {
   return {
     windowMs: cfg.budgetWindowMs,
     payerCreates: cfg.payerCreatesPerWindow,

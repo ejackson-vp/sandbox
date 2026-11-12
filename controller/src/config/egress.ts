@@ -8,7 +8,7 @@
 import { envInt as int } from "@x402s/shared/env";
 import type { ControllerConfig } from "./types.js";
 
-export type EgressSettings = Pick<
+type EgressSettings = Pick<
   ControllerConfig,
   | "allowedPorts"
   | "allowedHostSuffixes"

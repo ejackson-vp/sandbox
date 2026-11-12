@@ -3,35 +3,6 @@
  */
 import type { AttestationEnvelope, ExecutionMode } from "./attestation.js";
 
-export interface RelayRequestMessage {
-  type: "request";
-  /** Correlation id, chosen by the controller. */
-  id: string;
-  /** base64 sealed box for the guest. */
-  envelope: string;
-  /** Absolute epoch ms by which the operation must be abandoned. */
-  deadlineMs: number;
-  /**
-   * Execution-epoch fence. The controller bumps a session's epoch when it
-   * recovers an interrupted operation and publishes the new epoch to the relay
-   * before the fence can clear. The relay refuses a frame below that floor and
-   * withdraws a frame already forwarded from the superseded generation, so a
-   * frame from a previous controller generation can never start after
-   * recovery. The guest also refuses a frame below its own high-water mark.
-   */
-  epoch: number;
-}
-
-export interface RelayCancelMessage {
-  type: "cancel";
-  id: string;
-}
-
-export interface RelayShutdownMessage {
-  type: "shutdown";
-  reason: string;
-}
-
 /**
  * Claim sent to a warm (pre-booted, unleased) guest. Everything the guest
  * needs to become a real session is here, so the pod template itself never

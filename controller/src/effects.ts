@@ -36,7 +36,7 @@ import type { EffectStore } from "./store/ports.js";
 import type { Endpoint, RelayRegistration } from "./provisioning/endpoints.js";
 
 /** Values the readiness handshake contributes to `persist_ready`. */
-export interface ReadyHandshake {
+interface ReadyHandshake {
   readyAt: number;
   leaseExpiresAt: number;
   attestationJson: string;
@@ -108,7 +108,7 @@ export interface CreatePath {
  * registered with the relay is the token the guest boots with, and the volume
  * has to exist before the pod that mounts it.
  */
-export interface CreatePathContext {
+interface CreatePathContext {
   readonly path: CreatePath;
   readonly plan: StartPodPlan;
   /** Credential `register_relay` staged for the create that follows. */
@@ -133,7 +133,7 @@ export interface EffectRuntime {
   now(): number;
 }
 
-export interface EffectContext extends EffectRuntime {
+interface EffectContext extends EffectRuntime {
   /** The row the effects act on: pod name, workspace PVC and reason live here. */
   readonly session: SessionRecord;
   /** Supplied by the readiness path; `persist_ready` cannot run without it. */

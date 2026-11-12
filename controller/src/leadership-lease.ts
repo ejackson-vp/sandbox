@@ -25,9 +25,9 @@ import type { ControllerConfig } from "./config.js";
 import { BaseLeadership } from "./leadership.js";
 
 /** Renewal cadence. Comfortably below the duration, so one failed call is tolerated. */
-export const LEASE_RENEW_INTERVAL_MS = 2_000;
+const LEASE_RENEW_INTERVAL_MS = 2_000;
 /** How long a holder may go unrenewed before another replica may force-acquire. */
-export const LEASE_DURATION_MS = 10_000;
+const LEASE_DURATION_MS = 10_000;
 /**
  * One API call must not outlive a renewal window. Without a ceiling a hung
  * request would keep the loop from noticing that its own lease expired.
@@ -74,7 +74,7 @@ export interface LeaseClient {
   ): Promise<LeaseSnapshot>;
 }
 
-export class KubeLeaseClient implements LeaseClient {
+class KubeLeaseClient implements LeaseClient {
   private readonly coordination: k8s.CoordinationV1Api;
 
   constructor(kubeconfig?: k8s.KubeConfig) {
@@ -120,7 +120,7 @@ export class KubeLeaseClient implements LeaseClient {
   }
 }
 
-export interface LeaseLeadershipOptions {
+interface LeaseLeadershipOptions {
   client: LeaseClient;
   namespace: string;
   name: string;

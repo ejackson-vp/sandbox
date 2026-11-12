@@ -302,10 +302,6 @@ export function transition(
   }
 }
 
-export function canSuspend(snapshot: SessionSnapshot): boolean {
-  return transition(snapshot, { type: "suspend_requested" }).ok;
-}
-
 export function canResume(snapshot: SessionSnapshot): boolean {
   return transition(snapshot, { type: "resume_requested" }).ok;
 }

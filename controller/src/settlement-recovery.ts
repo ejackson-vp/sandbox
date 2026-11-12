@@ -25,7 +25,7 @@ import type { PaymentIntentRecord } from "./store/models.js";
 import type { SettlementRecoveryStore } from "./store/ports.js";
 import type { RefundOutcome, RefundService } from "./refunds.js";
 
-export interface SettlementRecord {
+interface SettlementRecord {
   settled: boolean;
   transaction?: string;
   payer?: string;
@@ -62,7 +62,7 @@ export class HttpSettlementLookup implements SettlementLookup {
   }
 }
 
-export interface SettlementRecoveryOptions {
+interface SettlementRecoveryOptions {
   /** How long a claim may sit before recovery considers it a crash. */
   graceMs: number;
   /** Intents examined per pass. */
@@ -72,7 +72,7 @@ export interface SettlementRecoveryOptions {
   now?: () => number;
 }
 
-export interface SettlementRecoveryResult {
+interface SettlementRecoveryResult {
   checked: number;
   recovered: number;
   errors: number;

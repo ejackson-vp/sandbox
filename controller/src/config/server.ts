@@ -8,11 +8,12 @@
  * controller port, before any relay or proxy port).
  */
 import { envInt as int } from "@x402s/shared/env";
+import { DEFAULT_METRICS_PORT } from "@x402s/shared/runtime";
 import type { AdminTokens, ServiceTokens } from "./tokens.js";
 import type { TransportSecurity } from "./tls.js";
 import type { ControllerConfig } from "./types.js";
 
-export type ServerSettings = Pick<
+type ServerSettings = Pick<
   ControllerConfig,
   | "controllerPort"
   | "metricsPort"
@@ -42,7 +43,7 @@ export function parseServer(
 ): ServerSettings {
   return {
     controllerPort: int(env.X402_CONTROLLER_PORT ?? env.CONTROLLER_PORT, 3001, 1, 65535),
-    metricsPort: int(env.METRICS_PORT, 9100, 0, 65535),
+    metricsPort: int(env.METRICS_PORT, DEFAULT_METRICS_PORT, 0, 65535),
     metricsHost: env.METRICS_HOST ?? "0.0.0.0",
     ...security.tls,
     relayPort: int(env.X402_RELAY_PORT ?? env.RELAY_PORT, 8443, 1, 65535),

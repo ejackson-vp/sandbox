@@ -15,7 +15,7 @@ import type { ProvisioningStore } from "../store/ports.js";
 type PodStatusStore = Pick<ProvisioningStore, "mergeTimings" | "requestTermination" | "setNodeName">;
 
 /** The narrow view of the reconciler that pod observation is allowed to use. */
-export interface PodStatusRuntime {
+interface PodStatusRuntime {
   readonly store: PodStatusStore;
   readonly provisioner: Pick<Provisioner, "getPod">;
   readonly capacity: Pick<CapacityService, "getReservation" | "pinSessionNode">;

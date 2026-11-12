@@ -15,8 +15,6 @@ import type {
   SessionHandle,
 } from "./types.js";
 
-export { DEFAULT_RUNTIME, SUPPORTED_RUNTIMES };
-
 /** The slice of {@link SandboxClient} a one-shot run needs. */
 export interface RunClient {
   createSession(opts?: CreateOptions): Promise<SessionHandle>;
@@ -37,7 +35,7 @@ export interface RunClient {
  * The list is the shared contract, not a client-side freeze; the server also
  * returns a 400 for an unknown name, so an older SDK still fails safely.
  */
-export function assertSupportedRuntime(runtime: string | undefined): string {
+function assertSupportedRuntime(runtime: string | undefined): string {
   const name = runtime ?? DEFAULT_RUNTIME;
   if (!isSupportedRuntime(name)) {
     throw new SandboxError(

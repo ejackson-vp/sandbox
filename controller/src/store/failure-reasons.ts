@@ -6,7 +6,7 @@
  * cardinality by accident. Shared by both adapters so the metric is identical
  * whichever backend is configured.
  */
-export const PROVISION_FAILURE_REASONS = new Set([
+const PROVISION_FAILURE_REASONS = new Set([
   "provisioning_timeout",
   "provisioning_queue_timeout",
   "warm_claim_timeout",

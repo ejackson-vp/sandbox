@@ -10,8 +10,9 @@
  * property-based tests can only sample. Correspondence to the implementation:
  *
  *   shared/src/domain/session.ts              SOURCE_STATES, transition()
- *   shared/src/protocol/relay.ts              RelayRequestMessage.epoch,
- *                                             GuestStatusMessage
+ *   shared/src/protocol/relay.ts              GuestStatusMessage
+ *   controller/src/relay/registry.ts          the request frame's epoch and
+ *                                             the forwarding floor
  *   guest/supervisor.go                       admitEpoch, publishStatus,
  *                                             the single guest slot
  *   controller/src/store.ts                   claimPaymentIntent,

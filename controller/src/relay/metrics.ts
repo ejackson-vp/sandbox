@@ -7,7 +7,7 @@
  */
 import { metrics, type MetricsRegistry } from "@x402s/shared/runtime";
 
-export const RELAY_DISCONNECT_REASONS = [
+const RELAY_DISCONNECT_REASONS = [
   "normal",
   "going_away",
   "policy_violation",
@@ -64,7 +64,7 @@ export function registerRelayMetrics(registry: MetricsRegistry = metrics): void 
 }
 
 /** The counters the scrape reads. Declared here so metrics does not import the registry. */
-export interface RelayMetricsSource {
+interface RelayMetricsSource {
   size(): number;
   pendingTotal(): number;
   activeTotal(): number;
