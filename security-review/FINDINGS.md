@@ -13,7 +13,7 @@ executed), `theoretical` (no concrete path found).
 | F-03 | High | proven | Schema version mismatch dropped `payments`, `payment_ledger`, `payment_intents` and `sessions` | Fixed |
 | F-04 | Medium | proven | Custom sessions were priced by duration only: 4 vCPU/8 GiB cost the same as 100m/128 MiB | Fixed |
 | F-05 | Medium | proven | RateLimiter cleared the whole table past 10k buckets, resetting unrelated penalties | Fixed |
-| F-06 | High | code-confirmed | Release images are pushed and tagged before the vulnerability scan; a failing scan leaves the tag pullable | **Open** |
+| F-06 | High | code-confirmed | Release images are pushed and tagged before the vulnerability scan; a failing scan leaves the tag pullable | **Fixed** in `release.yml` (staged tags, scan by digest, promote after scan); residual staging tag, see below |
 | F-07 | Medium | code-confirmed | A *full* create-request capture was replayable forever: the commitment was a static signature over (paymentKey, clientPublicKey, clientNonce) | **Fixed** (#47) |
 | F-08 | Low | code-confirmed | Capability derivation changed (`v2` HMAC); capabilities issued by an older build stop verifying after upgrade | Accepted |
 | F-09 | Low | proven | Payer rate-limit key comes from the unverified `from` field; only the per-IP bucket bounds key rotation | Accepted (documented) |
@@ -210,7 +210,7 @@ the deployment must ensure the proxy overwrites `X-Forwarded-For`.
 
 ---
 
-## F-06 — Release tags published before the scan (OPEN)
+## F-06 — Release tags published before the scan (FIXED, residual staging tag)
 
 **Attacker prerequisites:** none; this is a process defect.
 **Surface:** `.github/workflows/release.yml`.
@@ -226,12 +226,21 @@ red. The workflow comment acknowledges this.
 **Affected configurations:** any deployment pulling `ghcr.io/…-control:<tag>` or
 `:latest` from a release run that failed scanning.
 
-**Proposed fix (not implemented; needs a real release run to validate):**
-push only an immutable staging tag/digest (`staging-<sha>`), scan by digest,
-then a `promote` job uses `docker buildx imagetools create` to add the version and
-`latest` tags only after the scan passes. `release` should depend on `promote`.
+**Fix:** `release.yml` now pushes only a run-scoped `staging-<run-id>-<sha>`
+tag. The `digests` job resolves the immutable index digest, `scan` gates that
+exact digest, and `promote` adds the version and `latest` tags with
+`imagetools create` only after both image scans and the isolation gate pass.
+`release` depends on `promote`, so a red scan leaves no release tag. Provenance
+attestations are attached to the same digests.
 
-**Status:** open. Blocks the public-payment beta verdict.
+**Residual:** the run-scoped staging tag is still pullable from GHCR until it is
+cleaned up, and nothing at admission time prevents a deployment from using it.
+It is not a release artifact and is documented as such in
+`docs/release-process.md`; the deployment manifests and Kyverno policy target
+`repo@sha256:...` release digests, not `staging-*`.
+
+**Status:** fixed in code. A future release run should confirm that a failed
+scan leaves no version tag; that run is not in the retained evidence.
 
 ---
 
