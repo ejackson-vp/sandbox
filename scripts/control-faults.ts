@@ -5,20 +5,25 @@
  *   TARGET=controller  kill the controller while sessions are provisioning
  *   TARGET=api         kill the API while sessions are provisioning
  *   TARGET=relay       kill the relay during active sessions and verify the
- *                      guest exits, accounting is preserved, and cleanup drains
+ *                      guest reconnects, the session survives with its lease,
+ *                      the interrupted operation is outcome_unknown, and a new
+ *                      operation runs afterwards
  *   TARGET=relay SCENARIO=create-restart
  *                      restart the relay while paid creates are starting; every
  *                      create must reach READY, never a charged pod_terminated
  *
  * Every scenario measures time-to-convergence and asserts no duplicate Pods or
- * leaked reservations. TARGET=relay expects the sessions to fail closed: the
- * relay holds only in-memory connection state, so a guest whose relay link
- * drops exits and the controller terminates the session.
+ * leaked reservations. TARGET=relay expects the sessions to survive: the relay
+ * holds only in-memory connection state, so the controller re-registers the
+ * session on the replacement generation and the guest reconnects. A guest that
+ * cannot reconnect ends the session with `failure:relay_lost`, not
+ * `guest_exited`.
  */
 import { execFileSync, spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SandboxClient, SandboxError, type SessionHandle } from "@x402s/sdk";
 import { relayCreateRestart } from "./fault-scenarios/relay-create-restart.js";
+import { relayKill } from "./fault-scenarios/relay-kill.js";
 import { relayActive, relayPending } from "./relay-state.js";
 import { workloadRef } from "./workload-ref.js";
 
@@ -216,95 +221,6 @@ async function provisioningKill(): Promise<number> {
       failures,
     }, null, 2));
     if (failures.length || terminal.length || pods !== COUNT || reservations.total !== COUNT) process.exitCode = 1;
-    if (convergedMs > CONVERGENCE_BUDGET_MS) {
-      console.error(`convergence ${convergedMs}ms exceeded budget ${CONVERGENCE_BUDGET_MS}ms`);
-      process.exitCode = 1;
-    }
-  } finally {
-    console.log("destroying sessions...");
-    await destroyAll(handles);
-    const drained = await waitForDrain(Date.now() + 60_000);
-    console.log(`cleanup: pods=${drained.pods} reservations=${JSON.stringify(drained.reservations)}`);
-    if (drained.pods !== 0 || drained.reservations.total !== 0) process.exitCode = 1;
-  }
-  return convergedMs;
-}
-
-/**
- * Kill the relay under an in-flight operation. The session cannot survive a
- * relay restart (registrations and pending envelopes are in memory), so the
- * correct outcome is fail-closed: every operation errors, every guest exits,
- * every session becomes FAILED, and Pods/reservations drain without a leak.
- */
-async function relayKill(): Promise<number> {
-  const clients = makeClients(COUNT);
-  const handles: Array<{ client: SandboxClient; handle: SessionHandle }> = [];
-  let killedAt = 0;
-  let convergedMs = 0;
-  try {
-    console.log(`creating ${COUNT} paid sessions...`);
-    await createAll(clients, handles);
-    console.log("waiting for all sessions to be ready...");
-    await Promise.all(handles.map(({ client, handle }) => client.waitForReady(handle, 120_000)));
-
-    const execs = handles.map(({ client, handle }) => client
-      .exec(handle, { command: ["sleep", "30"], timeoutMs: 10_000 })
-      .then(
-        (result) => ({ ok: result.ok, error: result.ok ? "" : (result.error?.code ?? "operation_failed") }),
-        (err: Error) => ({ ok: false, error: err.message }),
-      ));
-    const pendingDeadline = Date.now() + 10_000;
-    let pendingAtKill = 0;
-    while (Date.now() < pendingDeadline) {
-      pendingAtKill = await relayPending({ namespace: NS });
-      if (pendingAtKill >= handles.length) break;
-      await sleep(50);
-    }
-    console.log(`killing relay with ${pendingAtKill}/${handles.length} operations in flight`);
-    killedAt = Date.now();
-    await kill("relay");
-    const execOutcomes = await Promise.all(execs);
-
-    const deadline = Date.now() + 120_000;
-    let states: string[] = [];
-    for (;;) {
-      const statuses = await Promise.all(handles.map(({ client, handle }) => client.status(handle).catch(() => null)));
-      states = statuses.map((s) => s?.state ?? "UNKNOWN");
-      if (states.every((state) => ["EXPIRED", "FAILED", "DESTROYED"].includes(state))) break;
-      if (Date.now() >= deadline) break;
-      await sleep(250);
-    }
-    convergedMs = Date.now() - killedAt;
-    const statuses = await Promise.all(handles.map(({ client, handle }) => client.status(handle).catch(() => null)));
-    const paid = statuses.filter((s) => Boolean(s?.paidAt)).length;
-    const terminal = statuses.filter((s) => ["EXPIRED", "FAILED", "DESTROYED"].includes(s?.state ?? "")).length;
-    const failed = statuses.filter((s) => s?.state === "FAILED").length;
-    const operationsFailed = execOutcomes.filter((outcome) => !outcome.ok).length;
-    const drained = await waitForDrain(deadline);
-
-    console.log(JSON.stringify({
-      target: "relay",
-      count: handles.length,
-      convergedMs,
-      convergenceBudgetMs: CONVERGENCE_BUDGET_MS,
-      terminal,
-      failed,
-      paid,
-      pendingAtKill,
-      operationsFailed,
-      podCount: drained.pods,
-      reservations: drained.reservations,
-      execErrors: Object.entries(execOutcomes.reduce<Record<string, number>>((acc, outcome) => {
-        const key = outcome.error.split(":")[0] ?? "unknown";
-        acc[key] = (acc[key] ?? 0) + 1;
-        return acc;
-      }, {})).map(([error, count]) => ({ error, count })),
-    }, null, 2));
-
-    if (terminal !== handles.length || failed !== handles.length || paid !== handles.length) process.exitCode = 1;
-    if (pendingAtKill !== handles.length) process.exitCode = 1;
-    if (operationsFailed !== handles.length) process.exitCode = 1;
-    if (drained.pods !== 0 || drained.reservations.total !== 0) process.exitCode = 1;
     if (convergedMs > CONVERGENCE_BUDGET_MS) {
       console.error(`convergence ${convergedMs}ms exceeded budget ${CONVERGENCE_BUDGET_MS}ms`);
       process.exitCode = 1;
@@ -617,7 +533,20 @@ async function main(): Promise<void> {
           createAll, destroyAll, podCount, capacity, waitForDrain, kill, log: (message) => console.log(message),
         }));
       } else {
-        samples.push(await relayKill());
+        samples.push(await relayKill({
+          count: COUNT,
+          budgetMs: CONVERGENCE_BUDGET_MS,
+          clients: makeClients(COUNT),
+          createAll,
+          destroyAll,
+          waitForStatuses,
+          relayPending: (until, waitMs) => relayPending({ namespace: NS, until, waitMs }),
+          podCount,
+          capacity,
+          waitForDrain,
+          kill,
+          log: (message) => console.log(message),
+        }));
       }
     } else if (SCENARIO === "lifecycle") {
       samples.push(await lifecycleRestart());

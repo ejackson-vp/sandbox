@@ -411,12 +411,24 @@ export class RelayRegistry {
     entry.ws = ws;
     entry.socket = socket ?? null;
     entry.connectedAt = Date.now();
+    // A new socket is a new guest process or a reconnected one. The execution
+    // status reported on the previous link no longer describes this one, so it
+    // is cleared: a recovery fence holds until the guest reports itself, rather
+    // than trusting a status that belonged to a dead socket.
+    entry.activeRequestId = null;
+    entry.execEpoch = null;
+    entry.statusAt = null;
     if (reconnecting) {
       this.metrics
         .counter("sandbox_relay_reconnects_total", "Guest reconnections to an existing registration")
         .inc();
     }
     return true;
+  }
+
+  /** Whether a registration already exists (used to log a re-registration). */
+  has(sessionId: string): boolean {
+    return this.entries.has(sessionId);
   }
 
   hello(

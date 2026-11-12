@@ -378,6 +378,16 @@ export class PostgresStore implements StoreBackend {
     return this.operations.clearFencedGate(sessionId, requestId, epoch);
   }
 
+  listRelaySessions(limit: number, after: string | null = null): Promise<SessionRecord[]> {
+    return this.operations.listRelaySessions(limit, after);
+  }
+
+  recoverSessionOperation(
+    sessionId: string,
+  ): Promise<{ requestId: string | null; epoch: number | null }> {
+    return this.operations.recoverSessionOperation(sessionId);
+  }
+
   claimOperation(sessionId: string, requestId: string, op: string, payloadHash: string | null = null) {
     return this.operations.claimOperation(sessionId, requestId, op, payloadHash);
   }

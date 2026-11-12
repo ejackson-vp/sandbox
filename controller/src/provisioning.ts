@@ -153,6 +153,15 @@ export class Provisioning implements CreatePath {
       return;
     }
 
+    // A Pod Kubernetes already has from an earlier attempt (the controller died
+    // after the create) is adopted before the effect list replays
+    // `register_relay`. Replaying it mints a fresh guest token, and the guest
+    // that is already running and connected still holds the old one: rotating
+    // it under a live guest strands the session on a 401 it can never retry
+    // away. Adoption instead moves PAID -> PROVISIONING and `awaitReady`
+    // re-registers the row's existing token hash if the relay lost it.
+    if (await this.pods.adoptExistingPod(session)) return;
+
     // PAID + provision_requested is the table's decision: register the guest
     // credential, ensure the workspace a suspendable session needs, then claim
     // a warm pod or create a cold one. The last effect performs the guarded

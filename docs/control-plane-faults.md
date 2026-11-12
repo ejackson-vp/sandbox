@@ -4,10 +4,13 @@ Status: control-plane fault slice implemented. In-process fault tests cover
 settlement, Pod adoption, deletion failure and lifecycle races; the real
 harness kills the API, controller or relay on a kind cluster and measures
 time-to-convergence. Relay request/response idempotency has dedicated unit
-tests. Full suite: 180 passed, 3 skipped. The relay-restart create window (#17)
-has an in-process integration case against the real guest plus a cluster case
-that was added without a local cluster run; see
-[Relay restart during a create](#relay-restart-during-a-create-17).
+tests. The relay-restart create window (#17) has an in-process integration case
+against the real guest plus a cluster case that was added without a local
+cluster run; see
+[Relay restart during a create](#relay-restart-during-a-create-17). Relay
+restarts during live sessions are covered in-process against the real guest
+(`tests/integration/relay-reconnect.test.ts`); the cluster case was changed to
+expect survival and has not been run since.
 
 ## Invariants
 
@@ -107,8 +110,10 @@ still owns retries, refunds and session convergence for the faults below.
 - `TARGET=relay` (default 20 sessions): wait for every session to be READY,
   start one long-running operation per session, wait until the relay reports
   all operations in flight, then kill the relay. The correct outcome is
-  fail-closed: every operation fails or becomes indeterminate, every session
-  ends `FAILED`, payment records remain, and Pods/reservations drain to zero.
+  survival: every operation becomes `outcome_unknown` (or a transport error the
+  SDK surfaces) and is never re-executed, every session stays `READY`/`ACTIVE`
+  with the same lease, a new operation succeeds after the guest reconnects, and
+  Pods/reservations stay allocated until the harness destroys the sessions.
 - `TARGET=relay SCENARIO=create-restart` (5 sessions): restart the relay as
   soon as the paid creates return, so the rollout overlaps provisioning. Every
   create must reach READY against the replacement relay, no session may be
@@ -138,7 +143,7 @@ scenario); a run that exceeds its budget exits nonzero.
 |---|---|---|---|
 | Controller killed during provisioning | 50 | 33.4 s–37.8 s across runs (17.8 s before the deterministic pre-kill wait) | 50/50 READY, 50 Pods, 50 allocated reservations, 0 failures |
 | API killed during provisioning | 20 | 6.6 s / 6.8 s | 20/20 READY, 20 Pods, 20 allocated reservations, 0 harness failures |
-| Relay killed with one in-flight operation per session | 3–5 | 6.7 s–27.2 s (dominated by relay rollout readiness) | all sessions `FAILED`, all operations failed or reported indeterminate, payment preserved, 0 Pods, 0 reservations |
+| Relay killed with one in-flight operation per session (before guest reconnect) | 3–5 | 6.7 s–27.2 s (dominated by relay rollout readiness) | all sessions `FAILED`, all operations failed or reported indeterminate, payment preserved, 0 Pods, 0 reservations. Superseded: this row measured fail-closed, which the survivor contract replaced; the current case has not been run on a cluster |
 | Relay restarted while paid creates are provisioning | 5 | 4.5 s–9.5 s across three runs | 5/5 READY, 5 Pods, 5 allocated reservations, no terminal sessions |
 | Controller killed with 50 live sessions: 30 READY, 10 ACTIVE, 10 SUSPENDED | 50 | 7.6 s restart; 2.2 s resume | all operation gates cleared, 40 non-suspended sessions executed after restart, 10 stayed `SUSPENDED` and then resumed; 40 Pods → 50 Pods, 40 allocated + 10 suspended → 50 allocated, 0 failures |
 | Controller paused during provisioning | 5 | 3.21–3.23 s across 3 runs | 5/5 READY, 5 Pods, 5 allocated, 0 failures |
@@ -262,6 +267,59 @@ the rollout and the stale-connection path that the local router only
 simulates. **This case was added but not run while implementing #17**; it needs
 the self-hosted cluster runner described below.
 
+## Relay restart during a live session
+
+Before guest reconnect, a relay restart ended every session on that shard: the
+supervisor exited with its link, the Pod went terminal, and the reconciler failed
+the session with `failure:guest_exited`. A `READY` session had already been paid
+for, so the customer lost the remaining lease.
+
+Now the guest reconnects (ADR 0011), and the controller treats a relay generation
+change as a recovery boundary:
+
+- the in-flight request becomes `outcome_unknown` and `sessions.exec_epoch` is
+  bumped once (the `pending -> outcome_unknown` transition is the guard),
+- the session is re-registered on the current generation with the token hash it
+  already has,
+- `OperationFence` holds the gate until the reconnected guest reports its slot
+  idle, then the next operation is admitted under the bumped epoch,
+- a guest that does not come back inside `RELAY_LOSS_GRACE_MS` (default 90 s)
+  ends the session with `failure:relay_lost`, which the refund policy can treat
+  differently from a crashed guest. An unreachable relay starts the same clock:
+  the scan cannot tell a replacement from a control-plane stall, and a relay
+  that cannot answer for the grace cannot serve the paid session.
+
+The lease, the Pod, the workspace and the reservations are unchanged in the
+survivor path. A retry of the interrupted request id is `409
+outcome_unknown`; it is never re-executed.
+
+### Local verification
+
+`tests/integration/relay-reconnect.test.ts` runs the real guest, two real relay
+processes on the same address, a real Postgres store and the real reconciler:
+
+- a `READY` session with an exec in flight survives a relay kill and restart: the
+  request is `outcome_unknown` with no stored result, the epoch moves from 1 to
+  2, the session stays `READY` with the same `leaseExpiresAt`, the workspace file
+  persists, a retry of the old request id is `409 outcome_unknown`, and a new
+  exec succeeds under epoch 2 with no duplicate execution of the old command;
+- a guest that cannot reconnect (frozen with `SIGSTOP`) ends the session `FAILED`
+  with `failure:relay_lost` once the grace expires.
+
+`tests/unit/relay-recovery.test.ts` pins detection (once per change), the
+READY/ACTIVE registration set, the idle hold and the grace outcome;
+`tests/unit/relay-recovery-store.test.ts` pins the exactly-once fence;
+`tests/unit/relay.test.ts` pins reconnect acceptance and the refusal of a frame
+below the floor after the re-registration.
+
+### Cluster case
+
+`make test-control-faults TARGET=relay` (matrix case `relay-kill`) now requires
+survival rather than fail-closed: no terminal session, unchanged leases,
+`outcome_unknown` for every interrupted operation, a successful new exec per
+session, and Pods/reservations still allocated. **This expectation was changed
+without a cluster run**; the local cases above are what was executed here.
+
 ## Scheduled runs (nightly)
 
 `.github/workflows/nightly-faults.yml` runs this matrix plus the cluster
@@ -310,7 +368,7 @@ that can only reach the sandbox namespaces, not an admin kubeconfig.
 |---|---|---|---|---|
 | `controller-kill` | controller | kill during provisioning | 50 | 60 s |
 | `api-kill` | api | kill during provisioning | 20 | 30 s |
-| `relay-kill` | relay | kill with operations in flight | 5 | 60 s |
+| `relay-kill` | relay | kill with operations in flight | 5 | 120 s |
 | `relay-create-restart` | relay | restart while paid creates are provisioning | 5 | 120 s |
 | `lifecycle-restart` | controller | kill with READY/ACTIVE/SUSPENDED sessions | 50 | 120 s |
 | `controller-pause` | controller | `SIGSTOP`/`SIGCONT` during provisioning | 5 | 60 s |
@@ -381,6 +439,8 @@ when `API_URL` is loopback, so no manual forwarding is needed.
 | Destroy during `RESUMING` | `lets destroy win while a resume is between SUSPENDED and RESUMING` | destroy wins; final state `DESTROYED`, no Pod left |
 | Duplicate destroy | `accepts duplicate destroys and still reaches a single terminal state` | one terminal `DESTROYED` row, no Pod left |
 | In-flight operation at controller crash | `fences an operation interrupted by a controller crash`, `keeps the gate closed until the guest finishes, then admits the next operation`, `recovery withdraws a stale frame the guest has not observed` | request becomes `outcome_unknown`; the gate stays closed until the guest reports its slot idle; no new operation is forwarded while fenced; the relay refuses and withdraws a frame below the recovery epoch; the next operation runs under a higher execution epoch |
+| Relay restart with an exec in flight | `fences the in-flight exec as outcome_unknown and keeps the session READY` | the request becomes `outcome_unknown` with no result; the epoch is bumped once; the session stays `READY` with the same lease; the guest reconnects to the replacement relay; a retry of the old id is `409 outcome_unknown`; a new exec succeeds and the workspace file persists |
+| Relay restart and the guest cannot reconnect | `ends the session with relay_lost when the guest cannot reconnect inside the grace` | the session becomes `FAILED` with `failure:relay_lost` (not `guest_exited`) once `RELAY_LOSS_GRACE_MS` passes; the reason is what the refund policy consumes |
 | Replayed relay request | `does not re-execute a completed request and keeps the first response` | retry sees the cached outcome; the guest receives one request; a delayed duplicate response cannot replace the first |
 | Retry of an in-flight relay request | `treats a retry of an in-flight request as pending without re-forwarding` | guest receives one frame |
 | Late success after a guest error | `keeps a guest error terminal for late and duplicate responses` | late/duplicate responses cannot turn the recorded error into success |
@@ -412,14 +472,16 @@ it:
    it already forwarded by resetting the guest link (unread bytes are
    discarded). The guest keeps its own high-water mark as defence in depth, so
    a request forwarded by the previous controller generation can never start
-   after recovery. A reset is a real link loss: the supervisor exits, the Pod is
-   terminal (`restartPolicy: Never`), and the session ends `FAILED` with
-   `failure:guest_exited` rather than lingering `READY` with no guest.
+   after recovery. A reset is a real link loss: the supervisor aborts the
+   command the link was carrying and reconnects (ADR 0011), so the session keeps
+   its lease and the withdrawn frame never starts.
 3. The guest reports its active request id and epoch on hello, when it takes the
    single slot, and when it releases it. `OperationFence` releases the gate only
-   when the relay reports the guest idle, or when no guest is connected (the
-   supervisor exits when its relay link drops). A connected guest that has never
-   reported status keeps the gate closed: failing closed is the contract.
+   when the relay reports the guest idle, or when no guest is connected and the
+   session was not fenced by a relay loss. A guest that lost its relay link is
+   expected back (ADR 0011), so its gate waits for the reconnected guest's idle
+   report. A connected guest that has never reported status keeps the gate
+   closed: failing closed is the contract.
 4. `GET /requests/{id}` returns `409 outcome_unknown` for a fenced request; an
    id the controller never saw is still `404 request_not_found`. If the relay
    had already cached the guest's signed result, that real result is returned

@@ -186,9 +186,18 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       expect((await store.getSession(sessionId))?.activeRequestId).toBeNull();
 
       // Let the guest run. The withdrawn frame must have been discarded: the
-      // command would have written the marker if the guest had read it.
+      // command would have written the marker if the guest had read it. The
+      // supervisor no longer exits on link loss: it reconnects with the same
+      // identity, so the session survives with its workspace.
       guest.resume();
-      expect(await guest.waitForExit(10_000)).not.toBeNull();
+      await waitFor(
+        relay,
+        sessionId,
+        (state) => state.connected && state.statusAt !== undefined,
+        "guest reconnected",
+      );
+      expect((await relay.state(sessionId)).epochFloor).toBe(2);
+      expect(guest.proc?.exitCode ?? null).toBeNull();
       await sleep(200);
       expect(existsSync(join(guest.workspace, "stale-frame-marker"))).toBe(false);
 

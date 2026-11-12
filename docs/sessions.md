@@ -142,6 +142,7 @@ a prerequisite that is not ready leaves the session where it is.
 | While `SUSPENDING` | New controller finishes the checkpoint idempotently: stop guest, delete pod, purge relay, mark `SUSPENDED`. |
 | While `RESUMING` | New controller adopts the pod and continues the readiness handshake; the provisioning timeout is measured from the resume start, not the original payment. |
 | While `ACTIVE` | Lease deadline is in Postgres; the new controller enforces it and deletes the pod. |
+| Relay restarted (new process generation) | Relay recovery fences the interrupted request `outcome_unknown`, bumps `sessions.exec_epoch`, re-registers the session with its existing token hash, and holds the gate until the reconnected guest reports idle. The lease, Pod and workspace are unchanged; see `docs/adr/0011-guest-reconnects-after-relay-loss.md`. |
 | While `TERMINATING` | Cleanup is idempotent and retried on the next tick. |
 
 ## Failure semantics
@@ -151,5 +152,14 @@ a prerequisite that is not ready leaves the session where it is.
 - Payment succeeds but the API crashes before responding: the client retries the
   same request; the outbox returns the same session (`200`) or recovers it from
   settlement state (`201`).
-- Guest dies mid-command: the relay reports `guest disconnected`, the operation
-  fails, and the session moves to `FAILED` when the reconciler notices the pod.
+- Relay link lost mid-command (relay restart, reset for a stale frame, network
+  drop): the operation becomes `outcome_unknown` and is never re-executed. The
+  guest reconnects and the session continues; a retry of the same request id gets
+  `409 outcome_unknown`, a new request id runs normally.
+- Guest cannot reconnect inside `RELAY_LOSS_GRACE_MS` (default 90 s) or its
+  lease ends first: the session becomes `FAILED` with `failure:relay_lost`,
+  distinct from `failure:guest_exited` (the guest process died and the Pod went
+  terminal). The refund policy owns compensation for both.
+- Guest process dies mid-command without a reconnect (OOM kill, panic): the Pod
+  goes terminal, the reconciler observes it and fails the session with
+  `failure:guest_exited`.

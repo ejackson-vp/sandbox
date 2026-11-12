@@ -162,6 +162,53 @@ describe("operation fence", () => {
     expect(h.sessions.get("sbx_1")?.activeRequestId).toBe("req-old");
   });
 
+  it("holds a relay-loss fence until the reconnected guest reports its slot idle", async () => {
+    const h = harness([{ id: "sbx_1", activeRequestId: "req-old", execEpoch: 2 }]);
+    // Relay recovery fenced the operation and asked for an idle report. A
+    // disconnected guest is no longer proof the command is gone: the same
+    // supervisor reconnects to the replacement relay.
+    h.fence.requireGuestIdle("sbx_1");
+    h.states.set("sbx_1", { registered: false, connected: false, pending: 0 });
+    expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 1, errors: 0 });
+    expect(h.sessions.get("sbx_1")?.activeRequestId).toBe("req-old");
+
+    // Re-registered, guest not yet connected.
+    h.states.set("sbx_1", { registered: true, connected: false, pending: 0, epochFloor: 2 });
+    expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 1, errors: 0 });
+
+    // Connected, but the new link has not reported status yet.
+    h.states.set("sbx_1", { registered: true, connected: true, pending: 0, epochFloor: 2 });
+    expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 1, errors: 0 });
+
+    // The reconnected guest reports idle: only now may the gate release.
+    h.states.set("sbx_1", {
+      registered: true,
+      connected: true,
+      pending: 0,
+      epochFloor: 2,
+      statusAt: Date.now(),
+      activeRequestId: "",
+    });
+    expect(await h.fence.reconcile()).toEqual({ cleared: 1, held: 0, errors: 0 });
+    expect(h.cleared).toEqual([{ sessionId: "sbx_1", requestId: "req-old", epoch: 2 }]);
+
+    // The hold was consumed: a later disconnect is the controller-restart shape
+    // (the supervisor exited with its link), not a relay reconnect.
+    h.states.set("sbx_1", { registered: true, connected: false, pending: 0 });
+    expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 0, errors: 0 });
+  });
+
+  it("drops a reconnect hold left behind for a session that is no longer fenced", async () => {
+    const h = harness([]);
+    h.fence.requireGuestIdle("sbx_gone");
+    expect(await h.fence.reconcile()).toEqual({ cleared: 0, held: 0, errors: 0 });
+    // A later fence for the same id (a resumed pod reusing the session) is not
+    // blocked by the stale marker.
+    h.sessions.set("sbx_gone", { id: "sbx_gone", activeRequestId: "req-new", execEpoch: 3 });
+    h.states.set("sbx_gone", { registered: true, connected: false, pending: 0 });
+    expect(await h.fence.reconcile()).toEqual({ cleared: 1, held: 0, errors: 0 });
+  });
+
   it("clears the gate after a reset so the session lifecycle can take over", async () => {
     const h = harness([{ id: "sbx_1", activeRequestId: "req-old", execEpoch: 2 }], { reset: true });
     // The relay withdrew the frame and reset the guest link; no guest remains,

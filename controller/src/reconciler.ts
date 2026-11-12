@@ -31,6 +31,7 @@ import { RefundService } from "./refunds.js";
 import { HttpRefundExecutor, RefundWorker } from "./refund-worker.js";
 import { SettlementRecovery } from "./settlement-recovery.js";
 import { OperationFence } from "./operation-fence.js";
+import { RelayRecovery } from "./relay-recovery.js";
 import { runBounded } from "./bounded-queue.js";
 import { ServiceAddressResolver } from "./service-address.js";
 import { cadenceFor } from "./reconcile-cadence.js";
@@ -56,6 +57,8 @@ interface ReconcilerDeps {
   ) => Promise<{ host: string; port: number } | null>;
   /** Restart-recovery fence; defaults to one bound to the store and relay. */
   fence?: OperationFence;
+  /** Injection point for tests; defaults to one bound to the fence and relay. */
+  relayRecovery?: RelayRecovery;
 }
 
 export class Reconciler {
@@ -82,6 +85,7 @@ export class Reconciler {
   private readonly lifecycle: Lifecycle;
   private readonly termination: Termination;
   private readonly fence: OperationFence;
+  private readonly relayRecovery: RelayRecovery;
   private readonly clock: ClockGuard;
   private readonly refundWorker: RefundWorker;
   private readonly settlementRecovery: SettlementRecovery;
@@ -124,6 +128,9 @@ export class Reconciler {
     this.lifecycle = new Lifecycle(this.ctx, this.provisioning);
     this.termination = new Termination(this.ctx);
     this.fence = deps.fence ?? new OperationFence(deps.store, deps.relay);
+    this.relayRecovery =
+      deps.relayRecovery ??
+      new RelayRecovery(deps.cfg, deps.store, deps.relay, this.fence, () => this.now());
     // Both are inert unless configured: recovery needs a facilitator that
     // exposes a settlement lookup, and the worker needs an operator-owned
     // refund endpoint. With neither, real-mode refunds stay REFUND_PENDING.
@@ -405,6 +412,9 @@ export class Reconciler {
     if (this.housekeepingRunning) return;
     this.housekeepingRunning = true;
     try {
+      // Relay generation recovery first: it fences the operation a lost link was
+      // carrying before the fence below may decide anything about that gate.
+      await this.relayRecovery.reconcile();
       await this.termination.sweep();
       await this.fence.reconcile();
       await this.warm.reconcile();

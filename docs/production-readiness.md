@@ -11,7 +11,7 @@ concrete next step.
 | 1 | **No hardware attestation** | dev/Kata evidence is signed by a published key | out of scope for this repository; it needs TEE hardware and an independent verifier |
 | 2 | **Shared host kernel in dev mode** | container escape is possible for hostile code | require Kata minimum; validate before launch |
 | 3 | **The database is a single Postgres pod** | one primary on a `ReadWriteOnce` volume, pinned to the control-plane node like the rest of the control plane. Losing the node loses the store until the pod is rescheduled and the volume reattached (30s to 2min on most clouds), so this is not database HA, and nothing in this repository backs it up | move the store onto CloudNativePG (streaming replicas + PITR) or pgBackRest, and record a failover that does not wait for a volume detach. [ADR 0010](adr/0010-controller-ha-storage.md), [backup-restore.md](backup-restore.md) |
-| 4 | **Relay is an in-memory registry per pod** | a restart loses pending ciphertext and sessions in flight; replicas hold disjoint sessions, addressed by deterministic shard affinity and enforced in the token, so N>1 no longer splits a session | Redis/NATS with per-session queues and TTLs (ciphertext only) if a relay restart must stop interrupting sessions |
+| 4 | **Relay is an in-memory registry per pod** | a restart loses pending ciphertext and the registration, but no longer the session: the guest reconnects and the interrupted operation is `outcome_unknown` ([ADR 0011](adr/0011-guest-reconnects-after-relay-loss.md)). Replicas hold disjoint sessions, addressed by deterministic shard affinity and enforced in the token, so N>1 no longer splits a session. A restart still costs one interrupted operation and up to `RELAY_LOSS_GRACE_MS` of no operations while the guest reconnects | Redis/NATS with per-session queues and TTLs (ciphertext only) if a relay restart must also stop interrupting the operation in flight |
 | 5 | **Settlement recovery needs a facilitator lookup** | the controller can now reconcile a settled-but-unentitled payment into a refundable ledger row, but only if the facilitator exposes `GET /settlements/:paymentKey`. Testnet's public facilitator does not, so that window still answers `409 reconciliation_pending` | use a facilitator with a settlement lookup or a webhook, and record the run that proves it |
 | 6 | **Real refunds have never run** | mock mode auto-refunds; a real mode records `REFUND_PENDING` and the refund worker sends it to an operator-configured webhook. Nothing in this repository has moved testnet funds, and the webhook contract is defined here rather than by a facilitator | a settlement-sandbox end-to-end run: settle, kill the controller, prove the refund executes. See [payment-ledger.md](payment-ledger.md) |
 | 7 | **Image pinning has no admission layer on the cluster** | the controller refuses to start with an unpinned guest image when `KUBERNETES_ENABLED=true`, and pulls `repo@sha256:…` whenever a digest is configured, dev mode or not, so a moved tag cannot change what runs inside the VM. A compromised *node* can still run anything | a Kyverno `ClusterPolicy` now rejects a guest pod whose image is not the pinned repository+digest ([deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md)); it is inert until Kyverno is installed, and it has not been executed against a cluster |
@@ -103,8 +103,10 @@ concrete next step.
   StatefulSet, no streaming replica, no PITR ([ADR 0010](adr/0010-controller-ha-storage.md)).
   Remaining: move the store onto CloudNativePG or pgBackRest and record a
   failover with the Postgres backend.
-- Persist relay state so a relay restart does not fail paid sessions (or fail and
-  refund them cleanly).
+- Persist relay state so a relay restart does not interrupt the operation in
+  flight either. A restart no longer fails a paid session (the guest reconnects),
+  and a guest that cannot reconnect ends it with `failure:relay_lost`; the
+  refund policy still has to decide compensation for that case.
 - Metrics: sessions created/expired/failed, provisioning latency, operation
   latency, timeouts, cancelled operations, relay pending, proxy denials by reason,
   reaper actions, orphan pods, intent recovery count.

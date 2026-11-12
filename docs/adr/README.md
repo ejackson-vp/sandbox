@@ -16,6 +16,7 @@ were rejected, and the cost we accepted.
 | [0008](0008-relay-enforces-execution-epoch.md) | The relay enforces the session execution epoch | accepted |
 | [0009](0009-leader-election.md) | A Kubernetes Lease elects the single writer | accepted |
 | [0010](0010-controller-ha-storage.md) | Controller HA targets a multi-reader store, not an RWX volume | accepted |
+| [0011](0011-guest-reconnects-after-relay-loss.md) | A guest reconnects after a relay link loss | accepted |
 
 ## Writing a record
 

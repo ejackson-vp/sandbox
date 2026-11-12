@@ -21,10 +21,14 @@
  *
  * The relay keeps the guest's own status report (see GuestStatusMessage). That
  * report survives a controller restart when the relay does; when the relay
- * restarted too, the guest's relay connection dropped and its supervisor
- * exited, so there is no command left to fence. A connected guest that has
- * never reported status (an older guest build) keeps the gate closed: failing
- * closed is the contract.
+ * restarted too, the guest had to reconnect to a new relay generation, so its
+ * status report starts again from "unknown". A session that lost its relay link
+ * is marked with `requireGuestIdle`: those gates are released only once the
+ * reconnected guest reports its slot idle. A disconnected guest is no longer
+ * proof that the command is gone, because the same supervisor reconnects.
+ *
+ * A connected guest that has never reported status (an older guest build) keeps
+ * the gate closed: failing closed is the contract.
  */
 import { log } from "@x402s/shared/runtime";
 import type { RelayClient } from "./relay-client.js";
@@ -40,14 +44,37 @@ interface FenceReconcileResult {
 }
 
 export class OperationFence {
+  /**
+   * Sessions whose guest link was lost and whose guest is expected back. Set by
+   * relay-recovery when it fences an interrupted operation; cleared when the
+   * gate is released. In memory on purpose: it describes the live relay link,
+   * which is exactly as durable as this process.
+   */
+  private readonly awaitReconnect = new Set<string>();
+
   constructor(
     private readonly store: FenceStore,
     private readonly relay: RelayClient,
   ) {}
 
+  /**
+   * Hold this session's gate until a guest reconnects and reports idle. Called
+   * before the relay is re-registered, so the fence cannot mistake the empty
+   * registry of a new relay generation for "the guest is gone for good".
+   */
+  requireGuestIdle(sessionId: string): void {
+    this.awaitReconnect.add(sessionId);
+  }
+
   async reconcile(): Promise<FenceReconcileResult> {
     const result: FenceReconcileResult = { cleared: 0, held: 0, errors: 0 };
-    for (const session of await this.store.listFencedSessions()) {
+    const fenced = await this.store.listFencedSessions();
+    // A session that is no longer fenced cannot be waiting for a reconnect.
+    const stillFenced = new Set(fenced.map((session) => session.id));
+    for (const id of this.awaitReconnect) {
+      if (!stillFenced.has(id)) this.awaitReconnect.delete(id);
+    }
+    for (const session of fenced) {
       const requestId = session.activeRequestId;
       if (!requestId) continue;
 
@@ -93,10 +120,15 @@ export class OperationFence {
         continue;
       }
 
-      // No guest is connected: the supervisor exits when its relay link drops,
-      // so the command cannot still be running. (A pod that outlives its relay
-      // link is killed by the lease and by guest shutdown on reconnect failure.)
+      // No guest is connected. After a controller restart that means the
+      // supervisor exited with its relay link, so the command cannot still be
+      // running. After a relay loss it does not: the same supervisor is expected
+      // to reconnect, so the gate waits for its idle status instead.
       if (!state.registered || !state.connected) {
+        if (this.awaitReconnect.has(session.id)) {
+          result.held += 1;
+          continue;
+        }
         if (await this.release(session.id, requestId, session.execEpoch)) result.cleared += 1;
         continue;
       }
@@ -138,6 +170,7 @@ export class OperationFence {
   private async release(sessionId: string, requestId: string, epoch: number): Promise<boolean> {
     const cleared = await this.store.clearFencedGate(sessionId, requestId, epoch);
     if (cleared) {
+      this.awaitReconnect.delete(sessionId);
       log.info("operation_fence_cleared", { sessionId, requestId, epoch });
     }
     return cleared;
