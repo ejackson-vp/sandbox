@@ -21,8 +21,19 @@
  *   - every write happens inside one `BEGIN IMMEDIATE` on the single-writer
  *     connection, with the same guarded-write discipline as the rest of the
  *     store.
+ *
+ * This file owns the rows, the transaction and the writes. The decision itself
+ * is `decideBudget` in `budget-decision.ts`, shared with the Postgres adapter.
  */
 import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { decideBudget, type BudgetDecision, type BudgetLimits } from "./budget-decision.js";
+
+export type {
+  BudgetDecision,
+  BudgetLimits,
+  BudgetRemaining,
+  BudgetScope,
+} from "./budget-decision.js";
 
 /** The constant key of the global budget row. */
 export const GLOBAL_BUDGET_KEY = "global";
@@ -30,47 +41,6 @@ export const GLOBAL_BUDGET_KEY = "global";
 export function payerBudgetKey(payer: string): string {
   return `payer:${payer.toLowerCase()}`;
 }
-
-export interface BudgetLimits {
-  windowMs: number;
-  payerCreates: number;
-  /** Atomic units of the asset (USDC has 6 decimals). */
-  payerSpend: string;
-  payerConcurrent: number;
-  globalCreates: number;
-  globalConcurrent: number;
-}
-
-export type BudgetScope =
-  | "payer_create"
-  | "payer_spend"
-  | "payer_concurrent"
-  | "global_create"
-  | "global_concurrent"
-  | "table";
-
-export interface BudgetRemaining {
-  /** Creates left for this payer in the window (null when no payer was given). */
-  payerCreates: number | null;
-  /** Atomic units left to spend in the window. */
-  payerSpend: string | null;
-  /** Concurrent sessions this payer may still open; null = unlimited. */
-  payerConcurrent: number | null;
-  /** Creates left globally in the window. */
-  globalCreates: number;
-  /** Concurrent sessions cluster-wide; null = unlimited. */
-  globalConcurrent: number | null;
-}
-
-export type BudgetDecision =
-  | { ok: true; remaining: BudgetRemaining; windowResetsAt: number }
-  | {
-      ok: false;
-      scope: BudgetScope;
-      retryAfterSeconds: number;
-      remaining: BudgetRemaining;
-      windowResetsAt: number;
-    };
 
 interface BudgetRow {
   budget_key: string;
@@ -98,80 +68,39 @@ export class BudgetRepository {
     limits: BudgetLimits,
     now: number,
   ): BudgetDecision {
-    const amount = BigInt(amountAtomic);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const windowResetsAt = (start: number) => start + limits.windowMs;
-
-      // ---- global ----
       const global = this.readRow(GLOBAL_BUDGET_KEY, now, limits.windowMs);
       const globalLive = this.liveSessions(null);
-      const globalBase: BudgetRemaining = {
-        payerCreates: null,
-        payerSpend: null,
-        payerConcurrent: null,
-        globalCreates: Math.max(0, limits.globalCreates - global.creates),
-        globalConcurrent:
-          limits.globalConcurrent > 0 ? Math.max(0, limits.globalConcurrent - globalLive) : null,
-      };
-      if (global.creates >= limits.globalCreates) {
-        this.db.exec("COMMIT");
-        return this.reject("global_create", global.windowStartMs, limits, globalBase, now);
+
+      // The global half is decided first so a refusal here never creates or
+      // rolls a payer row; the payer rows are read only once it admits.
+      let decision = decideBudget({ global, globalLive, payer: null }, amountAtomic, limits, now);
+      if (decision.ok && payer) {
+        decision = decideBudget(
+          {
+            global,
+            globalLive,
+            payer: {
+              row: this.readRow(payerBudgetKey(payer), now, limits.windowMs),
+              live: this.liveSessions(payer),
+            },
+          },
+          amountAtomic,
+          limits,
+          now,
+        );
       }
-      if (limits.globalConcurrent > 0 && globalLive >= limits.globalConcurrent) {
+      if (!decision.ok) {
         this.db.exec("COMMIT");
-        return this.reject("global_concurrent", global.windowStartMs, limits, globalBase, now);
+        return decision;
       }
 
-      // ---- payer ----
-      let payerRow: { windowStartMs: number; creates: number; spend: bigint } | null = null;
-      let payerLive = 0;
-      if (payer) {
-        const key = payerBudgetKey(payer);
-        const row = this.readRow(key, now, limits.windowMs);
-        payerRow = { windowStartMs: row.windowStartMs, creates: row.creates, spend: BigInt(row.spend) };
-        payerLive = this.liveSessions(payer);
-        const payerBase: BudgetRemaining = {
-          ...globalBase,
-          payerCreates: Math.max(0, limits.payerCreates - payerRow.creates),
-          payerSpend: (BigInt(limits.payerSpend) - payerRow.spend).toString(),
-          payerConcurrent:
-            limits.payerConcurrent > 0 ? Math.max(0, limits.payerConcurrent - payerLive) : null,
-        };
-        if (payerRow.creates >= limits.payerCreates) {
-          this.db.exec("COMMIT");
-          return this.reject("payer_create", payerRow.windowStartMs, limits, payerBase, now);
-        }
-        if (payerRow.spend + amount > BigInt(limits.payerSpend)) {
-          this.db.exec("COMMIT");
-          return this.reject("payer_spend", payerRow.windowStartMs, limits, payerBase, now);
-        }
-        if (limits.payerConcurrent > 0 && payerLive >= limits.payerConcurrent) {
-          this.db.exec("COMMIT");
-          return this.reject("payer_concurrent", payerRow.windowStartMs, limits, payerBase, now);
-        }
-      }
-
-      // ---- commit the reservation ----
       this.stmts.bumpBudgetCreate!.run(now, GLOBAL_BUDGET_KEY);
       if (payer) this.stmts.bumpBudgetCreate!.run(now, payerBudgetKey(payer));
       this.db.exec("COMMIT");
 
-      return {
-        ok: true,
-        windowResetsAt: windowResetsAt(global.windowStartMs),
-        remaining: {
-          payerCreates: payerRow ? Math.max(0, limits.payerCreates - payerRow.creates - 1) : null,
-          payerSpend: payerRow ? (BigInt(limits.payerSpend) - payerRow.spend).toString() : null,
-          payerConcurrent:
-            payerRow && limits.payerConcurrent > 0
-              ? Math.max(0, limits.payerConcurrent - payerLive)
-              : null,
-          globalCreates: Math.max(0, limits.globalCreates - global.creates - 1),
-          globalConcurrent:
-            limits.globalConcurrent > 0 ? Math.max(0, limits.globalConcurrent - globalLive) : null,
-        },
-      };
+      return decision;
     } catch (err) {
       this.db.exec("ROLLBACK");
       throw err;
@@ -223,24 +152,6 @@ export class BudgetRepository {
       return { windowStartMs: now, creates: 0, spend: "0" };
     }
     return { windowStartMs: raw.window_start_ms, creates: raw.creates, spend: raw.spend };
-  }
-
-  private reject(
-    scope: BudgetScope,
-    windowStartMs: number,
-    limits: BudgetLimits,
-    remaining: BudgetRemaining,
-    now: number,
-  ): BudgetDecision {
-    const resetsAt = windowStartMs + limits.windowMs;
-    return {
-      ok: false,
-      scope,
-      // Never 0: a Retry-After of 0 invites an immediate retry storm.
-      retryAfterSeconds: Math.max(1, Math.ceil((resetsAt - now) / 1000)),
-      remaining,
-      windowResetsAt: resetsAt,
-    };
   }
 
 }
