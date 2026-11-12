@@ -270,6 +270,22 @@ export interface FenceStore {
   listFencedSessions(): Promise<SessionRecord[]>;
 }
 
+/**
+ * Relay generation change recovery: find the sessions a relay restart could
+ * have stranded, fence the operation each one had in flight, and end the
+ * session that cannot get its guest back.
+ */
+export interface RelayRecoveryStore {
+  listRelaySessions(limit: number, after?: string | null): Promise<SessionRecord[]>;
+  /** Exactly-once: the pending -> outcome_unknown transition bumps the epoch. */
+  recoverSessionOperation(sessionId: string): Promise<{ requestId: string | null; epoch: number | null }>;
+  requestTermination(
+    id: string,
+    reason: string,
+    failure?: { code: string; message: string },
+  ): Promise<boolean>;
+}
+
 /** The reconcile scheduler's own view: due selection plus the cleanup sweep. */
 interface SchedulerStore {
   clearPod(id: string): Promise<void>;
@@ -294,6 +310,7 @@ export type ReconcilerStore = ProvisioningStore &
   WarmPoolStore &
   CapacityStore &
   FenceStore &
+  RelayRecoveryStore &
   SchedulerStore &
   RefundWorkerStore &
   SettlementRecoveryStore;

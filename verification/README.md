@@ -48,8 +48,9 @@ request); the capacity/safety run is the larger one and takes about a minute on
 a laptop. TLC's output names the invariant when one fails.
 
 The model is bounded by the constants in each `.cfg`: `Sessions`, `Payments`,
-`Requests`, `NodeCapacity`, `MaxRestarts`, `PodIds`. Bounds are what make the
-state space finite; they are not claims about production sizing.
+`Requests`, `NodeCapacity`, `MaxRestarts`, `MaxRelayRestarts`, `PodIds`. Bounds
+are what make the state space finite; they are not claims about production
+sizing.
 
 ## What is modeled
 
@@ -57,12 +58,13 @@ state space finite; they are not claims about production sizing.
 |---|---|---|
 | Session lifecycle | `SOURCE_STATES`, `transition()` | `state` over the 12 states, one action per event, with the same source states and the same `hasPod`/`hasRelay`/`hasPvc` guards |
 | Payment intent | `claimPaymentIntent`, `completeEntitlement`, `recoverInterruptedOperations` | `intent`, `intentEpoch`, `settledTo`, `charges`; a claim is reclaimable only from an older controller epoch |
-| Ledger and refunds | `payment_ledger`, `RefundService` | `charges` (one row per key), `refund` in `none -> pending -> refunded`, set only for a terminal session that was never READY |
+| Ledger and refunds | `payment_ledger`, `RefundService` | `charges` (one row per key), `refund` in `none -> pending -> refunded`, set for a terminal session that was never READY, or for one ended by the relay-loss grace (`final = RELAY_LOST`) |
 | Operation slot | `claimOperation`, `finishOperation` | `slots` (controller gate) and `guest` (the guest's own gate), keyed by request id; `slotEpoch` is the epoch the gate was claimed in |
-| Execution-epoch fence | `recoverInterruptedOperations`, `listFencedSessions`, `clearFencedGate`, `OperationFence.reconcile`, `relay/registry.ts` `raiseEpoch`/`request`, `guest/supervisor.go` `admitEpoch`/`publishStatus` | `execEpoch`, `fence`, `fenceReq`, `guestStatus`, `guestEpoch`, `admittedEpoch`, `startGen`, `relayPending`: recovery bumps the epoch and holds the gate; only `FenceRelease` clears it, on an idle/disconnected guest; the relay refuses and withdraws frames below `execEpoch`, and the guest rejects a frame below its own high-water |
+| Execution-epoch fence | `recoverInterruptedOperations`, `recoverSessionOperation`, `listFencedSessions`, `clearFencedGate`, `OperationFence.reconcile`, `relay/registry.ts` `raiseEpoch`/`request`, `guest/supervisor.go` `admitEpoch`/`publishStatus` | `execEpoch`, `fence`, `fenceReq`, `guestStatus`, `guestEpoch`, `admittedEpoch`, `startGen`, `relayPending`: recovery (controller restart or relay restart) bumps the epoch and holds the gate; only `FenceRelease` clears it, on the reconnected guest's idle status or on a session with no registration left; the relay refuses and withdraws frames below `execEpoch`, and the guest rejects a frame below its own high-water |
 | Capacity reservation | `admit`, `attachToSession`, `resume`, `beginRelease`, `confirmRelease` | `reservations` over `NONE/ATTACHED/ALLOCATED/SUSPENDED/RELEASING/RELEASED`, plus `usedCompute` |
 | Provisioning | `Provisioning.provision`, `deletePod`, PVC lifecycle | `pod` (recorded instance), `creating` (created by Kubernetes, not yet recorded), `pvc`, `relay`, `guestConnected` |
-| Faults | control-plane fault harness | `CrashRestart` bumps `epoch` and forces startup recovery; `RelayLost` fails one session closed; `GuestDisconnect` drops the relay link without failing the session; `ProvisioningTimeout`; client retries are ordinary re-enabled actions |
+| Relay restart | `RelayRecovery.reconcile`, `RelayClient.registerCurrent`, `guest` reconnect loop | `RelayRestart` drops the registration and the guest link and fences an in-flight operation (epoch bump, held gate); `ReregisterRelay` restores the registration; `GuestConnect` keeps the supervisor's high-water mark; `RelayGraceExpired` is the bounded-grace outcome (`failure:relay_lost`) |
+| Faults | control-plane fault harness | `CrashRestart` bumps `epoch` and forces startup recovery; `GuestDisconnect` drops the relay link without failing the session; `ProvisioningTimeout`; client retries are ordinary re-enabled actions |
 
 Three modelling choices are worth calling out because they are what make the
 interesting traces reachable:
@@ -73,6 +75,11 @@ interesting traces reachable:
 - `BeginRelease` moves `ALLOCATED` (and `SUSPENDED`) rows to `RELEASING`, and
   `usedCompute` counts only `ATTACHED` and `ALLOCATED`. See the note on
   `holdsCompute` under [Findings](#findings).
+- A relay restart is a registration loss plus a link drop, and it is separate
+  from the session lifecycle: `RelayRestart` keeps `state`, `pod`, `pvc` and the
+  reservation, so the survivor trace is reachable. `RelayGraceExpired` is the
+  only action that ends a session because of the relay, and it is
+  nondeterministic because the grace is time, which the model does not have.
 - A "stale frame" is a frame whose epoch is below the session's `exec_epoch`.
   Recovery publishes that epoch to the relay before the fence can clear, so the
   relay refuses the frame and withdraws one it already forwarded (the
@@ -115,22 +122,26 @@ and `StaleEpoch` variants.
 | I9 | `NoCapacityOverReservation` | Admitted rows (`ATTACHED` + `ALLOCATED`) never exceed `NodeCapacity`. | No capacity over-reservation, including the crash window before entitlement. |
 | I9b | `ReleasingAfterPodGone` | `RELEASING` implies the session row names no Pod. | Holding capacity during release is conservative, not a live-Pod leak. |
 | I10 | `TerminalDoesNotHoldCompute` | A terminal session's reservation is `RELEASING` or `RELEASED`. | Compute is not still sold to a destroyed session. |
-| I11 | `ReadyImpliesPodAndRelay` | `READY`/`ACTIVE`/`SUSPENDING` imply a recorded Pod and a relay entry. | The `guest_ready` invariant in the transition table. |
+| I11 | `ReadyImpliesPod` | `READY`/`ACTIVE`/`SUSPENDING` imply a recorded Pod. | The `guest_ready` invariant in the transition table. A relay registration is deliberately excluded: a relay restart drops it for as long as the reconnect takes, and `RelayGraceExpired` bounds that window. |
 | I12 | `SuspendedImpliesCheckpoint` | `SUSPENDED` implies a PVC, no Pod, no relay and no connected guest. | A suspended session can actually be resumed. |
 | I13 | `ReservationBoundToPayment` | A live reservation is bound to a payment key. | Reservations cannot be orphaned from the money that paid for them. |
-| I14 | `RefundOnlyWhenNoService` | A refund exists only for a terminal session that was never READY. | A delivered session is never refunded. |
+| I14 | `RefundOnlyWhenNoServiceOrRelayLoss` | A refund exists only for a terminal session that was never READY, or for one whose service was cut short by relay loss (`final = RELAY_LOST`). | A delivered session is not refunded, and the one deliberate exception is the relay-loss outcome the refund policy compensates. |
 | I15 | `NoEntitlementWithoutPayment` | A session row that exists has a payment key. | Settlement and entitlement stay joined. |
 | I16 | `FenceHoldsTheGate` | A held fence names exactly the request that still holds the gate. | Recovery cannot quietly replace the fenced request. |
 | I17 | `NoNewCommandOverlapsFence` | While a fence is held, the only command in flight at the guest is the fenced request. | A new command can never overlap the old one, even across recovery. |
 | I18 | `NoPrematureFenceRelease` | A released fence's request is not active at the guest. | `OperationFence` never clears the gate while the old command still runs; this is what `FenceRelease` falsifies. |
 | I19 | `PaidSessionProgress` | Every settled payment eventually reaches a READY session or gets a refund obligation. | No paid session stuck before READY, even across crash/retry. |
 | I20 | `TerminalReleasesCapacity` | A terminal session's reservation eventually reaches `RELEASED`. | Capacity comes back after the Pod is observed gone. |
-| I21 | `FencedGateClears` | A held fence eventually clears once the guest reports idle or is disconnected. | The gate does not stay closed forever after the guest is done; a connected guest that never reported status is deliberately outside this obligation. |
+| I21 | `FencedGateClears` | A held fence eventually clears once the guest reports idle or the session has no registration left. | The gate does not stay closed forever after the guest is done. A registered session with no guest waits for the reconnect (ADR 0011); a connected guest that never reported status is deliberately outside this obligation. |
 
-`I19`-`I21` are checked under weak fairness of the controller actions. Fairness
-is split into `ProvisionFairness`, `SuspendFairness`, `CleanupFairness`,
-`ReleaseFairness`, `OperationFairness`, `RecoveryFairness` and `RefundFairness`
-so a broken variant can keep the obligations of the actions it still has.
+`I19`-`I21` are checked under fairness of the controller actions. `FenceRelease`
+uses strong fairness (`SF_vars`) because its precondition alternates as a guest
+reconnects and drops again; weak fairness leaves a fair connect/disconnect cycle
+that starves the release. `GuestConnect` and `ReregisterRelay` are weak-fair, so
+a guest that can come back does. Fairness is split into `ProvisionFairness`,
+`SuspendFairness`, `ConnectionFairness`, `CleanupFairness`, `ReleaseFairness`,
+`OperationFairness`, `RecoveryFairness` and `RefundFairness` so a broken variant
+can keep the obligations of the actions it still has.
 
 ## Broken variants
 
@@ -194,13 +205,11 @@ longer admits the bug) or if it is rejected by an unexpected invariant.
   guest has not itself reported an epoch at or above the floor and has no
   command running, the relay resets the guest connection (TCP reset, so unread
   bytes are discarded rather than delivered after a close frame). That is the
-  existing "a command cannot survive its relay link" contract: the supervisor
-  exits on the read error and the fence clears.
-  The reset ends the guest, and sandbox Pods use `restartPolicy: Never`, so the
-  session does not stay `READY` without a guest: the reconciler's Pod health
-  probe sees the terminal Pod and fails it with `failure:guest_exited`.
-  `tests/integration/stale-frame-reset-outcome.test.ts` drives the real
-  reconciler and asserts that path end to end.
+  "a command cannot survive its relay link" contract: the link loss kills it.
+  The reset no longer ends the guest process: the supervisor reconnects with the
+  same identity (ADR 0011), so the session keeps its lease and the withdrawn
+  frame never starts. `tests/integration/stale-frame-reset-outcome.test.ts`
+  drives the real reconciler and asserts that path end to end.
   Residual: a frame the guest has already read (the read returned before the
   reset reached it) is an observed frame. It may start, and the fence waits for
   it exactly like the pre-#88 path; it cannot overlap a new command. Closing
@@ -222,6 +231,31 @@ longer admits the bug) or if it is rejected by an unexpected invariant.
   before the deferred status publish, so the model now requires
   `relayPending = 0` in `GuestDone`. The fix is the ordering, not an extra
   release path.
+- **A relay restart is a registration loss, not a session failure.** The model
+  keeps `state`, `pod`, `pvc` and the reservation across `RelayRestart`, bumps
+  the epoch for an in-flight operation and holds its gate, then lets
+  `ReregisterRelay` and `GuestConnect` restore service. The bounded-grace
+  outcome is `RelayGraceExpired` (`failure:relay_lost`), which is
+  nondeterministic because the grace is time. This is the property the old
+  `RelayLost` action removed: it failed the session on a relay loss, which is
+  exactly the bug ADR 0011 fixes.
+- **Relay loss cannot be a lease expiry, and its refund is a distinct final
+  value.** `ExpireLease` is disabled for a READY/ACTIVE session whose link is
+  lost, because relay recovery declares the loss at `min(grace,
+  leaseExpiresAt - 1 s)` and `enforceLease` cannot fire before
+  `leaseExpiresAt + leaseGraceMs`; the implementation also attributes a late
+  overrun to `relay_lost` while the loss window is open. The real-time margin is
+  not modelled, only the ordering guard. `final` carries `RELAY_LOST` as a value
+  that `Finalize` writes as `FAILED`, so `MarkRefundPending` and
+  `RefundOnlyWhenNoServiceOrRelayLoss` can express the policy: a READY session
+  ended by relay loss is refundable, a client destroy or ordinary lease expiry is
+  not.
+- **The fence release condition needs strong fairness to be checkable.** A guest
+  that reconnects and drops again makes `FenceRelease` alternately enabled and
+  disabled, so weak fairness admits a fair cycle that never releases the gate.
+  `SF_vars(FenceRelease(s))` says the reconciler, which retries every tick,
+  releases a gate that is repeatedly releasable. This is an assumption about the
+  controller, not about the guest: guest flapping is still unbounded.
 - **Suspension is a fair quiescence step.** A fenced session may be
   `SuspendRequest`ed (the transition table allows it from `ACTIVE`). Without
   fairness on `GuestStopped`, TLC found a cycle stuck in `SUSPENDING` with a
@@ -237,11 +271,21 @@ one worker) and reference this directory.
 ## Not modeled
 
 - More than one controller replica, Postgres/DynamoDB, leader election.
-- Real time: TTL arithmetic, clock skew, lease refresh.
+- Real time: TTL arithmetic, clock skew, lease refresh, the relay-loss grace and
+  the lease margin (`leaseExpiresAt - 1 s`) that makes relay loss win over a
+  lease expiry. The model keeps the ordering as a guard instead.
 - The relay's response cache and request/response framing (covered by unit
   tests in `controller/src/relay/`).
 - Kubernetes scheduler behaviour, node placement, warm pool.
 - Request payloads and per-command resource limits.
+- The outbound side effect of a command. The model tracks which request holds
+  the slot, not whether it wrote a file. It can show that a frame is never
+  re-executed, but not that a duplicate execution would be visible to the
+  customer. The integration tests assert that directly (marker files).
+- A command that survives its relay link. `GuestDisconnect` and `RelayRestart`
+  empty the guest slot because the supervisor kills the process group; if that
+  contract regresses, the model would not see it, and the "no overlap" argument
+  would need a new action rather than a new invariant.
 
 If one of those becomes load-bearing for an invariant, extend the model rather
 than adding a second checker.
@@ -255,9 +299,9 @@ The spec is organised to mirror the code:
 | `ClaimIntent`, `ReserveCapacity`, `ChargeSession` | `control-api/payments.ts`, `store.ts` |
 | `Provision` .. `GuestStopped`, `ResumeRequest` | `shared/src/domain/session.ts`, `lifecycle.ts` |
 | `StartOp`, `DispatchOp`, `GuestResponse`, `GuestDone`, `FinishOp` | `store.ts`, `relay/` |
-| `GuestConnect`, `GuestDisconnect`, `GuestReady` | `relay/registry.ts`, `relay/ws.ts` |
+| `GuestConnect`, `GuestDisconnect`, `GuestReady`, `RelayRestart`, `ReregisterRelay` | `relay/registry.ts`, `relay/ws.ts`, `relay-recovery.ts`, `guest/supervisor.go` (reconnect loop) |
 | `RecoverInterruptedOps`, `FenceRelease`, `RejectStaleFrame` | `store.ts` (`recoverInterruptedOperations`, `clearFencedGate`), `operation-fence.ts`, `relay/registry.ts` (`raiseEpoch`, `request`), `guest/supervisor.go` (`admitEpoch`) |
-| `RequestDestroy`, `ExpireLease`, `RelayLost`, `ProvisioningTimeout` | `reconciler.ts`, `termination.ts` |
+| `RequestDestroy`, `ExpireLease`, `RelayGraceExpired`, `ProvisioningTimeout` | `reconciler.ts`, `termination.ts`, `relay-recovery.ts`, `refunds.ts` |
 | `KillGuest`, `DeleteWorkspace`, `PurgeRelay`, `BeginRelease`, `ConfirmRelease`, `Finalize` | `termination.ts`, `capacity/reservations.ts` |
 
 If you change `SOURCE_STATES` or an admission guard, change the corresponding

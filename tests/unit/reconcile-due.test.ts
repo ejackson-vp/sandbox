@@ -75,6 +75,21 @@ async function seedPaid(store: PostgresStore, id: string, keyChar: string): Prom
   await store.completeEntitlement(key, claim.token, paymentRecord(key), sessionRecord(id, key));
 }
 
+/** A READY session whose lease is already past its grace. */
+async function seedExpiredReady(
+  store: PostgresStore,
+  id: string,
+  keyChar: string,
+  now: number,
+): Promise<void> {
+  await seedPaid(store, id, keyChar);
+  if (!await store.setProvisioning(id, `pod-${id}`)) throw new Error("expected PROVISIONING");
+  await store.setRelayToken(id, "relay-hash");
+  if (!await store.setReady(id, now - 60_000, now - 5_000, "{}", "guest-pk")) {
+    throw new Error("expected READY");
+  }
+}
+
 /** A session parked in SUSPENDING, ready to be finished by a pass. */
 async function seedSuspending(store: PostgresStore, id: string, keyChar: string): Promise<void> {
   await seedPaid(store, id, keyChar);
@@ -104,6 +119,81 @@ function harness(cfg: ReturnType<typeof config>, store: PostgresStore, clock: { 
   ).provisioning;
   return { reconciler, provisioning };
 }
+
+describe("lease overrun during a relay loss", () => {
+  it("records relay_lost, not lease_expired, when the loss window is open", async () => {
+    const store = await freshStore();
+    try {
+      const clock = { now: Date.now() };
+      await seedExpiredReady(store, "sbx_relay_lease", "d", clock.now);
+      expect(await setNextDue("sbx_relay_lease", clock.now)).toBe(true);
+
+      // The real relay recovery normally fires one second before the lease; this
+      // is the backstop for a scan that ran late, so it is injected as "open".
+      const relayRecovery = {
+        reconcile: async () => ({ scanned: 1, fenced: 0, reregistered: 0, lost: 0, errors: 0 }),
+        awaitingReconnect: () => true,
+      };
+      const reconciler = new Reconciler({
+        cfg: config(),
+        store,
+        provisioner: {
+          getPod: async () => ({ phase: "Running", deleted: false }),
+          deletePod: async () => undefined,
+        } as unknown as Provisioner,
+        relay: {} as RelayClient,
+        now: () => clock.now,
+        relayRecovery: relayRecovery as unknown as import(
+          "../../controller/src/relay-recovery.js"
+        ).RelayRecovery,
+      });
+
+      await reconciler.tick();
+
+      const row = await store.getSession("sbx_relay_lease");
+      expect(row?.state).toBe("TERMINATING");
+      // The reason is what the refund policy keys on, so a late scan must not
+      // turn the same interruption into an unrefunded lease expiry.
+      expect(row?.terminationReason).toBe("failure:relay_lost");
+      expect(row?.failureCode).toBe("relay_lost");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("still records lease_expired when no relay loss is open", async () => {
+    const store = await freshStore();
+    try {
+      const clock = { now: Date.now() };
+      await seedExpiredReady(store, "sbx_plain_lease", "e", clock.now);
+      expect(await setNextDue("sbx_plain_lease", clock.now)).toBe(true);
+
+      const reconciler = new Reconciler({
+        cfg: config(),
+        store,
+        provisioner: {
+          getPod: async () => ({ phase: "Running", deleted: false }),
+          deletePod: async () => undefined,
+        } as unknown as Provisioner,
+        relay: {} as RelayClient,
+        now: () => clock.now,
+        relayRecovery: {
+          reconcile: async () => ({ scanned: 1, fenced: 0, reregistered: 0, lost: 0, errors: 0 }),
+          awaitingReconnect: () => false,
+        } as unknown as import("../../controller/src/relay-recovery.js").RelayRecovery,
+      });
+
+      await reconciler.tick();
+
+      const row = await store.getSession("sbx_plain_lease");
+      expect(row?.state).toBe("TERMINATING");
+      expect(row?.terminationReason).toBe("lease_expired");
+      expect(row?.failureCode).toBeNull();
+    } finally {
+      await store.close();
+    }
+  });
+});
 
 describe("due-time reconcile pass", () => {
   it("dispatches a due session once and strictly advances its due time", async () => {

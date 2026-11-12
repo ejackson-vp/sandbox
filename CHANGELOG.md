@@ -235,6 +235,27 @@ the container registry.
 
 ### Fixed
 
+- A relay restart no longer kills a paid session. The relay registry is in
+  memory, so a relay rollout dropped every guest socket on the shard; the
+  supervisor exited with its link, the Pod went terminal, and the controller
+  failed a session that had already reached `READY` with
+  `failure:guest_exited` and no refund. The supervisor now aborts the operation
+  the link was carrying, reconnects with bounded backoff until the lease ends,
+  re-sends `hello` with the same session id, key and token, and republishes its
+  slot state. The controller detects the relay generation change, marks the
+  in-flight request `outcome_unknown`, bumps `sessions.exec_epoch` once, and
+  re-registers `READY`/`ACTIVE` sessions on the replacement with the token hash
+  they already have. `OperationFence` holds the gate until the reconnected guest
+  reports idle; a guest that cannot reconnect ends the session with
+  `failure:relay_lost` at the end of `RELAY_LOSS_GRACE_MS` (default 90 s) or 1 s
+  before the lease deadline, whichever comes first, and is refunded in full by
+  the refund policy. The lease bound is why a 60 s session with a 90 s grace is
+  still `relay_lost` and not `lease_expired`; an overrun the lease check notices
+  while the loss window is open is attributed to `relay_lost` too. A retry of the
+  interrupted request id is `409 outcome_unknown` and is never re-executed. See
+  [ADR 0011](docs/adr/0011-guest-reconnects-after-relay-loss.md).
+- A create retry that already booted a Pod adopts it before `register_relay`
+  replays, so it no longer rotates the guest token under a running guest.
 - Guest results carry `truncated` again. `Result.Truncated` and
   `Result.BodyTruncated` shared the `truncated` JSON tag, so `encoding/json`
   dropped both and neither exec stdout/stderr truncation nor HTTP body

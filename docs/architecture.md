@@ -98,9 +98,16 @@ An encrypted RPC switch, not a proxy or a tunnel:
 
 - guest connects **out**; sandbox pods have no ingress rules at all,
 - one connection per session, guest token checked against a stored hash,
+- a registration is in memory and belongs to one relay process, so a restart
+  drops it. The controller re-registers a `READY`/`ACTIVE` session on the new
+  generation with the token hash it already has, and the guest reconnects to
+  the same registration (`docs/adr/0011-guest-reconnects-after-relay-loss.md`),
 - frames: `request`/`cancel`/`shutdown` down, `response`/`error` up,
 - correlates opaque envelopes by id, caches responses for 5 minutes,
 - rejects >8 pending requests per session and >24 MiB frames,
+- per-session execution-epoch floor: a frame below it is refused
+  (`stale_epoch`) and an already-forwarded frame is withdrawn
+  (`docs/adr/0008-relay-enforces-execution-epoch.md`),
 - cannot decrypt anything and cannot reach internal services.
 
 ### Guest supervisor (`guest/`, Go)
@@ -117,6 +124,11 @@ Runs for the whole lease:
 - executes commands with a curated environment, per-command watchdog and
   process-group kill, capturing stdout/stderr separately with size caps,
 - implements workspace-confined `file.put/get/list/stat` with tar support,
+- on relay link loss (not lease end, not shutdown) aborts the operation that
+  link was carrying, re-dials with bounded backoff, re-sends hello with the same
+  session identity, key and token, and republishes its slot state. The workspace
+  and customer services survive; only relay-bound operations abort. It exits on
+  lease end, an explicit shutdown, or a `401` that retrying cannot fix,
 - refuses operations after the lease, kills descendants and exits.
 
 Platform: the guest is supported on Linux, which is what the images and the

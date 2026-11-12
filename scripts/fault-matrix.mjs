@@ -34,7 +34,7 @@ const FAIL_FAST = process.env.FAULT_FAIL_FAST === "1";
 const CASES = [
   { name: "controller-kill", target: "controller", action: "kill", scenario: "provisioning", sessions: 50, budgetMs: 60_000 },
   { name: "api-kill", target: "api", action: "kill", scenario: "provisioning", sessions: 20, budgetMs: 30_000 },
-  { name: "relay-kill", target: "relay", action: "kill", scenario: "provisioning", sessions: 5, budgetMs: 60_000 },
+  { name: "relay-kill", target: "relay", action: "kill", scenario: "provisioning", sessions: 5, budgetMs: 120_000 },
   { name: "relay-create-restart", target: "relay", action: "kill", scenario: "create-restart", sessions: 5, budgetMs: 120_000 },
   { name: "lifecycle-restart", target: "controller", action: "kill", scenario: "lifecycle", sessions: 50, budgetMs: 120_000 },
   { name: "controller-pause", target: "controller", action: "pause", scenario: "provisioning", sessions: 5, budgetMs: 60_000 },
@@ -243,8 +243,10 @@ function caseDetail(entry) {
   if (!report) return entry.failureReasons.join("; ") || "no result";
   switch (entry.case) {
     case "relay-kill":
-      return `failed ${report.failed}/${report.count}, operations failed ${report.operationsFailed}/${report.count}, ` +
-        `pending ${report.pendingAtKill}, pods ${report.podCount}, reservations ${report.reservations?.total ?? "?"}`;
+      return `survived ${report.survived}/${report.count}, terminal ${report.terminal}, ` +
+        `operations outcome-unknown ${report.operationsOutcomeUnknown ?? report.operationsUnresolved}/${report.count}, ` +
+        `new execs ${report.newExecSucceeded}/${report.count}, pending ${report.pendingAtKill}, ` +
+        `pods ${report.podCount}, reservations ${report.reservations?.total ?? "?"}`;
     case "relay-pause":
       return `operations ok ${report.operationsSucceeded}/${report.count}, terminal ${report.terminal}, ` +
         `pods ${report.podCount}, reservations ${report.reservations?.total ?? "?"}`;

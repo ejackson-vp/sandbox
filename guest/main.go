@@ -32,12 +32,16 @@ import (
 
 const defaultWorkspace = "/workspace"
 
-// relayDialTimeout bounds how long a session guest keeps retrying the relay.
-// It must stay comfortably longer than the controller's provisioning timeout
-// (PROVISIONING_TIMEOUT_MS, 90s by default). If the guest gives up first the
-// supervisor exits, the pod becomes terminal, and the controller observes
-// pod_terminated instead of re-registering against the replacement relay or
-// reporting a clean provisioning_timeout refund.
+// relayDialTimeout bounds how long a session guest keeps retrying the relay for
+// its FIRST connection. It must stay comfortably longer than the controller's
+// provisioning timeout (PROVISIONING_TIMEOUT_MS, 90s by default). If the guest
+// gives up first the supervisor exits, the pod becomes terminal, and the
+// controller observes pod_terminated instead of re-registering against the
+// replacement relay or reporting a clean provisioning_timeout refund.
+//
+// A reconnect after link loss is different: it is bounded by the lease, not by
+// this window, because the session is already paid for and the controller is
+// expected to re-register it on the replacement generation (docs/adr/0011).
 func relayDialTimeout() time.Duration {
 	return time.Duration(parseIntEnv("RELAY_DIAL_TIMEOUT_SECONDS", 150)) * time.Second
 }
@@ -166,6 +170,8 @@ func runSession(cfg sessionConfig) error {
 		sessionID:   cfg.SessionID,
 		clientNonce: cfg.ClientNonce,
 		workspace:   ws,
+		relayURL:    cfg.RelayURL,
+		evidence:    evidence,
 		runner: runner.Options{
 			Workspace:  cfg.WorkspaceDir,
 			ProxyURL:   cfg.ProxyURL,
