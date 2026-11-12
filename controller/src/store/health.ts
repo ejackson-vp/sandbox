@@ -13,15 +13,10 @@
  * connection is meant to be writable.
  */
 import type { DatabaseSync } from "node:sqlite";
+import type { StoreHealth } from "./models.js";
 import { SCHEMA_VERSION } from "./schema.js";
 
-export type StoreHealth =
-  | { ok: true; schemaVersion: number }
-  | {
-      ok: false;
-      reason: "unavailable" | "closed" | "migrations_incomplete" | "read_only" | "locked" | "write_failed";
-      schemaVersion?: number;
-    };
+export type { StoreHealth };
 
 const WRITE_PROBE = "UPDATE payments SET payment_key = payment_key WHERE 0";
 

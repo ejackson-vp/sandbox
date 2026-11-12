@@ -46,4 +46,26 @@ describe("session guards", () => {
       }
     }
   });
+
+  it("provisions and resumes through one ready transition, with a per-state refusal", () => {
+    for (const state of ["PROVISIONING", "RESUMING"] as const) {
+      const ready = transition({ ...permissive, state }, { type: "guest_ready" });
+      expect(ready.ok).toBe(true);
+      if (ready.ok) {
+        expect(ready.value.state).toBe("READY");
+        expect(ready.value.effects).toEqual([{ type: "persist_ready" }]);
+      }
+
+      const missingRelay = transition({ ...permissive, state, hasRelay: false }, { type: "guest_ready" });
+      expect(missingRelay.ok).toBe(false);
+      if (!missingRelay.ok) expect(missingRelay.error.code).toBe("invariant");
+
+      const refused = transition({ ...permissive, state }, { type: "operation_started" });
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) {
+        // Combined arm, but the refusal still names the state it came from.
+        expect(refused.error.message).toBe(`${state} accepts guest_ready or terminate`);
+      }
+    }
+  });
 });

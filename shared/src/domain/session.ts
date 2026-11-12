@@ -192,6 +192,7 @@ export function transition(
       return fail(snapshot, event, "invalid_transition", "PAID accepts provision or terminate");
 
     case "PROVISIONING":
+    case "RESUMING":
       if (event.type === "guest_ready") {
         if (!snapshot.hasPod || !snapshot.hasRelay) {
           return fail(snapshot, event, "invariant", "READY requires a pod and a relay entry");
@@ -201,7 +202,12 @@ export function transition(
       if (event.type === "terminate_requested" || event.type === "lease_expired") {
         return Ok({ state: "TERMINATING", effects: terminationEffects(snapshot) });
       }
-      return fail(snapshot, event, "invalid_transition", "PROVISIONING accepts guest_ready or terminate");
+      return fail(
+        snapshot,
+        event,
+        "invalid_transition",
+        `${snapshot.state} accepts guest_ready or terminate`,
+      );
 
     case "READY":
     case "ACTIVE":
@@ -278,18 +284,6 @@ export function transition(
         return fail(snapshot, event, "invalid_transition", "resume the session before operations");
       }
       return fail(snapshot, event, "invalid_transition", "SUSPENDED accepts resume or terminate");
-
-    case "RESUMING":
-      if (event.type === "guest_ready") {
-        if (!snapshot.hasPod || !snapshot.hasRelay) {
-          return fail(snapshot, event, "invariant", "READY requires a pod and a relay entry");
-        }
-        return Ok({ state: "READY", effects: [{ type: "persist_ready" }] });
-      }
-      if (event.type === "terminate_requested" || event.type === "lease_expired") {
-        return Ok({ state: "TERMINATING", effects: terminationEffects(snapshot) });
-      }
-      return fail(snapshot, event, "invalid_transition", "RESUMING accepts guest_ready or terminate");
 
     case "TERMINATING":
       if (event.type === "terminated") {

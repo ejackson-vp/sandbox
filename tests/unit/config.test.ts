@@ -208,6 +208,50 @@ describe("production config guards", () => {
   });
 });
 
+describe("transport security", () => {
+  const files = {
+    TLS_CERT_FILE: "/tls/tls.crt",
+    TLS_KEY_FILE: "/tls/tls.key",
+    TLS_CA_FILE: "/tls/ca.crt",
+  };
+
+  it("takes the public listener certificate set as three files or none", () => {
+    const cfg = loadControllerConfig({ ...dev, CONTROLLER_TLS_PORT: "8443", ...files });
+    expect(cfg.tlsPort).toBe(8_443);
+    expect(cfg.tlsCertFile).toBe("/tls/tls.crt");
+    expect(cfg.tlsKeyFile).toBe("/tls/tls.key");
+    expect(cfg.tlsCaFile).toBe("/tls/ca.crt");
+    expect(() => loadControllerConfig({ ...dev, TLS_CERT_FILE: "/tls/tls.crt" })).toThrow(
+      "TLS_CERT_FILE, TLS_KEY_FILE and TLS_CA_FILE must be set together",
+    );
+  });
+
+  it("requires the listener port and the certificate set to agree", () => {
+    expect(() => loadControllerConfig({ ...dev, CONTROLLER_TLS_PORT: "8443" })).toThrow(
+      "CONTROLLER_TLS_PORT requires TLS_CERT_FILE, TLS_KEY_FILE and TLS_CA_FILE",
+    );
+    expect(() => loadControllerConfig({ ...dev, ...files })).toThrow(
+      "TLS_CERT_FILE/TLS_KEY_FILE/TLS_CA_FILE require CONTROLLER_TLS_PORT",
+    );
+  });
+
+  it("keeps the prefixes independent", () => {
+    const cfg = loadControllerConfig({
+      ...dev,
+      RELAY_TLS_CERT_FILE: "/relay/tls.crt",
+      RELAY_TLS_KEY_FILE: "/relay/tls.key",
+      RELAY_TLS_CA_FILE: "/relay/ca.crt",
+    });
+    expect(cfg.relayTls).toEqual({
+      certFile: "/relay/tls.crt",
+      keyFile: "/relay/tls.key",
+      caFile: "/relay/ca.crt",
+    });
+    expect(cfg.tlsPort).toBeUndefined();
+    expect(cfg.tlsCertFile).toBeUndefined();
+  });
+});
+
 describe("leader election config", () => {
   const cluster = {
     ...TOKENS,
