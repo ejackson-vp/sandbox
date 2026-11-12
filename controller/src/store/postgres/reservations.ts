@@ -9,15 +9,19 @@
  * under `READ COMMITTED`. The per-identity uniqueness (`payment_key`,
  * `session_id`, `warm_id`) also exists as a UNIQUE constraint, so a bug in the
  * lock still cannot produce two reservations for one payment.
+ *
+ * The row shape, its mapping and the admission decision are in
+ * `reservation-decision.ts`, shared with the SQLite adapter; this file owns the
+ * reads, the transaction and the writes.
  */
 import { randomBytes } from "node:crypto";
 import { admitCapacity } from "../../capacity/admission.js";
-import type {
-  CapacitySnapshot,
-  ResourceVector,
-  ReservationState,
-  SandboxResourceRequest,
-} from "../../capacity/types.js";
+import {
+  planAdmission,
+  reservationFromRow,
+  type ReservationRow,
+} from "../../capacity/reservation-decision.js";
+import type { CapacitySnapshot, SandboxResourceRequest } from "../../capacity/types.js";
 import type {
   AdmitOptions,
   ReservationAdmission,
@@ -25,59 +29,6 @@ import type {
   ReservationStore,
 } from "../../capacity/reservation-store.js";
 import { CAPACITY_LOCK_KEY, type PgConnection, type Tx } from "./pg.js";
-
-interface ReservationRow {
-  id: string;
-  payment_key: string | null;
-  session_id: string | null;
-  warm_id: string | null;
-  spec_hash: string | null;
-  node_id: string;
-  pod_name: string | null;
-  state: ReservationState;
-  baseline_cpu_millis: number;
-  baseline_memory_bytes: number;
-  baseline_storage_bytes: number;
-  peak_cpu_millis: number;
-  peak_memory_bytes: number;
-  peak_storage_bytes: number;
-  expires_at: number | null;
-  created_at: number;
-  updated_at: number;
-}
-
-function vectorOf(row: ReservationRow): ResourceVector {
-  return {
-    cpuMillicores: row.baseline_cpu_millis,
-    memoryBytes: row.baseline_memory_bytes,
-    storageBytes: row.baseline_storage_bytes,
-  };
-}
-
-function peakOf(row: ReservationRow): ResourceVector {
-  return {
-    cpuMillicores: row.peak_cpu_millis,
-    memoryBytes: row.peak_memory_bytes,
-    storageBytes: row.peak_storage_bytes,
-  };
-}
-
-function mapRow(row: ReservationRow): ReservationRecord {
-  return {
-    id: row.id,
-    paymentKey: row.payment_key,
-    sessionId: row.session_id,
-    specHash: row.spec_hash,
-    nodeId: row.node_id,
-    podName: row.pod_name,
-    state: row.state,
-    baseline: vectorOf(row),
-    peak: peakOf(row),
-    expiresAt: row.expires_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
 
 const COLUMNS = `id, payment_key, session_id, warm_id, spec_hash, node_id, pod_name, state,
   baseline_cpu_millis, baseline_memory_bytes, baseline_storage_bytes,
@@ -93,7 +44,8 @@ export class PgReservationRepository implements ReservationStore {
   }
 
   private async active(tx: Tx): Promise<ReservationRecord[]> {
-    return (await this.rows(tx, "SELECT * FROM reservations WHERE state <> 'RELEASED'")).map(mapRow);
+    const rows = await this.rows(tx, "SELECT * FROM reservations WHERE state <> 'RELEASED'");
+    return rows.map(reservationFromRow);
   }
 
   private async findExisting(tx: Tx, opts: AdmitOptions): Promise<ReservationRecord | null> {
@@ -106,7 +58,7 @@ export class PgReservationRepository implements ReservationStore {
           : [null, null];
     if (column === null) return null;
     const found = await this.rows(tx, `SELECT * FROM reservations WHERE ${column} = $1`, [value]);
-    return found[0] ? mapRow(found[0]) : null;
+    return found[0] ? reservationFromRow(found[0]) : null;
   }
 
   private async updateHeld(
@@ -136,6 +88,40 @@ export class PgReservationRepository implements ReservationStore {
         expiresAt,
         now,
         id,
+      ],
+    );
+  }
+
+  /**
+   * Extend a live hold without changing its resources. A renew is a retry of
+   * the same identity, so the vectors already sold to capacity accounting stay,
+   * not the retry's hints. SQLite does the same in `renewHold`.
+   */
+  private async renewHeld(
+    tx: Tx,
+    held: ReservationRecord,
+    expiresAt: number | null,
+    now: number,
+    specHash: string | null,
+  ): Promise<void> {
+    await tx.query(
+      `UPDATE reservations
+          SET spec_hash = $1, node_id = $2, state = 'HELD', baseline_cpu_millis = $3,
+              baseline_memory_bytes = $4, baseline_storage_bytes = $5, peak_cpu_millis = $6,
+              peak_memory_bytes = $7, peak_storage_bytes = $8, expires_at = $9, updated_at = $10
+        WHERE id = $11`,
+      [
+        specHash,
+        held.nodeId,
+        held.baseline.cpuMillicores,
+        held.baseline.memoryBytes,
+        held.baseline.storageBytes,
+        held.peak.cpuMillicores,
+        held.peak.memoryBytes,
+        held.peak.storageBytes,
+        expiresAt,
+        now,
+        held.id,
       ],
     );
   }
@@ -181,55 +167,43 @@ export class PgReservationRepository implements ReservationStore {
     existing: ReservationRecord | null,
   ): Promise<ReservationAdmission> {
     const now = snapshot.now;
-    const ttlMs = opts.ttlMs ?? 120_000;
-    const state: "HELD" | "ALLOCATED" = opts.state ?? (opts.sessionId ? "ALLOCATED" : "HELD");
+    const plan = planAdmission(existing, opts, now);
 
-    const wantsAttach = state === "ALLOCATED" || Boolean(opts.sessionId);
-    let replacingExisting = false;
-    if (existing && existing.state !== "RELEASED") {
-      const alreadyAttached = wantsAttach && existing.state !== "HELD";
-      const expiredHold =
-        existing.state === "HELD" && existing.expiresAt !== null && existing.expiresAt <= now;
-      if (expiredHold) {
-        replacingExisting = true;
-      } else if (opts.specHash && existing.specHash && existing.specHash !== opts.specHash) {
+    switch (plan.outcome.kind) {
+      case "refuse":
         return {
           admitted: false,
           reason: "invalid_request",
           retryable: false,
           requested: request.baseline,
         };
-      } else if (alreadyAttached) {
+      case "reuse": {
         const refreshed = await this.findExisting(tx, opts);
         if (refreshed) return { admitted: true, reservation: refreshed };
-      } else if (wantsAttach) {
-        replacingExisting = true;
-      } else {
-        await this.updateHeld(
-          tx,
-          existing.id,
-          request,
-          existing.nodeId,
-          now,
-          now + ttlMs,
-          existing.specHash ?? opts.specHash ?? null,
-        );
-        const refreshed = await this.findExisting(tx, opts);
-        if (refreshed) return { admitted: true, reservation: refreshed };
+        break;
       }
+      case "renew": {
+        const held = plan.outcome.existing;
+        await this.renewHeld(tx, held, plan.outcome.expiresAt, now, held.specHash ?? opts.specHash ?? null);
+        const refreshed = await this.findExisting(tx, opts);
+        if (refreshed) return { admitted: true, reservation: refreshed };
+        break;
+      }
+      case "admit":
+        break;
     }
 
-    const active = replacingExisting
-      ? (await this.active(tx)).filter((reservation) => reservation.id !== existing?.id)
-      : await this.active(tx);
-    const decision = admitCapacity({ ...snapshot, now, reservations: active }, request);
+    const excludeId = plan.outcome.kind === "admit" ? plan.outcome.excludeId : null;
+    const active = await this.active(tx);
+    const accounted =
+      excludeId === null ? active : active.filter((reservation) => reservation.id !== excludeId);
+    const decision = admitCapacity({ ...snapshot, now, reservations: accounted }, request);
     if (!decision.admitted) return decision;
 
     const id = existing?.id ?? `res_${randomBytes(12).toString("hex")}`;
-    const expiresAt = state === "HELD" ? now + ttlMs : null;
     if (existing) {
-      await this.updateHeld(tx, id, request, decision.nodeId, now, expiresAt, opts.specHash ?? null);
-      if (wantsAttach) {
+      await this.updateHeld(tx, id, request, decision.nodeId, now, plan.expiresAt, opts.specHash ?? null);
+      if (plan.wantsAttach) {
         await this.attach(tx, id, opts, request, decision.nodeId, now);
       }
     } else {
@@ -243,14 +217,14 @@ export class PgReservationRepository implements ReservationStore {
           opts.warmId ?? null,
           opts.specHash ?? null,
           decision.nodeId,
-          state,
+          plan.state,
           request.baseline.cpuMillicores,
           request.baseline.memoryBytes,
           request.baseline.storageBytes,
           request.peak.cpuMillicores,
           request.peak.memoryBytes,
           request.peak.storageBytes,
-          expiresAt,
+          plan.expiresAt,
           now,
         ],
       );
@@ -288,7 +262,7 @@ export class PgReservationRepository implements ReservationStore {
         sessionId,
       ]);
       const existingRow = byPayment[0] ?? bySession[0];
-      const record = existingRow ? mapRow(existingRow) : null;
+      const record = existingRow ? reservationFromRow(existingRow) : null;
       if (record && record.sessionId && record.sessionId !== sessionId) {
         const oldExists = await tx.query("SELECT 1 AS present FROM sessions WHERE id = $1", [
           record.sessionId,
@@ -335,7 +309,7 @@ export class PgReservationRepository implements ReservationStore {
           requested: request.baseline,
         };
       }
-      const record = mapRow(row);
+      const record = reservationFromRow(row);
       if (record.state !== "SUSPENDED") {
         return { admitted: true, reservation: record };
       }
@@ -374,29 +348,31 @@ export class PgReservationRepository implements ReservationStore {
 
   private async byId(tx: Tx, id: string): Promise<ReservationRecord | null> {
     const found = await this.rows(tx, "SELECT * FROM reservations WHERE id = $1", [id]);
-    return found[0] ? mapRow(found[0]) : null;
+    return found[0] ? reservationFromRow(found[0]) : null;
   }
 
   async listActive(): Promise<ReservationRecord[]> {
-    return (await this.rows(this.conn, "SELECT * FROM reservations WHERE state <> 'RELEASED'")).map(mapRow);
+    const rows = await this.rows(this.conn, "SELECT * FROM reservations WHERE state <> 'RELEASED'");
+    return rows.map(reservationFromRow);
   }
 
   async listReleasing(): Promise<ReservationRecord[]> {
-    return (await this.rows(this.conn, "SELECT * FROM reservations WHERE state = 'RELEASING'")).map(mapRow);
+    const rows = await this.rows(this.conn, "SELECT * FROM reservations WHERE state = 'RELEASING'");
+    return rows.map(reservationFromRow);
   }
 
   async getBySession(sessionId: string): Promise<ReservationRecord | null> {
     const found = await this.rows(this.conn, "SELECT * FROM reservations WHERE session_id = $1", [
       sessionId,
     ]);
-    return found[0] ? mapRow(found[0]) : null;
+    return found[0] ? reservationFromRow(found[0]) : null;
   }
 
   async getByPayment(paymentKey: string): Promise<ReservationRecord | null> {
     const found = await this.rows(this.conn, "SELECT * FROM reservations WHERE payment_key = $1", [
       paymentKey,
     ]);
-    return found[0] ? mapRow(found[0]) : null;
+    return found[0] ? reservationFromRow(found[0]) : null;
   }
 
   async releasePayment(paymentKey: string): Promise<boolean> {

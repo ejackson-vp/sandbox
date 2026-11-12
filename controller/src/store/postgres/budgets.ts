@@ -15,6 +15,7 @@
  */
 import { GLOBAL_BUDGET_KEY, payerBudgetKey } from "../budgets.js";
 import { NON_TERMINAL_STATE_SQL } from "../models.js";
+import { decideBudget, type BudgetDecision, type BudgetLimits } from "../budget-decision.js";
 import { BUDGET_LOCK_KEY, type PgConnection, type Tx } from "./pg.js";
 
 export type {
@@ -22,9 +23,7 @@ export type {
   BudgetLimits,
   BudgetRemaining,
   BudgetScope,
-} from "../budgets.js";
-
-import type { BudgetDecision, BudgetLimits, BudgetRemaining, BudgetScope } from "../budgets.js";
+} from "../budget-decision.js";
 
 interface BudgetRow {
   window_start_ms: number;
@@ -41,51 +40,31 @@ export class PgBudgetRepository {
     limits: BudgetLimits,
     now: number,
   ): Promise<BudgetDecision> {
-    const amount = BigInt(amountAtomic);
     return this.conn.tx(async (tx) => {
       await tx.serialise(BUDGET_LOCK_KEY);
 
       const global = await this.readRow(tx, GLOBAL_BUDGET_KEY, now, limits.windowMs);
       const globalLive = await this.liveSessions(tx, null);
-      const globalBase: BudgetRemaining = {
-        payerCreates: null,
-        payerSpend: null,
-        payerConcurrent: null,
-        globalCreates: Math.max(0, limits.globalCreates - global.creates),
-        globalConcurrent:
-          limits.globalConcurrent > 0 ? Math.max(0, limits.globalConcurrent - globalLive) : null,
-      };
-      if (global.creates >= limits.globalCreates) {
-        return this.reject("global_create", global.windowStartMs, limits, globalBase, now);
-      }
-      if (limits.globalConcurrent > 0 && globalLive >= limits.globalConcurrent) {
-        return this.reject("global_concurrent", global.windowStartMs, limits, globalBase, now);
-      }
 
-      let payerRow: { windowStartMs: number; creates: number; spend: bigint } | null = null;
-      let payerLive = 0;
-      if (payer) {
-        const key = payerBudgetKey(payer);
-        const row = await this.readRow(tx, key, now, limits.windowMs);
-        payerRow = { windowStartMs: row.windowStartMs, creates: row.creates, spend: BigInt(row.spend) };
-        payerLive = await this.liveSessions(tx, payer);
-        const payerBase: BudgetRemaining = {
-          ...globalBase,
-          payerCreates: Math.max(0, limits.payerCreates - row.creates),
-          payerSpend: (BigInt(limits.payerSpend) - BigInt(row.spend)).toString(),
-          payerConcurrent:
-            limits.payerConcurrent > 0 ? Math.max(0, limits.payerConcurrent - payerLive) : null,
-        };
-        if (row.creates >= limits.payerCreates) {
-          return this.reject("payer_create", row.windowStartMs, limits, payerBase, now);
-        }
-        if (BigInt(row.spend) + amount > BigInt(limits.payerSpend)) {
-          return this.reject("payer_spend", row.windowStartMs, limits, payerBase, now);
-        }
-        if (limits.payerConcurrent > 0 && payerLive >= limits.payerConcurrent) {
-          return this.reject("payer_concurrent", row.windowStartMs, limits, payerBase, now);
-        }
+      // The global half is decided first so a refusal here never creates or
+      // rolls a payer row; the payer rows are read only once it admits.
+      let decision = decideBudget({ global, globalLive, payer: null }, amountAtomic, limits, now);
+      if (decision.ok && payer) {
+        decision = decideBudget(
+          {
+            global,
+            globalLive,
+            payer: {
+              row: await this.readRow(tx, payerBudgetKey(payer), now, limits.windowMs),
+              live: await this.liveSessions(tx, payer),
+            },
+          },
+          amountAtomic,
+          limits,
+          now,
+        );
       }
+      if (!decision.ok) return decision;
 
       await tx.query(
         "UPDATE payer_budgets SET creates = creates + 1, updated_at = $1 WHERE budget_key = $2",
@@ -98,21 +77,7 @@ export class PgBudgetRepository {
         );
       }
 
-      return {
-        ok: true,
-        windowResetsAt: global.windowStartMs + limits.windowMs,
-        remaining: {
-          payerCreates: payerRow ? Math.max(0, limits.payerCreates - payerRow.creates - 1) : null,
-          payerSpend: payerRow ? (BigInt(limits.payerSpend) - payerRow.spend).toString() : null,
-          payerConcurrent:
-            payerRow && limits.payerConcurrent > 0
-              ? Math.max(0, limits.payerConcurrent - payerLive)
-              : null,
-          globalCreates: Math.max(0, limits.globalCreates - global.creates - 1),
-          globalConcurrent:
-            limits.globalConcurrent > 0 ? Math.max(0, limits.globalConcurrent - globalLive) : null,
-        },
-      };
+      return decision;
     });
   }
 
@@ -198,22 +163,5 @@ export class PgBudgetRepository {
       return { windowStartMs: now, creates: 0, spend: "0" };
     }
     return { windowStartMs: raw.window_start_ms, creates: raw.creates, spend: raw.spend };
-  }
-
-  private reject(
-    scope: BudgetScope,
-    windowStartMs: number,
-    limits: BudgetLimits,
-    remaining: BudgetRemaining,
-    now: number,
-  ): BudgetDecision {
-    const resetsAt = windowStartMs + limits.windowMs;
-    return {
-      ok: false,
-      scope,
-      retryAfterSeconds: Math.max(1, Math.ceil((resetsAt - now) / 1000)),
-      remaining,
-      windowResetsAt: resetsAt,
-    };
   }
 }

@@ -2,20 +2,20 @@
  * Durable reservation repository.
  *
  * SQLite is the single writer. Every admission runs `BEGIN IMMEDIATE`, reloads
- * the active reservations inside the transaction, calls the pure capacity
- * model, and inserts the reservation before commit. That closes the
- * read-then-write race between concurrent creates. For multiple controllers
+ * the active reservations inside the transaction, calls `planAdmission` and the
+ * pure capacity model, and inserts the reservation before commit. That closes
+ * the read-then-write race between concurrent creates. For multiple controllers
  * this becomes a Postgres/DynamoDB conditional write on the same invariants.
+ *
+ * The row shape, its mapping and the admission decision are in
+ * `reservation-decision.ts`, shared with the Postgres adapter; this file owns
+ * the statements, the transaction and the writes.
  */
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { admitCapacity } from "./admission.js";
-import type {
-  CapacitySnapshot,
-  ResourceVector,
-  ReservationState,
-  SandboxResourceRequest,
-} from "./types.js";
+import { planAdmission, reservationFromRow, type ReservationRow } from "./reservation-decision.js";
+import type { CapacitySnapshot, SandboxResourceRequest } from "./types.js";
 import type {
   AdmitOptions,
   ReservationAdmission,
@@ -28,59 +28,6 @@ export type {
   ReservationAdmission,
   ReservationRecord,
 } from "./reservation-store.js";
-
-interface ReservationRow {
-  id: string;
-  payment_key: string | null;
-  session_id: string | null;
-  warm_id: string | null;
-  spec_hash: string | null;
-  node_id: string;
-  pod_name: string | null;
-  state: ReservationState;
-  baseline_cpu_millis: number;
-  baseline_memory_bytes: number;
-  baseline_storage_bytes: number;
-  peak_cpu_millis: number;
-  peak_memory_bytes: number;
-  peak_storage_bytes: number;
-  expires_at: number | null;
-  created_at: number;
-  updated_at: number;
-}
-
-function vectorOf(row: ReservationRow): ResourceVector {
-  return {
-    cpuMillicores: row.baseline_cpu_millis,
-    memoryBytes: row.baseline_memory_bytes,
-    storageBytes: row.baseline_storage_bytes,
-  };
-}
-
-function peakOf(row: ReservationRow): ResourceVector {
-  return {
-    cpuMillicores: row.peak_cpu_millis,
-    memoryBytes: row.peak_memory_bytes,
-    storageBytes: row.peak_storage_bytes,
-  };
-}
-
-function mapRow(row: ReservationRow): ReservationRecord {
-  return {
-    id: row.id,
-    paymentKey: row.payment_key,
-    sessionId: row.session_id,
-    specHash: row.spec_hash,
-    nodeId: row.node_id,
-    podName: row.pod_name,
-    state: row.state,
-    baseline: vectorOf(row),
-    peak: peakOf(row),
-    expiresAt: row.expires_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
 
 export class ReservationRepository implements ReservationStore {
   private readonly stmts: Record<string, StatementSync>;
@@ -177,7 +124,7 @@ export class ReservationRepository implements ReservationStore {
   }
 
   private active(): ReservationRecord[] {
-    return this.activeRows().map(mapRow);
+    return this.activeRows().map(reservationFromRow);
   }
 
   async listActive(): Promise<ReservationRecord[]> {
@@ -192,7 +139,7 @@ export class ReservationRepository implements ReservationStore {
         : opts.warmId
           ? (this.stmts.getByWarm!.get(opts.warmId) as ReservationRow | undefined)
           : undefined;
-    return row ? mapRow(row) : null;
+    return row ? reservationFromRow(row) : null;
   }
 
   /** Caller must hold the write transaction. */
@@ -203,61 +150,43 @@ export class ReservationRepository implements ReservationStore {
     existing: ReservationRecord | null,
   ): ReservationAdmission {
     const now = snapshot.now;
-    const ttlMs = opts.ttlMs ?? 120_000;
-    const state: "HELD" | "ALLOCATED" = opts.state ?? (opts.sessionId ? "ALLOCATED" : "HELD");
+    const plan = planAdmission(existing, opts, now);
 
-    const wantsAttach = state === "ALLOCATED" || Boolean(opts.sessionId);
-    let replacingExisting = false;
-    if (existing && existing.state !== "RELEASED") {
-      const alreadyAttached = wantsAttach && existing.state !== "HELD";
-      const expiredHold =
-        existing.state === "HELD" && existing.expiresAt !== null && existing.expiresAt <= now;
-      if (expiredHold) {
-        replacingExisting = true;
-      } else if (opts.specHash && existing.specHash && existing.specHash !== opts.specHash) {
+    switch (plan.outcome.kind) {
+      case "refuse":
         return {
           admitted: false,
           reason: "invalid_request",
           retryable: false,
           requested: request.baseline,
         };
-      } else if (alreadyAttached) {
+      case "reuse": {
         const refreshed = this.findExisting(opts);
         if (refreshed) return { admitted: true, reservation: refreshed };
-      } else if (wantsAttach) {
-        // Convert the HELD row into the session reservation below. Exclude it
-        // from the accounting snapshot so the transfer is not double-counted.
-        replacingExisting = true;
-      } else {
-        this.stmts.updateHeld!.run(
-          existing.specHash ?? opts.specHash ?? null,
-          existing.nodeId,
-          existing.baseline.cpuMillicores,
-          existing.baseline.memoryBytes,
-          existing.baseline.storageBytes,
-          existing.peak.cpuMillicores,
-          existing.peak.memoryBytes,
-          existing.peak.storageBytes,
-          now + ttlMs,
-          now,
-          existing.id,
-        );
-        const refreshed = this.findExisting(opts);
-        if (refreshed) return { admitted: true, reservation: refreshed };
+        break;
       }
+      case "renew": {
+        const held = plan.outcome.existing;
+        this.renewHold(held, opts, plan.outcome.expiresAt, now);
+        const refreshed = this.findExisting(opts);
+        if (refreshed) return { admitted: true, reservation: refreshed };
+        break;
+      }
+      case "admit":
+        break;
     }
 
-    const active = replacingExisting
-      ? this.active().filter((reservation) => reservation.id !== existing?.id)
-      : this.active();
+    const excludeId = plan.outcome.kind === "admit" ? plan.outcome.excludeId : null;
+    const active = this.active();
+    const accounted =
+      excludeId === null ? active : active.filter((reservation) => reservation.id !== excludeId);
     const decision = admitCapacity(
-      { ...snapshot, now, reservations: active },
+      { ...snapshot, now, reservations: accounted },
       request,
     );
     if (!decision.admitted) return decision;
 
     const id = existing?.id ?? `res_${randomBytes(12).toString("hex")}`;
-    const expiresAt = state === "HELD" ? now + ttlMs : null;
     if (existing) {
       this.stmts.updateHeld!.run(
         opts.specHash ?? null,
@@ -268,11 +197,11 @@ export class ReservationRepository implements ReservationStore {
         request.peak.cpuMillicores,
         request.peak.memoryBytes,
         request.peak.storageBytes,
-        expiresAt,
+        plan.expiresAt,
         now,
         id,
       );
-      if (wantsAttach) {
+      if (plan.wantsAttach) {
         this.stmts.attach!.run(
           opts.paymentKey ?? null,
           opts.sessionId ?? null,
@@ -296,14 +225,14 @@ export class ReservationRepository implements ReservationStore {
         opts.warmId ?? null,
         opts.specHash ?? null,
         decision.nodeId,
-        state,
+        plan.state,
         request.baseline.cpuMillicores,
         request.baseline.memoryBytes,
         request.baseline.storageBytes,
         request.peak.cpuMillicores,
         request.peak.memoryBytes,
         request.peak.storageBytes,
-        expiresAt,
+        plan.expiresAt,
         now,
         now,
       );
@@ -311,6 +240,28 @@ export class ReservationRepository implements ReservationStore {
     const saved = this.findExisting(opts);
     if (!saved) throw new Error("reservation insert did not round-trip");
     return { admitted: true, reservation: saved };
+  }
+
+  /** Extend an unrelated live hold, keeping the resources it already holds. */
+  private renewHold(
+    held: ReservationRecord,
+    opts: AdmitOptions,
+    expiresAt: number,
+    now: number,
+  ): void {
+    this.stmts.updateHeld!.run(
+      held.specHash ?? opts.specHash ?? null,
+      held.nodeId,
+      held.baseline.cpuMillicores,
+      held.baseline.memoryBytes,
+      held.baseline.storageBytes,
+      held.peak.cpuMillicores,
+      held.peak.memoryBytes,
+      held.peak.storageBytes,
+      expiresAt,
+      now,
+      held.id,
+    );
   }
 
   /** Atomically admit and persist. */
@@ -341,7 +292,7 @@ export class ReservationRepository implements ReservationStore {
       const existing =
         (this.stmts.getByPayment!.get(paymentKey) as ReservationRow | undefined) ??
         (this.stmts.getBySession!.get(sessionId) as ReservationRow | undefined);
-      const record = existing ? mapRow(existing) : null;
+      const record = existing ? reservationFromRow(existing) : null;
       if (record && record.sessionId && record.sessionId !== sessionId) {
         const oldSessionExists = Boolean(
           this.stmts.sessionExists!.get(record.sessionId),
@@ -383,7 +334,7 @@ export class ReservationRepository implements ReservationStore {
           requested: request.baseline,
         };
       }
-      const record = mapRow(row);
+      const record = reservationFromRow(row);
       if (record.state !== "SUSPENDED") {
         return { admitted: true, reservation: record };
       }
@@ -444,17 +395,17 @@ export class ReservationRepository implements ReservationStore {
   }
 
   async listReleasing(): Promise<ReservationRecord[]> {
-    return (this.stmts.listReleasing!.all() as unknown as ReservationRow[]).map(mapRow);
+    return (this.stmts.listReleasing!.all() as unknown as ReservationRow[]).map(reservationFromRow);
   }
 
   async getBySession(sessionId: string): Promise<ReservationRecord | null> {
     const row = this.stmts.getBySession!.get(sessionId) as ReservationRow | undefined;
-    return row ? mapRow(row) : null;
+    return row ? reservationFromRow(row) : null;
   }
 
   async getByPayment(paymentKey: string): Promise<ReservationRecord | null> {
     const row = this.stmts.getByPayment!.get(paymentKey) as ReservationRow | undefined;
-    return row ? mapRow(row) : null;
+    return row ? reservationFromRow(row) : null;
   }
 
   /** Expire unused provisional holds; called by housekeeping. */
