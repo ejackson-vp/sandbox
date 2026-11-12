@@ -1,8 +1,8 @@
 /**
  * Postgres schema and migration ladder.
  *
- * The tables, columns, uniques and indexes are those of schema v17, the version
- * the controller shipped before the Postgres-only migration. Two dialect
+ * The tables, columns, uniques and indexes are those of the schema the Postgres
+ * adapter was ported to (v17), plus the additive steps above it. Two dialect
  * differences are deliberate and are called out where they occur:
  *
  *   - epoch milliseconds are `BIGINT`, because 2026 is past `int4`'s ceiling.
@@ -63,10 +63,16 @@ CREATE TABLE IF NOT EXISTS payment_ledger (
   refund_attempts INTEGER NOT NULL DEFAULT 0,
   refund_last_error TEXT,
   refund_next_attempt_at BIGINT,
+  refund_claim_token TEXT,
+  refund_claimed_at BIGINT,
+  refund_idempotency_key TEXT,
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS payment_ledger_status ON payment_ledger(status);
+CREATE INDEX IF NOT EXISTS payment_ledger_refund_due
+  ON payment_ledger(status, refund_next_attempt_at, refund_claimed_at)
+  WHERE status IN ('REFUND_PENDING','REFUND_SENDING');
 CREATE INDEX IF NOT EXISTS payment_ledger_session ON payment_ledger(session_id);
 CREATE INDEX IF NOT EXISTS payment_ledger_nonce ON payment_ledger(settlement_nonce);
 CREATE TABLE IF NOT EXISTS challenge_nonces (
@@ -236,6 +242,20 @@ const LADDER: ReadonlyArray<{ from: number; sql: string }> = [
     // the behaviour it had when it was written.
     from: 17,
     sql: "ALTER TABLE exec_requests ADD COLUMN IF NOT EXISTS result_envelope TEXT;",
+  },
+  {
+    // Durable refund claim (#31): the worker claims a due row before it sends,
+    // so a crash, a timeout or a second worker cannot send the same refund
+    // twice. `REFUND_SENDING` is a status value, not a new table: an existing
+    // row simply never has it. The partial index serves the claim query, whose
+    // predicate is exactly `status IN ('REFUND_PENDING','REFUND_SENDING')`.
+    from: 18,
+    sql: `ALTER TABLE payment_ledger ADD COLUMN IF NOT EXISTS refund_claim_token TEXT;
+          ALTER TABLE payment_ledger ADD COLUMN IF NOT EXISTS refund_claimed_at BIGINT;
+          ALTER TABLE payment_ledger ADD COLUMN IF NOT EXISTS refund_idempotency_key TEXT;
+          CREATE INDEX IF NOT EXISTS payment_ledger_refund_due
+            ON payment_ledger(status, refund_next_attempt_at, refund_claimed_at)
+            WHERE status IN ('REFUND_PENDING','REFUND_SENDING');`,
   },
 ];
 

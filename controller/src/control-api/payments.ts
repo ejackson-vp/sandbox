@@ -305,7 +305,14 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
 
   app.get("/internal/payments", async (req: Request, res: Response) => {
     const status = String(req.query.status ?? "REFUND_PENDING");
-    if (status !== "SETTLED" && status !== "REFUND_PENDING" && status !== "REFUNDED") {
+    // `REFUND_SENDING` is listable on purpose: a row there is either in flight or
+    // waiting for its claim lease to expire, and an operator needs to see it.
+    if (
+      status !== "SETTLED" &&
+      status !== "REFUND_PENDING" &&
+      status !== "REFUND_SENDING" &&
+      status !== "REFUNDED"
+    ) {
       res.status(400).json({ error: "invalid_status" });
       return;
     }

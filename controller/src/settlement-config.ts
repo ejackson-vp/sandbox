@@ -19,6 +19,11 @@ interface SettlementConfig {
   refundWebhookToken: string;
   refundMaxAttempts: number;
   refundRetryBaseMs: number;
+  /**
+   * How long a claimed refund is owned before another pass may reclaim it. Must
+   * be longer than the refund webhook timeout (10 s in `HttpRefundExecutor`).
+   */
+  refundClaimLeaseMs: number;
   settlementRecoveryEnabled: boolean;
   settlementRecoveryGraceMs: number;
 }
@@ -45,6 +50,7 @@ export function parseSettlement(
     refundWebhookToken: env.REFUND_WEBHOOK_TOKEN ?? "",
     refundMaxAttempts: int(env.REFUND_MAX_ATTEMPTS, 10, 1, 100),
     refundRetryBaseMs: int(env.REFUND_RETRY_BASE_MS, 60_000, 1_000, 3_600_000),
+    refundClaimLeaseMs: int(env.REFUND_CLAIM_LEASE_MS, 60_000, 5_000, 3_600_000),
     settlementRecoveryEnabled: bool(env.SETTLEMENT_RECOVERY_ENABLED, true),
     settlementRecoveryGraceMs: int(env.SETTLEMENT_RECOVERY_GRACE_MS, 300_000, 30_000, 3_600_000),
   };

@@ -50,6 +50,22 @@ the container registry.
   `payment_ledger.settlement_nonce` lets a refund be keyed by the EIP-3009 nonce
   (`GET /internal/payments/by-nonce/:nonce`, refund endpoint accepts either).
   Never run against real money; the mock facilitator is the only backend tested.
+- Effectively-once refund execution (schema v18). A claim pass moves due rows to
+  `REFUND_SENDING` with `refund_claim_token` and `refund_claimed_at`, using
+  `SELECT ... FOR UPDATE SKIP LOCKED`, so two workers never own the same row and a
+  crash or timeout after the provider paid is recovered by a lease reclaim. Every
+  attempt sends the stored `refund_idempotency_key` (`refund:<paymentKey>`) as an
+  `Idempotency-Key` header and in the body; completion is conditional on the
+  claim token. Definite refusals count an attempt and back off;
+  ambiguous outcomes stay `REFUND_SENDING` and retry with the same key;
+  `REFUND_MAX_ATTEMPTS` bounds refusals only. New config
+  `REFUND_CLAIM_LEASE_MS`, gauges `sandbox_refunds_sending`, counters
+  `sandbox_refund_worker_total{result}` gain `unknown`, `reclaimed` and
+  `claim_lost`. The manual refund endpoint refuses `REFUND_SENDING`.
+- Refund policy for relay loss: a session terminated as `failure:relay_lost` is
+  refunded in full even though it reached READY, and start-up reconciliation
+  repairs terminal `relay_lost` rows left `SETTLED`. Client destroys and ordinary
+  lease expiry after READY are still not refunded.
 - Double-charge guard: a second signed payment for a `(clientPublicKey,
   clientNonce)` pair that already owns a session is refunded
   (`duplicate_client_nonce`) and refused with `409 duplicate_session`.

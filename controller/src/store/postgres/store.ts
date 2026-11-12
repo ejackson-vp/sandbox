@@ -20,8 +20,10 @@ import { metrics } from "@x402s/shared/runtime";
 import {
   NON_TERMINAL_STATE_SQL,
   type ChallengeBurnResult,
+  type ClaimedRefund,
   type LedgerStatus,
   type PaymentRecord,
+  type RefundClaimRequest,
   type SessionRecord,
   type SessionState,
   type StoreHealth,
@@ -224,12 +226,29 @@ export class PostgresStore implements StoreBackend {
     return this.ledgerRepo.listUnrefundedTerminalBeforeReady();
   }
 
+  listRelayLostSettled() {
+    return this.ledgerRepo.listRelayLostSettled();
+  }
+
   listUnclaimedSettled() {
     return this.ledgerRepo.listUnclaimedSettled();
   }
 
-  listRefundPendingDue(now: number, limit: number) {
-    return this.ledgerRepo.listRefundPendingDue(now, limit);
+  claimRefunds(request: RefundClaimRequest): Promise<ClaimedRefund[]> {
+    return this.ledgerRepo.claimRefunds(request);
+  }
+
+  completeRefundClaim(paymentKey: string, claimToken: string, transaction: string): Promise<boolean> {
+    return this.ledgerRepo.completeRefundClaim(paymentKey, claimToken, transaction);
+  }
+
+  releaseRefundClaim(
+    paymentKey: string,
+    claimToken: string,
+    error: string,
+    nextAttemptAt: number,
+  ): Promise<boolean> {
+    return this.ledgerRepo.releaseRefundClaim(paymentKey, claimToken, error, nextAttemptAt);
   }
 
   markRefundPending(paymentKey: string, reason: string): Promise<boolean> {
@@ -238,10 +257,6 @@ export class PostgresStore implements StoreBackend {
 
   markRefunded(paymentKey: string, transaction: string, reason: string): Promise<boolean> {
     return this.ledgerRepo.markRefunded(paymentKey, transaction, reason);
-  }
-
-  recordRefundAttempt(paymentKey: string, error: string, nextAttemptAt: number): Promise<boolean> {
-    return this.ledgerRepo.recordRefundAttempt(paymentKey, error, nextAttemptAt);
   }
 
   insertUnclaimedLedger(entry: UnclaimedLedgerEntry): Promise<boolean> {

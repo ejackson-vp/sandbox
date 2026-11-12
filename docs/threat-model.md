@@ -85,7 +85,7 @@ and can run code that is malicious inside its own sandbox.
 | Settled but API crashed before entitlement | durable intent + facilitator settlement lookup completes it on retry (tested) |
 | Reused settlement with a different spec | intent stores `spec_hash`; mismatch → 409, no session |
 | On-chain/testnet recovery | no lookup contract → `409 reconciliation_pending`; never charges twice, never fabricates an entitlement |
-| Refunds | not implemented (see production-readiness) |
+| Refunds | a durable claim (`REFUND_SENDING` + token + lease) before sending, and a stable `refund:<paymentKey>` idempotency key on every retry: effectively-once, conditional on the provider deduping the key. A crash or timeout after the provider paid resends the same key; two workers cannot claim the same row |
 
 ### G. Denial of service / resource exhaustion
 
