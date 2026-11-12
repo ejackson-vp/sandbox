@@ -21,6 +21,7 @@ import { cadenceFor } from "../../reconcile-cadence.js";
 import {
   mapSession,
   payloadDiffers,
+  persistableResultEnvelope,
   SESSION_COLUMNS,
   type ClaimOperationResult,
   type ExecRequestRecord,
@@ -153,15 +154,22 @@ export class PgOperationRepository {
     sessionId: string,
     requestId: string,
     outcome: "done" | "error" | "abandoned",
+    resultEnvelope?: string | null,
   ): Promise<void> {
+    // Same bound and same rule as the SQLite adapter: too large is stored as
+    // NULL, never truncated.
+    const envelope = persistableResultEnvelope(resultEnvelope);
     await this.conn.tx(async (tx) => {
       const now = Date.now();
       // A request fenced by restart recovery is `outcome_unknown`, not `pending`,
       // so a stale finish matches nothing and leaves the gate closed.
+      // `COALESCE` keeps an envelope the row already has, so a finish without one
+      // cannot erase a stored result.
       const finished = await tx.query(
-        `UPDATE exec_requests SET state = $1, updated_at = $2
-          WHERE session_id = $3 AND id = $4 AND state = 'pending' RETURNING id`,
-        [outcome, now, sessionId, requestId],
+        `UPDATE exec_requests
+            SET state = $1, result_envelope = COALESCE($2, result_envelope), updated_at = $3
+          WHERE session_id = $4 AND id = $5 AND state = 'pending' RETURNING id`,
+        [outcome, envelope, now, sessionId, requestId],
       );
       if ((finished.rowCount ?? 0) === 0) return;
       await tx.query(
@@ -188,6 +196,7 @@ export class PgOperationRepository {
       op: row.op as string,
       state: row.state as ExecRequestRecord["state"],
       payloadHash: (row.payload_hash as string | null) ?? null,
+      resultEnvelope: (row.result_envelope as string | null) ?? null,
       epoch: row.epoch as number,
       createdAt: row.created_at as number,
       updatedAt: row.updated_at as number,

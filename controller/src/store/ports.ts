@@ -225,6 +225,8 @@ export interface ControlApiStore {
     sessionId: string,
     requestId: string,
     outcome: "done" | "error" | "abandoned",
+    /** The sealed result to keep with the row; omitted or over the bound, none is stored. */
+    resultEnvelope?: string | null,
   ): Promise<void>;
   getExecRequest(sessionId: string, requestId: string): Promise<ExecRequestRecord | null>;
   getLedgerByNonce(settlementNonce: string): Promise<PaymentLedgerRecord | null>;

@@ -114,11 +114,28 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
         const record = await store.getExecRequest(id, requestId);
         const existing = await relay.response(id, requestId, parsed.data.waitMs ?? 1000).catch(() => ({ kind: "pending" as const }));
         if (existing.kind === "envelope") {
-          if (record?.state === "outcome_unknown") await store.finishOperation(id, requestId, "done");
+          // Keep the result with the row, as the owning POST and the GET path
+          // do, so this answer is still available after the relay evicts it.
+          // The store's `state = 'pending'` guard means a fenced request is
+          // left as `outcome_unknown` either way.
+          if (record?.state === "pending" || record?.state === "outcome_unknown") {
+            await store.finishOperation(id, requestId, "done", existing.envelope);
+          }
           res.json({
             state: (await store.getSession(id))?.state ?? session.state,
             requestId,
             envelope: existing.envelope,
+          });
+          return;
+        }
+        if (record?.resultEnvelope) {
+          // The relay has evicted the result but the controller still has the
+          // ciphertext it was given. It is sealed to the client key: opening it
+          // is the client's job, and the controller cannot.
+          res.json({
+            state: (await store.getSession(id))?.state ?? session.state,
+            requestId,
+            envelope: record.resultEnvelope,
           });
           return;
         }
@@ -203,7 +220,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
       return;
     }
     if (outcome.kind === "envelope") {
-      await store.finishOperation(id, requestId, "done");
+      await store.finishOperation(id, requestId, "done", outcome.envelope);
       res.json({ state: (await store.getSession(id))?.state, requestId, envelope: outcome.envelope });
       return;
     }
@@ -231,7 +248,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
       const outcome = await relay.response(id, requestId, waitMs);
       if (outcome.kind === "envelope") {
         if (record.state === "pending" || record.state === "outcome_unknown") {
-          await store.finishOperation(id, requestId, "done");
+          await store.finishOperation(id, requestId, "done", outcome.envelope);
         }
         res.json({
           state: (await store.getSession(id))?.state,
@@ -250,13 +267,26 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
         // fence rejection, not the outcome of the interrupted operation.
       }
     } catch {
-      /* fall through to pending/expired */
+      /* fall through to stored/pending/expired */
     }
-    if (record.state === "pending") {
+    // The relay holds a result for 5 minutes and 64 entries per session. Past
+    // that the row is the only copy: `result_envelope` is the same sealed
+    // ciphertext the relay had, so answering from it opens nothing. Re-read it
+    // because the wait above may have outlived the snapshot taken before it.
+    const latest = (await store.getExecRequest(id, requestId)) ?? record;
+    if (latest.resultEnvelope) {
+      res.json({
+        state: (await store.getSession(id))?.state,
+        requestId,
+        envelope: latest.resultEnvelope,
+      });
+      return;
+    }
+    if (latest.state === "pending") {
       res.status(202).json({ state: (await store.getSession(id))?.state, requestId, pending: true });
       return;
     }
-    if (record.state === "outcome_unknown") {
+    if (latest.state === "outcome_unknown") {
       // The controller restarted with this request in flight. It may still be
       // executing in the guest; the result was never observed. Never report
       // success/failure or a plain cache expiry for it.
@@ -267,6 +297,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
       });
       return;
     }
+    // Nothing in the relay and nothing on the row: the result is gone.
     res.status(410).json({ error: "result_expired", requestId });
   });
 

@@ -19,6 +19,7 @@ import { cadenceFor } from "../reconcile-cadence.js";
 import {
   mapSession,
   payloadDiffers,
+  persistableResultEnvelope,
   type ClaimOperationResult,
   type ExecRequestRecord,
   type RawSession,
@@ -150,14 +151,18 @@ export class OperationRepository {
     sessionId: string,
     requestId: string,
     outcome: "done" | "error" | "abandoned",
+    resultEnvelope?: string | null,
   ): void {
     const now = Date.now();
+    // Bounded here, at the write site: an envelope over the limit is stored as
+    // NULL, never truncated (see `MAX_PERSISTED_RESULT_BYTES`).
+    const envelope = persistableResultEnvelope(resultEnvelope);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       // A caller may have read this request as pending before a controller
       // restart fenced it. Recovery owns that request now; a stale finish must
       // not clear the gate or overwrite `outcome_unknown`.
-      const finished = this.stmts.finishRequest!.run(outcome, now, sessionId, requestId).changes;
+      const finished = this.stmts.finishRequest!.run(outcome, envelope, now, sessionId, requestId).changes;
       if (finished > 0) this.stmts.clearActive!.run(now + cadenceFor("READY"), now, sessionId, requestId);
       this.db.exec("COMMIT");
     } catch (err) {
@@ -175,6 +180,7 @@ export class OperationRepository {
       op: row.op as string,
       state: row.state as ExecRequestRecord["state"],
       payloadHash: (row.payload_hash as string | null) ?? null,
+      resultEnvelope: (row.result_envelope as string | null) ?? null,
       epoch: row.epoch as number,
       createdAt: row.created_at as number,
       updatedAt: row.updated_at as number,

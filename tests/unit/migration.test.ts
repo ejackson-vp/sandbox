@@ -276,6 +276,8 @@ describe("schema migration", () => {
     expect(after.columns).toContain("exec_epoch");
     expect(after.columns).toContain("next_due_ms");
     expect(after.requestColumns).toContain("epoch");
+    expect(after.requestColumns).toContain("payload_hash");
+    expect(after.requestColumns).toContain("result_envelope");
     expect(after.intentColumns).toEqual(expect.arrayContaining(["claim_token", "claim_expires_at"]));
 
     // Replay prevention survives the upgrade: the payment key is still unique.
@@ -353,6 +355,8 @@ describe("schema migration", () => {
     expect(after.columns).toContain("exec_epoch");
     expect(after.columns).toContain("next_due_ms");
     expect(after.requestColumns).toContain("epoch");
+    expect(after.requestColumns).toContain("payload_hash");
+    expect(after.requestColumns).toContain("result_envelope");
     expect(after.intentColumns).toEqual(expect.arrayContaining(["claim_token", "claim_expires_at"]));
   });
 });

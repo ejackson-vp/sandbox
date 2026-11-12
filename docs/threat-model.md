@@ -32,7 +32,7 @@ implemented **and** covered by tests in this repository.
 | Archive traversal / symlink escape | Path canonicalisation, symlink-parent rejection, `O_NOFOLLOW`, tar entry validation | Same |
 | Read another session's data | Separate pod, keys, relay entry, capability; no shared volumes | Same |
 | Guess/replay another capability | 256-bit random-ish HMAC, SHA-256 stored, scoped by session, TTL, constant-time compare | Same |
-| Replay a request id | Controller maps `(session, requestId)` to one execution and stores the client's canonical-operation SHA-256 (ciphertext hash as fallback); a same-operation retry returns the cached result, a different operation gets `409 idempotency_key_reused` | Same |
+| Replay a request id | Controller maps `(session, requestId)` to one execution and stores the client's canonical-operation SHA-256 (ciphertext hash as fallback); a same-operation retry returns the cached result, a different operation gets `409 idempotency_key_reused`. The stored result envelope is client-sealed, so replaying it reveals nothing to the controller or to storage | Same |
 | Abuse the relay as a tunnel | Relay only understands `request/cancel/shutdown` + opaque response; no arbitrary forwarding | Same |
 
 **Not mitigated:** the customer can always consume the resource they paid for,
@@ -131,7 +131,15 @@ admission control.
   child process.
 - Logs redact envelopes, tokens, file contents, commands; a marker test asserts
   code/output never appear in any control-plane or pod log.
-- SQLite stores metadata only. Relay stores ciphertext with a 5-minute TTL.
+- The controller's database stores metadata (state, timings, hashes, limits) plus
+  the **client-sealed result ciphertext** in `exec_requests.result_envelope`
+  (schema v17), so a retry can be answered after the relay's 5 minute cache
+  evicts the result. The controller holds no key for that column and cannot open
+  it; it is written only below `MAX_PERSISTED_RESULT_BYTES` (1 MiB, larger
+  results are dropped rather than truncated) and cleared for the session in the
+  same transaction that finalizes it, so ciphertext is retained only for live
+  and terminating sessions. The request rows stay for audit.
+- The relay stores ciphertext with a 5-minute TTL.
 - Ordinary workspace is memory-backed and deleted with the pod. Suspendable
   workspaces use a per-session PVC, deleted at termination; the PVC is
   **plaintext** and the node/storage administrator can read it. The control
@@ -143,7 +151,7 @@ admission control.
 | Race | Handling |
 | --- | --- |
 | Two execs at once | atomic single-operation claim → one runs, one gets `409 busy` |
-| Retry after network loss | same `requestId` and canonical operation returns the cached encrypted result, even if the envelope was re-sealed; a different operation is `409 idempotency_key_reused` |
+| Retry after network loss | same `requestId` and canonical operation returns the cached encrypted result, even if the envelope was re-sealed; a different operation is `409 idempotency_key_reused`. Past the relay cache the stored envelope on the request row answers the retry; the controller still cannot open it. |
 | Cancel vs completion | cancel is best-effort; whichever response arrives is bound to the request id; duplicates are idempotent |
 | Lease expiry during a command | guest watchdog cancels; controller deletes the pod regardless |
 | File write vs lease expiry | guest checks the lease before dispatch; pod deletion ends any in-flight I/O |

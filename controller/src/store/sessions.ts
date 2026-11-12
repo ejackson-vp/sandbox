@@ -201,14 +201,31 @@ export class SessionRepository {
     return changed;
   }
 
-  /** Terminal state is derived from the termination reason. */
+  /**
+   * Terminal state is derived from the termination reason.
+   *
+   * The finalize and the ciphertext clear are one transaction: a session that
+   * is terminal must not leave its result ciphertext behind, and a crash
+   * between the two writes would do exactly that. The request rows themselves
+   * stay for audit, with `result_envelope` NULL.
+   */
   finalizeTermination(id: string): SessionState | null {
-    const session = this.read(id);
-    if (!session || session.state !== "TERMINATING") return null;
-    const reason = session.terminationReason ?? "";
-    const final = finalStateForReason(reason);
-    const now = Date.now();
-    this.stmts.finalize!.run(final, now, now + cadenceFor(final), now, id);
+    this.db.exec("BEGIN IMMEDIATE");
+    let final: SessionState | null = null;
+    try {
+      const session = this.read(id);
+      if (session && session.state === "TERMINATING") {
+        const reason = session.terminationReason ?? "";
+        final = finalStateForReason(reason);
+        const now = Date.now();
+        this.stmts.finalize!.run(final, now, now + cadenceFor(final), now, id);
+        this.stmts.clearSessionResultEnvelopes!.run(id);
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
     return final;
   }
 

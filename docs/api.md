@@ -302,13 +302,15 @@ DELETE /v1/sessions/{id}/requests/{requestId}      # cancel the in-flight comman
 
 `GET` returns the sealed result when available, `202` while pending, `409
 outcome_unknown` when the controller restarted with this request in flight and
-the guest has not produced a result, and `410 result_expired` once a known
-result has aged out of the relay cache (5 minutes). `outcome_unknown` is
-terminal and distinct from an id the controller never saw (`404
-request_not_found`): the command may still have run. Retrying an `exec` with the
-same `requestId` returns the same result without executing twice. While the old
-request is fenced, a new operation returns `409 busy` with the old `requestId`;
-it is not forwarded to the guest.
+the guest has not produced a result, and `410 result_expired` only when neither
+the relay cache (5 minutes, 64 entries per session) nor the controller's stored
+copy of the envelope still has it. The controller keeps the client-sealed result
+with the request row, clears it when the session is finalized, and cannot open
+it. `outcome_unknown` is terminal and distinct from an id the controller never
+saw (`404 request_not_found`): the command may still have run. Retrying an `exec`
+with the same `requestId` returns the same result without executing twice. While
+the old request is fenced, a new operation returns `409 busy` with the old
+`requestId`; it is not forwarded to the guest.
 
 ## Suspend and resume
 

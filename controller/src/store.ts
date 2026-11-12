@@ -504,8 +504,9 @@ export class Store {
     sessionId: string,
     requestId: string,
     outcome: "done" | "error" | "abandoned",
+    resultEnvelope?: string | null,
   ): Promise<void> {
-    this.operations.finishOperation(sessionId, requestId, outcome);
+    this.operations.finishOperation(sessionId, requestId, outcome, resultEnvelope);
   }
 
   async getExecRequest(sessionId: string, requestId: string): Promise<ExecRequestRecord | null> {
