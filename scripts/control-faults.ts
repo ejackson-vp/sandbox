@@ -156,9 +156,28 @@ async function execUntilOk(client: SandboxClient, handle: SessionHandle, timeout
   }
 }
 
+/**
+ * Resolve the workload that owns a target. The relay is a StatefulSet (stable
+ * identity and its own service), the API and controller are Deployments. The
+ * harness used to hardcode `deploy/<target>`, so every relay kill died on
+ * `deployments.apps "relay" not found` before it could measure convergence.
+ */
+function workloadFor(target: string): string {
+  for (const kind of ["deploy", "statefulset"] as const) {
+    try {
+      kubectl(["-n", NS, "get", kind, target, "-o", "name"]);
+      return `${kind}/${target}`;
+    } catch {
+      /* try the next kind */
+    }
+  }
+  throw new Error(`no Deployment or StatefulSet named ${target} in ${NS}`);
+}
+
 async function kill(target: string): Promise<void> {
+  const workload = workloadFor(target);
   kubectl(["-n", NS, "delete", "pod", "-l", `app=${target}`, "--grace-period=0", "--force"]);
-  kubectl(["-n", NS, "rollout", "status", `deploy/${target}`, "--timeout=180s"]);
+  kubectl(["-n", NS, "rollout", "status", workload, "--timeout=180s"]);
 }
 
 async function pause(target: string): Promise<void> {
