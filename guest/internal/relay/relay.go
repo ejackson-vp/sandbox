@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"sync"
 	"time"
 
@@ -115,10 +116,8 @@ type Client struct {
 // DialOnce connects once. A non-101 handshake is a *StatusError, so a caller can
 // tell a permanent authentication rejection from a relay that is still starting
 // or a session the controller has not re-registered yet.
-func DialOnce(ctx context.Context, url string) (*Client, error) {
-	conn, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{
-		CompressionMode: websocket.CompressionDisabled,
-	})
+func DialOnce(ctx context.Context, rawURL string) (*Client, error) {
+	conn, resp, err := dialValidated(ctx, rawURL)
 	if err != nil {
 		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
 			return nil, &StatusError{Status: resp.StatusCode}
@@ -127,6 +126,25 @@ func DialOnce(ctx context.Context, url string) (*Client, error) {
 	}
 	conn.SetReadLimit(24 * 1024 * 1024)
 	return &Client{conn: conn}, nil
+}
+
+// dialValidated checks the endpoint before opening a socket. The value comes
+// from the signed claim/bootstrap, never from a customer operation, but pinning
+// the scheme and requiring a host keeps the network target a relay URL even if
+// a future caller passes something else. CodeQL flags the websocket sink as
+// request forgery; the lgtm annotation records why this is not a user-controlled
+// destination.
+func dialValidated(ctx context.Context, rawURL string) (*websocket.Conn, *http.Response, error) {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("relay url: %w", err)
+	}
+	if (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" {
+		return nil, nil, fmt.Errorf("relay url must be ws or wss with a host")
+	}
+	return websocket.Dial(ctx, parsed.String(), &websocket.DialOptions{ // lgtm[go/request-forgery]
+		CompressionMode: websocket.CompressionDisabled,
+	})
 }
 
 // Dial connects with bounded retries (the relay may still be starting). It is

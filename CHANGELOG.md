@@ -253,7 +253,7 @@ the container registry.
   still `relay_lost` and not `lease_expired`; an overrun the lease check notices
   while the loss window is open is attributed to `relay_lost` too. A retry of the
   interrupted request id is `409 outcome_unknown` and is never re-executed. See
-  [ADR 0011](docs/adr/0011-guest-reconnects-after-relay-loss.md).
+  [ADR 0011](docs/adr/0012-guest-reconnects-after-relay-loss.md).
 - A create retry that already booted a Pod adopts it before `register_relay`
   replays, so it no longer rotates the guest token under a running guest.
 - Guest results carry `truncated` again. `Result.Truncated` and
