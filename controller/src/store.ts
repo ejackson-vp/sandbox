@@ -14,13 +14,18 @@
  * still lean on one connection serialising `BEGIN IMMEDIATE` and the
  * `WHERE state = ...` guards; a network adapter has to earn them again.
  *
+ * This class is the facade: connection setup, the writer guard, backup, stats
+ * and health, plus a one-line delegation per port method. The rows live in one
+ * repository per concern, mirroring `store/postgres/`: sessions in
+ * `store/sessions.ts`, payments in `store/payments.ts`, operations in
+ * `store/operations.ts`, and so on.
+ *
  * Schema changes are additive and transactional; a database from a newer build
  * is refused rather than downgraded.
  */
 import { statSync } from "node:fs";
 import { backup as sqliteBackup, DatabaseSync, type StatementSync } from "node:sqlite";
 import {
-  mapSession,
   type ClaimOperationResult,
   type ExecRequestRecord,
   type IntentClaimResult,
@@ -28,7 +33,6 @@ import {
   type PaymentIntentRecord,
   type PaymentLedgerRecord,
   type PaymentRecord,
-  type RawSession,
   type SessionRecord,
   type SessionState,
 } from "./store/models.js";
@@ -36,13 +40,12 @@ import { migrate } from "./store/schema.js";
 import { boundedFailureReason } from "./store/failure-reasons.js";
 import { checkStoreHealth, type StoreHealth } from "./store/health.js";
 import { prepareStatements } from "./store/statements.js";
+import { SessionRepository } from "./store/sessions.js";
 import { PaymentRepository } from "./store/payments.js";
 import { ChallengeNonceRepository, type ChallengeBurnResult } from "./store/challenges.js";
 import { LedgerRepository, type UnclaimedLedgerEntry } from "./store/ledger.js";
 import { OperationRepository } from "./store/operations.js";
 import { BudgetRepository, type BudgetDecision, type BudgetLimits } from "./store/budgets.js";
-import { cadenceFor } from "./reconcile-cadence.js";
-import { finalStateForReason } from "@x402s/shared/protocol";
 import { metrics } from "@x402s/shared/runtime";
 
 import { ReservationRepository } from "./capacity/reservations.js";
@@ -83,6 +86,8 @@ function sleepSync(ms: number): void {
 export class Store {
   private readonly db: DatabaseSync;
   private readonly stmts: Record<string, StatementSync>;
+  /** Session reads and guarded transitions: the slice `store/postgres/sessions.ts` mirrors. */
+  private readonly sessions: SessionRepository;
   readonly reservations: ReservationStore;
   readonly payments: PaymentRepository;
   readonly challenges: ChallengeNonceRepository;
@@ -128,11 +133,12 @@ export class Store {
     this.reservations = new ReservationRepository(this.db);
 
     this.stmts = prepareStatements(this.db);
+    this.sessions = new SessionRepository(this.db, this.stmts);
     this.budgets = new BudgetRepository(this.db, this.stmts);
     this.payments = new PaymentRepository(this.db, this.stmts, this.budgets, this.budgetWindowMs);
     this.challenges = new ChallengeNonceRepository(this.db, this.stmts);
     this.ledger = new LedgerRepository(this.stmts);
-    this.operations = new OperationRepository(this.db, this.stmts, (id) => this.readSession(id));
+    this.operations = new OperationRepository(this.db, this.stmts, (id) => this.sessions.read(id));
   }
 
   close(): void {
@@ -190,6 +196,20 @@ export class Store {
   /** Consistent online copy for the backup service. */
   async backupTo(path: string): Promise<void> {
     await sqliteBackup(this.db, path);
+  }
+
+  /**
+   * Row counts across the whole database, not the session slice: the writer
+   * guard asserts nothing was written on a standby, and the payment tests pin
+   * "one payment, one session". They stay here with `stats` rather than in a
+   * repository because each reads a different table.
+   */
+  countSessions(): number {
+    return ((this.stmts.countSessions!.get() as { n: number } | undefined)?.n ?? 0);
+  }
+
+  countPayments(): number {
+    return ((this.stmts.countPayments!.get() as { n: number } | undefined)?.n ?? 0);
   }
 
   /* ---------------- payment intents (outbox) ---------------- */
@@ -260,25 +280,8 @@ export class Store {
 
   /* ---------------- sessions ---------------- */
 
-  /**
-   * The synchronous read the async port method and the adapter's own
-   * transactions share.
-   *
-   * Nothing outside this class uses it. The two internal callers
-   * (`claimOperation`, `finalizeTermination`) read and then write, and on
-   * SQLite that pair must not be interrupted: `claimOperation` holds
-   * `BEGIN IMMEDIATE` open, so an `await` in the middle would let another
-   * request on this connection try to start a second transaction. A Postgres
-   * adapter replaces both pairs with one guarded statement; until then the read
-   * stays inside the adapter, never in a caller.
-   */
-  private readSession(id: string): SessionRecord | null {
-    const row = this.stmts.getSession!.get(id) as RawSession | undefined;
-    return row ? mapSession(row) : null;
-  }
-
   async getSession(id: string): Promise<SessionRecord | null> {
-    return this.readSession(id);
+    return this.sessions.read(id);
   }
 
   async getPayment(key: string): Promise<PaymentRecord | null> {
@@ -345,70 +348,52 @@ export class Store {
     return this.ledger.listStaleClaimedIntents(olderThan, limit);
   }
 
+  /* ---------------- session reads and writes (delegated) ---------------- */
+
   async listNonTerminal(): Promise<SessionRecord[]> {
-    return (this.stmts.listNonTerminal!.all() as unknown as RawSession[]).map(mapSession);
+    return this.sessions.listNonTerminal();
   }
 
   /** Move a session's next reconcile pass. Cadence policy belongs to the caller. */
   bumpDue(id: string, atMs: number): boolean {
-    return this.stmts.bumpDue!.run(atMs, id).changes > 0;
+    return this.sessions.bumpDue(id, atMs);
   }
 
-  /**
-   * Advance a session's due time only if it is still due right now.
-   *
-   * Used by the reconcile pass after it processed a session: an unchanged
-   * session must move forward so `listDue` cannot return it again, while a
-   * session whose state change already armed a future deadline must not be
-   * overwritten. Returns true when this call moved it.
-   */
   async rearmDue(id: string, atMs: number, nowMs: number): Promise<boolean> {
-    return this.stmts.rearmDue!.run(atMs, id, nowMs).changes > 0;
+    return this.sessions.rearmDue(id, atMs, nowMs);
   }
 
-  /** Live sessions whose next pass is due right now. */
   async countDue(nowMs: number): Promise<number> {
-    return ((this.stmts.countDue!.get(nowMs) as { n: number } | undefined)?.n ?? 0);
+    return this.sessions.countDue(nowMs);
   }
 
-  /** Live session counts by state, without materialising rows. */
   async countLiveByState(): Promise<Partial<Record<SessionState, number>>> {
-    const counts: Partial<Record<SessionState, number>> = {};
-    for (const row of this.stmts.countLiveByState!.all() as Array<{ state: string; n: number }>) {
-      counts[row.state as SessionState] = row.n;
-    }
-    return counts;
+    return this.sessions.countLiveByState();
   }
 
-  /** Live sessions whose next pass is due, earliest first, bounded by `limit`. */
   async listDue(nowMs: number, limit: number): Promise<SessionRecord[]> {
-    return (this.stmts.listDue!.all(nowMs, limit) as unknown as RawSession[]).map(mapSession);
+    return this.sessions.listDue(nowMs, limit);
   }
 
   async listTerminalWithPod(): Promise<SessionRecord[]> {
-    return (this.stmts.listTerminalWithPod!.all() as unknown as RawSession[]).map(mapSession);
+    return this.sessions.listTerminalWithPod();
   }
 
-  countSessions(): number {
-    return ((this.stmts.countSessions!.get() as { n: number } | undefined)?.n ?? 0);
-  }
-
-  countPayments(): number {
-    return ((this.stmts.countPayments!.get() as { n: number } | undefined)?.n ?? 0);
+  async listTerminalWithPvc(): Promise<SessionRecord[]> {
+    return this.sessions.listTerminalWithPvc();
   }
 
   async setProvisioning(id: string, podName: string): Promise<boolean> {
-    const now = Date.now();
-    return this.stmts.setProvisioning!.run(podName, now + cadenceFor("PROVISIONING"), now, id).changes > 0;
+    return this.sessions.setProvisioning(id, podName);
   }
 
   /** Replace the pod of a session that is already PROVISIONING (relay restart). */
   async setProvisioningPod(id: string, podName: string): Promise<boolean> {
-    return this.stmts.setProvisioningPod!.run(podName, Date.now(), id).changes > 0;
+    return this.sessions.setProvisioningPod(id, podName);
   }
 
   async setRelayToken(id: string, tokenHash: string): Promise<void> {
-    this.stmts.setRelayToken!.run(tokenHash, Date.now(), id);
+    this.sessions.setRelayToken(id, tokenHash);
   }
 
   async setReady(
@@ -418,91 +403,51 @@ export class Store {
     attestationJson: string,
     guestPublicKey: string,
   ): Promise<boolean> {
-    const now = Date.now();
-    return (
-      this.stmts.setReady!.run(
-        readyAt,
-        leaseExpiresAt,
-        attestationJson,
-        guestPublicKey,
-        readyAt,
-        now + cadenceFor("READY"),
-        now,
-        id,
-      ).changes > 0
-    );
+    return this.sessions.setReady(id, readyAt, leaseExpiresAt, attestationJson, guestPublicKey);
   }
 
   async touchActivity(id: string): Promise<void> {
-    const now = Date.now();
-    this.stmts.touchActivity!.run(now, now, id);
+    this.sessions.touchActivity(id);
   }
 
   async markSuspending(id: string): Promise<boolean> {
-    const now = Date.now();
-    return this.stmts.markSuspending!.run(now + cadenceFor("SUSPENDING"), now, id).changes > 0;
+    return this.sessions.markSuspending(id);
   }
 
   async markSuspended(id: string, suspendedAt: number): Promise<boolean> {
-    return (
-      this.stmts.markSuspended!.run(
-        suspendedAt,
-        suspendedAt + cadenceFor("SUSPENDED"),
-        suspendedAt,
-        id,
-      ).changes > 0
-    );
+    return this.sessions.markSuspended(id, suspendedAt);
   }
 
   async markResuming(id: string, podName: string): Promise<boolean> {
-    const now = Date.now();
-    return this.stmts.markResuming!.run(podName, now + cadenceFor("RESUMING"), now, id).changes > 0;
+    return this.sessions.markResuming(id, podName);
   }
 
   async setWorkspacePvc(id: string, pvcName: string): Promise<void> {
-    this.stmts.setWorkspacePvc!.run(pvcName, Date.now(), id);
+    this.sessions.setWorkspacePvc(id, pvcName);
   }
 
   async setNodeName(id: string, nodeName: string): Promise<void> {
-    this.stmts.setNodeName!.run(nodeName, Date.now(), id);
+    this.sessions.setNodeName(id, nodeName);
   }
 
   async clearWorkspacePvc(id: string): Promise<void> {
-    this.stmts.clearWorkspacePvc!.run(Date.now(), id);
+    this.sessions.clearWorkspacePvc(id);
   }
 
-  async listTerminalWithPvc(): Promise<SessionRecord[]> {
-    return (this.stmts.listTerminalWithPvc!.all() as unknown as RawSession[]).map(mapSession);
-  }
-
+  /**
+   * PAID/PROVISIONING/READY/... -> TERMINATING, with the failure code written in
+   * the same transaction as the state change (see SessionRepository).
+   *
+   * The failure metric stays on the facade, not in the repository: the Postgres
+   * facade emits the same counter after its transaction, so the label and the
+   * counter live in one place whichever backend is configured.
+   */
   async requestTermination(
     id: string,
     reason: string,
     failure?: { code: string; message: string },
   ): Promise<boolean> {
-    const now = Date.now();
-    // The state write and the failure code are one decision: a crash between
-    // two autocommit statements would leave TERMINATING with no failure code.
-    // The Postgres adapter wraps the same pair in one transaction.
-    this.db.exec("BEGIN IMMEDIATE");
-    let changed: boolean;
-    try {
-      changed =
-        this.stmts.requestTermination!.run(
-          now,
-          reason,
-          now + cadenceFor("TERMINATING"),
-          now,
-          id,
-        ).changes > 0;
-      if (changed && failure) {
-        this.stmts.setFailure!.run(failure.code, failure.message, now, id);
-      }
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    const changed = this.sessions.requestTermination(id, reason, failure);
     if (changed && reason.startsWith("failure:")) {
       metrics
         .counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason")
@@ -511,44 +456,24 @@ export class Store {
     return changed;
   }
 
-  /** Terminal state is derived from the termination reason. */
   async finalizeTermination(id: string): Promise<SessionState | null> {
-    const session = this.readSession(id);
-    if (!session || session.state !== "TERMINATING") return null;
-    const reason = session.terminationReason ?? "";
-    const final = finalStateForReason(reason);
-    const now = Date.now();
-    this.stmts.finalize!.run(final, now, now + cadenceFor(final), now, id);
-    return final;
+    return this.sessions.finalizeTermination(id);
   }
 
   async requestDestroy(id: string): Promise<void> {
-    // Due now: a destroy is an event, not a state that can wait out its cadence.
-    const now = Date.now();
-    this.stmts.requestDestroy!.run(now, now, id);
+    this.sessions.requestDestroy(id);
   }
 
   async markRelayPurged(id: string): Promise<void> {
-    this.stmts.markRelayPurged!.run(Date.now(), Date.now(), id);
+    this.sessions.markRelayPurged(id);
   }
 
   async clearPod(id: string): Promise<void> {
-    this.stmts.clearPod!.run(Date.now(), id);
+    this.sessions.clearPod(id);
   }
 
-  /** Atomically merge lifecycle timings (JSON patch semantics). */
-  /**
-   * JSON object merge. The caller filters to finite numbers, so a merge is a
-   * concat. That is what keeps SQLite's RFC 7396 `json_patch` and Postgres's
-   * shallow `||` equivalent; a nested value would make them diverge.
-   */
   async mergeTimings(id: string, patch: Record<string, number | undefined>): Promise<void> {
-    const clean: Record<string, number> = {};
-    for (const [key, value] of Object.entries(patch)) {
-      if (typeof value === "number" && Number.isFinite(value)) clean[key] = value;
-    }
-    if (Object.keys(clean).length === 0) return;
-    this.stmts.mergeTimings!.run(JSON.stringify(clean), Date.now(), id);
+    this.sessions.mergeTimings(id, patch);
   }
 
   /* ---------------- operations ---------------- */
