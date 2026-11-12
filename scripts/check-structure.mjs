@@ -9,9 +9,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, posix, relative } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-// Ratchet: 550 is the target. Temporarily 650 because three controller modules
-// are above it (store.ts, control-api.ts, relay.ts). Lower this as they are
-// split; never raise it again.
+// Ratchet: 550 is the target. Temporarily 650 because two controller modules
+// are above it (provisioning.ts, reconciler.ts). Lower this as they are split;
+// never raise it again.
 const MAX_LINES = 650;
 const ROOTS = ["shared/src", "sdk/src", "api/src", "controller/src", "cli/src", "scripts", "guest"];
 
