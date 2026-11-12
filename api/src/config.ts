@@ -4,7 +4,7 @@
  * There is no path to mainnet: a mainnet network id is rejected at startup even
  * if every other flag is set. Testnet is opt-in and documented.
  */
-import { envBool as bool, envInt as int } from "@x402s/shared/env";
+import { envBool as bool, envInt as int, envTlsFiles } from "@x402s/shared/env";
 import {
   CAPABILITY_KEY_ID_PATTERN,
   capabilityKeyRing,
@@ -174,22 +174,10 @@ function parsePublicBaseUrl(env: NodeJS.ProcessEnv, port: number): string {
 }
 
 function parseControllerTls(env: NodeJS.ProcessEnv, controllerUrl: string): ApiConfig["controllerTls"] {
-  const tlsCertFile = env.CONTROLLER_TLS_CERT_FILE;
-  const tlsKeyFile = env.CONTROLLER_TLS_KEY_FILE;
-  const tlsCaFile = env.CONTROLLER_TLS_CA_FILE;
-  const tlsSet = [tlsCertFile, tlsKeyFile, tlsCaFile].filter(Boolean).length;
-  if (tlsSet !== 0 && tlsSet !== 3) {
-    throw new Error(
-      "CONTROLLER_TLS_CERT_FILE, CONTROLLER_TLS_KEY_FILE and CONTROLLER_TLS_CA_FILE must be set together",
-    );
-  }
-  if (tlsSet === 3 && !controllerUrl.startsWith("https://")) {
+  const controllerTls = envTlsFiles(env, "CONTROLLER_TLS");
+  if (controllerTls && !controllerUrl.startsWith("https://")) {
     throw new Error("CONTROLLER_TLS_* requires an https CONTROLLER_URL");
   }
-  const controllerTls =
-    tlsSet === 3
-      ? { certFile: tlsCertFile!, keyFile: tlsKeyFile!, caFile: tlsCaFile! }
-      : undefined;
   return controllerTls;
 }
 

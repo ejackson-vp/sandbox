@@ -60,3 +60,33 @@ describe("api config guards", () => {
     expect(cfg.httpRequestTimeoutMs).toBe(30_000);
   });
 });
+
+describe("controller mTLS", () => {
+  const files = {
+    CONTROLLER_TLS_CERT_FILE: "/controller/tls.crt",
+    CONTROLLER_TLS_KEY_FILE: "/controller/tls.key",
+    CONTROLLER_TLS_CA_FILE: "/controller/ca.crt",
+  };
+
+  it("is off when no file is set", () => {
+    expect(loadConfig(base).controllerTls).toBeUndefined();
+  });
+
+  it("requires all three files, not any two", () => {
+    expect(() => loadConfig({ ...base, CONTROLLER_TLS_CERT_FILE: "/controller/tls.crt" })).toThrow(
+      "CONTROLLER_TLS_CERT_FILE, CONTROLLER_TLS_KEY_FILE and CONTROLLER_TLS_CA_FILE must be set together",
+    );
+  });
+
+  it("requires an https CONTROLLER_URL once the files are set", () => {
+    expect(() => loadConfig({ ...base, ...files })).toThrow(
+      "CONTROLLER_TLS_* requires an https CONTROLLER_URL",
+    );
+    const cfg = loadConfig({ ...base, ...files, CONTROLLER_URL: "https://controller:3001" });
+    expect(cfg.controllerTls).toEqual({
+      certFile: "/controller/tls.crt",
+      keyFile: "/controller/tls.key",
+      caFile: "/controller/ca.crt",
+    });
+  });
+});

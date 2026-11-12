@@ -7,16 +7,9 @@
  * write probe is a no-op UPDATE, not a `SELECT`, because a read-only replica
  * answers a `SELECT` happily and only rejects the write.
  */
+import type { StoreHealth } from "../models.js";
 import { SCHEMA_VERSION } from "../schema.js";
 import type { PgConnection } from "./pg.js";
-
-type StoreHealth =
-  | { ok: true; schemaVersion: number }
-  | {
-      ok: false;
-      reason: "unavailable" | "closed" | "migrations_incomplete" | "read_only" | "locked" | "write_failed";
-      schemaVersion?: number;
-    };
 
 const WRITE_PROBE = "UPDATE payments SET payment_key = payment_key WHERE false";
 
