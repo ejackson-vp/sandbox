@@ -19,7 +19,7 @@ Each command, and what it deliberately leaves out:
 | `npm run test:property` | `tests/property`: `fast-check` invariants. |
 | `npm run test:portable` | `tests/transfers`, `tests/workloads`, `tests/compatibility`. No cluster; the browser case skips without its image. |
 | `make verify` | Build, typecheck, structure lint, unit, property, portable, `go test`, `go vet`. What a reviewer runs. |
-| `make test` | `npm test` plus `tests/integration` against a real guest binary. Needs `make guest` first. |
+| `make test` | `tests/unit` plus `tests/integration` against a real guest binary. Needs `make guest` first. |
 | `make security-test` | `tests/security`. Needs a kind cluster with Cilium (`make up`). |
 
 `npm test` deliberately excludes `tests/integration` and `tests/security`: both

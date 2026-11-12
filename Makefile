@@ -152,7 +152,7 @@ test-workloads:
 # Suites CI used to skip: transfer protocol, workload fixtures, browser
 # compatibility (skips without its image). No cluster or guest binary needed.
 test-portable:
-	npx vitest run tests/transfers tests/workloads tests/compatibility
+	npm run test:portable
 
 demo-sse:
 	npx tsx scripts/sse-demo.ts
@@ -172,7 +172,7 @@ fmt:
 test: test-unit test-integration
 
 test-unit:
-	npx vitest run tests/unit
+	npm run test:unit
 
 test-integration: cli guest
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest npx vitest run tests/integration
@@ -193,7 +193,7 @@ lint-structure:
 	npm run lint:structure
 
 test-property:
-	npx vitest run tests/property
+	npm run test:property
 
 # The guest's own suite. Without it a guard in guest/internal/files or the
 # envelope parser can be removed with every TypeScript gate still green.
