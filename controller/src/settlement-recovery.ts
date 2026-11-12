@@ -12,6 +12,10 @@
  * `REFUND_PENDING` ledger row with a synthetic session id (`unsettled:<key>`).
  * The refund worker then resolves it, or an operator does.
  *
+ * The lookup itself lives in `@x402s/shared/runtime`: the API and this worker
+ * read the same facilitator contract, and one copy is the only way to keep them
+ * from disagreeing about it.
+ *
  * Two deliberate limits:
  *
  *  - it never creates an entitlement. The spec, the client key and the
@@ -20,47 +24,10 @@
  *  - an unsettled intent is left alone. The API still owns the retry path, and
  *    failing the intent here would race a slow but successful settlement.
  */
-import { log, metrics } from "@x402s/shared/runtime";
+import { log, metrics, type SettlementLookup } from "@x402s/shared/runtime";
 import type { PaymentIntentRecord } from "./store/models.js";
 import type { SettlementRecoveryStore } from "./store/ports.js";
 import type { RefundOutcome, RefundService } from "./refunds.js";
-
-interface SettlementRecord {
-  settled: boolean;
-  transaction?: string;
-  payer?: string;
-  amount?: string;
-}
-
-export interface SettlementLookup {
-  readonly supported: boolean;
-  lookup(paymentKey: string): Promise<SettlementRecord | null>;
-}
-
-/**
- * The mock facilitator (and a production facilitator that implements the same
- * contract) exposes `GET /settlements/:paymentKey`. A facilitator without it
- * leaves `supported = false`, and recovery is a no-op rather than a guess.
- */
-export class HttpSettlementLookup implements SettlementLookup {
-  readonly supported = true;
-
-  constructor(
-    private readonly baseUrl: string,
-    private readonly timeoutMs = 5_000,
-  ) {}
-
-  async lookup(paymentKey: string): Promise<SettlementRecord | null> {
-    const res = await fetch(
-      `${this.baseUrl.replace(/\/$/, "")}/settlements/${encodeURIComponent(paymentKey)}`,
-      { signal: AbortSignal.timeout(this.timeoutMs) },
-    );
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`settlement lookup failed (${res.status})`);
-    const body = (await res.json()) as SettlementRecord;
-    return body?.settled ? body : null;
-  }
-}
 
 interface SettlementRecoveryOptions {
   /** How long a claim may sit before recovery considers it a crash. */

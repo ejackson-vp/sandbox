@@ -11,20 +11,20 @@ import sodium from "libsodium-wrappers";
 
 let readyPromise: Promise<void> | undefined;
 
-export async function initCrypto(): Promise<void> {
+async function initCrypto(): Promise<void> {
   readyPromise ??= sodium.ready.then(() => undefined);
   return readyPromise;
 }
 
-export interface BoxKeyPair {
+interface BoxKeyPair {
   publicKey: Uint8Array;
   privateKey: Uint8Array;
 }
 
-export const KEY_BYTES = 32;
-export const NONCE_BYTES = 32;
+const KEY_BYTES = 32;
+const NONCE_BYTES = 32;
 /** Hard cap on ciphertext we accept over the wire (2 MiB). */
-export const MAX_ENVELOPE_BYTES = 2 * 1024 * 1024;
+const MAX_ENVELOPE_BYTES = 2 * 1024 * 1024;
 
 export async function generateBoxKeyPair(): Promise<BoxKeyPair> {
   await initCrypto();
@@ -46,7 +46,7 @@ export function fromBase64(value: string): Uint8Array {
 }
 
 /** Anonymous public-key encryption to `recipientPublicKey`. */
-export async function sealTo(recipientPublicKey: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
+async function sealTo(recipientPublicKey: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
   await initCrypto();
   if (recipientPublicKey.length !== KEY_BYTES) throw new Error("invalid recipient public key length");
   return sodium.crypto_box_seal(plaintext, recipientPublicKey);
@@ -56,7 +56,7 @@ export async function sealTo(recipientPublicKey: Uint8Array, plaintext: Uint8Arr
  * Open a sealed box. Throws a generic error on any authentication failure; we
  * never leak decryption details (padding/format oracles).
  */
-export async function openSealed(
+async function openSealed(
   ciphertext: Uint8Array,
   recipientPublicKey: Uint8Array,
   recipientPrivateKey: Uint8Array,

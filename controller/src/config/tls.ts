@@ -10,6 +10,7 @@
  *    `RELAY_CLIENT_TLS_*` on the controller), which a cluster relay must have
  *    and which must match the scheme of `RELAY_URL`.
  */
+import { envTlsFiles } from "@x402s/shared/env";
 import type { RelayTlsOptions } from "../relay.js";
 import type { RelayClientTlsOptions } from "../relay-client.js";
 import type { Role } from "./role.js";
@@ -25,25 +26,6 @@ export interface TransportSecurity {
   relayClientTls?: RelayClientTlsOptions;
 }
 
-/**
- * All three files must be set together or none of them. Returns undefined when
- * the feature is disabled, so callers can fail closed only where it matters.
- */
-function parseTlsFiles(
-  env: NodeJS.ProcessEnv,
-  prefix: string,
-): { certFile: string; keyFile: string; caFile: string } | undefined {
-  const certFile = env[`${prefix}_CERT_FILE`];
-  const keyFile = env[`${prefix}_KEY_FILE`];
-  const caFile = env[`${prefix}_CA_FILE`];
-  const set = [certFile, keyFile, caFile];
-  if (set.every((value) => !value)) return undefined;
-  if (set.some((value) => !value)) {
-    throw new Error(`${prefix}_CERT_FILE, ${prefix}_KEY_FILE and ${prefix}_CA_FILE must be set together`);
-  }
-  return { certFile: certFile!, keyFile: keyFile!, caFile: caFile! };
-}
-
 function parseTlsPort(env: NodeJS.ProcessEnv): number | undefined {
   const tlsPortRaw = env.CONTROLLER_TLS_PORT ?? "0";
   const tlsPortNum = Number(tlsPortRaw);
@@ -55,22 +37,21 @@ function parseTlsPort(env: NodeJS.ProcessEnv): number | undefined {
 
 function parseTls(env: NodeJS.ProcessEnv): PublicTls {
   const tlsPort = parseTlsPort(env);
-  const certFile = env.TLS_CERT_FILE;
-  const keyFile = env.TLS_KEY_FILE;
-  const caFile = env.TLS_CA_FILE;
-  const set = [certFile, keyFile, caFile].filter(Boolean);
-  if (tlsPort && set.length !== 3) {
+  const files = envTlsFiles(env, "TLS");
+  // The port turns the listener on, so a port with no certificates and a
+  // certificate set with no port are both misconfiguration, not "disabled".
+  if (tlsPort && !files) {
     throw new Error("CONTROLLER_TLS_PORT requires TLS_CERT_FILE, TLS_KEY_FILE and TLS_CA_FILE");
   }
-  if (!tlsPort && set.length > 0) {
+  if (!tlsPort && files) {
     throw new Error("TLS_CERT_FILE/TLS_KEY_FILE/TLS_CA_FILE require CONTROLLER_TLS_PORT");
   }
-  if (!tlsPort) return {};
+  if (!tlsPort || !files) return {};
   return {
     tlsPort,
-    tlsCertFile: certFile!,
-    tlsKeyFile: keyFile!,
-    tlsCaFile: caFile!,
+    tlsCertFile: files.certFile,
+    tlsKeyFile: files.keyFile,
+    tlsCaFile: files.caFile,
   };
 }
 
@@ -80,8 +61,8 @@ export function parseTransportSecurity(
   role: Role,
 ): TransportSecurity {
   const tls = parseTls(env);
-  const relayTls = parseTlsFiles(env, "RELAY_TLS");
-  const relayClientTls = parseTlsFiles(env, "RELAY_CLIENT_TLS");
+  const relayTls = envTlsFiles(env, "RELAY_TLS");
+  const relayClientTls = envTlsFiles(env, "RELAY_CLIENT_TLS");
   // A cluster relay must never expose the control routes over plaintext. The
   // local process and unit tests may run without certificates.
   if (kubeEnabled && (role === "relay" || role === "all") && !relayTls) {

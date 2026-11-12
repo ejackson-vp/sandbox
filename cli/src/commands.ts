@@ -425,42 +425,16 @@ export const commands: Record<string, (ctx: CommandContext) => Promise<number>> 
       return 0;
   },
   "run": async (ctx) => {
-    const { values, positionals, json, quiet, client, hasSeparator } = ctx;
-      const oneShot =
-        hasSeparator ||
-        values.runtime !== undefined ||
-        values.file !== undefined ||
-        values.return !== undefined;
-      if (oneShot) return runOneShot(ctx);
-
-      const file = requireArg(positionals[1], "file");
-      const durationSeconds = parseDuration(values.duration as string | undefined) ?? 300;
-      const tier = inferTier(values.tier as string | undefined, durationSeconds);
-      return runFile(client, file, {
-        json,
-        quiet,
-        keep: Boolean(values.keep),
-        create: {
-          ...(tier ? { tier } : {}),
-          ...(durationSeconds === undefined ? {} : { durationSeconds }),
-        },
-      });
+    const { values, hasSeparator } = ctx;
+    const oneShot =
+      hasSeparator ||
+      values.runtime !== undefined ||
+      values.file !== undefined ||
+      values.return !== undefined;
+    if (oneShot) return runOneShot(ctx);
+    return runLocalFile(ctx);
   },
-  "agent-demo": async (ctx) => {
-    const { values, positionals, json, quiet, client } = ctx;
-      const file = requireArg(positionals[1], "file");
-      const durationSeconds = parseDuration(values.duration as string | undefined) ?? 300;
-      const tier = inferTier(values.tier as string | undefined, durationSeconds);
-      return runFile(client, file, {
-        json,
-        quiet,
-        keep: Boolean(values.keep),
-        create: {
-          ...(tier ? { tier } : {}),
-          ...(durationSeconds === undefined ? {} : { durationSeconds }),
-        },
-      });
-  },
+  "agent-demo": async (ctx) => runLocalFile(ctx),
 };
 
 
@@ -485,6 +459,28 @@ function interpreterFor(file: string): string[] {
   if (file.endsWith(".js") || file.endsWith(".mjs")) return ["node"];
   if (file.endsWith(".sh")) return ["bash"];
   throw new Error(`don't know how to run ${file} (expected .py, .js, .mjs or .sh)`);
+}
+
+/**
+ * The local-file form shared by `run` and `agent-demo`: upload one script,
+ * execute it in a fresh session and destroy the session afterwards. Both
+ * commands infer the tier from the same duration, so they share one body
+ * instead of two that can drift.
+ */
+async function runLocalFile(ctx: CommandContext): Promise<number> {
+  const { values, positionals, json, quiet, client } = ctx;
+  const file = requireArg(positionals[1], "file");
+  const durationSeconds = parseDuration(values.duration as string | undefined) ?? 300;
+  const tier = inferTier(values.tier as string | undefined, durationSeconds);
+  return runFile(client, file, {
+    json,
+    quiet,
+    keep: Boolean(values.keep),
+    create: {
+      ...(tier ? { tier } : {}),
+      ...(durationSeconds === undefined ? {} : { durationSeconds }),
+    },
+  });
 }
 
 async function runFile(

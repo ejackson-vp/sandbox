@@ -1,5 +1,6 @@
 /**
- * `@x402s/shared/runtime` — logging, metrics, rate limiting and readiness.
+ * `@x402s/shared/runtime` — logging, metrics, rate limiting, readiness and the
+ * settlement lookup.
  *
  * Everything here either opens a listener, reads `process.env` at module load,
  * or holds process-level state. It is the top of the shared layering: it may
@@ -13,3 +14,4 @@ export * from "../runtime-metrics.js";
 export * from "../request-metrics.js";
 export * from "../rate-limit.js";
 export * from "../readiness.js";
+export * from "../settlement.js";

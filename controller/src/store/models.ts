@@ -7,6 +7,19 @@ import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared/pro
 
 export type { SessionState };
 
+/**
+ * Readiness verdict shared by the SQLite and Postgres probes: the same three
+ * questions in the same order. The probes keep their own SQL and reason
+ * matching, so only the shape is shared.
+ */
+export type StoreHealth =
+  | { ok: true; schemaVersion: number }
+  | {
+      ok: false;
+      reason: "unavailable" | "closed" | "migrations_incomplete" | "read_only" | "locked" | "write_failed";
+      schemaVersion?: number;
+    };
+
 export interface PaymentRecord {
   paymentKey: string;
   network: string;

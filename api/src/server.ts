@@ -20,17 +20,19 @@ import { mintCapability, recoverCapability } from "@x402s/shared/crypto";
 import { MOCK_NETWORK, MockExactServerScheme } from "@x402s/shared/payment";
 import type { SessionSpec } from "@x402s/shared/protocol";
 import {
+  HttpSettlementLookup,
   LATENCY_BUCKETS,
   ReadinessCache,
+  UnsupportedSettlementLookup,
   httpMetricsMiddleware,
   log,
   metrics,
   registerRequestMetrics,
+  type SettlementLookup,
 } from "@x402s/shared/runtime";
 import type { ApiConfig } from "./config.js";
 import { RateLimiter } from "./admission.js";
 import { ControllerClient } from "./controller-client.js";
-import { HttpSettlementLookup, UnsupportedSettlementLookup, type SettlementLookup } from "./settlement-lookup.js";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 import { createSessionHandler } from "./routes/create-session.js";

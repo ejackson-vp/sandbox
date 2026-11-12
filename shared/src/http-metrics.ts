@@ -8,26 +8,26 @@
  */
 import { LATENCY_BUCKETS, metrics, type MetricsRegistry } from "./metrics.js";
 
-export interface MetricsRequest {
+interface MetricsRequest {
   method?: string;
   baseUrl?: string;
   route?: { path?: string };
 }
 
-export interface MetricsResponse {
+interface MetricsResponse {
   statusCode: number;
   on(event: "finish", listener: () => void): unknown;
 }
 
-export type MetricsNext = (err?: unknown) => void;
+type MetricsNext = (err?: unknown) => void;
 
-export const HTTP_REQUESTS_TOTAL = "sandbox_http_requests_total";
-export const HTTP_REQUEST_DURATION = "sandbox_http_request_duration_seconds";
+const HTTP_REQUESTS_TOTAL = "sandbox_http_requests_total";
+const HTTP_REQUEST_DURATION = "sandbox_http_request_duration_seconds";
 
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
 
 /** Map anything unexpected to `other` instead of accepting client input. */
-export function httpMethodLabel(method: string | undefined): string {
+function httpMethodLabel(method: string | undefined): string {
   const upper = (method ?? "").toUpperCase();
   return METHODS.has(upper) ? upper : "other";
 }
@@ -49,7 +49,7 @@ export function registerHttpMetrics(registry: MetricsRegistry = metrics): void {
   );
 }
 
-export function observeHttpRequest(
+function observeHttpRequest(
   registry: MetricsRegistry,
   route: string,
   method: string,

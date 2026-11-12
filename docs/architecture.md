@@ -112,6 +112,10 @@ Runs for the whole lease:
 - implements workspace-confined `file.put/get/list/stat` with tar support,
 - refuses operations after the lease, kills descendants and exits.
 
+Platform: the guest is supported on Linux, which is what the images and the
+cluster run, and it is built locally on macOS so the protocol tests can drive it
+natively. Windows is not a target.
+
 ### Egress proxy (`controller/src/egress-proxy.ts`)
 
 - HTTPS `CONNECT` on 443 only; plain HTTP proxying refused,

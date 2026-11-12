@@ -977,4 +977,25 @@ describe("agent-demo", () => {
     expect(code).toBe(0);
     expect(client.createSession).toHaveBeenCalledWith({ tier: "short", durationSeconds: 60 });
   });
+
+  it("defaults to the same standard 300s session as run", async () => {
+    const client = fakeClient();
+    const file = join(dir, "a.py");
+    writeFileSync(file, "x");
+    await run("agent-demo", client, { positionals: ["agent-demo", file] });
+    expect(client.createSession).toHaveBeenCalledWith({ tier: "standard", durationSeconds: 300 });
+  });
+
+  it("honours an explicit tier and --keep through the shared helper", async () => {
+    const client = fakeClient();
+    const file = join(dir, "a.py");
+    writeFileSync(file, "x");
+    const { code } = await run("agent-demo", client, {
+      positionals: ["agent-demo", file],
+      values: { tier: "long", duration: "15m", keep: true },
+    });
+    expect(code).toBe(0);
+    expect(client.createSession).toHaveBeenCalledWith({ tier: "long", durationSeconds: 900 });
+    expect(client.destroy).not.toHaveBeenCalled();
+  });
 });

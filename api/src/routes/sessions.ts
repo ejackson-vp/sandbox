@@ -21,6 +21,36 @@ interface SessionsDeps {
   controller: ControllerClient;
 }
 
+/**
+ * The response every session route sends when the controller call fails.
+ *
+ * A `ControllerError` carries the status and code the client should see, so the
+ * default is a straight copy. `translate` lets a route override either, which is
+ * how a lease that runs out mid-command becomes 410 instead of the controller's
+ * own status. Anything else is the control plane being unreachable: `log` names
+ * the failed call when the route passes one, and the client gets 503 without the
+ * internal message.
+ */
+function respondControllerError(
+  res: Response,
+  err: unknown,
+  options: {
+    translate?: (err: ControllerError) => { code?: string; status?: number };
+    log?: string;
+  } = {},
+): void {
+  if (!(err instanceof ControllerError)) {
+    if (options.log) log.error(options.log, { error: (err as Error).message });
+    res.status(503).json({ error: "control_plane_unavailable" });
+    return;
+  }
+  const mapped = options.translate?.(err) ?? {};
+  res.status(mapped.status ?? err.status).json({
+    error: mapped.code ?? err.code,
+    message: err.message,
+  });
+}
+
 export function createSessionsRouter(deps: SessionsDeps): express.Router {
   const router = express.Router();
   const readLimiter = new RateLimiter(deps.config.readRateBurst, deps.config.readRateRefill);
@@ -121,14 +151,11 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       }
       res.json({ state: out.state, requestId: out.requestId, envelope: out.envelope });
     } catch (err) {
-      if (err instanceof ControllerError) {
-        const code = err.code;
-        const status = code === "lease_expired" ? 410 : err.status;
-        res.status(status).json({ error: code, message: err.message });
-        return;
-      }
-      log.error("operation_failed", { error: (err as Error).message });
-      res.status(503).json({ error: "control_plane_unavailable" });
+      respondControllerError(res, err, {
+        log: "operation_failed",
+        // A lease that ran out mid-command is a 410, so the client stops retrying.
+        translate: (e) => ({ status: e.code === "lease_expired" ? 410 : e.status }),
+      });
     }
   };
 
@@ -188,12 +215,12 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       }
       res.json({ state: out.state, requestId: out.requestId, envelope: out.envelope });
     } catch (err) {
-      if (err instanceof ControllerError) {
-        res.status(err.status === 410 ? 410 : err.status).json({ error: err.code, message: err.message });
-        return;
-      }
-      log.error("file_get_failed", { error: (err as Error).message });
-      res.status(503).json({ error: "control_plane_unavailable" });
+      respondControllerError(res, err, {
+        log: "file_get_failed",
+        // The read path passes the controller's status through, 410 included,
+        // rather than reinterpreting it.
+        translate: (e) => ({ status: e.status === 410 ? 410 : e.status }),
+      });
     }
   });
 
@@ -217,11 +244,7 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       }
       res.json({ state: out.state, requestId, envelope: out.envelope });
     } catch (err) {
-      if (err instanceof ControllerError) {
-        res.status(err.status).json({ error: err.code, message: err.message });
-        return;
-      }
-      res.status(503).json({ error: "control_plane_unavailable" });
+      respondControllerError(res, err);
     }
   });
 
@@ -237,11 +260,7 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       await deps.controller.cancelOperation(session.sessionId, requestId);
       res.status(202).json({ ok: true, requestId });
     } catch (err) {
-      if (err instanceof ControllerError) {
-        res.status(err.status).json({ error: err.code, message: err.message });
-        return;
-      }
-      res.status(503).json({ error: "control_plane_unavailable" });
+      respondControllerError(res, err);
     }
   });
 
@@ -252,11 +271,7 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       const out = await deps.controller.suspend(session.sessionId);
       res.json(toStatus(out));
     } catch (err) {
-      if (err instanceof ControllerError) {
-        res.status(err.status).json({ error: err.code, message: err.message });
-        return;
-      }
-      res.status(503).json({ error: "control_plane_unavailable" });
+      respondControllerError(res, err);
     }
   });
 
@@ -268,11 +283,7 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       void deps.controller.wake();
       res.status(202).json(toStatus(out));
     } catch (err) {
-      if (err instanceof ControllerError) {
-        res.status(err.status).json({ error: err.code, message: err.message });
-        return;
-      }
-      res.status(503).json({ error: "control_plane_unavailable" });
+      respondControllerError(res, err);
     }
   });
 
