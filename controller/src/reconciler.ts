@@ -135,6 +135,7 @@ export class Reconciler {
       {
         maxAttempts: deps.cfg.refundMaxAttempts,
         retryBaseMs: deps.cfg.refundRetryBaseMs,
+        claimLeaseMs: deps.cfg.refundClaimLeaseMs,
         limit: 50,
         now: () => this.now(),
       },

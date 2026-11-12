@@ -208,6 +208,11 @@ export interface ControllerConfig {
   refundMaxAttempts: number;
   /** First retry delay; doubles per attempt up to one hour. */
   refundRetryBaseMs: number;
+  /**
+   * Lease on a claimed refund. A pass that dies leaves the row `REFUND_SENDING`
+   * until this elapses, then the next pass retries with the same key.
+   */
+  refundClaimLeaseMs: number;
   /** Reconcile intents that settled but never reached an entitlement (#31). */
   settlementRecoveryEnabled: boolean;
   /** How long a claim may sit before recovery treats it as a crash. */
