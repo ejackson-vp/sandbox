@@ -189,8 +189,10 @@ func Execute(ctx context.Context, opts Options, req *protocol.Request, cwd strin
 	result.TimedOut = timedOut
 	result.Cancelled = cancelled
 	result.DurationMs = time.Since(start).Milliseconds()
-	result.Truncated.Stdout = stdout.Truncated()
-	result.Truncated.Stderr = stderr.Truncated()
+	result.Truncated = protocol.Truncated{
+		Stdout: stdout.Truncated(),
+		Stderr: stderr.Truncated(),
+	}
 	return result
 }
 

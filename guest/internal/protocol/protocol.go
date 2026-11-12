@@ -68,13 +68,17 @@ type Result struct {
 	OK          bool     `json:"ok"`
 	Error       *OpError `json:"error,omitempty"`
 
-	ExitCode   int       `json:"exitCode"`
-	Stdout     string    `json:"stdout"`
-	Stderr     string    `json:"stderr"`
-	TimedOut   bool      `json:"timedOut"`
-	Cancelled  bool      `json:"cancelled"`
-	DurationMs int64     `json:"durationMs"`
-	Truncated  Truncated `json:"truncated"`
+	ExitCode   int    `json:"exitCode"`
+	Stdout     string `json:"stdout"`
+	Stderr     string `json:"stderr"`
+	TimedOut   bool   `json:"timedOut"`
+	Cancelled  bool   `json:"cancelled"`
+	DurationMs int64  `json:"durationMs"`
+	// The wire shape of `truncated` depends on the operation: a Truncated struct
+	// for exec, a bool for http.request. Two typed fields cannot share one JSON
+	// name; encoding/json treats that as a collision and drops both, which is
+	// how this field silently disappeared before. Assign the shape the op uses.
+	Truncated any `json:"truncated,omitempty"`
 
 	Path         string      `json:"path"`
 	DataBase64   string      `json:"dataBase64"`
@@ -87,17 +91,16 @@ type Result struct {
 	Entry        *FileEntry  `json:"entry"`
 
 	// service.* / http.request
-	Service       *ServiceInfo      `json:"service,omitempty"`
-	Services      []ServiceInfo     `json:"services,omitempty"`
-	Status        int               `json:"status,omitempty"`
-	Headers       map[string]string `json:"headers,omitempty"`
-	BodyBase64    string            `json:"bodyBase64,omitempty"`
-	BodyTruncated bool              `json:"truncated,omitempty"`
-	StreamID      string            `json:"streamId,omitempty"`
-	ChunkBase64   string            `json:"chunkBase64,omitempty"`
-	Pending       bool              `json:"pending,omitempty"`
-	Done          bool              `json:"done,omitempty"`
-	Binary        bool              `json:"binary,omitempty"`
+	Service     *ServiceInfo      `json:"service,omitempty"`
+	Services    []ServiceInfo     `json:"services,omitempty"`
+	Status      int               `json:"status,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	BodyBase64  string            `json:"bodyBase64,omitempty"`
+	StreamID    string            `json:"streamId,omitempty"`
+	ChunkBase64 string            `json:"chunkBase64,omitempty"`
+	Pending     bool              `json:"pending,omitempty"`
+	Done        bool              `json:"done,omitempty"`
+	Binary      bool              `json:"binary,omitempty"`
 
 	TransferID     string `json:"transferId,omitempty"`
 	Direction      string `json:"direction,omitempty"`

@@ -288,8 +288,9 @@ function migrateV14toV15(db: DatabaseSync): void {
 /**
  * v15 -> v16: bind the operation idempotency key to the request payload.
  *
- * `exec_requests.payload_hash` is the SHA-256 of the sealed envelope. A retry
- * of the same `requestId` with a different payload is refused instead of
+ * `exec_requests.payload_hash` is the client's hash of the canonical operation,
+ * or the SHA-256 of the sealed envelope when the client does not send one. A
+ * retry of the same `requestId` with a different payload is refused instead of
  * returning the first operation's cached result. The column is nullable and
  * existing rows keep NULL, which means "written before this check existed" and
  * accepts any duplicate: the migration cannot verify a payload it never stored,

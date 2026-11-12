@@ -84,7 +84,8 @@ export interface ExecRequestRecord {
    */
   state: "pending" | "done" | "error" | "abandoned" | "outcome_unknown";
   /**
-   * SHA-256 of the sealed envelope this request id was first claimed with.
+   * Hash of the canonical operation this request id was first claimed with,
+   * or SHA-256 of the sealed envelope when the client sends no canonical hash.
    * Null on rows written before v16: those predate payload binding, so a
    * duplicate against them is accepted.
    */

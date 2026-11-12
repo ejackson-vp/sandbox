@@ -724,7 +724,9 @@ describe("session execution", () => {
     const check = await client.exec(handle, {
       command: ["bash", "-c", "kill -0 $(cat bg.pid) 2>/dev/null && echo alive || echo dead"],
     });
-    if (check.ok) expect(check.stdout.trim()).toBe("dead");
+    expect(check.ok).toBe(true);
+    if (!check.ok) throw new Error(`follow-up exec failed: ${check.error?.code ?? "unknown"}`);
+    expect(check.stdout.trim()).toBe("dead");
 
     const long = client.exec(handle, { command: ["sleep", "5"] });
     await sleep(500);

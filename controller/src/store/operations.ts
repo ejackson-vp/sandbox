@@ -84,9 +84,11 @@ export class OperationRepository {
 
   /**
    * Atomically claim the single operation slot for a session.
-   * Request id doubles as the idempotency key. `payloadHash` is the SHA-256 of
-   * the sealed envelope, stored with the row so a retry that reuses the id for a
-   * different payload is refused rather than answered with the first result.
+   * Request id doubles as the idempotency key. `payloadHash` is the client's
+   * hash of the canonical operation, falling back to SHA-256 of the sealed
+   * envelope when the client sends none. It is stored with the row so a retry
+   * that reuses the id for a different payload is refused rather than answered
+   * with the first result.
    * The returned epoch must travel with the relay frame so the guest can reject
    * stale generations.
    */

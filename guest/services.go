@@ -168,9 +168,9 @@ func (s *supervisor) httpRequest(ctx context.Context, req *protocol.Request) *pr
 	return &protocol.Result{
 		V: 2, SessionID: req.SessionID, ClientNonce: req.ClientNonce, RequestID: req.RequestID,
 		Op: protocol.OpHTTP, OK: true,
-		Status:        resp.StatusCode,
-		Headers:       headers,
-		BodyBase64:    base64.StdEncoding.EncodeToString(data),
-		BodyTruncated: truncated,
+		Status:     resp.StatusCode,
+		Headers:    headers,
+		BodyBase64: base64.StdEncoding.EncodeToString(data),
+		Truncated:  truncated,
 	}
 }

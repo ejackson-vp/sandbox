@@ -85,6 +85,17 @@ describe("multi-command session", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("spawn_failed");
   });
+
+  it("carries the stdout truncation flag through the wire", async () => {
+    // The guest caps output at 64 KiB here. Two fields once shared the
+    // `truncated` JSON tag, so encoding/json dropped both and this came back
+    // undefined; the Go golden test pins the shape, this pins the boundary.
+    const res = expectGuestOk(
+      await guest.exec(["bash", "-c", "head -c 200000 /dev/zero | tr '\\0' x"]),
+      "exec",
+    );
+    expect(res.truncated).toEqual({ stdout: true, stderr: false });
+  });
 });
 
 describe("timeouts and cancellation", () => {
