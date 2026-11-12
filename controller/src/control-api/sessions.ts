@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Express, Request, Response } from "express";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import { LifecycleError } from "../reconciler.js";
@@ -90,8 +91,21 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     // The claim is the authority on the single operation slot, not the read
     // above: the row may have moved on in between, and `claimOperation`
     // refuses in one transaction rather than on a stale snapshot.
-    const claim = await store.claimOperation(id, requestId, op ?? "operation");
+    //
+    // `requestId` is the idempotency key, so it has to travel with the payload
+    // it was first used for. The hash is of the sealed envelope exactly as it
+    // arrived; the controller never sees inside it, and two different
+    // operations never share one.
+    const payloadHash = createHash("sha256").update(envelope).digest("hex");
+    const claim = await store.claimOperation(id, requestId, op ?? "operation", payloadHash);
     if (!claim.ok) {
+      if (claim.code === "idempotency_key_reused") {
+        // Same id, different payload: the cached result belongs to another
+        // operation, so neither running this one nor returning that result is
+        // correct.
+        res.status(409).json({ error: "idempotency_key_reused", requestId });
+        return;
+      }
       if (claim.code === "duplicate") {
         // Idempotent retry: return the (possibly still pending) response.
         const record = await store.getExecRequest(id, requestId);

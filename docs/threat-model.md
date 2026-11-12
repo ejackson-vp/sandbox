@@ -32,7 +32,7 @@ implemented **and** covered by tests in this repository.
 | Archive traversal / symlink escape | Path canonicalisation, symlink-parent rejection, `O_NOFOLLOW`, tar entry validation | Same |
 | Read another session's data | Separate pod, keys, relay entry, capability; no shared volumes | Same |
 | Guess/replay another capability | 256-bit random-ish HMAC, SHA-256 stored, scoped by session, TTL, constant-time compare | Same |
-| Replay a request id | Controller maps `(session, requestId)` to one execution; retries return the cached result | Same |
+| Replay a request id | Controller maps `(session, requestId)` to one execution and stores the envelope's SHA-256; a same-payload retry returns the cached result, a different payload gets `409 idempotency_key_reused` | Same |
 | Abuse the relay as a tunnel | Relay only understands `request/cancel/shutdown` + opaque response; no arbitrary forwarding | Same |
 
 **Not mitigated:** the customer can always consume the resource they paid for,
@@ -143,7 +143,7 @@ admission control.
 | Race | Handling |
 | --- | --- |
 | Two execs at once | atomic single-operation claim → one runs, one gets `409 busy` |
-| Retry after network loss | same `requestId` returns the cached encrypted result |
+| Retry after network loss | same `requestId` and envelope returns the cached encrypted result; a different envelope is `409 idempotency_key_reused` |
 | Cancel vs completion | cancel is best-effort; whichever response arrives is bound to the request id; duplicates are idempotent |
 | Lease expiry during a command | guest watchdog cancels; controller deletes the pod regardless |
 | File write vs lease expiry | guest checks the lease before dispatch; pod deletion ends any in-flight I/O |

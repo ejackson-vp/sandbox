@@ -314,7 +314,7 @@ export function prepareStatements(db: DatabaseSync): Record<string, StatementSyn
       countSessions: db.prepare("SELECT COUNT(*) AS n FROM sessions"),
       countPayments: db.prepare("SELECT COUNT(*) AS n FROM payments"),
       insertRequest: db.prepare(
-        "INSERT INTO exec_requests (id, session_id, op, state, epoch, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?, ?)",
+        "INSERT INTO exec_requests (id, session_id, op, state, epoch, payload_hash, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)",
       ),
       getRequest: db.prepare("SELECT * FROM exec_requests WHERE session_id = ? AND id = ?"),
       finishRequest: db.prepare(

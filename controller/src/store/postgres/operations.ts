@@ -20,6 +20,7 @@ import { SOURCE_STATES } from "@x402s/shared/protocol";
 import { cadenceFor } from "../../reconcile-cadence.js";
 import {
   mapSession,
+  payloadDiffers,
   SESSION_COLUMNS,
   type ClaimOperationResult,
   type ExecRequestRecord,
@@ -80,7 +81,12 @@ export class PgOperationRepository {
     return (res.rowCount ?? 0) > 0;
   }
 
-  async claimOperation(sessionId: string, requestId: string, op: string): Promise<ClaimOperationResult> {
+  async claimOperation(
+    sessionId: string,
+    requestId: string,
+    op: string,
+    payloadHash: string | null = null,
+  ): Promise<ClaimOperationResult> {
     const now = Date.now();
     try {
       return await this.conn.tx<ClaimOperationResult>(async (tx) => {
@@ -94,13 +100,23 @@ export class PgOperationRepository {
         }
 
         const inserted = await tx.query(
-          `INSERT INTO exec_requests (id, session_id, op, state, epoch, created_at, updated_at)
-           VALUES ($1, $2, $3, 'pending', $4, $5, $5)
+          `INSERT INTO exec_requests (id, session_id, op, state, epoch, payload_hash, created_at, updated_at)
+           VALUES ($1, $2, $3, 'pending', $4, $5, $6, $6)
            ON CONFLICT (session_id, id) DO NOTHING
            RETURNING id`,
-          [requestId, sessionId, op, session.execEpoch, now],
+          [requestId, sessionId, op, session.execEpoch, payloadHash, now],
         );
         if ((inserted.rowCount ?? 0) === 0) {
+          // The first claim owns the id. Read its payload back and decide whether
+          // this retry is the same request (`duplicate`) or a reused key.
+          const existing = await tx.query<{ payload_hash: string | null }>(
+            "SELECT payload_hash FROM exec_requests WHERE session_id = $1 AND id = $2",
+            [sessionId, requestId],
+          );
+          const stored = existing.rows[0]?.payload_hash ?? null;
+          if (payloadDiffers(stored, payloadHash)) {
+            return { ok: false, code: "idempotency_key_reused", state: session.state, requestId };
+          }
           return { ok: false, code: "duplicate", state: session.state, requestId };
         }
 
@@ -171,6 +187,7 @@ export class PgOperationRepository {
       sessionId: row.session_id as string,
       op: row.op as string,
       state: row.state as ExecRequestRecord["state"],
+      payloadHash: (row.payload_hash as string | null) ?? null,
       epoch: row.epoch as number,
       createdAt: row.created_at as number,
       updatedAt: row.updated_at as number,

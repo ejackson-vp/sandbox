@@ -186,7 +186,9 @@ X-Sandbox-Capability: …
 `GET /v1/sessions/{id}/requests/{requestId}`.
 
 `409 busy` — another operation is in flight (one active foreground operation per
-sandbox; the SDK can queue). `409 session_not_usable`, `410 lease_expired`.
+sandbox; the SDK can queue). `409 session_not_usable`, `409
+idempotency_key_reused` (the `requestId` was already used with a different
+envelope, so it is neither replayed nor executed), `410 lease_expired`.
 
 ### Envelope contents (client-side)
 

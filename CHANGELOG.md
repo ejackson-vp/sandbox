@@ -130,6 +130,14 @@ the container registry.
   value for it means the stale-frame guarantee degraded; it also logs
   `relay_reset_fell_back_to_terminate`.
 
+### Security
+
+- Operation idempotency keys are bound to the request payload (schema v16,
+  `exec_requests.payload_hash`). Reusing a `requestId` with a different sealed
+  envelope is refused with `409 idempotency_key_reused` instead of returning the
+  first operation's cached result; a same-envelope retry still replays. Rows
+  written before v16 keep a null hash and accept any duplicate.
+
 ### Changed
 
 - CodeQL analyses every branch push, not just `main`, so a commit that lands
