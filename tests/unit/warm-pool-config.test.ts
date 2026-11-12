@@ -9,6 +9,7 @@ const baseEnv: NodeJS.ProcessEnv = {
   EXECUTION_MODE: "dev",
   ALLOW_INSECURE_DEV: "true",
   KUBERNETES_ENABLED: "false",
+  DATABASE_URL: "postgres://user:pw@db:5432/sandbox",
 };
 
 describe("warm pool configuration", () => {

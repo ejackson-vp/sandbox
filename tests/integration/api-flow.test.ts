@@ -22,7 +22,7 @@ import { createControlApi } from "../../controller/src/control-api.js";
 import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
-import { Store } from "../../controller/src/store.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { SessionRecord } from "../../controller/src/store.js";
 import type { Snapshotter } from "../../controller/src/snapshotter.js";
 import { LocalProvisioner } from "../../controller/src/local-provisioner.js";
@@ -48,6 +48,7 @@ import {
 import { createSessionPayment, requestChallenge } from "../helpers/x402.js";
 import { makeTar } from "../helpers/tar.js";
 import { testPort } from "./ports.js";
+import { countRows, freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const API_PORT = testPort(13300);
 const FACILITATOR_PORT = testPort(13302);
@@ -62,7 +63,7 @@ const apiUrl = `http://127.0.0.1:${API_PORT}`;
 
 let facilitator: MockFacilitatorHandle;
 let relay: RelayServer;
-let store: Store;
+let store: PostgresStore;
 let reconciler: Reconciler;
 let servers: http.Server[] = [];
 let workDir: string;
@@ -146,7 +147,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => relay.server.listen(RELAY_PORT, "127.0.0.1", () => r()));
 
   const relayClient = new RelayClient({ baseUrl: `http://127.0.0.1:${RELAY_PORT}`, adminToken: RELAY_ADMIN });
-  store = new Store(join(workDir, "controller.db"));
+  store = await freshStore({ namespace: "integration" });
 
   const controllerCfg = loadControllerConfig({
     ADMIN_TOKEN: ADMIN,
@@ -154,7 +155,7 @@ beforeAll(async () => {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: join(workDir, "controller.db"),
+    DATABASE_URL: testDatabaseUrl("integration"),
     RELAY_URL: `http://127.0.0.1:${RELAY_PORT}`,
     RELAY_ADMIN_TOKEN: RELAY_ADMIN,
     WAKE_TOKEN: WAKE,
@@ -248,7 +249,7 @@ afterAll(async () => {
   await relay?.close();
   for (const s of servers) await close(s).catch(() => undefined);
   facilitator?.close();
-  store?.close();
+  await store?.close();
   await rm(workDir, { recursive: true, force: true });
 });
 
@@ -286,7 +287,7 @@ describe("payments and entitlements", () => {
     expect(decoded.x402Version).toBe(2);
     expect(decoded.accepts[0].amount).toBe("100000"); // $0.10
     expect(decoded.accepts[0].network).toBe("mock:local");
-    expect(store.countSessions()).toBe(0);
+    expect(await countRows("sessions", "integration")).toBe(0);
   });
 
   it("rejects a tampered payment", async () => {
@@ -300,7 +301,7 @@ describe("payments and entitlements", () => {
     // no longer covers this receipt. Rejected before any settlement.
     expect(res.status).toBe(401);
     expect(((await res.json()) as { error: string }).error).toBe("client_proof_invalid");
-    expect(store.countSessions()).toBe(0);
+    expect(await countRows("sessions", "integration")).toBe(0);
   });
 
   it("rejects plaintext command fields", async () => {
@@ -326,14 +327,14 @@ describe("payments and entitlements", () => {
     const first = await postSession(signedBody, header);
     expect(first.status).toBe(201);
     const created = (await first.json()) as { sessionId: string; capability: string };
-    const before = store.countSessions();
+    const before = await countRows("sessions", "integration");
 
     const replay = await postSession(signedBody, header);
     expect(replay.status).toBe(200);
     const replayBody = (await replay.json()) as { sessionId: string; capability: string };
     expect(replayBody.sessionId).toBe(created.sessionId);
     expect(replayBody.capability).toBe(created.capability);
-    expect(store.countSessions()).toBe(before);
+    expect(await countRows("sessions", "integration")).toBe(before);
   });
 
   it("returns the session view with the create and skips the post-create getSession", async () => {
@@ -423,17 +424,17 @@ describe("payments and entitlements", () => {
       }),
     });
 
-    const before = store.countSessions();
+    const before = await countRows("sessions", "integration");
     const hijack = await postSession({ ...bodyB, challengeNonce, clientSignature: bSignature }, header);
     expect(hijack.status).toBe(401);
     expect(((await hijack.json()) as { error: string }).error).toBe("client_proof_invalid");
-    expect(store.countSessions()).toBe(before);
+    expect(await countRows("sessions", "integration")).toBe(before);
     expect(challenge.requirement.amount).toBeTruthy();
 
     // A's own request still works: the hijack attempt consumed nothing.
     const created = await postSession(signedA, header);
     expect(created.status).toBe(201);
-    expect(store.countSessions()).toBe(before + 1);
+    expect(await countRows("sessions", "integration")).toBe(before + 1);
   });
 
   it("does not return a capability to a client that only holds the receipt", async () => {
@@ -497,7 +498,7 @@ describe("payments and entitlements", () => {
   it("cannot create multiple sessions under concurrent retries", async () => {
     const body = await createBody();
     const { header, body: signedBody } = await createSessionPayment(apiUrl, body);
-    const before = store.countSessions();
+    const before = await countRows("sessions", "integration");
     const results = await Promise.all(Array.from({ length: 6 }, () => postSession(signedBody, header)));
     const created = results.filter((r) => r.status === 201).length;
     const idempotent = results.filter((r) => r.status === 200).length;
@@ -505,7 +506,7 @@ describe("payments and entitlements", () => {
     expect(created).toBe(1);
     expect(created + idempotent).toBeGreaterThanOrEqual(1);
     expect(created + idempotent + rejected).toBe(6);
-    expect(store.countSessions()).toBe(before + 1);
+    expect(await countRows("sessions", "integration")).toBe(before + 1);
   });
 
   it("does not create a session when settlement fails", async () => {
@@ -513,10 +514,10 @@ describe("payments and entitlements", () => {
     try {
       const body = await createBody();
       const { header, body: signedBody } = await createSessionPayment(apiUrl, body);
-      const before = store.countSessions();
+      const before = await countRows("sessions", "integration");
       const res = await postSession(signedBody, header);
       expect(res.status).toBe(402);
-      expect(store.countSessions()).toBe(before);
+      expect(await countRows("sessions", "integration")).toBe(before);
     } finally {
       facilitator.setFailSettle(false);
     }
@@ -535,17 +536,17 @@ describe("payments and entitlements", () => {
     });
     expect(((await settle.json()) as { success: boolean }).success).toBe(true);
 
-    const before = store.countSessions();
+    const before = await countRows("sessions", "integration");
     const res = await postSession(signedBody, header);
     expect(res.status).toBe(201);
-    expect(store.countSessions()).toBe(before + 1);
+    expect(await countRows("sessions", "integration")).toBe(before + 1);
   });
 
   it("recovers when the controller crashes after settlement but before entitlement", async () => {
     const body = await createBody();
     const { header, body: signedBody } = await createSessionPayment(apiUrl, body);
-    const before = store.countSessions();
-    const paymentsBefore = store.countPayments();
+    const before = await countRows("sessions", "integration");
+    const paymentsBefore = await countRows("payments", "integration");
     const original = apiController.completeIntent.bind(apiController);
     (apiController as unknown as { completeIntent: typeof apiController.completeIntent }).completeIntent = async () => {
       throw new ControllerError(503, "injected_crash", "simulated controller crash after settlement");
@@ -553,17 +554,17 @@ describe("payments and entitlements", () => {
     try {
       const first = await postSession(signedBody, header);
       expect(first.status).toBe(503);
-      expect(store.countSessions()).toBe(before);
+      expect(await countRows("sessions", "integration")).toBe(before);
     } finally {
       (apiController as unknown as { completeIntent: typeof apiController.completeIntent }).completeIntent = original;
     }
     await new Promise((resolve) => setTimeout(resolve, 1200));
     const retry = await postSession(signedBody, header);
     expect(retry.status).toBe(201);
-    expect(store.countSessions()).toBe(before + 1);
+    expect(await countRows("sessions", "integration")).toBe(before + 1);
     // Exactly-once accounting: the retry recovered the settled payment rather
     // than charging a second time.
-    expect(store.countPayments()).toBe(paymentsBefore + 1);
+    expect(await countRows("payments", "integration")).toBe(paymentsBefore + 1);
     const created = (await retry.json()) as { sessionId: string; capability: string };
 
     // The same client can recover the same capability, and no second charge is
@@ -571,7 +572,7 @@ describe("payments and entitlements", () => {
     const recovered = await postSession(signedBody, header);
     expect(recovered.status).toBe(200);
     expect(((await recovered.json()) as { capability: string }).capability).toBe(created.capability);
-    expect(store.countPayments()).toBe(paymentsBefore + 1);
+    expect(await countRows("payments", "integration")).toBe(paymentsBefore + 1);
 
     await fetch(`${apiUrl}/v1/sessions/${created.sessionId}`, {
       method: "DELETE",

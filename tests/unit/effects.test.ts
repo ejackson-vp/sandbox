@@ -45,6 +45,7 @@ import { Lifecycle } from "../../controller/src/lifecycle.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import type { ReconcilerContext } from "../../controller/src/reconciler-context.js";
 import type { Provisioning } from "../../controller/src/provisioning.js";
+import { testDatabaseUrl } from "../helpers/test-store.js";
 
 const NOW = 1_700_000_000_000;
 
@@ -543,7 +544,7 @@ function controllerConfig() {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "proxy-secret-0123456789",

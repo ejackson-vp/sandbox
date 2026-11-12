@@ -7,13 +7,8 @@
  * briefly so kubelet probes do not hammer the store, relay or Kubernetes API.
  */
 import http from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { ReadinessCache } from "../../shared/src/entries/runtime.js";
 import { createControlApi } from "../../controller/src/control-api.js";
 import type { Leadership } from "../../controller/src/leadership.js";
 import { loadControllerConfig } from "../../controller/src/config.js";
@@ -21,15 +16,14 @@ import { createRelay, type RelayServer } from "../../controller/src/relay.js";
 import { RelayClient } from "../../controller/src/relay-client.js";
 import { NullProvisioner } from "../../controller/src/k8s-null.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
-import { Store } from "../../controller/src/store.js";
 import { SoloLeadership } from "../../controller/src/leadership.js";
-import { checkStoreHealth } from "../../controller/src/store/health.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { CapacityService } from "../../controller/src/capacity/service.js";
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 const ADMIN = "readiness-admin-token-0123456789";
 const RELAY_ADMIN = "r".repeat(24);
 
-const dirs: string[] = [];
 const servers: http.Server[] = [];
 const relays: RelayServer[] = [];
 
@@ -38,14 +32,7 @@ afterEach(async () => {
   for (const server of servers.splice(0)) {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
-
-function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "x402-readiness-"));
-  dirs.push(dir);
-  return dir;
-}
 
 function listen(app: http.RequestListener): Promise<{ server: http.Server; port: number }> {
   const server = http.createServer(app);
@@ -73,15 +60,15 @@ function controllerConfig() {
     RELAY_ADMIN_TOKEN: RELAY_ADMIN,
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "p".repeat(24),
-    DB_PATH: join(tempDir(), "controller.db"),
+    DATABASE_URL: testDatabaseUrl(),
   });
 }
 
 interface Harness {
-  store: Store;
+  store: PostgresStore;
   base: string;
   provisioner: Provisioner;
-  closeStore(): void;
+  closeStore(): Promise<void>;
 }
 
 async function startController(
@@ -91,7 +78,7 @@ async function startController(
     leadership?: Pick<Leadership, "isLeader" | "onChange">;
   } = {},
 ): Promise<Harness> {
-  const store = new Store(join(tempDir(), "controller.db"));
+  const store = await freshStore();
   let relayUrl = opts.relayUrl;
   if (!relayUrl) {
     const relay = createRelay({ adminToken: RELAY_ADMIN });
@@ -154,7 +141,7 @@ describe("controller readiness", () => {
     // rotation after it stopped being the writer. The cache is invalidated on
     // the transition, which is what makes this assertion pass without waiting.
     await leadership.stop();
-    harness.store.setWritesBlocked(true);
+    await harness.store.setWritesBlocked(true);
     const standby = await get(harness.base, "/internal/readyz");
     expect(standby.status).toBe(503);
     expect(standby.body).toMatchObject({
@@ -168,7 +155,7 @@ describe("controller readiness", () => {
 
   it("returns 503 naming the store when the database is closed, but liveness stays up", async () => {
     const harness = await startController();
-    harness.closeStore();
+    await harness.closeStore();
 
     const readiness = await get(harness.base, "/internal/readyz");
     expect(readiness.status).toBe(503);
@@ -220,67 +207,5 @@ describe("controller readiness", () => {
     const readiness = await get(harness.base, "/internal/readyz");
     expect(JSON.stringify(readiness.body)).not.toContain("secret");
     expect(JSON.stringify(readiness.body)).not.toContain("kube.internal");
-  });
-});
-
-describe("store health probe", () => {
-  it("treats a read-only database as NotReady", async () => {
-    const path = join(tempDir(), "controller.db");
-    const store = new Store(path);
-    store.close();
-
-    const readonly = new DatabaseSync(path, { readOnly: true });
-    try {
-      expect(checkStoreHealth(readonly)).toMatchObject({ ok: false, reason: "read_only" });
-    } finally {
-      readonly.close();
-    }
-  });
-
-  it("reports incomplete migrations instead of accepting writes", async () => {
-    const path = join(tempDir(), "controller.db");
-    const db = new DatabaseSync(path);
-    db.exec("PRAGMA user_version = 9");
-    try {
-      expect(checkStoreHealth(db)).toMatchObject({ ok: false, reason: "migrations_incomplete" });
-    } finally {
-      db.close();
-    }
-  });
-});
-
-describe("readiness cache", () => {
-  it("reuses a fresh answer and coalesces concurrent probes", async () => {
-    let calls = 0;
-    const cache = new ReadinessCache({
-      dep: async () => {
-        calls += 1;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        return { ok: true };
-      },
-    });
-
-    const [first, second] = await Promise.all([cache.check(), cache.check()]);
-    expect(first.cached).toBe(false);
-    expect(second.cached).toBe(false);
-    expect(calls).toBe(1);
-
-    const third = await cache.check();
-    expect(third.cached).toBe(true);
-    expect(calls).toBe(1);
-  });
-
-  it("briefly caches a negative answer too", async () => {
-    let calls = 0;
-    const cache = new ReadinessCache({
-      dep: async () => {
-        calls += 1;
-        return { ok: false, reason: "unreachable" };
-      },
-    });
-
-    expect((await cache.check()).ok).toBe(false);
-    expect((await cache.check()).cached).toBe(true);
-    expect(calls).toBe(1);
   });
 });

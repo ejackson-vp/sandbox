@@ -13,20 +13,16 @@
  * are discarded instead of executed when the guest resumes.
  */
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { sealJsonTo } from "@x402s/shared/crypto";
 import type { SessionLimits } from "@x402s/shared/protocol";
 import { OperationFence } from "../../controller/src/operation-fence.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
-import {
-  Store,
-  type PaymentRecord,
-  type SessionRecord,
-} from "../../controller/src/store.js";
+import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { GuestHarness } from "../helpers/guest.js";
+import { freshStore, openStore } from "../helpers/test-store.js";
 import { testPort } from "./ports.js";
 
 const limits: SessionLimits = {
@@ -100,7 +96,7 @@ function sessionRecord(id: string, key: string): SessionRecord {
   };
 }
 
-async function seedReadySession(store: Store, sessionId: string): Promise<void> {
+async function seedReadySession(store: PostgresStore, sessionId: string): Promise<void> {
   const key = "e".repeat(64);
   const claim = await store.claimPaymentIntent(key, "stale-frame-spec", 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
@@ -127,16 +123,14 @@ async function waitFor(
 
 describe("recovery withdraws a stale frame the guest has not observed", () => {
   it("never starts the superseded generation's command and admits the next epoch", async () => {
-    const workDir = mkdtempSync(join(tmpdir(), "x402-stale-frame-"));
-    const dbPath = join(workDir, "controller.db");
     const guest = new GuestHarness({ port: testPort(18890), leaseSeconds: 120, maxCommandSeconds: 120 });
     await guest.start();
-    let store: Store | undefined;
+    let store: PostgresStore | undefined;
 
     try {
       const relay = guest.relayClient;
       const sessionId = guest.sessionId;
-      store = new Store(dbPath);
+      store = await freshStore({ namespace: "integration" });
       await seedReadySession(store, sessionId);
 
       // The guest has connected and published its own (empty) execution state.
@@ -164,8 +158,8 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
 
       // The controller crashes. Only the store is replaced: the relay and the
       // (frozen) guest survive, exactly like a controller Deployment restart.
-      store.close();
-      store = new Store(dbPath);
+      await store.close();
+      store = await openStore({ namespace: "integration" });
       expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
       expect(await store.getSession(sessionId)).toMatchObject({ activeRequestId: oldRequestId, execEpoch: 2 });
       expect(await store.getExecRequest(sessionId, oldRequestId)).toMatchObject({
@@ -209,23 +203,20 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       } catch {
         /* already gone */
       }
-      store?.close();
+      await store?.close();
       await guest.stop().catch(() => undefined);
-      await rm(workDir, { recursive: true, force: true });
     }
   }, 60_000);
 
   it("clears the fence without a guest connection so recovery still progresses", async () => {
-    const workDir = mkdtempSync(join(tmpdir(), "x402-stale-frame-idle-"));
-    const dbPath = join(workDir, "controller.db");
     const guest = new GuestHarness({ port: testPort(18891), leaseSeconds: 120 });
     await guest.start();
-    let store: Store | undefined;
+    let store: PostgresStore | undefined;
 
     try {
       const relay = guest.relayClient;
       const sessionId = guest.sessionId;
-      store = new Store(dbPath);
+      store = await freshStore({ namespace: "integration" });
       await seedReadySession(store, sessionId);
 
       const oldRequestId = "stale-frame-idle-old";
@@ -236,8 +227,8 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       guest.proc?.kill("SIGKILL");
       await waitFor(relay, sessionId, (state) => !state.connected, "guest disconnect");
 
-      store.close();
-      store = new Store(dbPath);
+      await store.close();
+      store = await openStore({ namespace: "integration" });
       expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
 
       const fence = new OperationFence(store, relay);
@@ -251,9 +242,8 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       });
       await store.finishOperation(sessionId, "stale-frame-idle-new", "abandoned");
     } finally {
-      store?.close();
+      await store?.close();
       await guest.stop().catch(() => undefined);
-      await rm(workDir, { recursive: true, force: true });
     }
   }, 60_000);
 });

@@ -16,6 +16,7 @@ import type { Provisioner } from "../../controller/src/k8s.js";
 import type { ReconcilerContext } from "../../controller/src/reconciler-context.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
 import { Termination } from "../../controller/src/termination.js";
+import { testDatabaseUrl } from "../helpers/test-store.js";
 
 const NOW = 1_700_000_000_000;
 const GRACE = 3_600_000;
@@ -120,7 +121,7 @@ function config() {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "p".repeat(24),
@@ -212,7 +213,7 @@ describe("orphan PVC grace config", () => {
         EXECUTION_MODE: "dev",
         ALLOW_INSECURE_DEV: "true",
         KUBERNETES_ENABLED: "false",
-        DB_PATH: ":memory:",
+        DATABASE_URL: testDatabaseUrl(),
         RELAY_ADMIN_TOKEN: "r".repeat(24),
         WAKE_TOKEN: "w".repeat(24),
         PROXY_TOKEN_SECRET: "p".repeat(24),
@@ -229,7 +230,7 @@ describe("orphan PVC grace config", () => {
         EXECUTION_MODE: "dev",
         ALLOW_INSECURE_DEV: "true",
         KUBERNETES_ENABLED: "false",
-        DB_PATH: ":memory:",
+        DATABASE_URL: testDatabaseUrl(),
         RELAY_ADMIN_TOKEN: "r".repeat(24),
         WAKE_TOKEN: "w".repeat(24),
         PROXY_TOKEN_SECRET: "p".repeat(24),

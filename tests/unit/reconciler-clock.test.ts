@@ -11,6 +11,7 @@ import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import type { ReconcilerStore } from "../../controller/src/store/ports.js";
+import { testDatabaseUrl } from "../helpers/test-store.js";
 
 function config() {
   return loadControllerConfig({
@@ -19,7 +20,7 @@ function config() {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "proxy-secret-0123456789",

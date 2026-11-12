@@ -9,6 +9,7 @@ import type { RelayClient } from "../../controller/src/relay-client.js";
 import { Provisioning } from "../../controller/src/provisioning.js";
 import type { SessionRecord, Store } from "../../controller/src/store.js";
 import type { WarmPoolManager } from "../../controller/src/warm-pool-manager.js";
+import { testDatabaseUrl } from "../helpers/test-store.js";
 
 function session(id: string, state: SessionRecord["state"] = "PAID"): SessionRecord {
   return {
@@ -47,7 +48,7 @@ function harness(limit: number, persisted: SessionRecord[] = []) {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "proxy-secret-0123456789",

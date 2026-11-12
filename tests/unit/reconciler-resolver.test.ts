@@ -11,26 +11,12 @@
  * This exercises the real Reconciler context rather than a hand-built one, which
  * is the only way to catch a wiring fault of that shape.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
-import { Store } from "../../controller/src/store.js";
-
-const dirs: string[] = [];
-afterEach(() => {
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
-});
-
-function tempDb(): string {
-  const dir = mkdtempSync(join(tmpdir(), "x402-resolver-"));
-  dirs.push(dir);
-  return join(dir, "controller.db");
-}
+import { freshStore, testDatabaseUrl } from "../helpers/test-store.js";
 
 function config(extra: Record<string, string> = {}) {
   return loadControllerConfig({
@@ -39,7 +25,7 @@ function config(extra: Record<string, string> = {}) {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
@@ -49,7 +35,7 @@ function config(extra: Record<string, string> = {}) {
 
 describe("reconciler data-plane resolver wiring", () => {
   it("forwards the workload pod prefix to the provisioner", async () => {
-    const store = new Store(tempDb());
+    const store = await freshStore();
     try {
       const getServiceAddress = vi.fn(async () => ({ host: "10.1.0.9", port: 8443 }));
       const reconciler = new Reconciler({
@@ -80,12 +66,12 @@ describe("reconciler data-plane resolver wiring", () => {
         "egress-proxy",
       );
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("uses the ClusterIP names, with no prefix, when there is one replica", async () => {
-    const store = new Store(tempDb());
+    const store = await freshStore();
     try {
       const getServiceAddress = vi.fn(async () => ({ host: "10.1.0.9", port: 8443 }));
       const reconciler = new Reconciler({
@@ -106,7 +92,7 @@ describe("reconciler data-plane resolver wiring", () => {
       expect(getServiceAddress).toHaveBeenCalledWith("relay", undefined, undefined);
       expect(getServiceAddress).toHaveBeenCalledWith("egress-proxy", undefined, undefined);
     } finally {
-      store.close();
+      await store.close();
     }
   });
 });

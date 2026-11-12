@@ -1,23 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Store } from "../../controller/src/store.js";
+import { describe, expect, it } from "vitest";
+import { freshStore } from "../helpers/test-store.js";
 import { availableOnNode } from "../../controller/src/capacity/placement.js";
 import { holdsCompute, type CapacitySnapshot, type SandboxResourceRequest } from "../../controller/src/capacity/types.js";
 
 const MiB = 1024 * 1024;
-const dirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function freshStore(): Store {
-  const dir = mkdtempSync(join(tmpdir(), "x402-capacity-"));
-  dirs.push(dir);
-  return new Store(join(dir, "controller.db"));
-}
 
 function snapshot(now = Date.now()): CapacitySnapshot {
   return {
@@ -45,7 +31,7 @@ function request(): SandboxResourceRequest {
 
 describe("durable capacity reservations", () => {
   it("admits one of many competing requests for the same finite capacity", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       // All ten are issued before any of them is awaited: the adapter is the
       // only thing that can arbitrate, exactly as it would under a network
@@ -62,12 +48,12 @@ describe("durable capacity reservations", () => {
       expect(decisions.filter((d) => d.admitted)).toHaveLength(1);
       expect(decisions.filter((d) => !d.admitted)).toHaveLength(9);
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("returns the same hold for an idempotent payment retry", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const paymentKey = "b".repeat(64);
       const first = await store.reservations.admit(snapshot(), request(), {
@@ -86,12 +72,12 @@ describe("durable capacity reservations", () => {
         expect(second.reservation.id).toBe(first.reservation.id);
       }
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("releases compute on suspend, lets B take it, and rejects A's resume until B is gone", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const a = await store.reservations.admit(snapshot(), request(), {
         sessionId: "sbx_a",
@@ -124,12 +110,12 @@ describe("durable capacity reservations", () => {
       expect(resumed.admitted).toBe(true);
       expect((await store.reservations.getBySession("sbx_a"))?.state).toBe("ALLOCATED");
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("reasserts an admitted resume after a concurrent re-suspend", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const a = await store.reservations.admit(snapshot(), request(), {
         sessionId: "sbx_a",
@@ -147,12 +133,12 @@ describe("durable capacity reservations", () => {
       expect((await store.reservations.getBySession("sbx_a"))?.state).toBe("ALLOCATED");
       expect(await store.reservations.reassertAllocated("sbx_a")).toBe(false);
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("converts a payment hold into a session reservation without releasing capacity", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const paymentKey = "d".repeat(64);
       const hold = await store.reservations.admit(snapshot(), request(), {
@@ -179,12 +165,12 @@ describe("durable capacity reservations", () => {
       });
       expect(blocked.admitted).toBe(false);
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("rebinds a reservation when a crash left an undurable session id", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const paymentKey = "e".repeat(64);
       await store.reservations.admit(snapshot(), request(), {
@@ -211,12 +197,12 @@ describe("durable capacity reservations", () => {
       expect((await store.reservations.getBySession("sbx_after_restart"))?.state).toBe("ALLOCATED");
       expect(await store.reservations.getBySession("sbx_never_inserted")).toBeNull();
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("reconciles the reservation node with the node Kubernetes actually chose", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       await store.reservations.admit(snapshot(), request(), {
         sessionId: "sbx_move",
@@ -225,12 +211,12 @@ describe("durable capacity reservations", () => {
       expect(await store.reservations.pinNode("sbx_move", "node-b")).toBe(true);
       expect((await store.reservations.getBySession("sbx_move"))?.nodeId).toBe("node-b");
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("keeps compute charged when an active session enters RELEASING", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const snap = snapshot();
       expect((await store.reservations.admit(snap, request(), {
@@ -253,12 +239,12 @@ describe("durable capacity reservations", () => {
       expect(await store.reservations.confirmRelease("sbx_active_release")).toBe(true);
       expect(availableOnNode(node, await store.reservations.listActive(), snap.now)).toEqual(node.allocatable);
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("releases compute but not storage when a suspended session enters RELEASING", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const snap = snapshot();
       expect((await store.reservations.admit(snap, request(), {
@@ -294,12 +280,12 @@ describe("durable capacity reservations", () => {
       expect(await store.reservations.confirmRelease("sbx_suspended_release")).toBe(true);
       expect((await store.reservations.getBySession("sbx_suspended_release"))?.state).toBe("RELEASED");
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("keeps capacity reserved in RELEASING until the Pod is confirmed gone", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       expect((await store.reservations.admit(snapshot(), request(), {
         sessionId: "sbx_release",
@@ -317,12 +303,12 @@ describe("durable capacity reservations", () => {
       expect(await store.reservations.confirmRelease("sbx_release")).toBe(true);
       expect((await store.reservations.getBySession("sbx_release"))?.state).toBe("RELEASED");
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("expires provisional holds without leaking capacity", async () => {
-    const store = freshStore();
+    const store = await freshStore();
     try {
       const now = Date.now();
       const hold = await store.reservations.admit(snapshot(now), request(), {
@@ -348,7 +334,7 @@ describe("durable capacity reservations", () => {
       });
       expect(after.admitted).toBe(false); // rehold still owns the capacity
     } finally {
-      store.close();
+      await store.close();
     }
   });
 });

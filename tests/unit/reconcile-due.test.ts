@@ -2,42 +2,29 @@
  * Due-time scheduling: one bounded pass dispatches only due sessions, and a
  * processed session is moved forward so the next pass cannot select it again.
  *
- * These use the real Store (on a temp database) so the interaction with the
+ * These use the real store (on the test database) so the interaction with the
  * state-changing statements is exercised, with a fake provisioner/relay and an
  * injected clock so "two consecutive passes" really are the same instant.
  */
-import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { metrics } from "@x402s/shared/runtime";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import { Reconciler } from "../../controller/src/reconciler.js";
 import { cadenceFor, DEFAULT_REDUE_INTERVAL_MS } from "../../controller/src/reconcile-cadence.js";
 import type { Provisioner } from "../../controller/src/k8s.js";
 import type { RelayClient } from "../../controller/src/relay-client.js";
-import {
-  Store,
-  type PaymentRecord,
-  type SessionRecord,
-} from "../../controller/src/store.js";
+import type { PaymentRecord, SessionRecord } from "../../controller/src/store.js";
+import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { SessionLimits } from "../../shared/src/entries/protocol.js";
 import { limitsFor, paymentFixture, sessionFixture } from "../helpers/store-fixtures.js";
+import {
+  freshStore,
+  readNextDue as readStoredNextDue,
+  setNextDue,
+  testDatabaseUrl,
+} from "../helpers/test-store.js";
 
 const ADMIN = "unit-admin-token-0123456789";
-
-const dirs: string[] = [];
-afterEach(() => {
-  vi.restoreAllMocks();
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
-});
-
-function tempDb(): string {
-  const dir = mkdtempSync(join(tmpdir(), "x402-due-"));
-  dirs.push(dir);
-  return join(dir, "controller.db");
-}
 
 function config(extra: Record<string, string> = {}) {
   return loadControllerConfig({
@@ -46,7 +33,7 @@ function config(extra: Record<string, string> = {}) {
     EXECUTION_MODE: "dev",
     ALLOW_INSECURE_DEV: "true",
     KUBERNETES_ENABLED: "false",
-    DB_PATH: ":memory:",
+    DATABASE_URL: testDatabaseUrl(),
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
@@ -81,7 +68,7 @@ function sessionRecord(id: string, key: string): SessionRecord {
   });
 }
 
-async function seedPaid(store: Store, id: string, keyChar: string): Promise<void> {
+async function seedPaid(store: PostgresStore, id: string, keyChar: string): Promise<void> {
   const key = keyChar.repeat(64);
   const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
   if (claim.status !== "claimed") throw new Error("expected claim");
@@ -89,7 +76,7 @@ async function seedPaid(store: Store, id: string, keyChar: string): Promise<void
 }
 
 /** A session parked in SUSPENDING, ready to be finished by a pass. */
-async function seedSuspending(store: Store, id: string, keyChar: string): Promise<void> {
+async function seedSuspending(store: PostgresStore, id: string, keyChar: string): Promise<void> {
   await seedPaid(store, id, keyChar);
   if (!await store.setProvisioning(id, `pod-${id}`)) throw new Error("expected PROVISIONING");
   await store.setRelayToken(id, "relay-hash");
@@ -98,19 +85,9 @@ async function seedSuspending(store: Store, id: string, keyChar: string): Promis
   if (!await store.markSuspending(id)) throw new Error("expected SUSPENDING");
 }
 
-function readNextDue(path: string, id: string): number | null {
-  const db = new DatabaseSync(path);
-  try {
-    const row = db.prepare("SELECT next_due_ms FROM sessions WHERE id = ?").get(id) as
-      | { next_due_ms: number | null }
-      | undefined;
-    return row ? row.next_due_ms : null;
-  } finally {
-    db.close();
-  }
-}
+const readNextDue = (id: string) => readStoredNextDue(id);
 
-function harness(cfg: ReturnType<typeof config>, store: Store, clock: { now: number }) {
+function harness(cfg: ReturnType<typeof config>, store: PostgresStore, clock: { now: number }) {
   const provisioner = { deletePod: vi.fn(async () => undefined) } as unknown as Provisioner;
   const relay = { isReady: async () => true } as unknown as RelayClient;
   const reconciler = new Reconciler({
@@ -130,13 +107,12 @@ function harness(cfg: ReturnType<typeof config>, store: Store, clock: { now: num
 
 describe("due-time reconcile pass", () => {
   it("dispatches a due session once and strictly advances its due time", async () => {
-    const path = tempDb();
-    const store = new Store(path);
+    const store = await freshStore();
     try {
       await seedPaid(store, "sbx_rearm", "a");
       const clock = { now: Date.now() };
       // Park the schedule in the past: this pass must pick it up.
-      expect(store.bumpDue("sbx_rearm", clock.now)).toBe(true);
+      expect(await setNextDue("sbx_rearm", clock.now)).toBe(true);
 
       const { reconciler, provisioning } = harness(config(), store, clock);
       const provision = vi.fn(async () => undefined);
@@ -144,7 +120,7 @@ describe("due-time reconcile pass", () => {
 
       await reconciler.tick();
       expect(provision).toHaveBeenCalledTimes(1);
-      const firstDue = readNextDue(path, "sbx_rearm");
+      const firstDue = await readNextDue("sbx_rearm");
       expect(firstDue).not.toBeNull();
       expect(firstDue!).toBeGreaterThan(clock.now);
       // Nothing consumes the schedule between two ticks at the same instant.
@@ -152,25 +128,24 @@ describe("due-time reconcile pass", () => {
 
       await reconciler.tick();
       expect(provision).toHaveBeenCalledTimes(1);
-      expect(readNextDue(path, "sbx_rearm")).toBe(firstDue);
+      expect(await readNextDue("sbx_rearm")).toBe(firstDue);
 
       // At its due time it is dispatched again (not starved) and moves further.
       clock.now = firstDue!;
       await reconciler.tick();
       expect(provision).toHaveBeenCalledTimes(2);
-      expect(readNextDue(path, "sbx_rearm")!).toBeGreaterThan(firstDue!);
+      expect((await readNextDue("sbx_rearm"))!).toBeGreaterThan(firstDue!);
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("does not overwrite a due time a state transition already armed", async () => {
-    const path = tempDb();
-    const store = new Store(path);
+    const store = await freshStore();
     try {
       await seedSuspending(store, "sbx_transition", "b");
       const clock = { now: Date.now() };
-      expect(store.bumpDue("sbx_transition", clock.now)).toBe(true);
+      expect(await setNextDue("sbx_transition", clock.now)).toBe(true);
 
       const { reconciler } = harness(config(), store, clock);
       // The real finishSuspend is stubbed at the seam so the pass performs the
@@ -187,7 +162,7 @@ describe("due-time reconcile pass", () => {
       await reconciler.tick();
       expect((await store.getSession("sbx_transition"))?.state).toBe("SUSPENDED");
 
-      const due = readNextDue(path, "sbx_transition");
+      const due = await readNextDue("sbx_transition");
       expect(due).not.toBeNull();
       // The transition's SUSPENDED cadence survives: a re-arm from the
       // pre-pass SUSPENDING state (500ms) would have shortened it.
@@ -195,21 +170,21 @@ describe("due-time reconcile pass", () => {
 
       // A future deadline is never pulled forward by a later re-arm attempt.
       expect(await store.rearmDue("sbx_transition", clock.now + 1, clock.now)).toBe(false);
-      expect(readNextDue(path, "sbx_transition")).toBe(due);
+      expect(await readNextDue("sbx_transition")).toBe(due);
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("bounds one pass by the budget and reports the untouched backlog", async () => {
-    const store = new Store(tempDb());
+    const store = await freshStore();
     try {
       const ids = ["sbx_b1", "sbx_b2", "sbx_b3"];
       for (const [i, id] of ids.entries()) {
         await seedPaid(store, id, String.fromCharCode(99 + i));
       }
       const clock = { now: Date.now() };
-      for (const id of ids) expect(store.bumpDue(id, clock.now)).toBe(true);
+      for (const id of ids) expect(await setNextDue(id, clock.now)).toBe(true);
 
       const { reconciler, provisioning } = harness(
         config({ RECONCILE_BUDGET: "2" }),
@@ -230,22 +205,22 @@ describe("due-time reconcile pass", () => {
       expect(text).toContain("sandbox_reconcile_due_backlog 1");
       expect(text).toContain("sandbox_reconcile_saturated 0");
     } finally {
-      store.close();
+      await store.close();
     }
   });
 
   it("makes a destroy request immediately due, even from a long cadence", async () => {
-    const store = new Store(tempDb());
+    const store = await freshStore();
     try {
       await seedPaid(store, "sbx_destroy", "f");
       const clock = { now: Date.now() };
-      expect(store.bumpDue("sbx_destroy", clock.now + cadenceFor("SUSPENDED"))).toBe(true);
+      expect(await setNextDue("sbx_destroy", clock.now + cadenceFor("SUSPENDED"))).toBe(true);
       expect(await store.listDue(clock.now, 10)).toEqual([]);
 
       await store.requestDestroy("sbx_destroy");
       expect((await store.listDue(Date.now(), 10)).map((s) => s.id)).toEqual(["sbx_destroy"]);
     } finally {
-      store.close();
+      await store.close();
     }
   });
 });
