@@ -23,6 +23,7 @@ import {
   type SessionRecord,
 } from "../../controller/src/store.js";
 import type { SessionLimits } from "../../shared/src/entries/protocol.js";
+import { limitsFor, paymentFixture, sessionFixture } from "../helpers/store-fixtures.js";
 
 const ADMIN = "unit-admin-token-0123456789";
 
@@ -54,36 +55,21 @@ function config(extra: Record<string, string> = {}) {
   });
 }
 
-const limits: SessionLimits = {
-  cpuMillis: 1000,
-  memoryMiB: 1024,
-  diskMiB: 1024,
-  maxOutputBytes: 262144,
-  maxFileBytes: 8 * 1024 * 1024,
-  maxCommandSeconds: 300,
-  maxProcesses: 256,
-};
+const limits: SessionLimits = limitsFor("unit");
 
 function paymentRecord(key: string): PaymentRecord {
-  return {
+  return paymentFixture({
     paymentKey: key,
     network: "mock:local",
-    scheme: "exact",
-    asset: "mock:usdc",
-    amount: "50000",
-    payTo: "0x0000000000000000000000000000000000000402",
     payer: "0x0000000000000000000000000000000000000001",
     transaction: "mock:tx",
-    mode: "mock",
-  };
+  });
 }
 
 function sessionRecord(id: string, key: string): SessionRecord {
-  const now = Date.now();
-  return {
+  return sessionFixture({
     id,
-    capabilityHash: "a".repeat(64),
-    capabilityExpiresAt: now + 3_600_000,
+    paymentKey: key,
     // One client key pair per session: a repeated pair is a duplicate charge
     // and is refused by completeEntitlement (#31).
     clientPublicKey: `pk-${id}`,
@@ -91,39 +77,8 @@ function sessionRecord(id: string, key: string): SessionRecord {
     tier: "standard",
     durationSeconds: 300,
     limits,
-    state: "PAID",
-    createdAt: now,
-    paidAt: now,
-    readyAt: null,
-    leaseExpiresAt: null,
-    terminatingAt: null,
-    destroyedAt: null,
-    terminationReason: null,
-    failureCode: null,
-    failureMessage: null,
-    attestationJson: null,
-    guestPublicKey: null,
-    paymentKey: key,
-    podName: null,
-    runtimeClass: "x402-sandbox",
-    executionMode: "dev",
-    relayTokenHash: null,
-    activeRequestId: null,
-    execEpoch: 1,
-    relayPurgedAt: null,
-    destroyRequested: 0,
-    timingsJson: null,
-    idlePolicyJson: "{}",
-    maxLifetimeSeconds: 28_800,
-    suspendedAt: null,
-    resumeCount: 0,
-    lastActivityAt: null,
-    workspacePvc: null,
-    baselineCpuMillis: null,
-    baselineMemoryMib: null,
-    nodeName: null,
-    updatedAt: now,
-  };
+    overrides: { idlePolicyJson: "{}", maxLifetimeSeconds: 28_800 },
+  });
 }
 
 async function seedPaid(store: Store, id: string, keyChar: string): Promise<void> {

@@ -15,6 +15,7 @@ import { PostgresStore } from "../../../controller/src/store/postgres/store.js";
 import type { StoreBackend } from "../../../controller/src/store/backend.js";
 import type { PaymentRecord, SessionRecord } from "../../../controller/src/store/models.js";
 import type { CapacitySnapshot, SandboxResourceRequest } from "../../../controller/src/capacity/types.js";
+import { limitsFor, paymentFixture, sessionFixture } from "../../helpers/store-fixtures.js";
 
 export interface ContractBackend {
   readonly label: string;
@@ -27,28 +28,13 @@ export interface ContractBackend {
 
 const MiB = 1024 * 1024;
 
-export const LIMITS = {
-  cpuMillis: 1000,
-  memoryMiB: 1024,
-  diskMiB: 1024,
-  maxOutputBytes: 262144,
-  maxFileBytes: 8 * 1024 * 1024,
-  maxCommandSeconds: 300,
-  maxProcesses: 256,
-};
-
 export function paymentRecord(paymentKey: string, payer = "0xabc"): PaymentRecord {
-  return {
+  return paymentFixture({
     paymentKey,
     network: "eip155:84532",
-    scheme: "exact",
-    asset: "mock:usdc",
-    amount: "50000",
-    payTo: "0x0000000000000000000000000000000000000402",
     payer,
     transaction: "mock:tx",
-    mode: "mock",
-  };
+  });
 }
 
 export function sessionRecord(
@@ -56,51 +42,16 @@ export function sessionRecord(
   payment: string,
   clientNonce = `nonce-${id}`,
 ): SessionRecord {
-  const now = Date.now();
-  return {
+  return sessionFixture({
     id,
-    capabilityHash: "a".repeat(64),
-    capabilityExpiresAt: now + 3_600_000,
+    paymentKey: payment,
     clientPublicKey: "pk-shared",
     clientNonce,
-    clientSigner: null,
     tier: "standard",
     durationSeconds: 300,
-    limits: LIMITS,
-    state: "PAID",
-    createdAt: now,
-    paidAt: now,
-    readyAt: null,
-    leaseExpiresAt: null,
-    terminatingAt: null,
-    destroyedAt: null,
-    terminationReason: null,
-    failureCode: null,
-    failureMessage: null,
-    attestationJson: null,
-    guestPublicKey: null,
-    paymentKey: payment,
-    podName: null,
-    runtimeClass: "x402-sandbox",
-    executionMode: "dev",
+    limits: limitsFor("unit"),
     runtime: "base",
-    relayTokenHash: null,
-    activeRequestId: null,
-    execEpoch: 1,
-    relayPurgedAt: null,
-    destroyRequested: 0,
-    timingsJson: null,
-    idlePolicyJson: null,
-    maxLifetimeSeconds: null,
-    suspendedAt: null,
-    resumeCount: 0,
-    lastActivityAt: null,
-    workspacePvc: null,
-    baselineCpuMillis: null,
-    baselineMemoryMib: null,
-    nodeName: null,
-    updatedAt: now,
-  };
+  });
 }
 
 export function capacitySnapshot(now = Date.now()): CapacitySnapshot {

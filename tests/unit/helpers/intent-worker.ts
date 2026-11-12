@@ -5,6 +5,7 @@
  */
 import { Store } from "../../../controller/src/store.js";
 import type { PaymentRecord, SessionRecord } from "../../../controller/src/store.js";
+import { limitsFor, paymentFixture, sessionFixture } from "../../helpers/store-fixtures.js";
 
 interface Init {
   type: "init";
@@ -18,72 +19,24 @@ type Request =
 let store: Store | null = null;
 
 function paymentRecord(key: string): PaymentRecord {
-  return {
+  return paymentFixture({
     paymentKey: key,
     network: "mock:local",
-    scheme: "exact",
-    asset: "mock:usdc",
-    amount: "50000",
-    payTo: "0x0000000000000000000000000000000000000402",
     payer: "0x0000000000000000000000000000000000000001",
     transaction: "mock:tx",
-    mode: "mock",
-  };
+  });
 }
 
 function sessionRecord(id: string, key: string): SessionRecord {
-  const now = Date.now();
-  return {
+  return sessionFixture({
     id,
-    capabilityHash: "a".repeat(64),
-    capabilityExpiresAt: now + 3_600_000,
+    paymentKey: key,
     clientPublicKey: "pk",
     clientNonce: "nonce",
-    clientSigner: null,
     tier: "standard",
     durationSeconds: 300,
-    limits: {
-      cpuMillis: 1000,
-      memoryMiB: 1024,
-      diskMiB: 1024,
-      maxOutputBytes: 262_144,
-      maxFileBytes: 8 * 1024 * 1024,
-      maxCommandSeconds: 300,
-      maxProcesses: 256,
-    },
-    state: "PAID",
-    createdAt: now,
-    paidAt: now,
-    readyAt: null,
-    leaseExpiresAt: null,
-    terminatingAt: null,
-    destroyedAt: null,
-    terminationReason: null,
-    failureCode: null,
-    failureMessage: null,
-    attestationJson: null,
-    guestPublicKey: null,
-    paymentKey: key,
-    podName: null,
-    runtimeClass: "x402-sandbox",
-    executionMode: "dev",
-    relayTokenHash: null,
-    activeRequestId: null,
-    execEpoch: 1,
-    relayPurgedAt: null,
-    destroyRequested: 0,
-    timingsJson: null,
-    idlePolicyJson: null,
-    maxLifetimeSeconds: null,
-    suspendedAt: null,
-    resumeCount: 0,
-    lastActivityAt: null,
-    workspacePvc: null,
-    baselineCpuMillis: null,
-    baselineMemoryMib: null,
-    nodeName: null,
-    updatedAt: now,
-  };
+    limits: limitsFor("unit"),
+  });
 }
 
 process.on("message", async (message: Init | Request) => {

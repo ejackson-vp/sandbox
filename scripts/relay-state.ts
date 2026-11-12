@@ -20,7 +20,7 @@ export const RELAY_PENDING_GAUGE = "sandbox_relay_pending_requests";
 /** Operations the guests themselves report as running. */
 export const RELAY_ACTIVE_GAUGE = "sandbox_relay_active_requests";
 
-export interface RelayGaugeOptions {
+interface RelayGaugeOptions {
   namespace: string;
   /** Return as soon as the value equals this. */
   until?: number;
@@ -33,7 +33,7 @@ export interface RelayGaugeOptions {
  * when the metric is absent or its sample is not a finite number, so the caller
  * can retry instead of reporting a misleading zero.
  */
-export function parseGauge(body: string, name: string): number | null {
+function parseGauge(body: string, name: string): number | null {
   for (const raw of body.split("\n")) {
     const line = raw.trim();
     if (line === "" || line.startsWith("#")) continue;
@@ -55,7 +55,7 @@ export function parseActiveGauge(body: string): number | null {
 }
 
 /** One scrape of a metrics listener. Null means "not available yet". */
-export async function readRelayGauge(baseUrl: string, name: string): Promise<number | null> {
+async function readRelayGauge(baseUrl: string, name: string): Promise<number | null> {
   try {
     const res = await fetch(`${baseUrl.replace(/\/$/, "")}/metrics`);
     if (!res.ok) return null;
@@ -79,7 +79,7 @@ export async function readRelayActive(baseUrl: string): Promise<number | null> {
  * explicitly if the gauge never appears, so a topology regression is not
  * mistaken for a real zero.
  */
-export async function relayGauge(name: string, opts: RelayGaugeOptions): Promise<number> {
+async function relayGauge(name: string, opts: RelayGaugeOptions): Promise<number> {
   const port = 20000 + Math.floor(Math.random() * 20000);
   const deadline = Date.now() + (opts.waitMs ?? 0);
   const pf = spawn("kubectl", ["-n", opts.namespace, "port-forward", "svc/relay", `${port}:9100`], {

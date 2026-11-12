@@ -20,6 +20,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { SandboxClient, SandboxError, type SessionHandle } from "@x402s/sdk";
 import { relayCreateRestart } from "./fault-scenarios/relay-create-restart.js";
 import { relayActive, relayPending } from "./relay-state.js";
+import { workloadRef } from "./workload-ref.js";
 
 const API = process.env.API_URL ?? "http://localhost:8080";
 const NS = process.env.NAMESPACE ?? "sandbox-system";
@@ -157,8 +158,9 @@ async function execUntilOk(client: SandboxClient, handle: SessionHandle, timeout
 }
 
 async function kill(target: string): Promise<void> {
+  const workload = workloadRef(NS, target);
   kubectl(["-n", NS, "delete", "pod", "-l", `app=${target}`, "--grace-period=0", "--force"]);
-  kubectl(["-n", NS, "rollout", "status", `deploy/${target}`, "--timeout=180s"]);
+  kubectl(["-n", NS, "rollout", "status", workload, "--timeout=180s"]);
 }
 
 async function pause(target: string): Promise<void> {

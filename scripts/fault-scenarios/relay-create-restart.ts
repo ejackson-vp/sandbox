@@ -11,13 +11,13 @@
  */
 import type { SandboxClient, SessionHandle } from "@x402s/sdk";
 
-export type Entry = { client: SandboxClient; handle: SessionHandle };
+type Entry = { client: SandboxClient; handle: SessionHandle };
 
 interface Capacity {
   total: number;
 }
 
-export interface RelayCreateRestartDeps {
+interface RelayCreateRestartDeps {
   count: number;
   budgetMs: number;
   clients: SandboxClient[];
