@@ -250,8 +250,10 @@ signatures over canonical JSON produced by both implementations.
   the relay became a correlation switch.
 - **One active operation per sandbox.** Deterministic filesystem semantics;
   concurrency is rejected (`409 busy`) rather than silently interleaved.
-- **`requestId` as idempotency key.** Retries return the cached result; the SDK
-  keeps the same id across reconnects.
+- **`requestId` as idempotency key, bound to the payload.** Retries of the same
+  envelope return the cached result; reusing the id for a different envelope is
+  `409 idempotency_key_reused` rather than a replayed result. The SDK keeps the
+  same id across reconnects.
 - **Capability derived from the payment.** Solves "settled but response lost"
   without storing a plaintext secret.
 - **File content inside envelopes, paths inside envelopes too.** The API learns

@@ -553,8 +553,9 @@ export class Store {
     sessionId: string,
     requestId: string,
     op: string,
+    payloadHash: string | null = null,
   ): Promise<ClaimOperationResult> {
-    return this.operations.claimOperation(sessionId, requestId, op);
+    return this.operations.claimOperation(sessionId, requestId, op, payloadHash);
   }
 
   async finishOperation(

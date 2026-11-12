@@ -18,6 +18,7 @@ import { SOURCE_STATES } from "@x402s/shared/protocol";
 import { cadenceFor } from "../reconcile-cadence.js";
 import {
   mapSession,
+  payloadDiffers,
   type ClaimOperationResult,
   type ExecRequestRecord,
   type RawSession,
@@ -83,10 +84,18 @@ export class OperationRepository {
 
   /**
    * Atomically claim the single operation slot for a session.
-   * Request id doubles as the idempotency key. The returned epoch must travel
-   * with the relay frame so the guest can reject stale generations.
+   * Request id doubles as the idempotency key. `payloadHash` is the SHA-256 of
+   * the sealed envelope, stored with the row so a retry that reuses the id for a
+   * different payload is refused rather than answered with the first result.
+   * The returned epoch must travel with the relay frame so the guest can reject
+   * stale generations.
    */
-  claimOperation(sessionId: string, requestId: string, op: string): ClaimOperationResult {
+  claimOperation(
+    sessionId: string,
+    requestId: string,
+    op: string,
+    payloadHash: string | null = null,
+  ): ClaimOperationResult {
     const now = Date.now();
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -104,17 +113,28 @@ export class OperationRepository {
         return { ok: false, code: "lease_expired", state: session.state };
       }
       const existing = this.stmts.getRequest!.get(sessionId, requestId) as
-        | { state: string }
+        | { state: string; payload_hash: string | null }
         | undefined;
       if (existing) {
         this.db.exec("COMMIT");
+        if (payloadDiffers(existing.payload_hash, payloadHash)) {
+          return { ok: false, code: "idempotency_key_reused", state: session.state, requestId };
+        }
         return { ok: false, code: "duplicate", state: session.state, requestId };
       }
       if (session.activeRequestId) {
         this.db.exec("COMMIT");
         return { ok: false, code: "busy", state: session.state, requestId: session.activeRequestId };
       }
-      this.stmts.insertRequest!.run(requestId, sessionId, op, session.execEpoch, now, now);
+      this.stmts.insertRequest!.run(
+        requestId,
+        sessionId,
+        op,
+        session.execEpoch,
+        payloadHash,
+        now,
+        now,
+      );
       this.stmts.claimActive!.run(requestId, now + cadenceFor("ACTIVE"), now, sessionId);
       this.db.exec("COMMIT");
       return { ok: true, requestId, epoch: session.execEpoch };
@@ -152,6 +172,7 @@ export class OperationRepository {
       sessionId: row.session_id as string,
       op: row.op as string,
       state: row.state as ExecRequestRecord["state"],
+      payloadHash: (row.payload_hash as string | null) ?? null,
       epoch: row.epoch as number,
       createdAt: row.created_at as number,
       updatedAt: row.updated_at as number,

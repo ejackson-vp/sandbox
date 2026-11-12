@@ -399,8 +399,8 @@ export class PostgresStore implements StoreBackend {
     return this.operations.clearFencedGate(sessionId, requestId, epoch);
   }
 
-  claimOperation(sessionId: string, requestId: string, op: string) {
-    return this.operations.claimOperation(sessionId, requestId, op);
+  claimOperation(sessionId: string, requestId: string, op: string, payloadHash: string | null = null) {
+    return this.operations.claimOperation(sessionId, requestId, op, payloadHash);
   }
 
   finishOperation(

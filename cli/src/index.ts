@@ -2,6 +2,8 @@
 /**
  * `sandbox` CLI — argument parsing, early commands, and dispatch.
  */
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   SandboxClient,
@@ -13,8 +15,9 @@ import {
 import { createAgentPayer } from "./agent-payer.js";
 import { commands, err, HELP, type CommandContext } from "./commands.js";
 
-async function main(): Promise<number> {
+export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   const { values, positionals } = parseArgs({
+    args: argv,
     allowPositionals: true,
     options: {
       "api-url": { type: "string", default: "http://localhost:8080" },
@@ -129,7 +132,7 @@ async function main(): Promise<number> {
     paymentMode,
     client,
     attach,
-    hasSeparator: process.argv.includes("--"),
+    hasSeparator: argv.includes("--"),
   };
   const handler = commands[command];
   if (!handler) {
@@ -139,17 +142,41 @@ async function main(): Promise<number> {
   return handler(ctx);
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((error: unknown) => {
-    if (error instanceof SessionExpiredError) {
-      process.stderr.write(`error: ${error.message}\n`);
-      process.exit(124);
-    }
-    if (error instanceof SandboxError) {
-      process.stderr.write(`error: ${error.code}: ${error.message}\n`);
-      process.exit(1);
-    }
-    process.stderr.write(`fatal: ${(error as Error).message}\n`);
-    process.exit(1);
-  });
+/**
+ * Map a thrown error to an exit code, writing the operator-facing line first.
+ * A dead lease is 124 so a caller can tell "the sandbox went away" apart from a
+ * plain API error, which is 1.
+ */
+export function reportFatal(error: unknown): number {
+  if (error instanceof SessionExpiredError) {
+    process.stderr.write(`error: ${error.message}\n`);
+    return 124;
+  }
+  if (error instanceof SandboxError) {
+    process.stderr.write(`error: ${error.code}: ${error.message}\n`);
+    return 1;
+  }
+  process.stderr.write(`fatal: ${(error as Error).message}\n`);
+  return 1;
+}
+
+/**
+ * `main` is exported for tests, so the entry point has to be detected. When the
+ * check cannot answer (no argv[1], unreadable path) the CLI runs, because a
+ * script that silently does nothing is a worse failure than one that runs.
+ */
+function invokedAsScript(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return true;
+  try {
+    return realpathSync(entry) === fileURLToPath(import.meta.url);
+  } catch {
+    return true;
+  }
+}
+
+if (invokedAsScript()) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((error: unknown) => process.exit(reportFatal(error)));
+}

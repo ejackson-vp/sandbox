@@ -190,6 +190,73 @@ export function describeStoreContract(backend: ContractBackend): void {
       expect((await store.getSession(SESSION_1))?.activeRequestId).toBe("same-request");
     });
 
+    it("treats a retry of the same request id and payload as idempotent", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+      const payload = "a".repeat(64);
+
+      expect(await store.claimOperation(SESSION_1, "retry-same", "exec", payload)).toMatchObject({
+        ok: true,
+      });
+      await store.finishOperation(SESSION_1, "retry-same", "done");
+
+      // Second claim of the same request id and payload: no second execution,
+      // no new epoch, just the duplicate signal the control API turns into the
+      // cached result.
+      expect(await store.claimOperation(SESSION_1, "retry-same", "exec", payload)).toMatchObject({
+        ok: false,
+        code: "duplicate",
+        requestId: "retry-same",
+      });
+      expect((await store.getExecRequest(SESSION_1, "retry-same"))?.payloadHash).toBe(payload);
+    });
+
+    it("refuses a retry that reuses the request id for a different payload", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+
+      expect(
+        await store.claimOperation(SESSION_1, "retry-different", "exec", "b".repeat(64)),
+      ).toMatchObject({ ok: true });
+      await store.finishOperation(SESSION_1, "retry-different", "done");
+
+      expect(
+        await store.claimOperation(SESSION_1, "retry-different", "file.put", "c".repeat(64)),
+      ).toMatchObject({ ok: false, code: "idempotency_key_reused", requestId: "retry-different" });
+
+      // The stored row still names the first payload; the second is never run.
+      const record = await store.getExecRequest(SESSION_1, "retry-different");
+      expect(record?.op).toBe("exec");
+      expect(record?.payloadHash).toBe("b".repeat(64));
+    });
+
+    it("accepts a duplicate against a row with no stored payload hash", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+
+      // A pre-v16 row has no hash. It cannot be verified, so any duplicate is
+      // accepted (this is what keeps an in-flight request working across the
+      // upgrade).
+      expect(await store.claimOperation(SESSION_1, "legacy-row", "exec")).toMatchObject({ ok: true });
+      await store.finishOperation(SESSION_1, "legacy-row", "done");
+      expect((await store.getExecRequest(SESSION_1, "legacy-row"))?.payloadHash).toBeNull();
+
+      expect(
+        await store.claimOperation(SESSION_1, "legacy-row", "file.put", "d".repeat(64)),
+      ).toMatchObject({ ok: false, code: "duplicate" });
+    });
+
+    it("gives a concurrently reused request id to one payload only", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+
+      const results = await Promise.all([
+        store.claimOperation(SESSION_1, "retry-raced", "exec", "e".repeat(64)),
+        store.claimOperation(SESSION_1, "retry-raced", "file.put", "f".repeat(64)),
+      ]);
+      expect(results.filter((r) => r.ok)).toHaveLength(1);
+      const refused = results.filter((r) => !r.ok);
+      expect(refused[0]).toMatchObject({ code: "idempotency_key_reused" });
+      const record = await store.getExecRequest(SESSION_1, "retry-raced");
+      expect(["e".repeat(64), "f".repeat(64)]).toContain(record?.payloadHash);
+    });
+
     it("counts concurrent creates against the durable budget once", async () => {
       const limits: BudgetLimits = {
         windowMs: 3_600_000,
