@@ -315,8 +315,9 @@ that can only reach the sandbox namespaces, not an admin kubeconfig.
 | `relay-pause` | relay | `SIGSTOP`/`SIGCONT` with operations in flight | 5 | 60 s |
 
 `full` is all eight; `smoke` is `api-kill`, `controller-pause` and
-`relay-pause`. All eight cases, including `relay-create-restart`, have run on
-the kind rig.
+`relay-pause`. Relay is a StatefulSet, so the harness resolves the workload
+kind before waiting for rollout; a hardcoded `deploy/relay` made both relay
+cases die before any scenario logic, which is what the 0.1.20 artifact shows.
 
 ### Artifacts and reading a red run
 
