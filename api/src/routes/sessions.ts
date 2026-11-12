@@ -13,7 +13,7 @@ import {
 import { RateLimiter } from "../admission.js";
 import { ControllerError, type ControllerClient, type SessionView } from "../controller-client.js";
 import type { ApiConfig } from "../config.js";
-import { operationSchema, requestIdSchema, rejectPlaintextBodies } from "../schemas.js";
+import { operationSchema, payloadHashSchema, requestIdSchema, rejectPlaintextBodies } from "../schemas.js";
 import { toStatus } from "../status.js";
 
 export interface SessionsDeps {
@@ -113,6 +113,7 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
         envelope: parsed.data.envelope,
         op: "operation",
         waitMs,
+        ...(parsed.data.payloadHash ? { payloadHash: parsed.data.payloadHash } : {}),
       });
       if (out.pending) {
         res.status(202).json({ state: out.state, requestId: out.requestId, pending: true });
@@ -161,12 +162,25 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       return;
     }
     const envelope = raw;
+    // Optional: the client-computed canonical operation hash. A malformed value
+    // is refused rather than ignored, because silently falling back would hide a
+    // client bug and change which payload the request id is bound to.
+    const rawPayloadHash = req.query.payloadHash;
+    let payloadHash: string | undefined;
+    if (rawPayloadHash !== undefined) {
+      if (typeof rawPayloadHash !== "string" || !payloadHashSchema.safeParse(rawPayloadHash).success) {
+        res.status(400).json({ error: "invalid_payload_hash" });
+        return;
+      }
+      payloadHash = rawPayloadHash;
+    }
     try {
       const out = await deps.controller.operation(session.sessionId, {
         requestId,
         envelope,
         op: "file.get",
         waitMs: 60_000,
+        ...(payloadHash ? { payloadHash } : {}),
       });
       if (out.pending) {
         res.status(202).json({ state: out.state, requestId: out.requestId, pending: true });

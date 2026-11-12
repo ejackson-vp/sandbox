@@ -38,9 +38,24 @@ export const createSchema = z.object({
 
 export const requestIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/);
 
+/**
+ * Client-computed SHA-256 of the canonical operation plaintext, used only to
+ * bind the idempotency key to the request. The API cannot verify it (it never
+ * sees the plaintext); the controller stores it and refuses a retry that
+ * disagrees with it.
+ */
+export const payloadHashSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
 export const operationSchema = z.object({
   requestId: requestIdSchema,
   envelope: z.string().min(1).max(16 * 1024 * 1024),
+  /**
+   * Optional so a client that does not compute a canonical hash keeps the
+   * ciphertext binding. Needed because sealing is non-deterministic: without
+   * it, re-sealing the same operation under the same request id would look
+   * like a different payload.
+   */
+  payloadHash: payloadHashSchema.optional(),
   timeoutMs: z.number().int().min(100).max(3_600_000).optional(),
   waitMs: z.number().int().min(0).max(120_000).optional(),
 });

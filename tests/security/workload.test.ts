@@ -18,20 +18,46 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionStatus } from "../../shared/src/entries/protocol.js";
 import { SandboxClient, FileSessionStore } from "../../sdk/src/index.js";
-import { createSessionPayment } from "../helpers/x402.js";
+import { createSessionPayment, requestChallenge } from "../helpers/x402.js";
 import { clusterAvailable, deleteQuietly, kubectl, kubectlJson, kubectlTry } from "./kubectl.js";
 
 const API = process.env.API_URL ?? "http://localhost:8080";
-const available = clusterAvailable() && (await (async () => {
+
+/**
+ * Distinguish "no cluster" from "a cluster running an older build".
+ *
+ * These tests drive the deployed API with the SDK from this checkout. When the
+ * two are from different releases, the first paid request fails with a payment
+ * error that says nothing about the real cause and the suite reports unrelated
+ * hardening failures. The 402 challenge is the cheapest version probe: a build
+ * that does not advertise the single-use challenge nonce cannot be tested with
+ * this client, so skip with a named reason instead of failing the suite.
+ */
+async function deploymentContract(): Promise<"current" | "legacy" | "unavailable"> {
   try {
-    return (await fetch(`${API}/healthz`)).ok;
+    if (!(await fetch(`${API}/healthz`)).ok) return "unavailable";
+    const { challenge } = await requestChallenge(`${API}/v1/sessions`, {
+      tier: "short",
+      clientPublicKey: randomBytes(32).toString("base64"),
+      clientNonce: randomBytes(32).toString("base64"),
+    });
+    return typeof challenge.requirement.extra?.challengeNonce === "string"
+      ? "current"
+      : "legacy";
   } catch {
-    return false;
+    return "unavailable";
   }
-})());
+}
+
+const contract = await deploymentContract();
+const available = clusterAvailable() && contract === "current";
 
 if (!available) {
-  console.warn("\n[security] API/cluster not available: workload tests are SKIPPED\n");
+  const reason =
+    contract === "legacy"
+      ? "the deployed API predates the challengeNonce contract; run `make up` against this checkout"
+      : "API/cluster not available";
+  console.warn(`\n[security] ${reason}: workload tests are SKIPPED\n`);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

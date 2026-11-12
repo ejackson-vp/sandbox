@@ -2,7 +2,7 @@
  * Postgres schema, the same tables and the same ladder as the SQLite migrations.
  *
  * The tables, columns, uniques and indexes are the SQLite ones (see
- * `controller/src/store/schema.ts`, schema v15). Two dialect differences are
+ * `controller/src/store/schema.ts`, schema v16). Two dialect differences are
  * deliberate and are called out where they occur:
  *
  *   - epoch milliseconds are `BIGINT`, because 2026 is past `int4`'s ceiling.
@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS exec_requests (
   op TEXT NOT NULL,
   state TEXT NOT NULL,
   epoch INTEGER NOT NULL DEFAULT 1,
+  payload_hash TEXT,
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (session_id, id)
@@ -225,6 +226,10 @@ const LADDER: ReadonlyArray<{ from: number; sql: string }> = [
           CREATE INDEX IF NOT EXISTS payment_ledger_nonce ON payment_ledger(settlement_nonce);
           ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS requirements_json TEXT;
           CREATE INDEX IF NOT EXISTS sessions_client_key ON sessions(client_public_key, client_nonce);`,
+  },
+  {
+    from: 16,
+    sql: "ALTER TABLE exec_requests ADD COLUMN IF NOT EXISTS payload_hash TEXT;",
   },
 ];
 

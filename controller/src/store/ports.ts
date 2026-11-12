@@ -189,7 +189,12 @@ export interface CapacityStore {
 
 /** Everything the control API's payment and session routes touch. */
 export interface ControlApiStore {
-  claimOperation(sessionId: string, requestId: string, op: string): Promise<ClaimOperationResult>;
+  claimOperation(
+    sessionId: string,
+    requestId: string,
+    op: string,
+    payloadHash?: string | null,
+  ): Promise<ClaimOperationResult>;
   claimPaymentIntent(
     paymentKey: string,
     specHashValue: string,
