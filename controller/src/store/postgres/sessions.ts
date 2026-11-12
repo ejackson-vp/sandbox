@@ -9,6 +9,7 @@
  * `SELECT … FOR UPDATE` row lock to keep that pair atomic.
  */
 import { SOURCE_STATES, finalStateForReason } from "@x402s/shared/protocol";
+import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { cadenceFor } from "../../reconcile-cadence.js";
 import {
   mapSession,
@@ -375,7 +376,7 @@ export class PgSessionRepository {
         session.paymentKey,
         session.runtimeClass,
         session.executionMode,
-        session.runtime ?? "base",
+        session.runtime ?? DEFAULT_RUNTIME,
         session.relayTokenHash,
         session.updatedAt,
       ],

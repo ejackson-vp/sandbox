@@ -201,7 +201,7 @@ export class PgReservationRepository implements ReservationStore {
         };
       } else if (alreadyAttached) {
         const refreshed = await this.findExisting(tx, opts);
-        if (refreshed) return { admitted: true, reservation: refreshed, reused: true };
+        if (refreshed) return { admitted: true, reservation: refreshed };
       } else if (wantsAttach) {
         replacingExisting = true;
       } else {
@@ -215,7 +215,7 @@ export class PgReservationRepository implements ReservationStore {
           existing.specHash ?? opts.specHash ?? null,
         );
         const refreshed = await this.findExisting(tx, opts);
-        if (refreshed) return { admitted: true, reservation: refreshed, reused: true };
+        if (refreshed) return { admitted: true, reservation: refreshed };
       }
     }
 
@@ -257,7 +257,7 @@ export class PgReservationRepository implements ReservationStore {
     }
     const saved = await this.findExisting(tx, opts);
     if (!saved) throw new Error("reservation insert did not round-trip");
-    return { admitted: true, reservation: saved, reused: false };
+    return { admitted: true, reservation: saved };
   }
 
   async admit(
@@ -337,7 +337,7 @@ export class PgReservationRepository implements ReservationStore {
       }
       const record = mapRow(row);
       if (record.state !== "SUSPENDED") {
-        return { admitted: true, reservation: record, reused: true };
+        return { admitted: true, reservation: record };
       }
       const active = (await this.active(tx)).filter((r) => r.id !== record.id);
       const decision = admitCapacity({ ...snapshot, reservations: active }, request);
@@ -363,12 +363,12 @@ export class PgReservationRepository implements ReservationStore {
       );
       if ((updated.rowCount ?? 0) === 0) {
         const current = await this.byId(tx, record.id);
-        if (current) return { admitted: true, reservation: current, reused: true };
+        if (current) return { admitted: true, reservation: current };
         return { admitted: false, reason: "no_eligible_nodes", retryable: true, requested: request.baseline };
       }
       const saved = await this.byId(tx, record.id);
       if (!saved) throw new Error("reservation resume did not round-trip");
-      return { admitted: true, reservation: saved, reused: false };
+      return { admitted: true, reservation: saved };
     });
   }
 

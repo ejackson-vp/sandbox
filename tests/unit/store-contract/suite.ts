@@ -9,6 +9,7 @@
  * one gate holder), not about how the backend got there.
  */
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { DuplicateEntitlementError, PaymentClaimLostError } from "../../../controller/src/store.js";
 import type { StoreBackend } from "../../../controller/src/store/backend.js";
 import type { BudgetLimits } from "../../../controller/src/store/budgets.js";
@@ -148,6 +149,33 @@ export function describeStoreContract(backend: ContractBackend): void {
       expect(finals[0]).toBe("DESTROYED");
       expect(await store.finalizeTermination(SESSION_1)).toBeNull();
       expect((await store.getSession(SESSION_1))?.state).toBe("DESTROYED");
+    });
+
+    it("records the failure code in the same termination decision", async () => {
+      await seedSession(store, SESSION_1, KEY_A);
+      expect(
+        await store.requestTermination(SESSION_1, "failure:provisioning_timeout", {
+          code: "provisioning_timeout",
+          message: "the pod never reported ready",
+        }),
+      ).toBe(true);
+
+      const session = await store.getSession(SESSION_1);
+      expect(session?.state).toBe("TERMINATING");
+      expect(session?.failureCode).toBe("provisioning_timeout");
+      expect(session?.failureMessage).toBe("the pod never reported ready");
+    });
+
+    it("defaults a missing runtime to the shared default on every backend", async () => {
+      const key = "d".repeat(64);
+      const record = sessionRecord(SESSION_1, key);
+      delete record.runtime;
+
+      const claim = await store.claimPaymentIntent(key, "a".repeat(64), 30_000);
+      if (claim.status !== "claimed") throw new Error(`seed claim was ${claim.status}`);
+      await store.completeEntitlement(key, claim.token, paymentRecord(key), record);
+
+      expect((await store.getSession(SESSION_1))?.runtime).toBe(DEFAULT_RUNTIME);
     });
 
     it("gives the single operation slot to one of two concurrent claims", async () => {

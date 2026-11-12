@@ -481,20 +481,32 @@ export class Store {
     failure?: { code: string; message: string },
   ): Promise<boolean> {
     const now = Date.now();
-    const changed = this.stmts.requestTermination!.run(
-      now,
-      reason,
-      now + cadenceFor("TERMINATING"),
-      now,
-      id,
-    ).changes > 0;
+    // The state write and the failure code are one decision: a crash between
+    // two autocommit statements would leave TERMINATING with no failure code.
+    // The Postgres adapter wraps the same pair in one transaction.
+    this.db.exec("BEGIN IMMEDIATE");
+    let changed: boolean;
+    try {
+      changed =
+        this.stmts.requestTermination!.run(
+          now,
+          reason,
+          now + cadenceFor("TERMINATING"),
+          now,
+          id,
+        ).changes > 0;
+      if (changed && failure) {
+        this.stmts.setFailure!.run(failure.code, failure.message, now, id);
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
     if (changed && reason.startsWith("failure:")) {
       metrics
         .counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason")
         .inc({ reason: boundedFailureReason(reason.slice("failure:".length)) });
-    }
-    if (changed && failure) {
-      this.stmts.setFailure!.run(failure.code, failure.message, now, id);
     }
     return changed;
   }
@@ -525,6 +537,11 @@ export class Store {
   }
 
   /** Atomically merge lifecycle timings (JSON patch semantics). */
+  /**
+   * JSON object merge. The caller filters to finite numbers, so a merge is a
+   * concat. That is what keeps SQLite's RFC 7396 `json_patch` and Postgres's
+   * shallow `||` equivalent; a nested value would make them diverge.
+   */
   async mergeTimings(id: string, patch: Record<string, number | undefined>): Promise<void> {
     const clean: Record<string, number> = {};
     for (const [key, value] of Object.entries(patch)) {

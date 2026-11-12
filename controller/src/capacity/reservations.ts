@@ -223,7 +223,7 @@ export class ReservationRepository implements ReservationStore {
         };
       } else if (alreadyAttached) {
         const refreshed = this.findExisting(opts);
-        if (refreshed) return { admitted: true, reservation: refreshed, reused: true };
+        if (refreshed) return { admitted: true, reservation: refreshed };
       } else if (wantsAttach) {
         // Convert the HELD row into the session reservation below. Exclude it
         // from the accounting snapshot so the transfer is not double-counted.
@@ -243,7 +243,7 @@ export class ReservationRepository implements ReservationStore {
           existing.id,
         );
         const refreshed = this.findExisting(opts);
-        if (refreshed) return { admitted: true, reservation: refreshed, reused: true };
+        if (refreshed) return { admitted: true, reservation: refreshed };
       }
     }
 
@@ -310,7 +310,7 @@ export class ReservationRepository implements ReservationStore {
     }
     const saved = this.findExisting(opts);
     if (!saved) throw new Error("reservation insert did not round-trip");
-    return { admitted: true, reservation: saved, reused: false };
+    return { admitted: true, reservation: saved };
   }
 
   /** Atomically admit and persist. */
@@ -385,7 +385,7 @@ export class ReservationRepository implements ReservationStore {
       }
       const record = mapRow(row);
       if (record.state !== "SUSPENDED") {
-        return { admitted: true, reservation: record, reused: true };
+        return { admitted: true, reservation: record };
       }
       // Remove the suspended row from accounting; the request re-adds its
       // storage while adding compute back.
@@ -405,7 +405,7 @@ export class ReservationRepository implements ReservationStore {
       );
       const saved = this.findExisting({ sessionId });
       if (!saved) throw new Error("reservation resume did not round-trip");
-      return { admitted: true, reservation: saved, reused: false };
+      return { admitted: true, reservation: saved };
     });
   }
 

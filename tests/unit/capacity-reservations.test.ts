@@ -84,7 +84,6 @@ describe("durable capacity reservations", () => {
       expect(second.admitted).toBe(true);
       if (first.admitted && second.admitted) {
         expect(second.reservation.id).toBe(first.reservation.id);
-        expect(second.reused).toBe(true);
       }
     } finally {
       store.close();
