@@ -1,4 +1,5 @@
 import type {
+  ChallengeBurnResult,
   ClaimOperationResult,
   ExecRequestRecord,
   IntentClaimResult,
@@ -8,11 +9,10 @@ import type {
   PaymentRecord,
   SessionRecord,
   SessionState,
+  StoreHealth,
 } from "./models.js";
 import type { ReservationStore } from "../capacity/reservation-store.js";
-import type { ChallengeBurnResult } from "./challenges.js";
-import type { BudgetDecision, BudgetLimits } from "./budgets.js";
-import type { StoreHealth } from "./health.js";
+import type { BudgetDecision, BudgetLimits } from "./budget-decision.js";
 
 /**
  * Narrow store surfaces, one per consumer.
@@ -24,27 +24,27 @@ import type { StoreHealth } from "./health.js";
  * interface it declared.
  *
  * The direction matters: a port may not depend on the adapter. Adding a method
- * to `Store` therefore cannot widen any consumer's dependency. Satisfying these
- * interfaces is necessary but not sufficient for a replacement adapter: ADR
- * 0010 also requires it to keep the guarded-transition and uniqueness
- * guarantees the SQLite adapter gets from one serialised connection.
+ * to `StoreBackend` therefore cannot widen any consumer's dependency. Satisfying
+ * these interfaces is necessary but not sufficient for a replacement adapter:
+ * ADR 0010 also requires it to keep the guarded-transition and uniqueness
+ * guarantees the original single-connection adapter got from serialising writes.
  *
- * **Every method returns a `Promise`, and that is what makes a Postgres adapter
- * possible.** `node:sqlite` is synchronous, so the first adapter could return
- * values directly. No network client can, so the ports are `Promise`-returning
- * and the SQLite adapter satisfies them with `async` methods that return the
- * same values without an internal `await`. The async shape is the contract; the
- * SQLite implementation is still one synchronous call per method.
+ * **Every method returns a `Promise`.** `node:sqlite` was synchronous, so the
+ * first adapter could return values directly; no network client can, so the
+ * ports are `Promise`-returning and the synchronous adapter satisfied them with
+ * `async` methods. The async shape is the contract, and it is what made the
+ * Postgres adapter possible.
  *
  * A consequence callers must respect: a store call is an interleaving point. Two
  * calls that used to be adjacent now have a tick between them, so a read
  * followed by a write is not a transaction. Where the answer must be decided
  * atomically, the adapter owns it inside one statement or one transaction
- * (guarded `UPDATE ... WHERE state = ...`, `BEGIN IMMEDIATE`), never the caller.
+ * (guarded `UPDATE ... WHERE state = ...`, a transaction-scoped advisory lock),
+ * never the caller.
  *
  * Drift is caught for free: every port is exercised by a real call site that
- * passes a `Store` (the reconciler, the control API entrypoint and the metrics
- * collector), so a signature mismatch fails `tsc`.
+ * passes a `StoreBackend` (the reconciler and the control API entrypoint), so a
+ * signature mismatch fails `tsc`.
  */
 
 /**
@@ -253,14 +253,8 @@ export interface FenceStore {
   listFencedSessions(): Promise<SessionRecord[]>;
 }
 
-/** Scrape-time SQLite collector. */
-export interface MetricsStore {
-  stats(): Promise<{ sizeBytes: number; walBytes: number }>;
-}
-
 /** The reconcile scheduler's own view: due selection plus the cleanup sweep. */
 interface SchedulerStore {
-  backupTo(path: string): Promise<void>;
   clearPod(id: string): Promise<void>;
   countDue(nowMs: number): Promise<number>;
   countLiveByState(): Promise<Partial<Record<SessionState, number>>>;

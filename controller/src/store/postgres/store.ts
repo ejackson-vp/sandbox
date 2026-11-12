@@ -1,11 +1,9 @@
 /**
  * The Postgres adapter behind the store ports.
  *
- * Structure mirrors `controller/src/store.ts`: one facade over repositories that
- * own one concern each. What is different is where the invariants come from.
- * SQLite leans on one connection serialising `BEGIN IMMEDIATE`; this adapter has
- * a pool, so every invariant has to be carried by the statement or by an
- * explicit lock:
+ * Structure is one facade over repositories that own one concern each. What
+ * matters is where the invariants come from. There is a pool, so every invariant
+ * has to be carried by the statement or by an explicit lock:
  *
  *   - transitions are conditional `UPDATE … RETURNING` (see `sessions.ts`,
  *     `operations.ts`);
@@ -21,16 +19,16 @@
 import { metrics } from "@x402s/shared/runtime";
 import {
   NON_TERMINAL_STATE_SQL,
+  type ChallengeBurnResult,
   type LedgerStatus,
   type PaymentRecord,
   type SessionRecord,
   type SessionState,
+  type StoreHealth,
+  type UnclaimedLedgerEntry,
 } from "../models.js";
 import { boundedFailureReason } from "../failure-reasons.js";
-import type { UnclaimedLedgerEntry } from "../ledger.js";
-import type { BudgetDecision, BudgetLimits } from "../budgets.js";
-import type { ChallengeBurnResult } from "../challenges.js";
-import type { StoreHealth } from "../health.js";
+import type { BudgetDecision, BudgetLimits } from "../budget-decision.js";
 import type { ReservationStore } from "../../capacity/reservation-store.js";
 import type { StoreBackend } from "../backend.js";
 import { migratePostgres } from "./schema.js";
@@ -132,25 +130,6 @@ export class PostgresStore implements StoreBackend {
 
   async healthCheck(): Promise<StoreHealth> {
     return checkPostgresHealth(this.conn, { writable: !this.conn.writesAreBlocked });
-  }
-
-  /** Database size. There is no WAL sidecar to size here. */
-  async stats(): Promise<{ sizeBytes: number; walBytes: number }> {
-    const res = await this.conn.query<{ bytes: number }>(
-      "SELECT pg_database_size(current_database()) AS bytes",
-    );
-    return { sizeBytes: Number(res.rows[0]?.bytes ?? 0), walBytes: 0 };
-  }
-
-  /**
-   * Out of scope for this adapter. `pg_dump` needs a child process, a key and a
-   * retention policy of its own (ADR 0010 names it as a follow-up), so writing a
-   * half-answer here would be worse than refusing.
-   */
-  async backupTo(_path: string): Promise<void> {
-    throw new Error(
-      "backupTo is not implemented for the postgres backend; use pg_dump (see docs/adr/0010)",
-    );
   }
 
   recoverInterruptedOperations(): Promise<{ requests: number; sessions: number }> {
@@ -359,8 +338,8 @@ export class PostgresStore implements StoreBackend {
     failure?: { code: string; message: string },
   ): Promise<boolean> {
     const changed = await this.sessions.requestTermination(id, reason, failure);
-    // Same bounded label as the SQLite adapter, so the metric is identical
-    // whichever backend is configured.
+    // Same bounded label as before, so the metric is identical whichever
+    // process emits it.
     if (changed && reason.startsWith("failure:")) {
       metrics
         .counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason")

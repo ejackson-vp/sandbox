@@ -1,5 +1,5 @@
 /**
- * Persistence models and row mappers. Kept independent of SQLite so the
+ * Persistence models and row mappers. Kept free of any SQL client so the
  * controller and tests can share the shapes.
  */
 import { DEFAULT_RUNTIME, type RuntimeName } from "@x402s/shared/runtimes";
@@ -8,9 +8,9 @@ import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared/pro
 export type { SessionState };
 
 /**
- * Readiness verdict shared by the SQLite and Postgres probes: the same three
- * questions in the same order. The probes keep their own SQL and reason
- * matching, so only the shape is shared.
+ * Readiness verdict for the store: the same three questions in the same order.
+ * The probe keeps its own SQL and reason matching, so only the shape is shared
+ * between the adapter and the readiness route.
  */
 export type StoreHealth =
   | { ok: true; schemaVersion: number }
@@ -166,6 +166,27 @@ export interface PaymentLedgerRecord {
   updatedAt: number;
 }
 
+/**
+ * A ledger row written for a settled payment that no session consumed (#31):
+ * unentitled or a duplicate charge. Shared by the refund and settlement-recovery
+ * ports, so the shape lives with the record it inserts rather than with an
+ * adapter.
+ */
+export interface UnclaimedLedgerEntry {
+  paymentKey: string;
+  sessionId: string;
+  payer: string | null;
+  amount: string;
+  asset: string;
+  network: string;
+  mode: "mock" | "testnet";
+  status: LedgerStatus;
+  reason: string;
+  /** Set when the row is written already refunded (a mock refund). */
+  refundTransaction?: string | null;
+  settlementNonce: string | null;
+}
+
 export interface PaymentIntentRecord {
   paymentKey: string;
   status: IntentStatus;
@@ -241,6 +262,26 @@ export type IntentClaimResult =
   | { status: "in_progress" }
   | { status: "failed"; reason: string | null }
   | { status: "mismatch" };
+
+/**
+ * Single-use challenge nonce outcome (F-07). Shared by the store port and the
+ * control API, which maps each status to a response.
+ */
+export type ChallengeBurnResult =
+  | { status: "burned" }
+  /** The same payment already burned this nonce: the retry/recovery path. */
+  | { status: "replay" }
+  | { status: "expired" }
+  | { status: "unknown" }
+  /** A different payment already burned this nonce. */
+  | { status: "reused" };
+
+export class ChallengeNonceCapacityError extends Error {
+  constructor(active: number, max: number) {
+    super(`challenge nonce table is full (${active}/${max}); refusing to issue`);
+    this.name = "ChallengeNonceCapacityError";
+  }
+}
 
 /**
  * Session states that still need reconcile work. The due query and the

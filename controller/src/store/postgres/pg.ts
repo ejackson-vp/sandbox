@@ -35,16 +35,30 @@ const types = {
 };
 
 /**
- * Advisory-lock keys. Session-scoped locks use the writer key; transaction
- * scoped locks use the others to serialise a read-then-write that the schema
- * alone cannot make atomic. They are arbitrary but stable: changing one is a
- * behaviour change, not a rename.
+ * Advisory-lock keys, scoped per database.
+ *
+ * Every lock is taken with the two-int form `(key, hashtext(current_database())::int)`.
+ * The first int is the stable constant below; the second is derived by the server
+ * from the current database name, so a store pointed at another database in the
+ * same cluster does not block this one. In production there is one database, so
+ * the second key is constant in practice; in tests it is what lets each database
+ * keep its own writer and its own admission locks while sharing a cluster.
+ *
+ * They are arbitrary but stable: changing one is a behaviour change, not a
+ * rename.
  */
 const WRITER_LOCK_KEY = 8_402_001;
 /** Durable create budget: the concurrency caps are counted, not enforced by a row. */
 export const BUDGET_LOCK_KEY = 8_402_002;
 /** Capacity admission: the snapshot and the insert must agree. */
 export const CAPACITY_LOCK_KEY = 8_402_003;
+
+/**
+ * The second key of every advisory lock. `hashtext` is the server's own string
+ * hash; two databases can collide in it, which only makes them share a lock they
+ * did not need to share, never the reverse.
+ */
+const DATABASE_SCOPE = "hashtext(current_database())::int";
 
 export class WriterLockUnavailableError extends Error {
   constructor(message: string) {
@@ -63,7 +77,7 @@ export interface Querier {
 
 export interface Tx extends Querier {
   /** Take a transaction-scoped advisory lock; held until COMMIT/ROLLBACK. */
-  serialise(key: number | string): Promise<void>;
+  serialise(key: number): Promise<void>;
 }
 
 export class PgConnection implements Querier {
@@ -116,8 +130,8 @@ export class PgConnection implements Querier {
     const tx: Tx = {
       query: <R extends QueryResultRow = Record<string, unknown>>(text: string, values?: unknown[]) =>
         client.query<R>(text, values),
-      serialise: async (key: number | string) => {
-        await client.query("SELECT pg_advisory_xact_lock($1)", [key]);
+      serialise: async (key: number) => {
+        await client.query(`SELECT pg_advisory_xact_lock($1, ${DATABASE_SCOPE})`, [key]);
       },
     };
     try {
@@ -145,7 +159,7 @@ export class PgConnection implements Querier {
     const client = await this.pool.connect();
     try {
       const res = await client.query<{ ok: boolean }>(
-        "SELECT pg_try_advisory_lock($1) AS ok",
+        `SELECT pg_try_advisory_lock($1, ${DATABASE_SCOPE}) AS ok`,
         [WRITER_LOCK_KEY],
       );
       if (res.rows[0]?.ok !== true) {
@@ -179,7 +193,7 @@ export class PgConnection implements Querier {
     this.lockClient = null;
     if (!client) return;
     try {
-      await client.query("SELECT pg_advisory_unlock($1)", [WRITER_LOCK_KEY]);
+      await client.query(`SELECT pg_advisory_unlock($1, ${DATABASE_SCOPE})`, [WRITER_LOCK_KEY]);
     } catch {
       // The connection died, and the session lock died with it. There is nothing
       // left to unlock, and refusing to close would only strand the pool.
@@ -217,10 +231,14 @@ export class RolledBack<T = unknown> extends Error {
 }
 
 /**
- * A stable signed 64-bit key for `pg_advisory_xact_lock`, derived from a
- * string. Used to serialise two creates that claim the same client key pair.
+ * A stable signed 32-bit key for `pg_advisory_xact_lock`, derived from a string.
+ * Used to serialise two creates that claim the same client key pair.
+ *
+ * 32 bits because the lock is taken in the two-int form, whose first key is
+ * `int4`. A collision over-serialises two unrelated creates for the length of one
+ * transaction; it cannot let two creates for the same pair both through.
  */
-export function advisoryKey(scope: string, value: string): string {
+export function advisoryKey(scope: string, value: string): number {
   const digest = createHash("sha256").update(`${scope}:${value}`).digest();
-  return BigInt.asIntN(64, digest.readBigUInt64BE(0)).toString();
+  return digest.readInt32BE(0);
 }

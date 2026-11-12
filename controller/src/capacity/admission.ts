@@ -1,5 +1,5 @@
 /**
- * Pure capacity admission. No network, no Kubernetes, no SQLite, no clock.
+ * Pure capacity admission. No network, no Kubernetes, no database, no clock.
  */
 import {
   fitsWithin,

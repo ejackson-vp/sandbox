@@ -4,18 +4,17 @@
  * Burn is a conditional UPDATE with `RETURNING`, so the row decides the winner
  * and the loser re-reads to distinguish "the same payment retrying" (replay)
  * from "a different payment reusing the nonce" (reused). That is the same
- * answer SQLite returns from its serialised read-then-write.
+ * answer the previous single-connection adapter returned from its serialised
+ * read-then-write.
  *
- * `issue` is the one place the two adapters can differ under load. The hard cap
- * on active rows is enforced by counting, and under `READ COMMITTED` two
- * concurrent issues can both see a count below the cap. The overshoot is bounded
+ * `issue` enforces the hard cap on active rows by counting, and under
+ * `READ COMMITTED` two concurrent issues can both see a count below the cap. The
  * by the number of in-flight issuers (single digits here), and the cap is a
  * write-amplification bound rather than a correctness invariant, so the trade is
  * deliberate: taking a global lock on an unauthenticated 402 path would let a
  * client stall every other challenge.
  */
-import type { ChallengeBurnResult } from "../challenges.js";
-import { ChallengeNonceCapacityError } from "../challenges.js";
+import { ChallengeNonceCapacityError, type ChallengeBurnResult } from "../models.js";
 import type { PgConnection } from "./pg.js";
 
 interface NonceRow {

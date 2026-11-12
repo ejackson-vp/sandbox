@@ -5,7 +5,7 @@
  * counter are process memory. Running either with more than one replica is only
  * correct if every replica, and the controller, can compute the same owner for
  * a session from the session id alone: there is no shared counter store, and
- * putting one in front of the control plane's SQLite writer would make egress
+ * putting one in front of the control plane's store would make egress
  * depend on control-plane availability.
  *
  * So placement is a pure function of the id. sha256 is used rather than a cheap

@@ -28,8 +28,7 @@
     "test:portable": "vitest run tests/transfers tests/workloads tests/compatibility --fileParallelism",
     "test:coverage": "vitest run tests/unit tests/property --coverage --fileParallelism",
     "lint:structure": "node scripts/check-structure.mjs && node scripts/check-singletons.mjs",
-    "coupling": "node scripts/coupling.mjs",
-    "bench:ceiling": "tsx scripts/bench-reconcile-ceiling.ts"
+    "coupling": "node scripts/coupling.mjs"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

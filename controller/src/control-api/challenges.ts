@@ -10,7 +10,7 @@
  */
 import { randomBytes } from "node:crypto";
 import type { Express, Request, Response } from "express";
-import { ChallengeNonceCapacityError } from "../store/challenges.js";
+import { ChallengeNonceCapacityError } from "../store/models.js";
 import { burnChallengeNonceSchema } from "../control-api-schemas.js";
 import type { ControlApiDeps } from "./types.js";
 
