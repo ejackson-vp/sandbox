@@ -89,11 +89,13 @@ a prerequisite that is not ready leaves the session where it is.
 
 - One active foreground operation per sandbox. A second concurrent request gets
   `409 busy` (the SDK can queue with `queueMs`).
-- `requestId` is the idempotency key, bound to the sealed envelope: retrying with
-  the same id and the same envelope returns the cached result instead of running
-  the command again, while reusing the id for a different envelope is refused
-  with `409 idempotency_key_reused`. The controller stores a SHA-256 of the
-  envelope on the `exec_requests` row (schema v16) and never sees inside it.
+- `requestId` is the idempotency key, bound to the operation: the client sends a
+  SHA-256 of the canonical operation plaintext, so retrying with the same id and
+  operation returns the cached result even though the envelope was re-sealed,
+  while reusing the id for a different operation is refused with `409
+  idempotency_key_reused`. Without the client hash the controller hashes the
+  ciphertext instead (schema v16, `exec_requests.payload_hash`) and a re-sealed
+  retry is treated as a different payload.
 - Results are cached at the relay for 5 minutes so a client can reconnect with
   `GET /v1/sessions/{id}/requests/{requestId}` after a disconnect.
 - `DELETE /v1/sessions/{id}/requests/{requestId}` cancels the running command;

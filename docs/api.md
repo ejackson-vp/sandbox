@@ -171,10 +171,17 @@ X-Sandbox-Capability: …
 {
   "requestId": "8f7c…",      // 8–128 chars, idempotency key
   "envelope": "<base64 sealed box>",
+  "payloadHash": "9d2e…",    // optional, sha256 of the canonical operation
   "timeoutMs": 30000,        // optional, hints the server's wait
   "waitMs": 40000            // optional, how long the API should wait
 }
 ```
+
+`payloadHash` binds the idempotency key to the operation rather than to the
+ciphertext. Sealing is non-deterministic, so without it a re-sealed retry of the
+same operation looks like a different payload. The SDK computes it as
+`sha256(canonical JSON of the operation object)`, which includes `requestId`.
+When omitted, the controller falls back to hashing the envelope.
 
 `200 OK`:
 
@@ -187,8 +194,8 @@ X-Sandbox-Capability: …
 
 `409 busy` — another operation is in flight (one active foreground operation per
 sandbox; the SDK can queue). `409 session_not_usable`, `409
-idempotency_key_reused` (the `requestId` was already used with a different
-envelope, so it is neither replayed nor executed), `410 lease_expired`.
+idempotency_key_reused` (the `requestId` was already used for a different
+operation, so it is neither replayed nor executed), `410 lease_expired`.
 
 ### Envelope contents (client-side)
 
@@ -245,6 +252,11 @@ POST /v1/sessions/{id}/operations
 ```http
 GET /v1/sessions/{id}/operations?request=<url-encoded envelope>&requestId=<id>
 ```
+
+An optional `&payloadHash=<64 lowercase hex>` carries the same canonical
+operation hash as the POST body. A malformed value is `400
+invalid_payload_hash`; omit it and the controller falls back to hashing the
+envelope.
 
 The envelope contains one of:
 

@@ -283,7 +283,14 @@ export class ControllerClient {
 
   async operation(
     sessionId: string,
-    body: { requestId: string; envelope: string; op?: string; waitMs?: number },
+    body: {
+      requestId: string;
+      envelope: string;
+      op?: string;
+      waitMs?: number;
+      /** Client-computed canonical operation hash; see `operationSchema`. */
+      payloadHash?: string;
+    },
   ): Promise<OperationResult> {
     const res = await this.raw(`/internal/sessions/${encodeURIComponent(sessionId)}/operations`, {
       method: "POST",

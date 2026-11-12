@@ -133,10 +133,14 @@ the container registry.
 ### Security
 
 - Operation idempotency keys are bound to the request payload (schema v16,
-  `exec_requests.payload_hash`). Reusing a `requestId` with a different sealed
-  envelope is refused with `409 idempotency_key_reused` instead of returning the
-  first operation's cached result; a same-envelope retry still replays. Rows
-  written before v16 keep a null hash and accept any duplicate.
+  `exec_requests.payload_hash`). The operation request accepts an optional
+  `payloadHash`, the SHA-256 of the canonical operation plaintext (the SDK sends
+  it on both the POST body and the GET query); reusing a `requestId` for a
+  different operation is refused with `409 idempotency_key_reused` instead of
+  returning the first operation's cached result. A same-operation retry still
+  replays even when the envelope was re-sealed. A client that sends no hash keeps
+  the ciphertext binding, and rows written before v16 keep a null hash and accept
+  any duplicate.
 
 ### Changed
 

@@ -93,10 +93,13 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     // refuses in one transaction rather than on a stale snapshot.
     //
     // `requestId` is the idempotency key, so it has to travel with the payload
-    // it was first used for. The hash is of the sealed envelope exactly as it
-    // arrived; the controller never sees inside it, and two different
-    // operations never share one.
-    const payloadHash = createHash("sha256").update(envelope).digest("hex");
+    // it was first used for. Prefer the client's hash of the canonical
+    // operation plaintext: sealing is non-deterministic, so hashing the
+    // ciphertext would turn a re-sealed retry of the same operation into a
+    // mismatch. The ciphertext hash stays as the fallback for clients that do
+    // not send one. Neither value is trusted for anything but idempotency.
+    const payloadHash =
+      parsed.data.payloadHash ?? createHash("sha256").update(envelope).digest("hex");
     const claim = await store.claimOperation(id, requestId, op ?? "operation", payloadHash);
     if (!claim.ok) {
       if (claim.code === "idempotency_key_reused") {

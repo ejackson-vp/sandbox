@@ -4,9 +4,11 @@
  * this; the public facade composes them.
  */
 import {
+  canonicalJson,
   fromBase64,
   openSealedJson,
   sealJsonTo,
+  sha256Hex,
   toBase64,
   verifyAttestation,
 } from "@x402s/shared/crypto";
@@ -219,6 +221,12 @@ export class ClientRuntime {
     signal?: AbortSignal,
   ): Promise<T> {
     if (!handle.guestPublicKey) await this.waitForReady(handle);
+    // The envelope is re-sealed (fresh randomness) if the caller retries the
+    // logical operation, so the idempotency key is bound to the canonical
+    // plaintext instead. The operation carries `requestId`, so two different
+    // requests never share a hash. Computed once per call and reused on every
+    // retry inside the loop below.
+    const payloadHash = sha256Hex(canonicalJson(operation));
     const envelope = await sealJsonTo(handle.guestPublicKey!, operation);
     const waitMs = Math.min(120_000, (timeoutMs ?? 60_000) + 10_000);
     const queueDeadline = Date.now() + queueMs;
@@ -229,7 +237,7 @@ export class ClientRuntime {
         {
           method: "POST",
           headers: this.auth(handle),
-          body: JSON.stringify({ requestId, envelope, timeoutMs, waitMs }),
+          body: JSON.stringify({ requestId, envelope, payloadHash, timeoutMs, waitMs }),
         },
         waitMs + 30_000,
         signal,
@@ -282,11 +290,14 @@ export class ClientRuntime {
     queueMs: number,
   ): Promise<T> {
     if (!handle.guestPublicKey) await this.waitForReady(handle);
+    // Same binding as `run`: hash the canonical plaintext, not the ciphertext,
+    // which changes on every seal.
+    const payloadHash = sha256Hex(canonicalJson(operation));
     const envelope = await sealJsonTo(handle.guestPublicKey!, operation);
     const queueDeadline = Date.now() + queueMs;
     for (;;) {
       const res = await this.api(
-        `/v1/sessions/${handle.sessionId}/operations?request=${encodeURIComponent(envelope)}&requestId=${encodeURIComponent(operation.requestId)}&waitMs=60000`,
+        `/v1/sessions/${handle.sessionId}/operations?request=${encodeURIComponent(envelope)}&requestId=${encodeURIComponent(operation.requestId)}&payloadHash=${payloadHash}&waitMs=60000`,
         { headers: this.auth(handle) },
         120_000,
       );
