@@ -26,7 +26,8 @@ import {
 } from "../../controller/src/store.js";
 import { RefundService } from "../../controller/src/refunds.js";
 import { RefundWorker, type RefundExecutor } from "../../controller/src/refund-worker.js";
-import { SettlementRecovery, type SettlementLookup } from "../../controller/src/settlement-recovery.js";
+import { SettlementRecovery } from "../../controller/src/settlement-recovery.js";
+import type { SettlementLookup } from "../../shared/src/entries/runtime.js";
 
 const NOW = Date.now();
 const PAYER = "0x00000000000000000000000000000000000000aa";

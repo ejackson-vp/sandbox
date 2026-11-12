@@ -21,6 +21,7 @@ import {
   paymentKey,
 } from "../../shared/src/entries/payment.js";
 import { TokenBucket } from "../../shared/src/entries/runtime.js";
+import type { SettlementLookup } from "../../shared/src/entries/runtime.js";
 import { createSessionHandler } from "../../api/src/routes/create-session.js";
 
 export const CHALLENGE_NONCE = `cn_${"a".repeat(32)}`;
@@ -87,10 +88,12 @@ export interface CreateResult {
 /**
  * Post a paid create with a valid header and commitment. `patch` runs before
  * the handler is built so a test can change one controller answer or one body
- * field without rebuilding the harness.
+ * field without rebuilding the harness. `opts.settlementLookup` replaces the
+ * inert default when a test exercises the recovery path.
  */
 export async function postCreate(
   patch: (ctx: { controller: ControllerStub; body: Record<string, unknown> }) => void = () => undefined,
+  opts: { settlementLookup?: SettlementLookup } = {},
 ): Promise<CreateResult> {
   const account = privateKeyToAccount(generatePrivateKey());
   const controller = admittingController();
@@ -159,7 +162,7 @@ export async function postCreate(
     },
     controller,
     resourceServer: {},
-    settlementLookup: { supported: false, lookup: async () => null },
+    settlementLookup: opts.settlementLookup ?? { supported: false, lookup: async () => null },
     requirementFor: async () => REQUIREMENT,
     payment402,
     capabilityFor: () => "capability",

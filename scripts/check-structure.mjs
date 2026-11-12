@@ -60,7 +60,7 @@ if (offenders.length > 0) {
  *   0 pure     types, decisions, env parsing. No I/O, no node builtins.
  *   1 crypto   node:crypto, libsodium-wrappers.
  *   2 payment  x402 schemes and the tier table on top of crypto.
- *   3 runtime  listeners, metrics, logs, rate limits.
+ *   3 runtime  listeners, metrics, logs, rate limits, settlement lookup.
  *
  * Two edges are forbidden even though the order would allow them: runtime must
  * not reach crypto or payment. A process that only serves metrics or writes
@@ -107,6 +107,7 @@ const SHARED_LAYERS = [
         "request-metrics.ts",
         "rate-limit.ts",
         "readiness.ts",
+        "settlement.ts",
       ].includes(rel),
   },
 ];
