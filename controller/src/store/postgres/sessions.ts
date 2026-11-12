@@ -2,9 +2,9 @@
  * Session rows and their guarded transitions, for Postgres.
  *
  * Every method here is either a read or a single conditional write. The
- * transitions that the SQLite adapter gets away with by holding one serialised
- * `BEGIN IMMEDIATE` are `UPDATE … WHERE state IN (…) RETURNING state` here, so
- * the guard is evaluated by the server against the committed row. The only
+ * transitions the previous single-connection adapter got away with by holding one
+ * serialised transaction are `UPDATE … WHERE state IN (…) RETURNING state` here,
+ * so the guard is evaluated by the server against the committed row. The only
  * read-then-write left is `finalizeTermination`, and it takes an explicit
  * `SELECT … FOR UPDATE` row lock to keep that pair atomic.
  */
@@ -264,7 +264,7 @@ export class PgSessionRepository {
    * TERMINATING -> the terminal state the reason implies.
    *
    * The terminal state is derived in TypeScript from the same
-   * `finalStateForReason` the SQLite adapter uses, so the policy stays in one
+   * `finalStateForReason` helper, so the policy stays in one
    * place. `SELECT … FOR UPDATE` is what makes the read-then-write correct under
    * `READ COMMITTED`: a second finalizer blocks on the row, re-reads the
    * committed state, and returns null instead of overwriting.

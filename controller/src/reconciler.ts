@@ -27,7 +27,6 @@ import { Termination } from "./termination.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import { NoopSnapshotter, type Snapshotter } from "./snapshotter.js";
 import { CapacityService } from "./capacity/service.js";
-import { BackupService } from "./backup.js";
 import { RefundService } from "./refunds.js";
 import { HttpRefundExecutor, RefundWorker } from "./refund-worker.js";
 import { SettlementRecovery } from "./settlement-recovery.js";
@@ -82,7 +81,6 @@ export class Reconciler {
   private readonly provisioning: Provisioning;
   private readonly lifecycle: Lifecycle;
   private readonly termination: Termination;
-  private readonly backup: BackupService;
   private readonly fence: OperationFence;
   private readonly clock: ClockGuard;
   private readonly refundWorker: RefundWorker;
@@ -125,14 +123,6 @@ export class Reconciler {
     this.provisioning = new Provisioning(this.ctx, this.warm);
     this.lifecycle = new Lifecycle(this.ctx, this.provisioning);
     this.termination = new Termination(this.ctx);
-    this.backup = new BackupService({
-      store: deps.store,
-      dir: deps.cfg.backupDir,
-      key: deps.cfg.backupKey,
-      intervalMs: deps.cfg.backupIntervalMs,
-      retention: deps.cfg.backupRetention,
-      now: () => this.now(),
-    });
     this.fence = deps.fence ?? new OperationFence(deps.store, deps.relay);
     // Both are inert unless configured: recovery needs a facilitator that
     // exposes a settlement lookup, and the worker needs an operator-owned
@@ -430,7 +420,6 @@ export class Reconciler {
       // enforces the bound, this just keeps the table small.
       await this.deps.store.pruneChallengeNonces();
       await this.ctx.capacity.reap();
-      await this.backup.maybeRun();
     } catch (err) {
       log.warn("housekeeping_failed", { error: (err as Error).message });
     } finally {

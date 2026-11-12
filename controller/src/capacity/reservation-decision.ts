@@ -1,5 +1,5 @@
 /**
- * Admission of one reservation, shared by the SQLite and Postgres adapters.
+ * Admission of one reservation: the decision the reservation adapter persists.
  *
  * Pure: no SQL, no clock, no I/O. The adapter reads the row stored for this
  * identity, hands it here with `now`, and persists what comes back. Which

@@ -1,11 +1,10 @@
 /**
- * The durable create-budget decision, shared by the SQLite and Postgres
- * adapters (#48).
+ * The durable create-budget decision (#48).
  *
  * Pure: no SQL, no clock, no I/O. The adapter reads the rows it needs, hands
  * them here with `now`, then persists the outcome. The refusal codes, the order
- * they are checked in (global before payer) and the remaining-budget arithmetic
- * therefore exist once instead of once per adapter.
+ * they are checked in (global before payer), the remaining-budget arithmetic and
+ * the row keys therefore live in one place, not in each adapter.
  *
  * The payer half of the snapshot is allowed to be absent because of read order:
  * a create refused on the global budget must not create or roll a payer row, so
@@ -13,6 +12,17 @@
  * that admits. Calling again with the payer half filled in is the same decision
  * the single call would have made.
  */
+
+/** The constant key of the global budget row. */
+export const GLOBAL_BUDGET_KEY = "global";
+
+/**
+ * The row key for one payer. Lower-cased so two spellings of the same address
+ * share a budget, and prefixed so a payer can never collide with `global`.
+ */
+export function payerBudgetKey(payer: string): string {
+  return `payer:${payer.toLowerCase()}`;
+}
 
 export interface BudgetLimits {
   windowMs: number;

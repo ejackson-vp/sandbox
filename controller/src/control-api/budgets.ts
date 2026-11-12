@@ -9,7 +9,7 @@
 import type { Express, Request, Response } from "express";
 import { metrics } from "@x402s/shared/runtime";
 import { budgetReserveSchema } from "../control-api-schemas.js";
-import type { BudgetLimits } from "../store/budgets.js";
+import type { BudgetLimits } from "../store/budget-decision.js";
 import type { ControlApiDeps } from "./types.js";
 
 function budgetLimitsFrom(cfg: ControlApiDeps["cfg"]): BudgetLimits {

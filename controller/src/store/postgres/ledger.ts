@@ -4,11 +4,17 @@
  * Every state change is a conditional UPDATE, so two refund workers cannot both
  * move the same row: the loser matches zero rows and treats it as "someone else
  * already did this". `insertUnclaimed` is `ON CONFLICT DO NOTHING` for the same
- * reason SQLite uses `INSERT OR IGNORE`: a concurrent recovery or a manual
- * refund wins and the second write is a no-op rather than an error.
+ * reason: a concurrent recovery or a manual refund wins and the second write is
+ * a no-op rather than an error.
  */
-import { mapIntent, mapLedger, type LedgerStatus, type PaymentIntentRecord, type PaymentLedgerRecord } from "../models.js";
-import type { UnclaimedLedgerEntry } from "../ledger.js";
+import {
+  mapIntent,
+  mapLedger,
+  type LedgerStatus,
+  type PaymentIntentRecord,
+  type PaymentLedgerRecord,
+  type UnclaimedLedgerEntry,
+} from "../models.js";
 import type { PgConnection } from "./pg.js";
 
 export class PgLedgerRepository {

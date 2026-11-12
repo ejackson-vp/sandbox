@@ -1,14 +1,13 @@
 /**
- * Readiness for the Postgres adapter.
+ * Readiness for the store.
  *
- * Same three questions the SQLite probe asks, in the same order, so a probe
- * result means the same thing whichever backend is configured: is the schema
+ * Three questions, in order, so a probe result means one thing: is the schema
  * current, is this process the writer, and does the server accept a write. The
  * write probe is a no-op UPDATE, not a `SELECT`, because a read-only replica
  * answers a `SELECT` happily and only rejects the write.
  */
 import type { StoreHealth } from "../models.js";
-import { SCHEMA_VERSION } from "../schema.js";
+import { SCHEMA_VERSION } from "../schema-version.js";
 import type { PgConnection } from "./pg.js";
 
 const WRITE_PROBE = "UPDATE payments SET payment_key = payment_key WHERE false";

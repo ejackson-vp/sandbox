@@ -42,17 +42,12 @@ export interface ControllerConfig {
   wakeToken: string;
   controllerUrl: string;
   proxyTokenSecret: string;
-  dbPath: string;
-  /** Which adapter backs the store ports: `sqlite` (default) or `postgres` (ADR 0010). */
-  storeBackend: "sqlite" | "postgres";
-  /** Required when `storeBackend` is postgres; parsed by `parseStoreSelection`. */
-  databaseUrl: string | null;
-  /** Empty disables scheduled backups. */
-  backupDir: string;
-  backupIntervalMs: number;
-  backupRetention: number;
-  /** Required when backupDir is set; null when backups are disabled. */
-  backupKey: Buffer | null;
+  /**
+   * Postgres connection string. Required: Postgres is the only store backend
+   * (ADR 0010 shipped, SQLite removed), so a controller without this refuses to
+   * start.
+   */
+  databaseUrl: string;
   sandboxNamespace: string;
   controlNamespace: string;
   guestImageDigest: string;
