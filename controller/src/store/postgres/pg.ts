@@ -35,6 +35,19 @@ const types = {
 };
 
 /**
+ * Timeout for one read-only audit statement.
+ *
+ * The audit runs inside `/metrics`, whose scrape timeout is 10 s
+ * (`deploy/monitoring/contract/prometheus-scrape.yaml`). Two statements at 2 s
+ * each leave the scrape handler well inside that budget even when the database
+ * is slow rather than down.
+ */
+export const READ_ONLY_QUERY_TIMEOUT_MS = 2_000;
+
+/** How long the audit pool may spend establishing a connection. */
+const READ_ONLY_CONNECT_TIMEOUT_MS = 1_000;
+
+/**
  * Advisory-lock keys, scoped per database.
  *
  * Every lock is taken with the two-int form `(key, hashtext(current_database())::int)`.
@@ -82,12 +95,17 @@ export interface Tx extends Querier {
 
 export class PgConnection implements Querier {
   readonly pool: Pool;
+  /** Dedicated to the scrape-time audit; see `queryReadOnly`. */
+  private auditPool: Pool | null = null;
   /** Dedicated connection that holds the session advisory lock. */
   private lockClient: PoolClient | null = null;
   private writable = false;
   private closed = false;
 
-  constructor(url: string, options: { max?: number } = {}) {
+  constructor(
+    private readonly url: string,
+    options: { max?: number } = {},
+  ) {
     this.pool = new pg.Pool({ connectionString: url, types, max: options.max ?? 10 });
     // A pool-level error is a connection that died while idle. It must not take
     // the process down, but it is worth surfacing: the next write will retry on
@@ -202,6 +220,60 @@ export class PgConnection implements Querier {
     }
   }
 
+  /**
+   * Run one read-only statement on a pool the audit owns.
+   *
+   * The audit is called from `/metrics`, so it must never queue behind, or
+   * starve, the ten connections the control API and the reconciler share. This
+   * pool has one connection, a server-side `statement_timeout` and a client-side
+   * timer, and a timed-out connection is destroyed rather than returned to the
+   * pool still waiting for an answer. A slow database therefore costs one
+   * audit connection and leaves the writer pool untouched.
+   *
+   * Read-only is structural, not a convention: the pool is opened with
+   * `default_transaction_read_only=on`, so a write sent here is refused by the
+   * server. There is no `write` guard to bypass.
+   */
+  async queryReadOnly<R extends QueryResultRow = Record<string, unknown>>(
+    text: string,
+    values: unknown[] = [],
+    timeoutMs: number = READ_ONLY_QUERY_TIMEOUT_MS,
+  ): Promise<QueryResult<R>> {
+    const client = await this.readOnlyPool().connect();
+    let destroyed = false;
+    const timer = setTimeout(() => {
+      destroyed = true;
+      // release(error) closes the socket: a client that is still waiting on a
+      // server answer must not be handed to the next caller.
+      client.release(new Error("read-only query timed out"));
+    }, timeoutMs);
+    timer.unref?.();
+    try {
+      return await client.query<R>(text, values);
+    } finally {
+      clearTimeout(timer);
+      if (!destroyed) client.release();
+    }
+  }
+
+  private readOnlyPool(): Pool {
+    this.auditPool ??= new pg.Pool({
+      connectionString: this.url,
+      types,
+      max: 1,
+      connectionTimeoutMillis: READ_ONLY_CONNECT_TIMEOUT_MS,
+      statement_timeout: READ_ONLY_QUERY_TIMEOUT_MS,
+      // Structural read-only: even a future caller that points a write at this
+      // method is refused by the server, not just by code review.
+      options: "-c default_transaction_read_only=on",
+      application_name: "sandbox-ledger-audit",
+    });
+    // An idle audit connection dying must not take the process down; the next
+    // scrape opens another one.
+    this.auditPool.on("error", () => {});
+    return this.auditPool;
+  }
+
   assertWritable(): void {
     if (this.writable) return;
     throw new WriterLockUnavailableError(
@@ -214,6 +286,7 @@ export class PgConnection implements Querier {
     this.closed = true;
     await this.releaseWriterLock();
     await this.pool.end();
+    if (this.auditPool) await this.auditPool.end();
   }
 }
 

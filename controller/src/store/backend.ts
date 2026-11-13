@@ -11,7 +11,7 @@
  * each declared by more than one consumer, and an interface cannot extend two
  * sources that both declare a member.
  */
-import type { ControlApiStore, ReconcilerStore } from "./ports.js";
+import type { ControlApiStore, LedgerAuditStore, ReconcilerStore } from "./ports.js";
 
 interface StoreBackendProcess {
   /** True when this process is deliberately not the writer. */
@@ -28,4 +28,5 @@ interface StoreBackendProcess {
   close(): Promise<void>;
 }
 
-export type StoreBackend = ReconcilerStore & ControlApiStore & StoreBackendProcess;
+export type StoreBackend =
+  ReconcilerStore & ControlApiStore & LedgerAuditStore & StoreBackendProcess;

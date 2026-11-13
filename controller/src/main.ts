@@ -16,6 +16,7 @@ import { createControlApi } from "./control-api.js";
 import { createRelay, notifyControllerReady, type RelayServer } from "./relay.js";
 import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
+import { createLedgerAuditCollector } from "./ledger-audit-collector.js";
 import { OperationFence } from "./operation-fence.js";
 import { CapacityService } from "./capacity/service.js";
 import { bindLeadership, SoloLeadership, type Leadership } from "./leadership.js";
@@ -130,6 +131,12 @@ async function main(): Promise<void> {
     ? makeLeaseLeadership(cfg)
     : new SoloLeadership(cfg.leaderIdentity);
   const store: StoreBackend = await openStore(cfg, { writer: leadership.isLeader() });
+  // Scrape-time, not a timer: the audit costs one read per scrape, and a
+  // standby may run it because it only reads. The collector registers its three
+  // families itself, so only the controller exports them; a relay or proxy pod
+  // never shows an uncollected zero that could sum into a clean answer.
+  const ledgerAudit = createLedgerAuditCollector({ store });
+  collectors.push(() => ledgerAudit.collect());
   log.info("leadership_mode", {
     mode: leadership.mode,
     identity: leadership.identity,

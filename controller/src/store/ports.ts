@@ -16,6 +16,7 @@ import type {
 import type { ReservationStore } from "../capacity/reservation-store.js";
 import type { ClaimToken } from "@x402s/shared/durable";
 import type { BudgetDecision, BudgetLimits } from "./budget-decision.js";
+import type { LedgerAuditLimits, LedgerAuditSnapshot } from "../ledger-audit.js";
 
 /**
  * Narrow store surfaces, one per consumer.
@@ -172,6 +173,17 @@ export interface RefundWorkerStore {
     error: string,
     nextAttemptAt: number,
   ): Promise<boolean>;
+}
+
+/**
+ * The ledger audit: one read-only snapshot per metrics scrape.
+ *
+ * Deliberately its own port rather than a method on a money port: nothing that
+ * moves money may depend on the audit, and the audit may not write. A standby
+ * (writes blocked) satisfies this port like any reader.
+ */
+export interface LedgerAuditStore {
+  readLedgerAudit(nowMs: number, limits: LedgerAuditLimits): Promise<LedgerAuditSnapshot>;
 }
 
 /** Settlement recovery for the settle-then-crash window (#31). */
