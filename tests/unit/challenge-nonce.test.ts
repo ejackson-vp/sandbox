@@ -9,7 +9,7 @@
  *    holds capacity, claims the intent or settles anything.
  *
  * The end-to-end handshake (a real wallet signature over the nonce) is covered
- * by tests/integration/api-flow.test.ts, which CI runs.
+ * by tests/integration/api-payments.test.ts, which CI runs.
  */
 import { describe, expect, it } from "vitest";
 import { ChallengeNonceCapacityError } from "../../controller/src/store/models.js";
