@@ -16,7 +16,7 @@ import { createControlApi } from "./control-api.js";
 import { createRelay, notifyControllerReady, type RelayServer } from "./relay.js";
 import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
-import { createLedgerAuditCollector } from "./ledger-audit-collector.js";
+import { createLedgerAuditSampler } from "./ledger-audit-sampler.js";
 import { OperationFence } from "./operation-fence.js";
 import { CapacityService } from "./capacity/service.js";
 import { bindLeadership, SoloLeadership, type Leadership } from "./leadership.js";
@@ -131,11 +131,18 @@ async function main(): Promise<void> {
     ? makeLeaseLeadership(cfg)
     : new SoloLeadership(cfg.leaderIdentity);
   const store: StoreBackend = await openStore(cfg, { writer: leadership.isLeader() });
-  // Scrape-time, not a timer: the audit costs one read per scrape, and a
-  // standby may run it because it only reads. The collector registers its three
-  // families itself, so only the controller exports them; a relay or proxy pod
-  // never shows an uncollected zero that could sum into a clean answer.
-  const ledgerAudit = createLedgerAuditCollector({ store });
+  // Periodic, not a scrape-time read: the audit scans `payment_intents`, which
+  // cost about 1.3 s per scrape at 10M intents on every replica. The sampler
+  // reads on its own timer and the scrape renders the last sample plus its age,
+  // so scrape latency no longer grows with the ledger. A standby may sample
+  // because it only reads. The sampler registers its families itself, so only
+  // the controller exports them; a relay or proxy pod never shows an uncollected
+  // zero that could sum into a clean answer.
+  const ledgerAudit = createLedgerAuditSampler({
+    store,
+    intervalMs: cfg.ledgerAuditIntervalMs,
+  });
+  ledgerAudit.start();
   collectors.push(() => ledgerAudit.collect());
   log.info("leadership_mode", {
     mode: leadership.mode,
@@ -300,6 +307,7 @@ async function main(): Promise<void> {
   installShutdown(async () => {
     // Order: stop scheduling, refuse writes, then hand the lease over.
     reconciler.stop();
+    ledgerAudit.stop();
     await store.setWritesBlocked(true);
     await leadership.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -2,7 +2,7 @@
  * The ledger audit: do the books agree with the payment intents?
  *
  * Pure: no SQL, no clock, no I/O. The adapter reads one read-only snapshot,
- * hands it here with `now`, and the scrape path publishes the counts as gauges.
+ * hands it here with `now`, and the sampler publishes the counts as gauges.
  *
  * Three code paths move money, and each is correct on its own: the settlement
  * transaction (`completeEntitlement`), the refund worker's claim protocol, and
@@ -10,7 +10,7 @@
  * settled intent with no ledger row, or a ledger row that claims service was
  * delivered for an intent that failed, stayed invisible until a human
  * reconciled a spreadsheet. This module is that comparison, as a total
- * function over a bounded snapshot.
+ * function over one read-only snapshot.
  *
  * The rules are deliberately narrow. A divergence is something the three
  * writers themselves should have made impossible, not a style opinion:
@@ -42,7 +42,7 @@ import type { IntentStatus, LedgerStatus } from "./store/models.js";
 
 /**
  * The closed set of divergence labels. Every member is a gauge sample on every
- * scrape, including zero, so an alert on a reason does not depend on the reason
+ * pass, including zero, so an alert on a reason does not depend on the reason
  * having ever fired.
  */
 export const LEDGER_DIVERGENCE_REASONS = [
@@ -110,16 +110,16 @@ export interface LedgerAuditLimits {
    * allowed to be late.
    */
   sessionGraceMs: number;
-  /**
-   * Rows read per source. The audit is a probe, not a full-table
-   * reconciliation: a snapshot at the cap reports a floor, not a total.
-   */
-  maxRows: number;
 }
 
+/**
+ * The grace period only. There is no row cap: the reads return exactly the rows
+ * that can be findings, so a cap would report a floor on the one number the
+ * gauge exists for. The cost of the pass is the scan, which a `LIMIT` never
+ * bounded anyway, and the pass now runs on a timer instead of inside a scrape.
+ */
 export const DEFAULT_LEDGER_AUDIT_LIMITS: LedgerAuditLimits = {
   sessionGraceMs: 60_000,
-  maxRows: 500,
 };
 
 export interface LedgerDivergence {

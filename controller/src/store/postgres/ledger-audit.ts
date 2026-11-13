@@ -2,15 +2,15 @@
  * The ledger audit's read-only snapshot, for Postgres.
  *
  * Two statements, no transaction, no lock, no write, and both run on the
- * dedicated read-only pool in `pg.ts` with a timeout sized under the metrics
- * scrape timeout. The audit is called from `/metrics`, so it must be unable to
- * hold a writer-pool connection while the database is slow.
+ * dedicated read-only pool in `pg.ts` with a timeout sized well under a scrape
+ * timeout. The audit samples on a timer (`LEDGER_AUDIT_INTERVAL_MS`), so a slow
+ * read can delay one sample, never a scrape, and it can never hold a
+ * writer-pool connection.
  *
- * The payment query is one round trip (two CTEs): the intent divergences, capped
- * because an operator reads the keys, and the duplicate claims, which are
- * grouped before they leave SQL so a member outside any cap cannot hide a
- * duplicate. The session query is the second round trip. Both are issued on the
- * same connection, one after the other.
+ * The payment query is one round trip (two CTEs): the intent divergences, read
+ * in full, and the duplicate claims, which are grouped before they leave SQL so
+ * a member of a nonce pair cannot be hidden. The session query is the second
+ * round trip. Both are issued on the same connection, one after the other.
  *
  * The intent predicate is a superset of the pure module's rules, not a second
  * copy of the decision. It exists so the read returns the rows that can diverge
@@ -50,8 +50,16 @@ interface SessionAuditRow {
  * are reads of `payment_intents` joined to `payment_ledger` on the primary key,
  * so the join itself is a primary-key lookup and the scan is the table.
  *
- * The claiming half is deliberately unbounded and grouped in SQL. A capped read
- * of `REFUND_SENDING` rows could return one member of a nonce pair and hide the
+ * Unbounded, deliberately. The cap this query used to carry bounded the rows
+ * returned, not the scan, and the counts are the metric: a cap turns a large
+ * incident into a floor that looks smaller than it is. In a healthy ledger the
+ * predicate matches nothing, so the unbounded result set is only large when
+ * something is already badly wrong, which is exactly when the exact count is
+ * worth having. The pass is off the scrape path and single-flights; the
+ * read-only pool's statement timeout still bounds it.
+ *
+ * The claiming half is unbounded and grouped in SQL. A capped read of
+ * `REFUND_SENDING` rows could return one member of a nonce pair and hide the
  * duplicate in JS, which is the exact incident the check exists for: ADR 0011
  * keeps ambiguous rows in `REFUND_SENDING` indefinitely, so the worse the
  * backlog, the blinder a capped check becomes. `HAVING count(*) > 1` returns only
@@ -67,8 +75,6 @@ const PAYMENT_AUDIT_SQL = `
       LEFT JOIN payment_ledger l ON l.payment_key = i.payment_key
      WHERE (i.status = 'settled' AND l.payment_key IS NULL)
         OR (i.status = 'failed' AND l.status = 'SETTLED')
-     ORDER BY i.updated_at DESC
-     LIMIT $1
   ),
   live AS (
     SELECT payment_key, settlement_nonce
@@ -119,9 +125,7 @@ export class PgLedgerAuditRepository {
   async read(now: number, limits: LedgerAuditLimits): Promise<LedgerAuditSnapshot> {
     // One connection, one statement at a time, so a slow read holds at most one
     // audit connection and never a writer-pool one.
-    const payments = await this.conn.queryReadOnly<PaymentAuditRow>(PAYMENT_AUDIT_SQL, [
-      limits.maxRows,
-    ]);
+    const payments = await this.conn.queryReadOnly<PaymentAuditRow>(PAYMENT_AUDIT_SQL);
     const sessions = await this.conn.queryReadOnly<SessionAuditRow>(STALE_SESSION_SQL, [
       now - limits.sessionGraceMs,
       MAX_SESSION_LIFETIME_SECONDS,

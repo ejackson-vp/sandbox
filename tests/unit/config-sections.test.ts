@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadTiers } from "@x402s/shared/payment";
 import { parseCapacity } from "../../controller/src/config/capacity.js";
+import { DEFAULT_LEDGER_AUDIT_INTERVAL_MS, parseLedgerAudit } from "../../controller/src/config/audit.js";
 import { parsePaymentLimits } from "../../controller/src/config/payments.js";
 import { parseDataPlanePlacement } from "../../controller/src/config/relay.js";
 import { parseWarmPoolAllocation } from "../../controller/src/config/warm-pool.js";
@@ -105,6 +106,29 @@ describe("capacity defaults", () => {
   it("refuses an unknown accounting mode", () => {
     expect(() => parseCapacity({ CAPACITY_ACCOUNTING: "sometimes" })).toThrow(
       /CAPACITY_ACCOUNTING/,
+    );
+  });
+});
+
+describe("ledger audit interval", () => {
+  it("samples every five minutes by default", () => {
+    expect(parseLedgerAudit({}).ledgerAuditIntervalMs).toBe(300_000);
+    expect(DEFAULT_LEDGER_AUDIT_INTERVAL_MS).toBe(300_000);
+  });
+
+  it("accepts an operator override", () => {
+    expect(parseLedgerAudit({ LEDGER_AUDIT_INTERVAL_MS: "900000" }).ledgerAuditIntervalMs).toBe(
+      900_000,
+    );
+  });
+
+  it("refuses an interval outside the supported bounds", () => {
+    expect(() => parseLedgerAudit({ LEDGER_AUDIT_INTERVAL_MS: "0" })).toThrow(
+      /LEDGER_AUDIT_INTERVAL_MS|invalid integer/,
+    );
+    // Above an hour the freshness alert would fire between samples by design.
+    expect(() => parseLedgerAudit({ LEDGER_AUDIT_INTERVAL_MS: "7200000" })).toThrow(
+      /invalid integer/,
     );
   });
 });
