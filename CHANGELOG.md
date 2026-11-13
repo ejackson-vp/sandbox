@@ -9,6 +9,15 @@ the container registry.
 
 ### Added
 
+- Controller refuses to start when `EXECUTION_MODE=kata` but the `RuntimeClass`
+  named by `RUNTIME_CLASS` is not handled by a microVM runtime (`kata`,
+  `kata-qemu`, `kata-clh`, or whatever `KATA_RUNTIME_HANDLERS` lists). A drifted
+  overlay that downgrades the handler to `runc` is now a startup error with the
+  handler and the fix in the message, instead of a silent loss of the guest
+  kernel while the API still advertises Kata. The resolved handler is logged,
+  exported as `sandbox_runtime_class_info`, and echoed by `/internal/healthz`;
+  `EXECUTION_MODE=dev` and `KUBERNETES_ENABLED=false` skip the check. See
+  [docs/adr/0005-kata-isolation-boundary.md](docs/adr/0005-kata-isolation-boundary.md).
 - Single-use challenge nonce in the 402 response (`accepts[0].extra.challengeNonce`,
   `cn_` + 128 bits), bound into the client commitment signature and burned in the
   controller's `challenge_nonces` table (schema v13) before capacity is held.

@@ -77,6 +77,7 @@ async function startController(
     provisioner?: Provisioner;
     leadership?: Pick<Leadership, "isLeader" | "onChange">;
     acquireSettled?: () => boolean;
+    runtime?: { executionMode: string; runtimeClass: string; handler: string | null };
   } = {},
 ): Promise<Harness> {
   const store = await freshStore();
@@ -96,6 +97,7 @@ async function startController(
     provisioner,
     ...(opts.leadership ? { leadership: opts.leadership } : {}),
     ...(opts.acquireSettled ? { acquireSettled: opts.acquireSettled } : {}),
+    ...(opts.runtime ? { runtime: opts.runtime } : {}),
     // These tests never reach the capacity routes.
     capacity: {} as CapacityService,
   });
@@ -128,6 +130,21 @@ describe("controller readiness", () => {
     const live = await get(harness.base, "/internal/healthz");
     expect(live.status).toBe(200);
     expect(live.body).toEqual({ ok: true });
+  });
+
+  it("echoes the RuntimeClass handler the controller verified at startup", async () => {
+    // The handler is auditable after the fact: a relay/proxy pod omits it, and
+    // a controller pod that passed the check names what it read.
+    const harness = await startController({
+      runtime: { executionMode: "kata", runtimeClass: "x402-sandbox", handler: "kata" },
+    });
+
+    const live = await get(harness.base, "/internal/healthz");
+    expect(live.status).toBe(200);
+    expect(live.body).toEqual({
+      ok: true,
+      runtime: { executionMode: "kata", runtimeClass: "x402-sandbox", handler: "kata" },
+    });
   });
 
   it("reports a leadership standby not ready and follows the handover immediately", async () => {

@@ -17,7 +17,7 @@ import https from "node:https";
 import type { Server } from "node:http";
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { loadControllerConfig, makeProvisioner, makeRelayClient, type ControllerConfig } from "./config.js";
+import { loadControllerConfig, makeProvisioner, makeRelayClient, verifyRuntimeClass, type ControllerConfig, type RuntimeClassCheck } from "./config.js";
 import { openStore } from "./store-backend.js";
 import type { StoreBackend } from "./store/backend.js";
 import { createControlApi } from "./control-api.js";
@@ -45,6 +45,13 @@ export interface ControllerProcess {
 
 export async function start(): Promise<ControllerProcess> {
   const cfg = loadControllerConfig();
+
+  // The isolation boundary this deployment claims. Checked before any listener
+  // opens, because a controller that later schedules guests on an unverified
+  // runtime has already broken the only claim that makes the product safe.
+  // `EXECUTION_MODE=kata` is otherwise a label: the real handler comes from the
+  // cluster's RuntimeClass object, which a drifted overlay can change.
+  const isolation = await checkRuntimeClass(cfg);
 
   // Register metric families eagerly (bounded labels only).
   metrics.histogram("sandbox_provision_duration_seconds", "Entitlement to pod create", LATENCY_BUCKETS);
@@ -221,6 +228,15 @@ export async function start(): Promise<ControllerProcess> {
     provisioner,
     capacity,
     leadership,
+    ...(isolation
+      ? {
+          runtime: {
+            executionMode: cfg.executionMode,
+            runtimeClass: cfg.runtimeClass,
+            handler: isolation.handler,
+          },
+        }
+      : {}),
     acquireSettled: () => acquireSettled,
     wake: () => wake?.(),
     suspend: (id) => {
@@ -339,6 +355,59 @@ export async function start(): Promise<ControllerProcess> {
   }
 
   return { stop };
+}
+
+/**
+ * Verify the RuntimeClass once, for the roles that schedule sandboxes.
+ *
+ * A relay or proxy pod loads the same ConfigMap and would inherit
+ * `EXECUTION_MODE=kata`, but neither provisions nor holds the cluster-scoped
+ * permission the read needs. Asking there would make a data-plane rollout
+ * depend on an RBAC rule for a control-plane decision, so the check is scoped
+ * to the roles that create pods.
+ */
+async function checkRuntimeClass(cfg: ControllerConfig): Promise<RuntimeClassCheck | null> {
+  if (cfg.role !== "controller" && cfg.role !== "all") return null;
+
+  const check = await verifyRuntimeClass({
+    executionMode: cfg.executionMode,
+    runtimeClass: cfg.runtimeClass,
+    kubeEnabled: cfg.kubeEnabled,
+  });
+
+  if (!check.enforced) {
+    // Not an isolation claim: dev mode or no Kubernetes API, where no
+    // RuntimeClass exists to consult. Recorded so the absent claim is visible.
+    log.warn("runtime_class_unverified", {
+      executionMode: cfg.executionMode,
+      runtimeClass: cfg.runtimeClass,
+      kubeEnabled: cfg.kubeEnabled,
+      isolation: "shared-kernel",
+    });
+    return check;
+  }
+
+  log.info("runtime_class_verified", {
+    executionMode: cfg.executionMode,
+    runtimeClass: check.runtimeClass,
+    handler: check.handler,
+    allowed: check.allowed,
+  });
+  // One sample per process, on the private scrape listener: after an incident
+  // the handler that actually served the sessions is readable without the pod
+  // logs, and a scrape that disagrees with the release notes is a deployment
+  // someone has to explain.
+  metrics
+    .gauge("sandbox_runtime_class_info", "Verified RuntimeClass handler (one sample, always 1)")
+    .set(
+      {
+        runtime_class: check.runtimeClass,
+        handler: check.handler ?? "",
+        execution_mode: cfg.executionMode,
+      },
+      1,
+    );
+  return check;
 }
 
 async function main(): Promise<void> {
