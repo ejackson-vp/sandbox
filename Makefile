@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-restore-dump test-go verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-restore-dump test-go coverage-go coverage-go-fuzz verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -210,6 +210,16 @@ test-property:
 # envelope parser can be removed with every TypeScript gate still green.
 test-go:
 	cd guest && go test ./...
+
+# The guest's coverage number, which `go test ./...` above cannot express. Same
+# run CI makes in `integration (local guest)`, floor and all.
+coverage-go:
+	./scripts/go-coverage.sh
+
+# What each Go fuzz target's corpus reaches, seed corpus against seed + fuzz.
+# Writes coverage-go-fuzz/ and never touches guest/testdata.
+coverage-go-fuzz:
+	./scripts/go-fuzz-coverage.sh
 
 # go test runs only a subset of vet checks; struct tags are not in it.
 vet-go:
