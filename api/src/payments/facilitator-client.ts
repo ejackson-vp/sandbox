@@ -119,7 +119,12 @@ export class X402FacilitatorClient implements FacilitatorClient {
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(options: FacilitatorClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    // Trailing slashes are trimmed with a loop, not `/\/+$/`: a regex over an
+    // operator-supplied string is a CodeQL polynomial-regex finding, and the
+    // loop is both linear and obvious.
+    let baseUrl = options.baseUrl;
+    while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
+    this.baseUrl = baseUrl;
     this.auth = options.auth ?? noFacilitatorAuth();
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retries = options.retries ?? DEFAULT_RETRIES;
@@ -210,15 +215,27 @@ export class X402FacilitatorClient implements FacilitatorClient {
         await this.sleep(this.retryBaseMs * 2 ** (attempt - 1));
       }
       const url = new URL(`${this.baseUrl}/${operation}`);
+      // `supported` is a read: x402 v2 serves it as `GET`, and both the mock
+      // facilitator and every real one reject a POST here. Getting this wrong
+      // fails the resource server's initialize step, which surfaces as "no
+      // supported payment kinds loaded from any facilitator" at start-up.
+      const method = operation === "supported" ? "GET" : "POST";
       try {
         const response = await this.fetchImpl(url, {
-          method: "POST",
-          headers: { "content-type": "application/json", ...this.auth.headers("POST", url) },
-          body: JSON.stringify({
-            x402Version: paymentPayload?.x402Version ?? 2,
-            ...(paymentPayload ? { paymentPayload } : {}),
-            ...(paymentRequirements ? { paymentRequirements } : {}),
-          }),
+          method,
+          headers: {
+            ...(method === "POST" ? { "content-type": "application/json" } : {}),
+            ...this.auth.headers(method, url),
+          },
+          ...(method === "POST"
+            ? {
+                body: JSON.stringify({
+                  x402Version: paymentPayload?.x402Version ?? 2,
+                  ...(paymentPayload ? { paymentPayload } : {}),
+                  ...(paymentRequirements ? { paymentRequirements } : {}),
+                }),
+              }
+            : {}),
           redirect: "follow",
           signal: AbortSignal.timeout(this.timeoutMs),
         });

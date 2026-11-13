@@ -15,6 +15,7 @@ import type { ControlApiDeps } from "./types.js";
 export function registerAllowlistRoutes(app: Express, deps: ControlApiDeps): void {
   const store = deps.store;
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted on /internal (control-api.ts:120); CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.post("/internal/payer-allowlist/authorize", async (req: Request, res: Response) => {
     const parsed = allowlistAuthorizeSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -29,12 +30,14 @@ export function registerAllowlistRoutes(app: Express, deps: ControlApiDeps): voi
     res.json(decision);
   });
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted on /internal (control-api.ts:120); CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.get("/internal/payer-allowlist", async (_req: Request, res: Response) => {
     res.json({ entries: await store.listAllowlist() });
   });
 
   // PUT, not POST: the address is the identity, so re-adding replaces the
   // entry and clears `disabled_at`. It is how a wallet is re-enabled.
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted on /internal (control-api.ts:120); CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.put("/internal/payer-allowlist", async (req: Request, res: Response) => {
     const parsed = allowlistEntrySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -47,6 +50,7 @@ export function registerAllowlistRoutes(app: Express, deps: ControlApiDeps): voi
     res.json({ entry });
   });
 
+  // codeql[js/missing-rate-limiting] bounded by the TokenBucket middleware mounted on /internal (control-api.ts:120); CodeQL models only third-party limiter packages (security-review/FINDINGS.md F-16).
   app.delete("/internal/payer-allowlist/:address", async (req: Request, res: Response) => {
     const address = String(req.params.address ?? "");
     if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {

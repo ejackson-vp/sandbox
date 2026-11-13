@@ -26,7 +26,7 @@ const REQUIREMENTS = {
 
 interface FakeFacilitator {
   url: string;
-  requests: Array<{ path: string; authorization?: string; body: Record<string, unknown> }>;
+  requests: Array<{ path: string; method?: string; authorization?: string; body: Record<string, unknown> }>;
   close(): Promise<void>;
 }
 
@@ -44,6 +44,7 @@ async function fakeFacilitator(
     req.on("end", () => {
       requests.push({
         path: req.url ?? "",
+        method: req.method,
         authorization: req.headers.authorization as string | undefined,
         body: body ? (JSON.parse(body) as Record<string, unknown>) : {},
       });
@@ -192,5 +193,44 @@ describe("facilitator client", () => {
     expect(
       new X402FacilitatorClient({ baseUrl: "https://facilitator.example.test/" }),
     ).toBeInstanceOf(X402FacilitatorClient);
+  });
+
+  // The resource server calls getSupported during initialize(). A POST here is
+  // rejected by the mock facilitator and by every real one, and the failure
+  // surfaces far from the cause: "no supported payment kinds loaded".
+  it("reads supported with GET, not POST", async () => {
+    running = await fakeFacilitator((req, res) => {
+      if (req.method !== "GET") {
+        json(res, 405, { error: "method_not_allowed" });
+        return;
+      }
+      json(res, 200, {
+        kinds: [{ x402Version: 2, scheme: "exact", network: "mock:local" }],
+      });
+    });
+    const client = new X402FacilitatorClient({ baseUrl: running.url });
+
+    const supported = await client.getSupported();
+
+    expect(running.requests[0]?.method).toBe("GET");
+    expect(running.requests[0]?.path).toBe("/facilitator/supported");
+    expect(supported.kinds).toEqual([
+      { x402Version: 2, scheme: "exact", network: "mock:local" },
+    ]);
+  });
+
+  it("signs the supported read with the GET method", async () => {
+    running = await fakeFacilitator((_req, res) =>
+      json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "mock:local" }] }),
+    );
+    const client = new X402FacilitatorClient({
+      baseUrl: running.url,
+      auth: {
+        headers: (method, url) => ({ authorization: `test ${method} ${url.pathname}` }),
+      },
+    });
+
+    await client.getSupported();
+    expect(running.requests[0]?.authorization).toBe("test GET /facilitator/supported");
   });
 });
