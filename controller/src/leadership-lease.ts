@@ -108,6 +108,13 @@ class KubeLeaseClient implements LeaseClient {
     record: LeaseRecord,
     resourceVersion: string,
   ): Promise<LeaseSnapshot> {
+    if (!resourceVersion) {
+      // A replace with no version is an unconditional overwrite: the API server
+      // accepts it, and the compare-and-swap two replicas race on is gone. A
+      // read that did not return one is a bug, and it must fail here rather than
+      // become a blind write.
+      throw new Error("lease replace requires a resourceVersion");
+    }
     // The resourceVersion is the fence: the API server rejects a write built on
     // a record another replica has already replaced.
     const body: k8s.V1Lease = {

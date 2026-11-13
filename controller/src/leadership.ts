@@ -98,6 +98,10 @@ export class SoloLeadership extends BaseLeadership {
  * Acquiring: writes are enabled (and startup recovery runs) before the loop
  * starts, so the first pass never sees a read-only store.
  *
+ * A refusal is retried a bounded number of times, then the lease is released:
+ * renewing a lease this replica cannot back with the writer lock keeps every
+ * other candidate out.
+ *
  * Losing: the loop stops scheduling before the store refuses writes. A pass
  * still in flight then fails loudly on the guard instead of writing after
  * another replica may already own the lease.
@@ -120,26 +124,133 @@ interface LeadershipHooks {
   release(): void;
 }
 
-export function bindLeadership(leadership: Leadership, hooks: LeadershipHooks): () => void {
+export interface AcquireRetryOptions {
+  /** Attempts including the first one. */
+  attempts?: number;
+  /** First backoff, doubled on each retry. */
+  initialDelayMs?: number;
+  /** Ceiling for a single backoff. */
+  maxDelayMs?: number;
+}
+
+/**
+ * Six attempts, 200ms doubling to 2s: about five seconds in total.
+ *
+ * Long enough to cover the common refusal, a previous writer's advisory lock on
+ * a session that is still closing. Shorter than one lease duration (10s), so a
+ * lease that cannot be backed by the lock is handed back before another replica
+ * would have been entitled to force-acquire it anyway.
+ */
+const ACQUIRE_ATTEMPTS = 6;
+const ACQUIRE_INITIAL_DELAY_MS = 200;
+const ACQUIRE_MAX_DELAY_MS = 2_000;
+
+type AcquireOutcome = { ok: true } | { ok: false; error: unknown };
+
+async function attemptAcquire(hooks: LeadershipHooks): Promise<AcquireOutcome> {
+  try {
+    await hooks.acquire();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+function backoff(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    // A pending retry must not be the reason the process stays alive.
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+/**
+ * Settle the acquire hook, retrying a refusal a bounded number of times.
+ *
+ * A refusal is usually the previous writer's advisory lock, still held by a
+ * session that is closing, and it clears on its own. Waiting forever is the
+ * wrong answer: this replica keeps renewing a lease it cannot use, so no other
+ * candidate can take over. After the last attempt the lease is released, which
+ * lets the replica that actually holds the lock win it instead.
+ *
+ * Never throws: the caller is an event listener, and a rejected task there would
+ * only surface as an unhandled rejection.
+ */
+async function acquireWithRetry(
+  leadership: Leadership,
+  hooks: LeadershipHooks,
+  options: Required<AcquireRetryOptions>,
+  first: AcquireOutcome,
+): Promise<void> {
+  let outcome = first;
+  try {
+    for (let attempt = 1; ; attempt += 1) {
+      if (!leadership.isLeader()) {
+        // The role moved while this was running. `setLeader(false)` already
+        // stopped the loop (or it was never started), so starting it now would
+        // reconcile without the lease.
+        return;
+      }
+      if (outcome.ok) {
+        hooks.start();
+        return;
+      }
+      if (attempt >= options.attempts) {
+        log.error("leadership_acquire_failed", {
+          attempts: attempt,
+          error: (outcome.error as Error).message,
+          action: "releasing_lease",
+        });
+        await leadership.stop();
+        return;
+      }
+      const delayMs = Math.min(
+        options.initialDelayMs * 2 ** (attempt - 1),
+        options.maxDelayMs,
+      );
+      log.warn("leadership_acquire_retry", {
+        attempt,
+        delayMs,
+        error: (outcome.error as Error).message,
+      });
+      await backoff(delayMs);
+      // Do not enable writes on a replica that lost the role while waiting.
+      if (!leadership.isLeader()) return;
+      outcome = await attemptAcquire(hooks);
+    }
+  } catch (error) {
+    log.error("leadership_acquire_failed", { error: (error as Error).message });
+  }
+}
+
+export function bindLeadership(
+  leadership: Leadership,
+  hooks: LeadershipHooks,
+  retry: AcquireRetryOptions = {},
+): () => void {
+  const options: Required<AcquireRetryOptions> = {
+    attempts: Math.max(1, retry.attempts ?? ACQUIRE_ATTEMPTS),
+    initialDelayMs: Math.max(0, retry.initialDelayMs ?? ACQUIRE_INITIAL_DELAY_MS),
+    maxDelayMs: Math.max(0, retry.maxDelayMs ?? ACQUIRE_MAX_DELAY_MS),
+  };
   return leadership.onChange((isLeader) => {
     if (isLeader) {
-      const acquiring = hooks.acquire();
+      let first: void | Promise<void>;
+      try {
+        first = hooks.acquire();
+      } catch (error) {
+        // A synchronous refusal is retried exactly like an asynchronous one.
+        void acquireWithRetry(leadership, hooks, options, { ok: false, error });
+        return;
+      }
       // Synchronous hooks keep the old ordering exactly. An async acquire (the
       // controller's recovery write) has to settle before the loop starts, or
       // a pass could reconcile rows the recovery was about to fence.
-      if (acquiring instanceof Promise) {
-        void (async () => {
-          try {
-            await acquiring;
-            // The role can change while recovery runs. `setLeader(false)`
-            // already stopped the loop (or it was never started), so starting it
-            // now would reconcile without the lease.
-            if (!leadership.isLeader()) return;
-            hooks.start();
-          } catch (err) {
-            log.error("leadership_acquire_failed", { error: (err as Error).message });
-          }
-        })();
+      if (first instanceof Promise) {
+        void first.then(
+          () => acquireWithRetry(leadership, hooks, options, { ok: true }),
+          (error) => acquireWithRetry(leadership, hooks, options, { ok: false, error }),
+        );
         return;
       }
       hooks.start();

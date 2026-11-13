@@ -19,19 +19,33 @@
  * event loop produces), B waits out the lease duration and takes the Lease, and
  * the assertions are about what each process can commit at each instant.
  *
+ * The fake API server is a control, not a test of the election: dropping the
+ * version from its observe key would keep this file green, and
+ * `leadership.test.ts` is what catches that. What this file proves is the
+ * Postgres fence under a handover, which no other test executes. The client
+ * that actually sends the version to Kubernetes is covered separately in
+ * `lease-client-cas.test.ts`.
+ *
  * The wiring is the production wiring: `bindLeadership` with the same hooks
  * `main.ts` installs, so the ordering under test (stop scheduling, then refuse
- * writes) is the ordering that ships.
+ * writes, retry a refused acquire, hand the Lease back if it cannot be backed)
+ * is the ordering that ships.
  *
  * Skips cleanly when DATABASE_URL is unset. The repository's global test setup
  * already fails the run without a database; the skip is here so this file can be
  * pointed at a command line without one and still report a sensible result.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { bindLeadership } from "../../controller/src/leadership.js";
+import { ReadinessCache } from "@x402s/shared/runtime";
+import {
+  bindLeadership,
+  type AcquireRetryOptions,
+} from "../../controller/src/leadership.js";
 import {
   makeLeaseLeadership,
   type LeaseClient,
+  type LeaseLeadership,
+  type LeaseLeadershipOverrides,
   type LeaseRecord,
   type LeaseSnapshot,
 } from "../../controller/src/leadership-lease.js";
@@ -210,14 +224,32 @@ function expectRefused(attempt: WriteAttempt, message: RegExp): void {
   expect((attempt.error as Error).message).toMatch(message);
 }
 
-/** Advisory locks currently held in the database, counting every session. */
+/** Advisory locks held in this test's database, counting every session. */
 async function advisoryLocks(): Promise<number> {
+  // `pg_locks` is cluster-wide, so scope it to this database: the suite runs
+  // files in parallel, each with its own database and its own writer lock.
   const rows = await sqlRows<{ n: number }>(
-    "SELECT COUNT(*)::int AS n FROM pg_locks WHERE locktype = 'advisory'",
+    `SELECT COUNT(*)::int AS n
+       FROM pg_locks
+      WHERE locktype = 'advisory'
+        AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
     [],
     DATABASE_NAMESPACE,
   );
   return rows[0]?.n ?? -1;
+}
+
+/** Poll for an asynchronous assertion the retry loop makes on its own. */
+async function waitFor(
+  condition: () => boolean | Promise<boolean>,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("condition was not met in time");
 }
 
 /* ------------------------------------------------------------------ */
@@ -274,8 +306,13 @@ describe.skipIf(!HAS_DATABASE)("split brain between the Lease and the writer loc
 
     const eventsA: string[] = [];
     const eventsB: string[] = [];
-    let bAcquire: Promise<void> | undefined;
-    let bAcquireError: unknown;
+    let bAttempts = 0;
+    let bFailures = 0;
+    let lastBError: unknown;
+
+    // Long enough that B keeps trying for the whole test, so the assertions are
+    // about the fence rather than about the retry budget.
+    const retry: AcquireRetryOptions = { attempts: 100, initialDelayMs: 20, maxDelayMs: 50 };
 
     // The same hooks main.ts installs: writes first on acquire, stop before
     // release, and the release unblocks the guard synchronously.
@@ -292,20 +329,19 @@ describe.skipIf(!HAS_DATABASE)("split brain between the Lease and the writer loc
       },
     });
     bindLeadership(leaseB, {
-      acquire: () => {
-        bAcquire = storeB.setWritesBlocked(false).then(
-          () => {
-            eventsB.push("acquire:ok");
-          },
-          (err: unknown) => {
-            bAcquireError = err;
-            eventsB.push("acquire:failed");
-            // Rethrow: `bindLeadership` must see the failure and leave the
-            // reconcile loop stopped, as `main.ts` relies on.
-            throw err;
-          },
-        );
-        return bAcquire;
+      acquire: async () => {
+        bAttempts += 1;
+        try {
+          await storeB.setWritesBlocked(false);
+          eventsB.push("acquire:ok");
+        } catch (error) {
+          bFailures += 1;
+          lastBError = error;
+          eventsB.push("acquire:failed");
+          // Rethrow: `bindLeadership` owns the retry and the decision to stand
+          // down, so it has to see the refusal.
+          throw error;
+        }
       },
       start: () => eventsB.push("start"),
       stop: () => eventsB.push("stop"),
@@ -313,7 +349,7 @@ describe.skipIf(!HAS_DATABASE)("split brain between the Lease and the writer loc
         eventsB.push("release");
         void Promise.resolve(storeB.setWritesBlocked(true)).catch(() => undefined);
       },
-    });
+    }, retry);
 
     /* 1. A wins the election and the writer lock. ------------------- */
 
@@ -345,24 +381,43 @@ describe.skipIf(!HAS_DATABASE)("split brain between the Lease and the writer loc
     // B has watched the same record for a full duration, so the compare-and-swap
     // takeover is allowed. It wins the Lease.
     await leaseB.tick();
-    await bAcquire?.catch(() => undefined);
+    await waitFor(() => bFailures >= 1);
 
     expect(api.holder).toBe("controller-b");
     expect(leaseB.isLeader()).toBe(true);
+    expect(bAttempts).toBeGreaterThanOrEqual(1);
 
     // ...and cannot write, because A's session still holds the advisory lock.
     // This is the fence doing its job: the new Lease holder is refused rather
     // than becoming a second writer.
-    expect(bAcquireError).toBeInstanceOf(WriterLockUnavailableError);
-    expect((bAcquireError as Error).message).toMatch(
+    expect(lastBError).toBeInstanceOf(WriterLockUnavailableError);
+    expect((lastBError as Error).message).toMatch(
       /another process holds the store writer lock; refusing to become the writer/,
     );
     expect(storeB.writesAreBlocked).toBe(true);
     // The reconciler loop must not start on a replica that could not take the
     // lock, or it would schedule effects it cannot commit.
-    expect(eventsB).toEqual(["acquire:failed"]);
+    expect(eventsB).not.toContain("acquire:ok");
+    expect(eventsB).not.toContain("start");
 
-    // The database agrees: one advisory lock, held by A's session.
+    // Readiness is the AND of the store and the lease. B holds the lease, but
+    // the store reports read_only because its write guard is closed, so readyz
+    // is 503. A write-blocked leader is not routed creates.
+    const readiness = new ReadinessCache({
+      store: async () => {
+        const health = await storeB.healthCheck();
+        return health.ok ? { ok: true } : { ok: false, reason: health.reason };
+      },
+      leadership: () =>
+        leaseB.isLeader() ? { ok: true } : { ok: false, reason: "not_leader" },
+    });
+    const report = await readiness.check();
+    expect(report.ok).toBe(false);
+    expect(report.components.store).toMatchObject({ ok: false, reason: "read_only" });
+    expect(report.components.leadership).toMatchObject({ ok: true });
+
+    // The database has exactly one advisory writer lock, and the refused
+    // promotion above is what identifies it as A's session rather than B's.
     expect(await advisoryLocks()).toBe(1);
 
     // Both replicas try to write at the same instant. A is stale (its Lease is
@@ -389,31 +444,236 @@ describe.skipIf(!HAS_DATABASE)("split brain between the Lease and the writer loc
     const aAfterStandDown = await tryWrite(storeA, "a-after-stand-down");
     expectRefused(aAfterStandDown, /does not hold the store writer lock/);
 
-    /* 4. A's session dies. B can take the lock, but does it? --------- */
+    /* 4. B retries and recovers without a restart. ------------------ */
 
-    // A's process goes away: the lock connection, and the advisory lock with it.
-    await storeA.close();
-    expect(await advisoryLocks()).toBe(0);
-
-    // B still has not retried. `bindLeadership` notifies only on a transition,
-    // and B's transition already happened, so the one failed acquire is the last
-    // attempt B will make. The fence is safe here; the takeover is stuck.
-    expect(eventsB).toEqual(["acquire:failed"]);
-    expect(storeB.writesAreBlocked).toBe(true);
-
-    // The retry the current wiring does not perform. Everything below proves
-    // the lock is available; the step itself is the gap this test documents.
-    await storeB.setWritesBlocked(false);
+    // A's stand-down released the advisory lock. B's next attempt takes it, so
+    // the takeover is not stuck waiting for A's process to die.
+    await waitFor(() => eventsB.includes("acquire:ok"));
     expect(storeB.writesAreBlocked).toBe(false);
+    expect(eventsB).toContain("start");
+    expect(api.holder).toBe("controller-b");
     expect(await advisoryLocks()).toBe(1);
 
     const bAfterTakeover = await tryWrite(storeB, "b-after-takeover");
     expect(committedWriters([bAfterTakeover])).toEqual(["b-after-takeover"]);
 
+    // A's process dies after it stood down. The lock B holds is unaffected.
+    await storeA.close();
+    expect(await advisoryLocks()).toBe(1);
+    expect(storeA.writesAreBlocked).toBe(true);
+
     // Exactly one writer at every phase above: A before the split, A during it,
-    // nobody while A stands down, B after A's session is gone.
+    // nobody while A stands down, B once the lock is free.
     await leaseA.stop();
     await leaseB.stop();
+  });
+});
+
+interface WedgeWorld {
+  api: FakeLeaseApi;
+  time: ReturnType<typeof clock>;
+  linkA: FakeLeaseClient;
+  storeA: PostgresStore;
+  storeB: PostgresStore;
+  leaseA: LeaseLeadership;
+  leaseB: LeaseLeadership;
+  eventsB: string[];
+  readonly bFailures: number;
+  close(): Promise<void>;
+}
+
+/**
+ * Two replicas on a fresh database, wired the way `main.ts` wires them.
+ *
+ * Retry timing is the only thing a test changes: the number of renewal windows
+ * is driven by the fake clock, so waiting out the production 5s budget would
+ * make the suite slow without testing anything new.
+ */
+async function openWedgeWorld(
+  namespace: string,
+  retryB: AcquireRetryOptions,
+): Promise<WedgeWorld> {
+  await ensureTestDatabase(namespace);
+  const url = testDatabaseUrl(namespace);
+  const storeA = await PostgresStore.open(url, { writer: true });
+  const storeB = await PostgresStore.open(url, { writer: false });
+  const api = new FakeLeaseApi();
+  const time = clock();
+  const linkA = new FakeLeaseClient(api);
+  const linkB = new FakeLeaseClient(api);
+  const leaseOptions: LeaseLeadershipOverrides = {
+    renewIntervalMs: 10_000,
+    leaseDurationMs: 10_000,
+    now: time.now,
+    monotonic: time.mono,
+    callTimeoutMs: 500,
+  };
+  const leaseA = makeLeaseLeadership(configFor("controller-a"), {
+    ...leaseOptions,
+    client: linkA,
+  });
+  const leaseB = makeLeaseLeadership(configFor("controller-b"), {
+    ...leaseOptions,
+    client: linkB,
+  });
+  const eventsB: string[] = [];
+  let failures = 0;
+
+  bindLeadership(leaseA, {
+    acquire: async () => {
+      await storeA.setWritesBlocked(false);
+    },
+    start: () => undefined,
+    stop: () => undefined,
+    release: () => {
+      void Promise.resolve(storeA.setWritesBlocked(true)).catch(() => undefined);
+    },
+  });
+  bindLeadership(
+    leaseB,
+    {
+      acquire: async () => {
+        try {
+          await storeB.setWritesBlocked(false);
+          eventsB.push("acquire:ok");
+        } catch (error) {
+          failures += 1;
+          eventsB.push("acquire:failed");
+          throw error;
+        }
+      },
+      start: () => eventsB.push("start"),
+      stop: () => eventsB.push("stop"),
+      release: () => {
+        eventsB.push("release");
+        void Promise.resolve(storeB.setWritesBlocked(true)).catch(() => undefined);
+      },
+    },
+    retryB,
+  );
+
+  return {
+    api,
+    time,
+    linkA,
+    storeA,
+    storeB,
+    leaseA,
+    leaseB,
+    eventsB,
+    get bFailures() {
+      return failures;
+    },
+    async close() {
+      await leaseA.stop().catch(() => undefined);
+      await leaseB.stop().catch(() => undefined);
+      await storeA.close().catch(() => undefined);
+      await storeB.close().catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * The acquire wedge: the Lease moves to a replica that cannot take the writer
+ * lock, and the lock does not free.
+ *
+ * `bindLeadership` retries a refusal a bounded number of times. If the lock is
+ * still someone else's, it releases the Lease rather than renewing one it cannot
+ * use: whoever holds the advisory lock is the replica that can write, so it
+ * should be allowed to win.
+ */
+describe.skipIf(!HAS_DATABASE)("acquire retry when the writer lock is held", () => {
+  it("recovers when the lock frees inside the retry budget", async () => {
+    const world = await openWedgeWorld("split_brain_retry_recover", {
+      attempts: 100,
+      initialDelayMs: 20,
+      maxDelayMs: 50,
+    });
+    try {
+      await world.leaseA.start();
+      await world.leaseB.start();
+      expect(world.leaseA.isLeader()).toBe(true);
+
+      // A is suspended and B takes the Lease.
+      world.linkA.down = new Error("connect ECONNREFUSED 10.96.0.1:443");
+      world.time.advance(10_000);
+      await world.leaseB.tick();
+      await waitFor(() => world.bFailures >= 1);
+      expect(world.storeB.writesAreBlocked).toBe(true);
+
+      // The Lease keeps renewing while B cannot write: two renewal windows.
+      for (let window = 0; window < 2; window += 1) {
+        world.time.advance(2_000);
+        await world.leaseB.tick();
+      }
+      expect(world.api.holder).toBe("controller-b");
+
+      // The lock frees while B is still inside the retry budget.
+      await world.storeA.setWritesBlocked(true);
+      expect(world.storeA.writesAreBlocked).toBe(true);
+
+      await waitFor(() => world.eventsB.includes("acquire:ok"));
+      expect(world.storeB.writesAreBlocked).toBe(false);
+      expect(world.leaseB.isLeader()).toBe(true);
+      expect(world.eventsB).toContain("start");
+
+      const write = await tryWrite(world.storeB, "b-recovered");
+      expect(committedWriters([write])).toEqual(["b-recovered"]);
+
+      // A resumes and stands down on its own deadline.
+      world.linkA.down = null;
+      world.time.advance(2_000);
+      await world.leaseA.tick();
+      expect(world.leaseA.isLeader()).toBe(false);
+      expect(world.storeA.writesAreBlocked).toBe(true);
+    } finally {
+      await world.close();
+    }
+  });
+
+  it("stands down when the lock never frees, and the lock holder wins the released lease", async () => {
+    const world = await openWedgeWorld("split_brain_retry_stepdown", {
+      attempts: 3,
+      initialDelayMs: 10,
+      maxDelayMs: 20,
+    });
+    try {
+      await world.leaseA.start();
+      await world.leaseB.start();
+
+      world.linkA.down = new Error("connect ECONNREFUSED 10.96.0.1:443");
+      world.time.advance(10_000);
+      await world.leaseB.tick();
+      await waitFor(() => world.bFailures >= 1);
+
+      // The Lease renews across two windows, then the retry budget runs out.
+      for (let window = 0; window < 2; window += 1) {
+        world.time.advance(2_000);
+        await world.leaseB.tick();
+      }
+      await waitFor(() => !world.leaseB.isLeader());
+      await waitFor(() => world.api.holder === "");
+
+      expect(world.eventsB).toContain("acquire:failed");
+      expect(world.eventsB).toContain("stop");
+      expect(world.eventsB).toContain("release");
+      expect(world.storeB.writesAreBlocked).toBe(true);
+      const refused = await tryWrite(world.storeB, "b-after-stand-down");
+      expectRefused(refused, /does not hold the store writer lock/);
+
+      // A is the replica that can write. The released Lease is free, so A wins
+      // it back and the cluster has one writer again.
+      world.linkA.down = null;
+      await world.leaseA.tick();
+      await waitFor(() => world.leaseA.isLeader() && !world.storeA.writesAreBlocked);
+
+      expect(world.api.holder).toBe("controller-a");
+      expect(world.storeB.writesAreBlocked).toBe(true);
+      const write = await tryWrite(world.storeA, "a-wins-back");
+      expect(committedWriters([write])).toEqual(["a-wins-back"]);
+    } finally {
+      await world.close();
+    }
   });
 });
 
