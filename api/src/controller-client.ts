@@ -192,7 +192,9 @@ export class ControllerClient {
       method: "POST",
       body: JSON.stringify({ paymentKey, specHash, staleMs, requirements }),
     });
-    const body = (await res.json().catch(() => ({}))) as IntentClaim & { status?: string };
+    // A body of literal `null` is valid JSON, so `.catch` does not catch it and
+    // `body.status` would throw a TypeError instead of a ControllerError.
+    const body = ((await res.json().catch(() => ({}))) ?? {}) as IntentClaim & { status?: string };
     if (res.ok) return body as IntentClaim;
     if (res.status === 409) {
       if (body.status === "in_progress") return { status: "in_progress" };

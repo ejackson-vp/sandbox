@@ -259,6 +259,14 @@ describe("controller client", () => {
     await expect(client.claimIntent("a".repeat(64), "b".repeat(64))).rejects.toBeInstanceOf(
       ControllerError,
     );
+
+    // `null` is valid JSON, so the parse fallback does not cover it. A proxy or
+    // a newer controller answering 409 with a null body must still raise a
+    // ControllerError rather than a TypeError from reading `.status`.
+    reply = { status: 409, body: "null" };
+    await expect(client.claimIntent("a".repeat(64), "b".repeat(64))).rejects.toBeInstanceOf(
+      ControllerError,
+    );
   });
 
   it("keeps the controller's error code and detail on a failed call", async () => {

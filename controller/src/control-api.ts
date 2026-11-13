@@ -183,6 +183,17 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   registerSessionRoutes(app, deps);
 
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+    // A body the parser rejected is the caller's fault, not an outage. The
+    // public API's backstop already answers these two the same way, and the two
+    // surfaces disagreed on the same malformed input until this did too.
+    if (err.name === "PayloadTooLargeError" || (err as { type?: string }).type === "entity.too.large") {
+      res.status(413).json({ error: "payload_too_large" });
+      return;
+    }
+    if (err.name === "SyntaxError") {
+      res.status(400).json({ error: "invalid_json" });
+      return;
+    }
     log.error("control_api_error", { error: err.message });
     res.status(500).json({ error: "internal_error" });
   });
