@@ -137,6 +137,12 @@ local-path checkpoint is a single-node feature.
   untouched; the restarted controller resumes it and the workspace is intact.
 - **Relay restart while suspended:** covered by the lifecycle soak; resume
   registers a fresh relay entry.
+- **Leader stands down with a write in flight:** `setWritesBlocked(false)` is a
+  round trip and cannot be cancelled, so it can resolve after the Lease is gone.
+  `bindLeadership` closes the write guard, and closes it again when such a write
+  resolves under a role that has been given up
+  (`leadership_late_acquire_closed`). The order is stop scheduling, close the
+  guard, release the Lease, and no replica is left writable without the role.
 - **Node cordoned/gone:** `409 resume_unavailable` (see portability above).
 
 `make demo-faults` exercises the missing-PVC and controller-restart cases.

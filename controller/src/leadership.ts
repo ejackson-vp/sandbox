@@ -23,6 +23,14 @@ export interface Leadership {
   /** Stop renewing, release the role, and notify listeners. */
   stop(): Promise<void>;
   isLeader(): boolean;
+  /**
+   * How many times the role has changed, in either direction.
+   *
+   * A write belongs to the generation it was ordered under. An acquire that
+   * settles under a later generation is a write for a role this process has
+   * given up, which is what `bindLeadership` keys its repair on.
+   */
+  generation(): number;
   /** Notified only on a transition. Returns an unsubscribe function. */
   onChange(listener: LeadershipListener): () => void;
 }
@@ -38,6 +46,8 @@ export abstract class BaseLeadership implements Leadership {
   abstract readonly identity: string;
   abstract readonly mode: "solo" | "lease";
   protected leader = false;
+  /** Bumped by `setLeader` on every transition. Never reset, never reused. */
+  private roleGeneration = 0;
   private readonly listeners = new Set<LeadershipListener>();
 
   abstract start(): Promise<void>;
@@ -45,6 +55,10 @@ export abstract class BaseLeadership implements Leadership {
 
   isLeader(): boolean {
     return this.leader;
+  }
+
+  generation(): number {
+    return this.roleGeneration;
   }
 
   onChange(listener: LeadershipListener): () => void {
@@ -57,6 +71,7 @@ export abstract class BaseLeadership implements Leadership {
   protected setLeader(next: boolean): void {
     if (next === this.leader) return;
     this.leader = next;
+    this.roleGeneration += 1;
     for (const listener of [...this.listeners]) {
       try {
         listener(next);
@@ -106,9 +121,14 @@ export type AcquireFailure = "lock_refused" | "store_unavailable";
  * back quickly so a rival can use the role; a store failure is held and retried
  * for longer, because nobody can write meanwhile and a handover buys nothing.
  *
- * Losing: the loop stops scheduling before the store refuses writes. A pass
- * still in flight then fails loudly on the guard instead of writing after
- * another replica may already own the lease.
+ * Losing: the loop stops scheduling before the store refuses writes, and the
+ * Lease is released after that. A pass still in flight then fails loudly on the
+ * guard instead of writing after another replica may already own the lease.
+ *
+ * A write that lands late is the remaining hole. `acquire()` is a network round
+ * trip and cannot be cancelled, so a `setWritesBlocked(false)` issued before the
+ * role moved can resolve after it is gone. The library closes the guard again
+ * in that case (`repairIfRoleGone`) instead of trusting the caller to notice.
  */
 interface LeadershipHooks {
   /**
@@ -124,7 +144,11 @@ interface LeadershipHooks {
   start(): void;
   /** Stop scheduling reconcile work. */
   stop(): void;
-  /** Refuse writes. Always runs after `stop()`. */
+  /**
+   * Refuse writes. Always runs after `stop()`, and may run more than once: a
+   * second call is the repair for an acquire that enabled writes after the role
+   * was given up, so it must be safe to repeat.
+   */
   release(): void;
   /**
    * Called after the Lease has been released because acquire could not settle.
@@ -208,13 +232,20 @@ function classifyAcquireError(error: unknown): AcquireFailure {
 async function attemptAcquire(
   hooks: LeadershipHooks,
   timeoutMs: number,
+  onLate: () => void,
 ): Promise<AcquireOutcome> {
+  const pending = Promise.resolve(hooks.acquire());
   try {
     // The hook can hang on a socket with no deadline of its own. A late success
-    // is harmless: the next attempt re-runs the whole hook, recovery included.
-    await withDeadline(Promise.resolve(hooks.acquire()), timeoutMs, "leadership acquire");
+    // is harmless only if the role is still held: `onLate` closes the guard
+    // again when it is not.
+    await withDeadline(pending, timeoutMs, "leadership acquire");
     return { ok: true };
   } catch (error) {
+    // The deadline does not cancel the hook. Watch the rest of its life, or a
+    // `setWritesBlocked(false)` that resolves after the role is gone would
+    // leave the store writable with nothing behind it.
+    pending.then(onLate, onLate);
     return { ok: false, error };
   }
 }
@@ -226,11 +257,16 @@ async function attemptAcquire(
  * pinned: an already-resolved acquire must reach `start()` in the same number
  * of microtasks it did before the deadline existed. A promise race would add a
  * hop, so this attaches the callbacks directly.
+ *
+ * When the timer wins, the hook is still running, so `onLate` is attached to
+ * the original promise: it is the only thing left watching a write that can
+ * still land after the role is gone.
  */
 function settleFirstAttempt(
   first: Promise<void>,
   timeoutMs: number,
   settle: (outcome: AcquireOutcome) => void,
+  onLate: () => void,
 ): void {
   let settled = false;
   let timer: NodeJS.Timeout | undefined;
@@ -240,14 +276,13 @@ function settleFirstAttempt(
     if (timer) clearTimeout(timer);
     settle(outcome);
   };
-  timer = setTimeout(
-    () =>
-      finish({
-        ok: false,
-        error: new Error(`leadership acquire timed out after ${timeoutMs}ms`),
-      }),
-    timeoutMs,
-  );
+  timer = setTimeout(() => {
+    first.then(onLate, onLate);
+    finish({
+      ok: false,
+      error: new Error(`leadership acquire timed out after ${timeoutMs}ms`),
+    });
+  }, timeoutMs);
   timer.unref?.();
   first.then(
     () => finish({ ok: true }),
@@ -296,6 +331,45 @@ async function giveUp(
 }
 
 /**
+ * Give the role up in the only order that is safe: stop scheduling, then refuse
+ * writes. The Lease is released by `leadership.stop()` once this returns.
+ *
+ * Repeating it is the point. `release()` closes the guard synchronously inside
+ * the adapter (the advisory unlock is the round trip), so the last word on the
+ * guard is always "closed", and the loop's last word is always "stopped".
+ */
+function standDown(hooks: LeadershipHooks): void {
+  hooks.stop();
+  hooks.release();
+}
+
+/**
+ * Close the guard again when an acquire settles under a role this process gave
+ * up. This is the library's own answer to "the store became writable and nobody
+ * holds the Lease"; the caller does not have to check the role at the call site.
+ *
+ * The generation is the test: attempts are only started from `isLeader()`, so
+ * an unchanged generation means the role never moved and the acquire still owns
+ * the store. A generation that has moved and a role that is held again means a
+ * newer role owns it; that generation's acquire decides when writes open, and
+ * repairing here would close the guard under a legitimate leader.
+ */
+function repairIfRoleGone(
+  leadership: Leadership,
+  hooks: LeadershipHooks,
+  generation: number,
+): void {
+  if (leadership.generation() === generation) return;
+  if (leadership.isLeader()) return;
+  log.warn("leadership_late_acquire_closed", {
+    mode: leadership.mode,
+    identity: leadership.identity,
+    generation,
+  });
+  standDown(hooks);
+}
+
+/**
  * Settle the acquire hook, retrying a refusal on a policy chosen by its class.
  *
  * A lock refusal is handed back quickly: a rival can use the role. A store
@@ -310,17 +384,20 @@ async function acquireWithRetry(
   leadership: Leadership,
   hooks: LeadershipHooks,
   options: ResolvedAcquireOptions,
+  generation: number,
   first: AcquireOutcome,
 ): Promise<void> {
   let outcome = first;
   let lockFailures = 0;
   let unavailableFailures = 0;
+  const repair = () => repairIfRoleGone(leadership, hooks, generation);
   try {
     for (;;) {
       if (!leadership.isLeader()) {
         // The role moved while this was running. `setLeader(false)` already
-        // stopped the loop (or it was never started), so starting it now would
-        // reconcile without the lease.
+        // stopped the loop and closed the guard, but the attempt that just
+        // settled may have reopened it after that.
+        repair();
         return;
       }
       if (outcome.ok) {
@@ -347,8 +424,11 @@ async function acquireWithRetry(
       });
       await backoff(delayMs);
       // Do not enable writes on a replica that lost the role while waiting.
-      if (!leadership.isLeader()) return;
-      outcome = await attemptAcquire(hooks, options.callTimeoutMs);
+      if (!leadership.isLeader()) {
+        repair();
+        return;
+      }
+      outcome = await attemptAcquire(hooks, options.callTimeoutMs, repair);
     }
   } catch (error) {
     log.error("leadership_acquire_failed", { error: (error as Error).message });
@@ -378,27 +458,38 @@ export function bindLeadership(
   };
   return leadership.onChange((isLeader) => {
     if (isLeader) {
+      // The role this acquire is ordered under. A settle under any other
+      // generation is a write this replica no longer has the Lease for.
+      const generation = leadership.generation();
+      const repair = () => repairIfRoleGone(leadership, hooks, generation);
       let first: void | Promise<void>;
       try {
         first = hooks.acquire();
       } catch (error) {
         // A synchronous refusal is retried exactly like an asynchronous one.
-        void acquireWithRetry(leadership, hooks, options, { ok: false, error });
+        void acquireWithRetry(leadership, hooks, options, generation, {
+          ok: false,
+          error,
+        });
         return;
       }
       // Synchronous hooks keep the old ordering exactly. An async acquire (the
       // controller's recovery write) has to settle before the loop starts, or
       // a pass could reconcile rows the recovery was about to fence.
       if (first instanceof Promise) {
-        settleFirstAttempt(first, options.callTimeoutMs, (outcome) => {
-          void acquireWithRetry(leadership, hooks, options, outcome);
-        });
+        settleFirstAttempt(
+          first,
+          options.callTimeoutMs,
+          (outcome) => {
+            void acquireWithRetry(leadership, hooks, options, generation, outcome);
+          },
+          repair,
+        );
         return;
       }
       hooks.start();
       return;
     }
-    hooks.stop();
-    hooks.release();
+    standDown(hooks);
   });
 }

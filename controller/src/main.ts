@@ -267,12 +267,12 @@ async function main(): Promise<void> {
         await store.setWritesBlocked(true).catch(() => undefined);
         throw error;
       }
-      // The role can move while recovery runs. Do not leave a follower holding
-      // the writer lock; bindLeadership will not start the loop either.
-      if (!leadership.isLeader()) {
-        await store.setWritesBlocked(true).catch(() => undefined);
-        return;
-      }
+      // The role can move while recovery runs. Do not claim readiness and do not
+      // unblock the fence on a replica that no longer writes: returning here is
+      // enough, because bindLeadership closes the write guard again when an
+      // acquire settles under a role this replica has given up (see
+      // `repairIfRoleGone` in leadership.ts).
+      if (!leadership.isLeader()) return;
       acquireSettled = true;
       // Unblock any startup fence as soon as the relay is reachable. The control
       // API fails closed until this succeeds, and the reconciler retries it.
@@ -287,7 +287,9 @@ async function main(): Promise<void> {
       acquireSettled = false;
       // The guard closes synchronously inside the adapter, even when the unlock
       // is an async round trip, so the next write is refused before this returns.
-      // Awaiting here would only delay handing the lease over.
+      // Awaiting here would only delay handing the lease over. bindLeadership
+      // calls this again when an in-flight acquire enabled writes after the role
+      // was given up, so it has to stay idempotent.
       void Promise.resolve(store.setWritesBlocked(true)).catch((err: unknown) => {
         log.error("store_write_guard_failed", { error: (err as Error).message });
       });
