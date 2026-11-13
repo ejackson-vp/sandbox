@@ -9,17 +9,22 @@
  * `pg_dump -Fc | openssl enc -aes-256-cbc -pbkdf2` and then counts rows from
  * `sessions` in a scratch database. That proves the artifact decompresses; it
  * does not prove the payment, session, operation or reservation invariants
- * survived. This restores the artifact into a database it creates and runs the
- * same suite `npm run test:store-contract` runs, against that copy.
+ * survived. This restores the artifact into a database it creates, fingerprints
+ * every money and session table against the database the dump came from, and
+ * runs the same suite `npm run test:store-contract` runs, against that copy.
+ * The data check runs before the contract, never after: the contract truncates
+ * every table, so afterwards there are no rows left to compare.
  *
  * `DATABASE_URL` is the admin connection. The database it names is never
  * written to: this creates its own `sbx_restore_<stamp>_<pid>_<random>`,
  * which cannot collide with a real database or a parallel run, drops it on
  * success, on failure and on SIGINT/SIGTERM, and needs `pg_restore` (and
- * `openssl` when the dump is encrypted) on PATH.
+ * `openssl` when the dump is encrypted) on PATH. That database is also the
+ * default comparison source, read only, in a read-only session.
  *
  * The contract suite truncates every table, which is why it must never see the
- * database an operator pointed this at.
+ * database an operator pointed this at. `scripts/restore-verify.mjs` holds the
+ * comparison.
  */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -27,6 +32,7 @@ import { createReadStream, closeSync, openSync, readFileSync, readSync, statSync
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { usableSource, verifyData } from "./restore-verify.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCRATCH_PREFIX = "sbx_restore_";
@@ -36,12 +42,17 @@ const OPENSSL_MAGIC = "Salted__";
 const USAGE = `usage: node scripts/restore-dump.mjs <dump> [options]
 
 Restore a pg_dump -Fc artifact (optionally openssl-encrypted) into a scratch
-database and run the store contract against that copy.
+database, check that its rows match the database the dump came from, and run
+the store contract against that copy.
 
 options:
   --key-env NAME        environment variable holding the openssl passphrase
                         (default: ${DEFAULT_KEY_ENV})
   --database-url URL    admin connection (default: DATABASE_URL)
+  --compare-url URL     database to compare the restored rows with
+                        (default: the database in --database-url, read only)
+  --no-compare          skip the row comparison; the artifact is then only
+                        proved to restore a schema
   --keep                leave the scratch database in place for inspection
   -h, --help            print this text
 
@@ -49,7 +60,7 @@ environment:
   DATABASE_URL          admin connection; its database is never written to
   ${DEFAULT_KEY_ENV}    passphrase; the key is read here, never from argv
 
-exit codes: 0 contract passed, 1 restore or contract failed, 2 usage error.`;
+exit codes: 0 contract passed, 1 restore, comparison or contract failed, 2 usage error.`;
 
 /** An argument problem, which exits 2 rather than reporting a failed restore. */
 export class UsageError extends Error {}
@@ -59,6 +70,8 @@ export function parseArgs(argv) {
     dump: null,
     keyEnv: DEFAULT_KEY_ENV,
     databaseUrl: null,
+    compareUrl: null,
+    compare: true,
     keep: false,
     help: false,
   };
@@ -69,12 +82,15 @@ export function parseArgs(argv) {
       options.help = true;
     } else if (arg === "--keep") {
       options.keep = true;
-    } else if (arg === "--key-env" || arg === "--database-url") {
+    } else if (arg === "--no-compare") {
+      options.compare = false;
+    } else if (arg === "--key-env" || arg === "--database-url" || arg === "--compare-url") {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith("-")) {
         throw new UsageError(`${arg} needs a value`);
       }
       if (arg === "--key-env") options.keyEnv = value;
+      else if (arg === "--compare-url") options.compareUrl = value;
       else options.databaseUrl = value;
       index += 1;
     } else if (arg.startsWith("-") && arg !== "-") {
@@ -278,7 +294,7 @@ export async function restoreInto({ dumpPath, scratchUrl, encrypted, keyEnv, env
     const detail = tail(source.stderr(), 4);
     const hint = /wrong final block length/.test(source.stderr())
       ? "the ciphertext is truncated or corrupt (openssl reported a bad final block)"
-      : `the passphrase in ${keyEnv} does not decrypt this dump`;
+      : `the passphrase in ${keyEnv} does not decrypt this dump: the key is wrong, or the file is truncated or corrupt`;
     throw new Error(`openssl exited ${sourceResult.code}: ${hint}` + (detail ? `\n${detail}` : ""));
   }
   if (result.code !== 0) {
@@ -308,14 +324,7 @@ async function inspectScratch(scratchUrl) {
       version = row.rows[0]?.version ?? null;
       if (version !== null) version = Number(version);
     }
-
-    const counts = {};
-    for (const table of ["sessions", "payments", "payment_ledger", "reservations", "exec_requests"]) {
-      if (!names.has(table)) continue;
-      const row = await client.query(`SELECT count(*) AS n FROM "${table}"`);
-      counts[table] = Number(row.rows[0]?.n ?? 0);
-    }
-    return { version, counts };
+    return { version };
   } finally {
     await client.end().catch(() => {});
   }
@@ -440,16 +449,34 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     log(encrypted ? `decrypting with ${options.keyEnv} and restoring` : "restoring");
     await restoreInto({ dumpPath, scratchUrl, encrypted, keyEnv: options.keyEnv, env });
 
-    const { version, counts } = await inspectScratch(scratchUrl);
-    const rows = Object.entries(counts)
-      .map(([table, count]) => `${table}=${count}`)
-      .join(" ");
-    log(`restored: ${rows || "no sandbox tables"}`);
+    const { version } = await inspectScratch(scratchUrl);
+    log(`restored the archive into ${name}`);
 
     const plan = schemaPlan(version, buildSchemaVersion());
     log(`schema: ${plan.message}`);
     if (plan.action === "refuse") {
       console.error("[restore-dump] FAIL: this dump is not usable with this build");
+      return 1;
+    }
+
+    // Rows first: the contract truncates every table, so after it runs there is
+    // nothing left to compare.
+    const sourceUrl = options.compare
+      ? await usableSource({
+          sourceUrl: options.compareUrl ?? adminUrl,
+          explicit: options.compareUrl !== null,
+          log,
+        })
+      : null;
+    if (!options.compare) log("data: --no-compare, so the rows are not compared");
+
+    const data = await verifyData({ scratchUrl, sourceUrl, log });
+    if (!data.ok) {
+      console.error(
+        `[restore-dump] FAIL: the restored copy does not match the source ` +
+          `(${data.mismatches.length} of ${data.tables.length} tables differ)`,
+      );
+      for (const difference of data.differences) console.error(`[restore-dump]   ${difference}`);
       return 1;
     }
 
@@ -459,9 +486,12 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       console.error(`[restore-dump] FAIL: the store contract exited ${code}`);
       return 1;
     }
+    const sessions = data.tables.find((entry) => entry.table === "sessions")?.rows ?? 0;
     log(
-      `PASS: ${name} survived the dump, the restore and the store contract ` +
-        `(${version === null ? "no version row" : `schema v${version}`}, ${counts.sessions ?? 0} sessions)`,
+      `PASS: ${name} survived the dump, the restore` +
+        `${data.compared ? ", the row comparison" : ""} and the store contract ` +
+        `(${version === null ? "no version row" : `schema v${version}`}, ${sessions} sessions, ` +
+        `total fp ${data.total.fp}${data.compared ? "" : ", rows NOT compared"})`,
     );
     return 0;
   } catch (err) {

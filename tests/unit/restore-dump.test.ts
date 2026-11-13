@@ -27,6 +27,8 @@ describe("restore-dump", () => {
       dump: "postgres.dump.enc",
       keyEnv: "BACKUP_ENCRYPTION_KEY",
       databaseUrl: null,
+      compareUrl: null,
+      compare: true,
       keep: false,
       help: false,
     });
@@ -45,6 +47,21 @@ describe("restore-dump", () => {
       databaseUrl: "postgres://postgres:pg@127.0.0.1:5432/postgres",
       keep: true,
     });
+  });
+
+  it("takes the source to compare rows with, and can be told not to", () => {
+    const compared = parseArgs([
+      "--compare-url",
+      "postgres://postgres:pg@127.0.0.1:5453/sandbox",
+      "postgres.dump.enc",
+    ]);
+    expect(compared.compareUrl).toBe("postgres://postgres:pg@127.0.0.1:5453/sandbox");
+    // With no explicit source the script falls back to the DATABASE_URL
+    // database, so comparison is on by default.
+    expect(compared.compare).toBe(true);
+
+    expect(parseArgs(["--no-compare", "postgres.dump.enc"]).compare).toBe(false);
+    expect(() => parseArgs(["--compare-url"])).toThrow(/needs a value/);
   });
 
   it("refuses an unknown option, a missing value and a second path", () => {
