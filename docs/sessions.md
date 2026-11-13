@@ -155,7 +155,9 @@ a prerequisite that is not ready leaves the session where it is.
 - Relay link lost mid-command (relay restart, reset for a stale frame, network
   drop): the operation becomes `outcome_unknown` and is never re-executed. The
   guest reconnects and the session continues; a retry of the same request id gets
-  `409 outcome_unknown`, a new request id runs normally.
+  `409 outcome_unknown` (even if its payload hash differs), a new request id runs
+  normally. The relay classifies the cause, so a lost link is never reported as a
+  `502 guest_error`, and the request row is never a `410 result_expired`.
 - Guest cannot reconnect before the relay-loss deadline, which is the end of
   `RELAY_LOSS_GRACE_MS` (default 90 s) or 1 s before the lease, whichever comes
   first: the session becomes `FAILED` with `failure:relay_lost`, distinct from

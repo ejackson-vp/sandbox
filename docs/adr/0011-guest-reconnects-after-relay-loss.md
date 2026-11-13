@@ -39,6 +39,12 @@ Three changes, one per hop:
    status reported on the previous one, so a fence never trusts a dead link's
    report. Pending frames are not replayed: they are dropped with the old link
    and stay `outcome_unknown`.
+   The response endpoint reports why it has no outcome with a structured code:
+   `guest_disconnected` and `request_superseded` are link losses whose outcome
+   is unknown, `guest_error` is the guest reporting a failed operation, and
+   `session_destroyed` means the session is being torn down. A generic 409 with
+   prose forced the controller to guess, and it guessed wrong: a lost link
+   reached the caller as a 502 guest error with the text guest disconnected.
 3. **Controller.** Relay recovery compares the generation in the per-session
    snapshot with the last one it observed. On a change (or a registration that
    disappeared) it marks the in-flight request `outcome_unknown` and bumps
@@ -61,6 +67,23 @@ of the interrupted request id is `409 outcome_unknown` from the request row.
 - A relay restart no longer kills a paid session. The lease, the Pod, the
   workspace and the shard's reservations are unchanged; the next operation is
   admitted after the reconnected guest reports idle.
+- The guest URL is stable across Pod replacement. It is a ClusterIP, never an
+  endpoint Pod IP: the shardless `relay` Service at one replica, and one
+  per-shard Service `relay-<n>` (selecting
+  `statefulset.kubernetes.io/pod-name: relay-<n>`) above one. A guest runs with
+  `dnsPolicy: None` and no DNS egress, so a Service name is not an option, and
+  the address is baked into the guest at boot, so it cannot follow a new Pod.
+  Creating a session with the old per-shard Pod IP is what made every guest on
+  the shard dial a dead address after the restart. The controller still uses its
+  own per-shard admin address (host template over the headless Service); only
+  the guest URL changed. Sharded deployments create the per-shard Services with
+  `make dev-scale N`.
+- A frame the relay accepted and then lost is `outcome_unknown` at the control
+  API: it marks the request fenced (leaving the single-operation gate closed),
+  answers `409 outcome_unknown`, and a lookup or same-id retry keeps answering
+  that. A guest-reported error still finishes `error` and answers `502`, and a
+  failure before the relay accepts the frame stays `guest_not_available` with the
+  request `abandoned`.
 - The interrupted operation is never reported as success or failure. Its retry
   is a defined `409 outcome_unknown`, and a new request id runs normally.
 - A guest that cannot reconnect is now a distinct outcome
@@ -104,6 +127,14 @@ of the interrupted request id is `409 outcome_unknown` from the request row.
   still record `lease_expired`. The TLA model abstracts the ordering as a guard
   (`ExpireLease` is disabled while the link is lost); it does not model the
   margin.
+- **The egress proxy URL is still a Pod IP.** A proxy replacement breaks egress
+  for the rest of the session, though not the session or its relay link. The
+  same stable-Service treatment applies, with per-shard proxy Services; it is
+  not in this change.
+- **Changing `RELAY_REPLICAS` mid-lease changes the guest address.** A session
+  created at one replica holds the `relay` ClusterIP; after scaling to two, the
+  shard claim refuses it (421) and the reconnect cannot land. Scaling is a
+  rollout operation, not a live one, and the fault matrix covers a fixed count.
 - **A controller restart can beat the first relay-loss scan.** The lease
   attribution reads an in-memory loss window, which a fresh process has not
   populated yet. If the controller restarts with the relay also lost and the

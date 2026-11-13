@@ -12,6 +12,9 @@ function exists(namespace: string, kind: string, target: string): boolean {
   try {
     execFileSync("kubectl", ["-n", namespace, "get", kind, target, "-o", "name"], {
       encoding: "utf8",
+      // Probing the wrong kind is expected; kubectl's "not found" line on
+      // stderr is not a harness error and polluted the fault logs.
+      stdio: ["ignore", "pipe", "ignore"],
     });
     return true;
   } catch {

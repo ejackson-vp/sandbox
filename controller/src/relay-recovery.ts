@@ -150,6 +150,17 @@ export class RelayRecovery {
     result: RelayRecoveryResult,
   ): Promise<void> {
     const now = this.now();
+    // A lease that is already over has no paid work left to resume, and the
+    // reconciler's lease check owns the outcome. A guest that disconnects at its
+    // lease boundary is not a relay loss: classifying it as one would turn every
+    // ordinary expiry into a refunded FAILED session. The loss window is only
+    // opened while the lease is live, which is also the only time the
+    // lease-bound deadline can fire.
+    if (session.leaseExpiresAt !== null && now >= session.leaseExpiresAt) {
+      this.lostAt.delete(session.id);
+      this.expiring.delete(session.id);
+      return;
+    }
     let state;
     try {
       state = await this.relay.state(session.id);

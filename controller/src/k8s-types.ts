@@ -120,6 +120,24 @@ export interface Provisioner {
   patchPodLabels(podName: string, labels: Record<string, string | null>): Promise<void>;
   /** Resolve a Service to a dialable endpoint; `shard` selects one replica. */
   getServiceAddress(name: string, shard?: number, podPrefix?: string): Promise<{ host: string; port: number } | null>;
+  /**
+   * Resolve a Service to its ClusterIP, never to an endpoint Pod IP.
+   *
+   * This is the address a guest is given. A sandbox guest runs with
+   * `dnsPolicy: None` and no DNS egress, so it cannot resolve a Service name,
+   * and a Pod IP dies with the Pod: a relay replacement would leave every
+   * guest on the shard dialling a dead address forever. The ClusterIP survives
+   * Pod replacement and is DNAT'd to a live backend.
+   *
+   * Above one replica `shard` selects the per-shard Service named
+   * `<podPrefix>-<shard>` (for example `relay-0`), which selects exactly that
+   * StatefulSet Pod. At one replica `shard` is undefined and `name` is used.
+   */
+  getStableServiceAddress(
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ): Promise<{ host: string; port: number } | null>;
   /** Capacity planning only; Kubernetes remains the real scheduler. */
   listNodes(): Promise<NodeInfo[]>;
 }

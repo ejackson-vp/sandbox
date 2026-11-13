@@ -135,7 +135,11 @@ export function harness(opts: HarnessOptions = {}): WarmHarness {
     serviceAddress: async (name: string) =>
       name === cfg.proxyServiceName
         ? { host: "proxy", port: 3128 }
-        : { host: "relay", port: 8443 },
+        : { host: "relay-pod", port: 8443 },
+    stableServiceAddress: async (name: string, shard?: number) =>
+      name === cfg.proxyServiceName
+        ? { host: "proxy", port: 3128 }
+        : { host: shard === undefined ? "relay" : `relay-${shard}`, port: 8443 },
   };
 
   const manager = new WarmPoolManager(ctx);
@@ -176,7 +180,9 @@ export function harness(opts: HarnessOptions = {}): WarmHarness {
     claim: (runtime?: string, overrides?: Partial<SessionRecord>) =>
       manager.tryClaim(
         session(runtime, overrides),
-        { host: "relay", port: 8443 },
+        // The caller's fallback is the controller's own endpoint view, which
+        // in a real deployment is a Pod IP. The claim must not use it.
+        { host: "relay-pod", port: 8443 },
         { host: "proxy", port: 3128 },
         clock.now,
       ),

@@ -77,6 +77,7 @@ function harness(
       snapshotter: {} as never,
       now,
       serviceAddress: vi.fn(async () => ({ host: "10.0.0.1", port: 8443 })),
+      stableServiceAddress: vi.fn(async () => ({ host: "10.0.0.1", port: 8443 })),
     },
     {} as WarmPoolManager,
   );

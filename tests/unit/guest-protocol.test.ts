@@ -170,6 +170,7 @@ function harness(opts: {
       snapshotter: {} as never,
       now: () => Date.now(),
       serviceAddress: vi.fn(async () => null),
+      stableServiceAddress: vi.fn(async () => null),
     },
     {} as WarmPoolManager,
   );

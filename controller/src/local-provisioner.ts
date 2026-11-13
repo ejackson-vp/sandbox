@@ -302,6 +302,19 @@ export class LocalProvisioner implements Provisioner {
     if (labels["x402.io/pool"] === "sandbox") pod.warm = false;
   }
 
+  /**
+   * Local mode has no Service or Pod IP: each data plane is one process on a
+   * fixed host and port, which is as stable as it gets and survives a restart
+   * of that process. Sharding does not exist here.
+   */
+  async getStableServiceAddress(
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ): Promise<{ host: string; port: number } | null> {
+    return this.getServiceAddress(name, shard, podPrefix);
+  }
+
   async getServiceAddress(name: string, _shard?: number, _podPrefix?: string): Promise<{ host: string; port: number } | null> {
     // Local process mode has one of each service and no sharding.
     if (name === "relay") return { host: this.opts.relayHost, port: this.opts.relayPort };

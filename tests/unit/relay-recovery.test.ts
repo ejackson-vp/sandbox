@@ -304,6 +304,20 @@ describe("relay generation recovery", () => {
     ]);
   });
 
+  it("does not call a connection lost after the lease has ended", async () => {
+    const start = 1_000_000;
+    const h = harness([session({ id: "sbx_expired", leaseExpiresAt: start - 1_000 })], {
+      now: start,
+      graceMs: 60_000,
+    });
+    h.relay.unreachable.add("sbx_expired");
+
+    // The lease check owns an expired session. A guest leaving at its lease
+    // boundary must not become a refunded relay_lost FAILED session.
+    expect(await h.recovery.reconcile()).toMatchObject({ lost: 0, errors: 0 });
+    expect(h.terminated).toEqual([]);
+  });
+
   it("does not run the grace while the guest stays connected", async () => {
     const h = harness([session({ id: "sbx_1" })]);
     await h.recovery.reconcile();

@@ -55,6 +55,12 @@ interface ReconcilerDeps {
     shard?: number,
     podPrefix?: string,
   ) => Promise<{ host: string; port: number } | null>;
+  /** Override for tests: resolves ClusterIP-based guest addresses. */
+  stableServiceAddress?: (
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ) => Promise<{ host: string; port: number } | null>;
   /** Restart-recovery fence; defaults to one bound to the store and relay. */
   fence?: OperationFence;
   /** Injection point for tests; defaults to one bound to the fence and relay. */
@@ -122,6 +128,7 @@ export class Reconciler {
       // Bound, not wrapped: a wrapper with a shorter parameter list silently
       // drops arguments, which is how the shard pod prefix was lost.
       serviceAddress: this.serviceAddress.bind(this),
+      stableServiceAddress: this.stableServiceAddress.bind(this),
     };
     this.warm = new WarmPoolManager(this.ctx);
     this.provisioning = new Provisioning(this.ctx, this.warm);
@@ -487,6 +494,27 @@ export class Reconciler {
 
   resumeSession(id: string): Promise<void> {
     return this.lifecycle.resume(id);
+  }
+
+  /**
+   * ClusterIP-based address for a guest-facing URL.
+   *
+   * Cacheable, unlike the relay's endpoint Pod IP: a ClusterIP belongs to the
+   * Service, not to a Pod, so a relay replacement does not change it. The
+   * resolver's short TTL still picks up a Service being recreated.
+   */
+  private async stableServiceAddress(
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ): Promise<{ host: string; port: number } | null> {
+    return this.serviceAddresses.resolve(
+      `stable:${name}#${shard ?? ""}#${podPrefix ?? name}`,
+      () => this.deps.stableServiceAddress
+        ? this.deps.stableServiceAddress(name, shard, podPrefix)
+        : this.deps.provisioner.getStableServiceAddress(name, shard, podPrefix),
+      { cache: true },
+    );
   }
 
   private async serviceAddress(

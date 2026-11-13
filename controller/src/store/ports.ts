@@ -241,7 +241,11 @@ export interface ControlApiStore {
   finishOperation(
     sessionId: string,
     requestId: string,
-    outcome: "done" | "error" | "abandoned",
+    /**
+     * `outcome_unknown` marks the request fenced and leaves the single-operation
+     * gate closed; only the operation fence or relay recovery may release it.
+     */
+    outcome: "done" | "error" | "abandoned" | "outcome_unknown",
     /** The sealed result to keep with the row; omitted or over the bound, none is stored. */
     resultEnvelope?: string | null,
   ): Promise<void>;

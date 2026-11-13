@@ -260,7 +260,10 @@ export function registerRelayControlRoutes(
       return;
     }
     if (result.kind === "error") {
-      res.status(409).json({ error: "guest_error", message: result.message });
+      // Structured code, so the controller can tell a link loss (outcome
+      // unknown) from a guest-reported operation error (a real failure). A
+      // generic 409 forced it to guess from the message.
+      res.status(409).json({ error: result.code, message: result.message });
       return;
     }
     res.status(202).json({ pending: result.stillPending });

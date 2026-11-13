@@ -219,11 +219,13 @@ export class PodCreation {
     const { guestToken } = registration;
 
     // Registration may have waited through a relay replacement. Resolve the
-    // relay endpoint again after it succeeds so the pod boots against the relay
-    // that accepted the registration, not the one that was cached before it.
-    // Above one replica this re-resolves the shard's ready endpoint, so the pod
-    // lands on its shard and is never handed a hostname the guest cannot
-    // resolve. The proxy endpoint is stable and already resolved by the caller.
+    // guest's relay address again after it succeeds. This is the ClusterIP of
+    // the session's Service, never a Pod IP: the guest bakes the URL into its
+    // process at boot and must still reach the replacement relay after a
+    // restart. Readiness was already checked against a ready endpoint by
+    // `podEndpoints`; the address and the readiness probe are separate. The proxy endpoint is a Pod IP and already resolved by the
+    // caller; a proxy restart costs egress for the rest of the session, not the
+    // session itself.
     const relay = (await this.ctx.endpoints.relayAddress(session.id)) ?? relayAddr;
     const proxy = proxyAddr;
 

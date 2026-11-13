@@ -82,6 +82,7 @@ function harness(limit: number, persisted: SessionRecord[] = []) {
       snapshotter: {} as never,
       now: () => Date.now(),
       serviceAddress: async () => null,
+      stableServiceAddress: async () => null,
     },
     {} as WarmPoolManager,
   );

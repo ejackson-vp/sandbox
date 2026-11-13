@@ -171,13 +171,20 @@ export class PgOperationRepository {
           [requestId, sessionId, op, session.execEpoch, payloadHash, now],
         );
         if ((inserted.rowCount ?? 0) === 0) {
-          // The first claim owns the id. Read its payload back and decide whether
-          // this retry is the same request (`duplicate`) or a reused key.
-          const existing = await tx.query<{ payload_hash: string | null }>(
-            "SELECT payload_hash FROM exec_requests WHERE session_id = $1 AND id = $2",
+          // The first claim owns the id. Read its state and payload back.
+          const existing = await tx.query<{ payload_hash: string | null; state: string }>(
+            "SELECT payload_hash, state FROM exec_requests WHERE session_id = $1 AND id = $2",
             [sessionId, requestId],
           );
-          const stored = existing.rows[0]?.payload_hash ?? null;
+          const row = existing.rows[0];
+          // A fenced request is answered with its outcome, not with the
+          // idempotency-key verdict: the id is spent either way, and the client
+          // must learn that the operation's outcome is unknown. Reporting
+          // `idempotency_key_reused` there hides the only answer it can act on.
+          if (row?.state === "outcome_unknown") {
+            return { ok: false, code: "duplicate", state: session.state, requestId };
+          }
+          const stored = row?.payload_hash ?? null;
           if (payloadDiffers(stored, payloadHash)) {
             return { ok: false, code: "idempotency_key_reused", state: session.state, requestId };
           }
@@ -216,7 +223,7 @@ export class PgOperationRepository {
   async finishOperation(
     sessionId: string,
     requestId: string,
-    outcome: "done" | "error" | "abandoned",
+    outcome: "done" | "error" | "abandoned" | "outcome_unknown",
     resultEnvelope?: string | null,
   ): Promise<void> {
     // One bound and one rule: too large is stored as
@@ -235,6 +242,11 @@ export class PgOperationRepository {
         [outcome, envelope, now, sessionId, requestId],
       );
       if ((finished.rowCount ?? 0) === 0) return;
+      // `outcome_unknown` fences the gate, it does not release it: the guest may
+      // still be running the command or reconnecting, so only
+      // `OperationFence`/relay recovery may clear `active_request_id` after the
+      // guest reports idle. Every other outcome is the end of the operation.
+      if (outcome === "outcome_unknown") return;
       await tx.query(
         `UPDATE sessions
             SET active_request_id = NULL,

@@ -45,6 +45,7 @@ export function disconnectReasonLabel(code: number | undefined): RelayDisconnect
 
 export function registerRelayMetrics(registry: MetricsRegistry = metrics): void {
   registry.gauge("sandbox_relay_sessions", "Registered relay sessions");
+  registry.gauge("sandbox_relay_connected_sessions", "Registered relay sessions with a live guest");
   registry.gauge("sandbox_relay_pending_requests", "Requests awaiting a guest response");
   registry.gauge("sandbox_relay_active_requests", "Operations the guests report as running");
   registry.counter("sandbox_relay_reconnects_total", "Guest reconnections to an existing registration");
@@ -66,12 +67,16 @@ export function registerRelayMetrics(registry: MetricsRegistry = metrics): void 
 /** The counters the scrape reads. Declared here so metrics does not import the registry. */
 interface RelayMetricsSource {
   size(): number;
+  connectedTotal(): number;
   pendingTotal(): number;
   activeTotal(): number;
 }
 
 export function collectRelayMetrics(registry: MetricsRegistry, relay: RelayMetricsSource): void {
   registry.gauge("sandbox_relay_sessions", "Registered relay sessions").set({}, relay.size());
+  registry
+    .gauge("sandbox_relay_connected_sessions", "Registered relay sessions with a live guest")
+    .set({}, relay.connectedTotal());
   registry
     .gauge("sandbox_relay_pending_requests", "Requests awaiting a guest response")
     .set({}, relay.pendingTotal());
