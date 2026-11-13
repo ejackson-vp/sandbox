@@ -10,83 +10,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import { mintProxyToken } from "../../controller/src/tokens.js";
 import { applyYaml, clusterAvailable, CONTEXT, deleteQuietly, kubectl, kubectlJson, kubectlTry } from "./kubectl.js";
+import { probePod, runProbes, type ProbeCase } from "./probe.js";
 
 const available = clusterAvailable();
 if (!available) {
   console.warn("\n[security] cluster not available: network isolation tests are SKIPPED\n");
-}
-
-interface ProbeCase {
-  name: string;
-  kind: "tcp" | "dns" | "https-proxy" | "direct-https";
-  target?: string;
-  url?: string;
-  proxy?: string;
-  proxyToken?: string;
-  hostname?: string;
-  timeoutMs: number;
-  expected: "allow" | "deny";
-}
-
-function probePod(name: string): string {
-  return `
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ${name}
-  namespace: sandbox-workloads
-  labels: {x402.io/test-probe: "true"}
-spec:
-  runtimeClassName: x402-sandbox
-  restartPolicy: Never
-  automountServiceAccountToken: false
-  enableServiceLinks: false
-  dnsPolicy: None
-  dnsConfig: {nameservers: ["127.0.0.1"], searches: [], options: []}
-  nodeSelector: {x402.io/sandbox-pool: "true"}
-  tolerations: [{key: x402.io/sandbox, operator: Exists, effect: NoSchedule}]
-  securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
-  containers:
-    - name: probe
-      image: x402-sandbox/guest:dev
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c", "sleep 900"]
-      securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
-      volumeMounts: [{name: w, mountPath: /run/x402}]
-  volumes: [{name: w, emptyDir: {medium: Memory, sizeLimit: 32Mi}}]
-`;
-}
-
-interface Outcome {
-  name: string;
-  ok: boolean;
-  detail: string;
-  ms: number;
-}
-
-function runProbes(pod: string, probes: ProbeCase[]): Record<string, Outcome> {
-  const payload = probes.map((p) => ({
-    name: p.name,
-    kind: p.kind,
-    target: p.target,
-    url: p.url,
-    proxy: p.proxy,
-    proxyToken: p.proxyToken,
-    hostname: p.hostname,
-    timeoutMs: p.timeoutMs,
-  }));
-  const out = kubectl([
-    "-n",
-    "sandbox-workloads",
-    "exec",
-    pod,
-    "--",
-    "env",
-    `PROBES=${JSON.stringify(payload)}`,
-    "/usr/local/bin/x402-netprobe",
-  ]);
-  const results = JSON.parse(out.trim().split("\n").pop() ?? "[]") as Outcome[];
-  return Object.fromEntries(results.map((r) => [r.name, r]));
 }
 
 describe.skipIf(!available)("network isolation (real cluster)", () => {
