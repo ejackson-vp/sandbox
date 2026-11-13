@@ -183,7 +183,15 @@ jobs:
         working-directory: guest
         run: ../scripts/fuzz-go.sh . FuzzChunkDecode 20s
       - name: typescript fuzz targets
-        run: npm run test:fuzz
+        # Instrumented so the badge can merge them. These targets drive the
+        # create route, the internal payment routes and the controller client
+        # with adversarial input, and no other measured suite does that.
+        run: npm run test:fuzz:coverage
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: coverage-fuzz-report
+          path: coverage-fuzz/
+          retention-days: 14
 
   integration:
     name: integration (local guest)
@@ -248,21 +256,22 @@ jobs:
 
   # The README coverage badge is measured, not hand-maintained. `unit` runs the
   # unit and property suites under instrumentation; `integration` runs the same
-  # suite it always runs, instrumented. This job merges the two reports, because
-  # coverage is a union: a line counts if any suite ran it. Before the merge the
-  # badge read whatever the unit suite alone reached, which scored the client and
-  # wiring code at zero.
+  # suite it always runs, instrumented; `fuzz` runs its TypeScript targets
+  # instrumented. This job merges the three reports, because coverage is a union:
+  # a line counts if any suite ran it. Before the merge the badge read whatever
+  # the unit suite alone reached, which scored the client, wiring and adversarial
+  # entry points at zero.
   #
-  # The merge also owns the floor, since neither run can express a total only the
-  # pair reaches. The per-module floors in vitest.config.ts still gate `unit` on
-  # every pull request; this one gates a main push.
+  # The merge also owns the floor, since none of the runs can express a total
+  # only the set reaches. The per-module floors in vitest.config.ts still gate
+  # `unit` on every pull request; this one gates a main push.
   #
   # Writes exactly one JSON file to the `badges` branch, which the README badge
   # reads. Main pushes only, and it never checks out or runs PR code: the
   # artifacts are produced by the trusted run, this job only merges and publishes.
   coverage-badge:
     name: coverage badge
-    needs: [unit, integration]
+    needs: [unit, integration, fuzz]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -277,12 +286,16 @@ jobs:
         with:
           name: coverage-integration-report
           path: coverage-integration
-      - name: Merge unit and integration coverage
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: coverage-fuzz-report
+          path: coverage-fuzz
+      - name: Merge unit, integration and fuzz coverage
         # A few points under the merged totals, so a real drop fails the publish
         # instead of only recolouring a badge.
         run: >-
           node scripts/coverage-merge.mjs coverage-merged
-          coverage/lcov.info coverage-integration/lcov.info
+          coverage/lcov.info coverage-integration/lcov.info coverage-fuzz/lcov.info
           --floor-lines 74 --floor-branches 64 --floor-functions 75
       - name: Render badge JSON
         run: node scripts/coverage-badge.mjs coverage-merged/coverage-summary.json badge/coverage.json
