@@ -249,6 +249,11 @@ export interface ControlApiStore {
     payment: PaymentRecord,
     session: SessionRecord,
   ): Promise<{ sessionId: string; created: boolean }>;
+  /**
+   * Fail an unsettled intent. Throws `LedgerSettledError` when a `SETTLED`
+   * ledger row already exists for the payment key, so no API path can produce
+   * the `intent_failed_ledger_settled` divergence.
+   */
   failPaymentIntent(paymentKey: string, reason: string): Promise<void>;
   finishOperation(
     sessionId: string,

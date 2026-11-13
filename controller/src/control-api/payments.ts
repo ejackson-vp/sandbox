@@ -7,6 +7,7 @@ import { log, metrics } from "@x402s/shared/runtime";
 import { isHeldBy } from "@x402s/shared/durable";
 import {
   DuplicateEntitlementError,
+  LedgerSettledError,
   PaymentAlreadyRedeemedError,
   PaymentClaimLostError,
   type LedgerStatus,
@@ -295,9 +296,25 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     res.status(201).json(await completionResponse(body.sessionId, true));
   });
 
+  // Fail an intent whose settlement was refused. Refused when the ledger
+  // already says the customer was served: the money moved, so the recovery is a
+  // refund (see `/internal/payments/:key/refund`), never a retry of this route.
   app.post("/internal/payment-intents/:paymentKey/fail", async (req: Request, res: Response) => {
+    const paymentKey = String(req.params.paymentKey ?? "");
     const reason = String((req.body ?? {}).reason ?? "settlement_failed");
-    await store.failPaymentIntent(String(req.params.paymentKey ?? ""), reason);
+    try {
+      await store.failPaymentIntent(paymentKey, reason);
+    } catch (err) {
+      if (err instanceof LedgerSettledError) {
+        res.status(409).json({
+          error: "ledger_settled",
+          ledgerStatus: "SETTLED",
+          message: err.message,
+        });
+        return;
+      }
+      throw err;
+    }
     log.warn("payment_intent_failed", { reason });
     res.json({ ok: true });
   });

@@ -22,10 +22,12 @@ import {
 } from "@x402s/shared/durable";
 import {
   DuplicateEntitlementError,
+  LedgerSettledError,
   mapIntent,
   PaymentAlreadyRedeemedError,
   PaymentClaimLostError,
   type IntentClaimResult,
+  type LedgerStatus,
   type PaymentIntentRecord,
   type PaymentRecord,
   type SessionRecord,
@@ -159,13 +161,43 @@ export class PgPaymentRepository {
     };
   }
 
+  /**
+   * Fail a payment intent, unless the ledger already says the customer was
+   * served.
+   *
+   * The ledger guard is part of the same statement as the status change, so
+   * settlement recovery cannot write a `SETTLED` row between the decision and
+   * the update: there is no read-then-write window to lose. A refused fail is
+   * the `LedgerSettledError` the route maps to 409; without it that pair of rows
+   * is the `intent_failed_ledger_settled` divergence, which must stay reachable
+   * only by an edit outside this service.
+   *
+   * Nothing to change is not an error: an intent that is already `settled`, or
+   * that does not exist, returns normally as it always has.
+   */
   async failIntent(paymentKey: string, reason: string): Promise<void> {
-    await this.conn.write(
-      `UPDATE payment_intents SET status = 'failed', reason = $1, claim_token = NULL,
-          claim_expires_at = NULL, updated_at = $2
-        WHERE payment_key = $3 AND status <> 'settled'`,
+    const outcome = await this.conn.write<{ failed: number; ledger_status: LedgerStatus | null }>(
+      `WITH failed AS (
+         UPDATE payment_intents
+            SET status = 'failed', reason = $1, claim_token = NULL,
+                claim_expires_at = NULL, updated_at = $2
+          WHERE payment_key = $3
+            AND status <> 'settled'
+            AND NOT EXISTS (
+                  SELECT 1 FROM payment_ledger
+                   WHERE payment_key = $3 AND status = 'SETTLED')
+          RETURNING payment_key
+       )
+       SELECT (SELECT count(*) FROM failed)::int AS failed,
+              (SELECT status FROM payment_ledger WHERE payment_key = $3) AS ledger_status`,
       [reason.slice(0, 500), Date.now(), paymentKey],
     );
+    // The decision was the UPDATE; this only names why it matched no row, from
+    // the same statement snapshot.
+    const row = outcome.rows[0];
+    if (row?.failed === 0 && row.ledger_status === "SETTLED") {
+      throw new LedgerSettledError(paymentKey);
+    }
   }
 
   /**
