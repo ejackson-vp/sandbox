@@ -45,6 +45,7 @@ jump to the full index below.
 - [architecture-principles.md](architecture-principles.md) — the working rulebook
 - [verification.md](verification.md) — bounded TLA+ model of lifecycle, payment, operations and capacity
 - [release-process.md](release-process.md) — staged image release, scan gate and promotion
+- [launch.md](launch.md) — the ordered path from merged to a paid public beta, with the check for each step
 - [adr/](adr/) — why the load-bearing choices were made
 - [workload-compatibility.md](workload-compatibility.md) — what runs in the guest
 - [benchmark-methodology.md](benchmark-methodology.md) — how numbers are taken
