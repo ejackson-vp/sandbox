@@ -8,14 +8,14 @@ without inheriting VictoriaMetrics.
 
 The runnable stack (VictoriaMetrics single-node, vmalert, Grafana, the
 `monitoring` namespace, NetworkPolicies, image pins, retention and Flux wiring)
-is cluster-specific and lives in the private `ejackson-vp/homelab` repository
-under [`apps/sandbox-monitoring/`](https://github.com/ejackson-vp/homelab/tree/main/apps/sandbox-monitoring).
+is cluster-specific and lives in the private GitOps repository
+under `apps/sandbox-monitoring/`.
 
 | Part | Where | Why |
 | --- | --- | --- |
 | Scrape list, SLO rules, dashboard JSON, metric/SLO docs | **here** — `deploy/monitoring/contract/` | Tied to app metric names; portable to any Prometheus-compatible stack |
-| VMSingle, vmalert, Grafana, namespace, NetworkPolicies, scrape-config mirror | `homelab/apps/sandbox-monitoring/` | Cluster decisions: storage class, retention, resources, image pins |
-| Flux ordering | `homelab/apps/sandbox-monitoring{,-namespace,-contract}.yaml` | Namespace → contract → stack, so a fresh cluster cannot deadlock |
+| VMSingle, vmalert, Grafana, namespace, NetworkPolicies, scrape-config mirror | `apps/sandbox-monitoring/` | Cluster decisions: storage class, retention, resources, image pins |
+| Flux ordering | `apps/sandbox-monitoring{,-namespace,-contract}.yaml` | Namespace → contract → stack, so a fresh cluster cannot deadlock |
 
 Nothing in this directory creates a workload. `kubectl apply -k
 deploy/monitoring/contract` produces three ConfigMaps in the `monitoring`
@@ -24,7 +24,7 @@ namespace and nothing else.
 ## Scrape contract
 
 One job covers all three control-plane roles. Each role runs one replica in the
-homelab, so DNS targets are enough; a scaled deployment should switch to pod
+reference deployment, so DNS targets are enough; a scaled deployment should switch to pod
 discovery with `containerPort: metrics` (the pods already name the port
 `metrics`).
 
@@ -158,7 +158,7 @@ expression and narrow the rule.
 
 **Warm-pool rules are gated on an enabled pool.** `SandboxWarmPoolEmpty` is
 gated on `sum(sandbox_warm_pool_budget) > 0`, so it stays inactive when
-`WARM_POOL_SIZE=0`, the homelab default. The profile rules are traffic-gated
+`WARM_POOL_SIZE=0`, the reference deployment default. The profile rules are traffic-gated
 instead: with the pool disabled, claims record `miss_disabled`, no profile has
 a non-zero target, and none of the expressions match. Enable the pool and set
 `WARM_POOL_BASE_MIN` below `WARM_POOL_SIZE` before relying on them.
@@ -179,7 +179,7 @@ you run more than one, use `max by (profile)` for
 summed.
 
 **The rules do not deliver notifications.** The rule file carries no receiver.
-The homelab stack evaluates with `-notifier.blackhole`, so alerts are visible as
+The reference stack evaluates with `-notifier.blackhole`, so alerts are visible as
 `ALERTS` series and in the dashboard but nothing pages. Any other deployment is
 free to attach its own Alertmanager or webhook bridge without touching these
 rules.
@@ -188,11 +188,11 @@ rules.
 
 `contract/grafana-dashboard.json` is the #37 dashboard plus a firing-alert
 table. Grafana provisions it as `Sandbox / Sandbox control plane` in the
-homelab; imported by hand elsewhere, it keeps the same uid and title.
+reference deployment; imported by hand elsewhere, it keeps the same uid and title.
 
 The `DS_PROMETHEUS` input is a datasource variable, so the dashboard binds to
 whichever Prometheus-compatible datasource the viewer selects. The committed
-default is the homelab's `vmsingle` uid; pick your own datasource once after
+default is the reference deployment's `vmsingle` uid; pick your own datasource once after
 import.
 
 The table at the bottom, **Firing SLO alerts (vmalert)**, queries
@@ -238,32 +238,32 @@ These checks need no cluster:
 
 Cluster-only checks — scrape targets up, rules loaded, dashboard panels
 resolving, PVC bound, steady-state memory — are the stack's responsibility and
-are recorded in the homelab repository.
+are recorded in the reference deployment repository.
 
 ## Residual risks (contract side)
 
 - **`reconciliation_pending` is approximate** until the API exports a dedicated
   counter (see [Alert caveats](#alert-caveats)).
-- **Warm-pool rules are active only when the pool is enabled.** The homelab
-  default `WARM_POOL_SIZE=0` keeps them quiet. `WARM_POOL_BASE_MIN` defaults to
+- **Warm-pool rules are active only when the pool is enabled.** The reference
+  deployment default `WARM_POOL_SIZE=0` keeps them quiet. `WARM_POOL_BASE_MIN` defaults to
   the whole budget, which leaves no headroom for `python` and `node`; set it
   below `WARM_POOL_SIZE` before expecting profile misses to grow a pool.
 - **Profile alert thresholds are starting points.** The 20% miss ratio, 20-miss
   volume, three blocked growths and five drains per hour are sized for a small
   pool, not derived from capacity.
 - **Blast-radius threshold** of five sessions is a starting point for a
-  single-tenant homelab, not a capacity-derived number.
-- **The contract names two ConfigMaps after their homelab consumers**
+  single-tenant cluster, not a capacity-derived number.
+- **The contract names two ConfigMaps after their reference deployment consumers**
   (`vmalert-rules`, `grafana-dashboard-sandbox`). That keeps the live
   installation adoptable without recreation; a downstream consumer that mounts
   the files by path does not care about the names.
 
 Stack risks — no HA, no delivery, root-running upstream images, anonymous
 Grafana on a ClusterIP, local-path PVC pinning — are recorded with the stack in
-the homelab repository, because they follow from the deployment and not from
+the private GitOps repo, because they follow from the deployment and not from
 these files.
 
-## The homelab stack
+## The reference stack
 
 The stack keeps the same namespace, PVC, Deployment and Service names, the same
 dashboard uid (`sandbox-control-plane`) and the same scrape targets as before the

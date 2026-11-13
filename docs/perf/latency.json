@@ -1,22 +1,25 @@
 {
-  "$comment": "The landing page reads this file at the latest release tag. Re-run the cluster harness, update the figures, and commit before tagging.",
+  "$comment": "Read by site/index.html from main, which the page prefers over a release tag. The landing page is the only consumer. Update the figures from docs/performance-cluster.md before tagging a release; the page picks them up on the next load.",
   "control": "0.1.16",
-  "guest": "0.1.6",
   "measured": "2026-11-09",
-  "samples": 50,
-  "warm_pool": 20,
   "metrics": [
-    { "value": "127 ms", "label": "warm session ready, p50" },
-    { "value": "53 ms", "label": "exec round trip, p50" },
-    { "value": "182 MiB", "label": "idle guest memory" },
-    { "value": "0", "label": "accounts, keys, signups" }
-  ],
-  "caveat": {
-    "text": "0.1.22 measured 292-354 ms server ready across two 50-sample runs.",
-    "link": {
-      "label": "issue #116",
-      "href": "https://github.com/ejackson-vp/sandbox/issues/116"
+    {
+      "value": "395 ms",
+      "label": "warm start p50"
+    },
+    {
+      "value": "708 ms",
+      "label": "warm start p95"
+    },
+    {
+      "value": "2.87 s",
+      "label": "cold start p50"
+    },
+    {
+      "value": "3.96 s",
+      "label": "cold start p95"
     }
-  },
+  ],
+  "note": "Client-side, create to ready, payment and network included. Warm is a pool of 20 pre-booted guests; cold is an empty pool with the image cached. Control 0.1.16, 2026-11-09. 0.1.22 currently measures 548-595 ms warm.",
   "source": "docs/performance-cluster.md"
 }

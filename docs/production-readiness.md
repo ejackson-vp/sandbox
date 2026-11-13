@@ -15,8 +15,8 @@ concrete next step.
 | 5 | **Settlement recovery needs a facilitator lookup** | the controller can now reconcile a settled-but-unentitled payment into a refundable ledger row, but only if the facilitator exposes `GET /settlements/:paymentKey`. Testnet's public facilitator does not, so that window still answers `409 reconciliation_pending` | use a facilitator with a settlement lookup or a webhook, and record the run that proves it |
 | 6 | **Real refunds have never run** | mock mode auto-refunds; a real mode records `REFUND_PENDING` and the refund worker sends it to an operator-configured webhook. Nothing in this repository has moved testnet funds, and the webhook contract is defined here rather than by a facilitator | a settlement-sandbox end-to-end run: settle, kill the controller, prove the refund executes. See [payment-ledger.md](payment-ledger.md) |
 | 7 | **Image pinning has no admission layer on the cluster** | the controller refuses to start with an unpinned guest image when `KUBERNETES_ENABLED=true`, and pulls `repo@sha256:…` whenever a digest is configured, dev mode or not, so a moved tag cannot change what runs inside the VM. A compromised *node* can still run anything | a Kyverno `ClusterPolicy` now rejects a guest pod whose image is not the pinned repository+digest ([deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md)); it is inert until Kyverno is installed, and it has not been executed against a cluster |
-| 8 | **Dev attestation key is public by design** | anyone can forge dev evidence, so it is only safe while `ALLOW_INSECURE_DEV=true` | hardware attestation. The other credentials are no longer in the public repo: local runs generate them, and the homelab injects its own from SOPS |
-| 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; the homelab's `local-path` has no encryption and the controller cannot verify a CSI driver's parameters | decided in [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md): no at-rest encryption is claimed anywhere, the boundary is stated in [security-guarantees.md](security-guarantees.md) and [lifecycle.md](lifecycle.md), and PVC expiry plus an orphan-volume sweep are implemented. The real fix — client-side encrypted checkpoint objects with a client-held key — is a protocol change and is split into follow-up 1 in the ADR |
+| 8 | **Dev attestation key is public by design** | anyone can forge dev evidence, so it is only safe while `ALLOW_INSECURE_DEV=true` | hardware attestation. The other credentials are no longer in the public repo: local runs generate them, and the reference deployment injects its own from SOPS |
+| 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; the reference deployment's `local-path` has no encryption and the controller cannot verify a CSI driver's parameters | decided in [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md): no at-rest encryption is claimed anywhere, the boundary is stated in [security-guarantees.md](security-guarantees.md) and [lifecycle.md](lifecycle.md), and PVC expiry plus an orphan-volume sweep are implemented. The real fix — client-side encrypted checkpoint objects with a client-held key — is a protocol change and is split into follow-up 1 in the ADR |
 | 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |
 | 11 | **Suspend/resume pricing undefined** | a resume starts a fresh lease in the mock model | bill active time + storage, or charge per resume; decide before charging real money |
 | 12 | **Checkpoints are node-pinned** | local-path PVCs cannot resume after node loss; `resume_unavailable` is fail-fast, not HA | RWX/network storage or Firecracker snapshot/restore before promising node-failure recovery |
@@ -25,7 +25,7 @@ concrete next step.
 ## 2. Security hardening backlog
 
 - **The app repo ships no credentials.** Local runs generate a git-ignored
-  Secret (`scripts/dev-secrets.sh`); the homelab applies its own from the
+  Secret (`scripts/dev-secrets.sh`); the reference deployment applies its own from the
   private repo, SOPS-encrypted. The one committed key is the dev attestation
   seed, which is published by design and labelled `insecureDevOnly` everywhere.
 - **Credential separation** is enforced at startup: `CAPABILITY_SECRET` must be
@@ -37,12 +37,12 @@ concrete next step.
 - **HTTP receipt timeouts** bound slow clients: `HTTP_HEADERS_TIMEOUT_MS`
   (default 15 s) and `HTTP_REQUEST_TIMEOUT_MS` (default 60 s). Both stop once the
   request has been received, so a long-poll `exec` is unaffected. A
-  per-connection concurrency cap is deliberately absent — the API is tailnet-only
+  per-connection concurrency cap is deliberately absent — the API is reachable only over a private network
   and the per-IP bucket plus these timers is proportionate for one operator; it
   becomes necessary if the API is ever exposed publicly or scaled out.
 - **Client IP behind one reverse proxy**: `TRUST_PROXY_HOPS` (default 0) trusts
   a forwarded hop, so `req.ip` is the real client instead of the proxy pod. The
-  homelab sets it to 1 *and* scopes `allow-api` to the tailscale namespace, so
+  reference deployment sets it to 1 *and* scopes `allow-api` to the ingress namespace, so
   no workload can forge `X-Forwarded-For`; kind keeps it at 0.
 - **Image scanning** runs in the release workflow: Trivy on both images, SARIF
   to the Security tab, and a failure on fixable CRITICAL/HIGH. Note that the
@@ -115,9 +115,9 @@ concrete next step.
   Process/event-loop/GC families are included so application latency can be
   separated from runtime pauses. What ships here is the portable contract
   (`deploy/monitoring/contract/`): scrape list, SLO rules and dashboard. The
-  runnable homelab stack — VictoriaMetrics single-node + Grafana + vmalert,
+  runnable stack — VictoriaMetrics single-node + Grafana + vmalert,
   14-day retention, version-pinned images, provisioned dashboards and rules —
-  lives in the private homelab repo (`apps/sandbox-monitoring/`), so a cluster
+  lives in the private GitOps repo (`apps/sandbox-monitoring/`), so a cluster
   that already runs Prometheus can take the contract without inheriting
   VictoriaMetrics.
 - Alerts: `deploy/monitoring/contract/rules/sandbox-slo.yaml` implements the
@@ -128,7 +128,7 @@ concrete next step.
   blast-radius. `reconciliation_pending` is not yet a per-code counter, and the
   warm-pool rule is inactive while `WARM_POOL_SIZE=0`. Settlement-failure,
   PVC-full and orphan-pod alerts are still not implemented. The rule file
-  carries no receiver and the homelab stack evaluates with
+  carries no receiver and the reference stack evaluates with
   `-notifier.blackhole`: alert state is visible, nothing is paged.
 - Incident procedures: egress abuse, orphan Pod/PVC cleanup, relay compromise and
   secret rotation each have a runbook under `docs/runbooks/`, plus a

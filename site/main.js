@@ -1,5 +1,7 @@
 /* Small, dependency-free sprinkles. The page is complete without this file. */
 
+document.documentElement.classList.add("js");
+
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const year = document.querySelector("#year");
@@ -12,8 +14,21 @@ const origin = servedFromHttp
   : "https://raw.githubusercontent.com/ejackson-vp/sandbox/main/site";
 const docsUrl = `${origin}/llms.txt`;
 
-for (const el of document.querySelectorAll(".dossier code")) {
-  el.innerHTML = el.innerHTML.replaceAll("{origin}", origin);
+/* The hosted API lives at api.<root> while the page sits on the root domain.
+ * Local preview and hosts with more than one label, such as a GitHub Pages
+ * subdomain, have no such sibling and keep pointing at whatever served the page. */
+const host = servedFromHttp ? location.hostname : "";
+const isRootDomain = host.split(".").length === 2 && !/^\d+\.\d+$/.test(host);
+const apiBase = isRootDomain ? `https://api.${host}` : origin;
+
+const fill = (text) => text.replaceAll("{origin}", origin).replaceAll("{api}", apiBase);
+
+for (const el of document.querySelectorAll("code")) {
+  el.innerHTML = fill(el.innerHTML);
+}
+
+for (const el of document.querySelectorAll("[data-copy]")) {
+  el.dataset.copy = fill(el.dataset.copy);
 }
 
 /* ---------- nav shadow ---------- */
@@ -23,33 +38,131 @@ const onScroll = () => nav?.classList.toggle("is-scrolled", window.scrollY > 8);
 onScroll();
 window.addEventListener("scroll", onScroll, { passive: true });
 
-/* ---------- reveal on scroll ---------- */
+/* ---------- terminal demo ---------- */
 
-const reveals = [...document.querySelectorAll(".reveal")];
+const term = document.querySelector("[data-term]");
 
-if (reduceMotion || !("IntersectionObserver" in window)) {
-  reveals.forEach((el) => el.classList.add("reveal-in"));
-} else {
-  const observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        entry.target.classList.remove("reveal-pending");
-        entry.target.classList.add("reveal-in");
-        observer.unobserve(entry.target);
-      }
-    },
-    { rootMargin: "0px 0px -8% 0px", threshold: 0.06 },
-  );
+if (term) {
+  const cmd = term.querySelector(".t-cmd");
+  const cmdLine = term.querySelector(".t-cmd-line");
+  const lines = [...term.querySelectorAll(".t-line")];
+  const rest = lines.filter((line) => line !== cmdLine);
+  const replay = term.querySelector("[data-term-replay]");
+  const toggle = term.querySelector("[data-term-toggle]");
+  const full = cmd?.dataset.cmd ?? "";
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const hold = 9000;
+  const initialHold = 3000;
+  let running = false;
+  let paused = false;
+  let inView = false;
+  let runToken = 0;
+  let loopTimer = 0;
 
-  for (const el of reveals) {
-    const box = el.getBoundingClientRect();
-    if (box.top < window.innerHeight * 0.92) {
-      el.classList.add("reveal-in");
-    } else {
-      el.classList.add("reveal-pending");
-      observer.observe(el);
+  const reset = () => {
+    term.classList.add("is-armed");
+    lines.forEach((line) => line.classList.remove("is-on"));
+    if (cmd) cmd.textContent = "";
+  };
+
+  const finish = () => {
+    runToken += 1;
+    running = false;
+    clearTimeout(loopTimer);
+    term.classList.remove("is-playing");
+    term.classList.add("is-armed");
+    lines.forEach((line) => line.classList.add("is-on"));
+    if (cmd) cmd.textContent = full;
+  };
+
+  const play = async () => {
+    if (running || !cmd || reduceMotion || paused) return;
+    running = true;
+    const token = ++runToken;
+    reset();
+    term.classList.add("is-playing");
+    cmdLine?.classList.add("is-on");
+
+    for (let i = 1; i <= full.length; i += 1) {
+      if (token !== runToken) return;
+      cmd.textContent = full.slice(0, i);
+      await wait(75);
     }
+
+    await wait(1200);
+    if (token !== runToken) return;
+
+    for (const line of rest) {
+      line.classList.add("is-on");
+      await wait(1400);
+    }
+
+    if (token !== runToken) return;
+    term.classList.remove("is-playing");
+    running = false;
+  };
+
+  function schedule(delay) {
+    clearTimeout(loopTimer);
+    loopTimer = setTimeout(run, delay);
+  }
+
+  async function run() {
+    if (running || reduceMotion || !inView || document.hidden || paused) return;
+    await play();
+    if (inView && !document.hidden && !paused) schedule(hold);
+  }
+
+  const setPaused = (value) => {
+    paused = value;
+    if (paused) finish();
+    else if (!reduceMotion) schedule(40);
+
+    if (toggle) {
+      toggle.textContent = paused ? "play" : "pause";
+      toggle.setAttribute(
+        "aria-label",
+        paused ? "Play the terminal animation" : "Pause the terminal animation",
+      );
+    }
+  };
+
+  toggle?.addEventListener("click", () => {
+    if (reduceMotion) return;
+    setPaused(!paused);
+  });
+
+  replay?.addEventListener("click", () => {
+    if (reduceMotion) return;
+    if (paused) {
+      setPaused(false);
+      return;
+    }
+    runToken += 1;
+    running = false;
+    schedule(30);
+  });
+
+  if (!reduceMotion) {
+    if ("IntersectionObserver" in window) {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          inView = entries.some((entry) => entry.isIntersecting);
+          if (inView && !paused) schedule(running ? hold : initialHold);
+          else if (!inView) clearTimeout(loopTimer);
+        },
+        { threshold: 0.25 },
+      );
+      observer.observe(term);
+    } else {
+      inView = true;
+      if (!paused) schedule(initialHold);
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) clearTimeout(loopTimer);
+      else if (inView && !running && !paused) schedule(initialHold);
+    });
   }
 }
 
@@ -128,9 +241,10 @@ promptButton?.addEventListener("click", async () => {
 });
 
 /* ---------- numbers from the repo ----------
- * Two reads, both optional and unauthenticated: the latest release tag, then the
- * latency file that was published with it. The page is complete without either.
- * Nothing about the visitor is sent anywhere.
+ * Optional and unauthenticated. Reads the benchmark file from main, which is the
+ * newest one, then the copy tagged with the latest release, then the local file.
+ * Payloads that are not the four warm/cold numbers are ignored. The page is
+ * complete without any of it. Nothing about the visitor is sent anywhere.
  */
 
 const repo = "ejackson-vp/sandbox";
@@ -138,18 +252,21 @@ const api = "https://api.github.com";
 const raw = "https://raw.githubusercontent.com/ejackson-vp/sandbox";
 const cacheMs = 30 * 60 * 1000;
 
+/* The stored shape changes between deploys, so the key carries a version and the
+ * reader checks the shape it is about to use. A bad payload is a cache miss. */
 const cache = {
-  get(key) {
+  get(key, isValid = () => true) {
     try {
-      const value = JSON.parse(localStorage.getItem(`sandbox:${key}`) ?? "null");
-      return value && Date.now() - value.at < cacheMs ? value.body : null;
+      const value = JSON.parse(localStorage.getItem(`sandbox:v3:${key}`) ?? "null");
+      const fresh = value && Date.now() - value.at < cacheMs;
+      return fresh && isValid(value.body) ? value.body : null;
     } catch {
       return null;
     }
   },
   set(key, body) {
     try {
-      localStorage.setItem(`sandbox:${key}`, JSON.stringify({ at: Date.now(), body }));
+      localStorage.setItem(`sandbox:v3:${key}`, JSON.stringify({ at: Date.now(), body }));
     } catch {
       /* Private mode and file:// both refuse this. Fine. */
     }
@@ -162,53 +279,62 @@ const getJson = async (url, options = {}) => {
   return response;
 };
 
-const relative = (iso) => {
-  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (mins < 1) return "pushed just now";
-  if (mins < 60) return `pushed ${mins} min ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 36) return `pushed ${hours} h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 14) return `pushed ${days} d ago`;
-  return `pushed ${Math.round(days / 7)} w ago`;
-};
 
 /* ---------- hero numbers, from the latest release ---------- */
 
 const statsEl = document.querySelector("#stats");
 const noteEl = document.querySelector("#stat-note");
 
-const renderStats = (data, tag) => {
-  if (!statsEl || !Array.isArray(data.metrics) || !data.metrics.length) return;
+const isLatency = (data) =>
+  Array.isArray(data?.metrics) &&
+  data.metrics.length === 4 &&
+  data.metrics.every(
+    (m) => typeof m?.value === "string" && /warm|cold/i.test(m.label) && /p50|p95/i.test(m.label),
+  );
+
+const renderStats = (data, ref = "main") => {
+  if (!statsEl || !isLatency(data)) return;
+
+  const parsed = data.metrics.map(({ value, label }) => ({
+    value,
+    kind: /p50/i.test(label) ? "p50" : /p95/i.test(label) ? "p95" : null,
+    group: /warm/i.test(label) ? "Warm start" : /cold/i.test(label) ? "Cold start" : null,
+  }));
+  if (parsed.some((m) => !m.kind || !m.group)) return;
+
+  const groups = ["Warm start", "Cold start"].map((name) => {
+    const cells = ["p50", "p95"].map((kind) => parsed.find((m) => m.group === name && m.kind === kind));
+    return cells.every(Boolean) ? { name, cells } : null;
+  });
+  if (groups.some((group) => !group)) return;
 
   statsEl.replaceChildren(
-    ...data.metrics.map(({ value, label }) => {
-      const cell = document.createElement("div");
+    ...groups.map(({ name, cells }) => {
+      const wrap = document.createElement("div");
       const dt = document.createElement("dt");
+      dt.className = "stat-name";
+      dt.textContent = name;
+
       const dd = document.createElement("dd");
-      dt.textContent = value;
-      dd.textContent = label;
-      cell.append(dt, dd);
-      return cell;
+      dd.className = "stat-pair";
+      for (const { kind, value } of cells) {
+        const cell = document.createElement("span");
+        const b = document.createElement("b");
+        const small = document.createElement("small");
+        b.textContent = value;
+        small.textContent = kind;
+        cell.append(b, small);
+        dd.append(cell);
+      }
+
+      wrap.append(dt, dd);
+      return wrap;
     }),
   );
 
   if (!noteEl) return;
 
-  const ref = tag ?? "main";
-  noteEl.replaceChildren(
-    `Two-node Kata cluster, control ${data.control}, ${data.measured}, n=${data.samples}. `,
-  );
-
-  if (data.caveat?.text) {
-    noteEl.append(`${data.caveat.text} `);
-    if (data.caveat.link?.href) {
-      const caveat = document.createElement("a");
-      caveat.href = data.caveat.link.href;
-      caveat.textContent = data.caveat.link.label;
-      noteEl.append(caveat, ". ");
-    }
-  }
+  noteEl.replaceChildren(data.note ? `${data.note} ` : "");
 
   const method = document.createElement("a");
   method.href = `https://github.com/${repo}/blob/${ref}/docs/performance-cluster.md`;
@@ -219,9 +345,9 @@ const renderStats = (data, tag) => {
 const loadStats = async () => {
   if (!statsEl) return;
 
-  const remembered = cache.get("latency");
+  const remembered = cache.get("latency", (body) => isLatency(body?.data));
   if (remembered) {
-    renderStats(remembered.data, remembered.tag);
+    renderStats(remembered.data, remembered.ref);
     return;
   }
 
@@ -233,14 +359,22 @@ const loadStats = async () => {
     /* Rate limited or offline. The main branch copy is still worth showing. */
   }
 
-  /* A release only carries the file once it has been tagged after a benchmark run. */
-  const candidates = [tag && `${raw}/${tag}/docs/perf/latency.json`, `${raw}/main/docs/perf/latency.json`, "./latency.json"];
+  /* Main carries the newest benchmark. The tag copy can lag by a release, so it
+   * is only a fallback. A local preview prefers the checkout. */
+  const local = ["localhost", "127.0.0.1"].includes(location.hostname);
+  const candidates = [
+    local ? { url: "./latency.json", ref: "main" } : null,
+    { url: `${raw}/main/docs/perf/latency.json`, ref: "main" },
+    tag ? { url: `${raw}/${tag}/docs/perf/latency.json`, ref: tag } : null,
+    { url: "./latency.json", ref: "main" },
+  ].filter(Boolean);
 
-  for (const url of candidates.filter(Boolean)) {
+  for (const { url, ref } of candidates) {
     try {
       const data = await (await getJson(url, { cache: "no-cache" })).json();
-      renderStats(data, tag);
-      cache.set("latency", { data, tag });
+      if (!isLatency(data)) continue;
+      renderStats(data, ref);
+      cache.set("latency", { data, ref });
       return;
     } catch {
       /* Try the next source. */
@@ -248,60 +382,4 @@ const loadStats = async () => {
   }
 };
 
-/* ---------- repo vitals ---------- */
-
-const vitals = document.querySelector("#vitals-data");
-
-const loadVitals = async () => {
-  if (!vitals) return;
-
-  const remembered = cache.get("vitals");
-  if (remembered) {
-    vitals.textContent = remembered.text.replace(/pushed [^·]+$/, relative(remembered.pushedAt));
-    return;
-  }
-
-  const headers = { Accept: "application/vnd.github+json" };
-
-  const [repoRes, commitRes, runRes, contributorsRes] = await Promise.all([
-    getJson(`${api}/repos/${repo}`, { headers }),
-    getJson(`${api}/repos/${repo}/commits?sha=main&per_page=1`, { headers }),
-    getJson(`${api}/repos/${repo}/actions/runs?branch=main&per_page=1`, { headers }),
-    getJson(`${api}/repos/${repo}/contributors?per_page=1&anon=1`, { headers }),
-  ]);
-
-  const [info, commits, runs] = await Promise.all([repoRes.json(), commitRes.json(), runRes.json()]);
-
-  /* The contributor count lives in the pagination header, not the body. */
-  const link = contributorsRes.headers.get("link") ?? "";
-  const contributors = Number(link.match(/[?&]page=(\d+)>;\s*rel="last"/)?.[1] ?? 1);
-
-  const sha = commits?.[0]?.sha?.slice(0, 7);
-  const run = runs?.workflow_runs?.[0];
-  const ci =
-    !run || run.status !== "completed"
-      ? run
-        ? "CI running"
-        : null
-      : run.conclusion === "success"
-        ? "CI passing"
-        : `CI ${run.conclusion}`;
-
-  const issues = info.open_issues_count;
-  const text = [
-    sha ? `main@${sha}` : null,
-    relative(info.pushed_at),
-    ci,
-    `${issues} open ${issues === 1 ? "issue" : "issues"}`,
-    `${contributors} ${contributors === 1 ? "contributor" : "contributors"}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  vitals.textContent = text;
-  cache.set("vitals", { text, pushedAt: info.pushed_at });
-};
-
-/* Each block fails on its own. A rate limit must not blank the other. */
 loadStats().catch(() => {});
-loadVitals().catch(() => {});

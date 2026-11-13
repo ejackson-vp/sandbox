@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>sandbox — a Linux box with a very short life</title>
+    <title>throwbox: a Linux box you throw away</title>
     <meta
       name="description"
-      content="Rent a disposable Kata microVM for one task. Pay once with x402, run code, and let the machine forget everything when the lease ends. No account. No key. No leftovers."
+      content="A temporary Linux machine for untrusted code and AI agents. One payment, one session, and the machine is gone when the lease ends. No account, no API key."
     />
     <meta name="theme-color" content="#f4efe3" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#101613" media="(prefers-color-scheme: dark)" />
@@ -19,7 +19,7 @@
     <a class="skip-link" href="#main">Skip to content</a>
 
     <header class="nav" id="nav">
-      <a class="wordmark" href="#top" aria-label="sandbox, back to top">
+      <a class="wordmark" href="#top" aria-label="throwbox, back to top">
         <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
           <path d="M17 4 H6 Q4 4 4 6 V17" />
           <path d="M47 4 H58 Q60 4 60 6 V17" />
@@ -27,14 +27,13 @@
           <path d="M60 47 V58 Q60 60 58 60 H47" />
           <rect class="eye" x="25.5" y="25.5" width="13" height="13" rx="3.5" />
         </svg>
-        <span>sandbox</span>
+        <span>throwbox</span>
         <span class="alpha">alpha</span>
       </a>
 
       <nav class="nav-links" aria-label="Primary">
-        <a href="#idea">The idea</a>
-        <a href="#life">Lifecycle</a>
-        <a href="#menu">Menu</a>
+        <a href="#how">How it works</a>
+        <a href="#pricing">Pricing</a>
         <a href="#agents">For agents</a>
         <a class="nav-github" href="https://github.com/ejackson-vp/sandbox">
           <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -49,26 +48,21 @@
 
     <main id="main">
       <section class="hero" id="top">
-        <div class="hero-sun" aria-hidden="true"></div>
-
         <div class="hero-grid">
           <div class="hero-copy">
-            <p class="kicker reveal"><span class="pulse" aria-hidden="true"></span> disposable linux · no accounts</p>
-
-            <h1 class="reveal">
+            <h1>
               A Linux box<br />
-              with a very<br />
-              <span class="serif">short life.</span>
+              you throw away.
             </h1>
 
-            <p class="lede reveal">
-              <strong>sandbox</strong> sells Kata microVMs by the session. Five cents buys five minutes. Run your
-              thing. The lease ends and the machine is gone.
+            <p class="lede">
+              For untrusted code, AI agents, and jobs too small to deserve a server. No account, one payment, one
+              session, then it's gone.
             </p>
 
-            <div class="cta-row reveal">
-              <a class="button primary" href="#run">
-                Run it in two minutes
+            <div class="cta-row">
+              <a class="button primary" href="#start">
+                Start a session
                 <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" /></svg>
               </a>
               <a class="button ghost" href="#agents">
@@ -76,201 +70,142 @@
               </a>
             </div>
 
-            <p class="micro reveal">MIT · self-hosted · no hosted endpoint</p>
+            <p class="micro">MIT · hosted or self-hosted</p>
           </div>
 
-          <div class="hero-art reveal">
-            <svg class="scribble" viewBox="0 0 220 120" aria-hidden="true">
-              <path d="M8 84c28-38 67-56 109-50 28 4 48 18 61 39" />
-              <path d="M178 73l-5 18-16-9" />
-            </svg>
+          <div class="hero-art">
+            <figure class="flight">
+              <svg
+                class="flight-art"
+                viewBox="0 0 520 400"
+                role="img"
+                aria-label="A taped cardboard box in mid-air, labelled THROWBOX, with a 300 second tag"
+              >
+                <defs>
+                  <pattern id="bars" width="7" height="12" patternUnits="userSpaceOnUse">
+                    <rect width="2" height="12" fill="currentColor" />
+                    <rect x="4" width="1.4" height="12" fill="currentColor" />
+                  </pattern>
+                </defs>
 
-            <div class="pass-wrap">
-              <article class="pass" aria-label="A sample sandbox day pass">
-                <div class="pass-main">
-                  <div class="pass-top">
-                    <span class="pass-brand">
-                      <svg class="mark small" viewBox="0 0 64 64" aria-hidden="true">
-                        <path d="M17 4 H6 Q4 4 4 6 V17" />
-                        <path d="M47 4 H58 Q60 4 60 6 V17" />
-                        <path d="M4 47 V58 Q4 60 6 60 H17" />
-                        <path d="M60 47 V58 Q60 60 58 60 H47" />
-                        <rect class="eye" x="25.5" y="25.5" width="13" height="13" rx="3.5" />
-                      </svg>
-                      SANDBOX · ONE SESSION
-                    </span>
-                    <span class="pass-serial">NO. 6174-X402</span>
-                  </div>
+                <path class="arc" d="M18 374C98 332 140 238 228 192" />
+                <path class="arc" d="M396 146C440 124 464 96 486 66" />
 
-                  <h2 class="pass-title">DAY PASS</h2>
-                  <p class="pass-sub">one (1) linux machine</p>
+                <g class="speed">
+                  <path d="M20 300 68 282" />
+                  <path d="M6 330 46 316" />
+                  <path d="M34 358 100 334" />
+                  <path d="M60 268 96 254" />
+                </g>
 
-                  <dl class="pass-grid">
-                    <div><dt>cpu</dt><dd>1 vCPU</dd></div>
-                    <div><dt>memory</dt><dd>1 GiB</dd></div>
-                    <div><dt>lease</dt><dd>300 s</dd></div>
-                    <div><dt>fare</dt><dd>$0.05</dd></div>
-                  </dl>
+                <g transform="rotate(-12 300 215)">
+                  <g class="cube">
+                    <path class="face-top" d="M220 150 254 120 414 120 380 150Z" />
+                    <path class="face-side" d="M380 150 414 120 414 270 380 300Z" />
+                    <path class="face-front" d="M220 150h160v150H220Z" />
 
-                  <div class="barcode" aria-hidden="true"></div>
-                  <p class="pass-fine">Non-transferable. Non-persistent. Void after 300 seconds.</p>
+                    <path class="tape" d="M318 120h32l-34 30h-32Z" />
 
-                  <span class="stamp" aria-hidden="true">PAID<br /><span>X402</span></span>
-                </div>
+                    <rect class="label" x="234" y="170" width="126" height="80" rx="3" />
+                    <text class="label-brand" x="244" y="192">THROWBOX</text>
+                    <rect class="barcode-area" x="244" y="200" width="106" height="12" fill="url(#bars)" />
+                    <text class="label-fine" x="244" y="226">ONE SESSION</text>
 
-                <div class="pass-stub">
-                  <span class="stub-text">ONE AGENT</span>
-                  <svg class="mark stub-mark" viewBox="0 0 64 64" aria-hidden="true">
-                    <path d="M17 4 H6 Q4 4 4 6 V17" />
-                    <path d="M47 4 H58 Q60 4 60 6 V17" />
-                    <path d="M4 47 V58 Q4 60 6 60 H17" />
-                    <path d="M60 47 V58 Q60 60 58 60 H47" />
-                    <rect class="eye" x="25.5" y="25.5" width="13" height="13" rx="3.5" />
-                  </svg>
-                  <span class="stub-code">SBX-05</span>
-                </div>
-              </article>
+                    <rect class="stamp-box" x="296" y="256" width="56" height="22" rx="2" transform="rotate(-6 324 267)" />
+                    <text class="label-stamp" x="324" y="271" transform="rotate(-6 324 267)">PAID</text>
+                  </g>
+                </g>
 
+                <g class="puff">
+                  <path d="M486 40v12M486 72v12M468 62h12M492 62h12M473 49l8 8M491 75l8 8M491 49l-8 8M473 75l8 8" />
+                </g>
+              </svg>
+            </figure>
+          </div>
+        </div>
+
+        <div class="hero-demo">
+          <figure class="term" data-term aria-label="Terminal demo">
+            <div class="term-bar">
+              <span class="term-title">sandbox run</span>
+              <button class="term-toggle" type="button" data-term-toggle aria-label="Pause the terminal animation">pause</button>
+              <button class="term-replay" type="button" data-term-replay>replay</button>
             </div>
+            <pre class="term-screen"><code><span class="t-line t-cmd-line"><span class="t-prompt">$</span> <span class="t-cmd" data-cmd="sandbox run --tier short -- python3 -c &quot;print(6*7)&quot;">sandbox run --tier short -- python3 -c "print(6*7)"</span><span class="t-caret" aria-hidden="true"></span></span>
+<span class="t-line"><span class="t-dim">session</span> <span class="t-id">sbx_dca4fb9410b1e62cfeb0dccc</span> <span class="t-dim">created (short, 60s,</span> <span class="t-price">$0.02</span><span class="t-dim">)</span></span>
+<span class="t-line">42</span>
+<span class="t-line"><span class="t-dim">exit 0 (7ms)</span></span></code></pre>
+          </figure>
+        </div>
 
-            <svg class="star" viewBox="0 0 40 40" aria-hidden="true">
-              <path d="M20 2v8M20 30v8M2 20h8M30 20h8M7.3 7.3l5.7 5.7M27 27l5.7 5.7M32.7 7.3 27 13M13 27l-5.7 5.7" />
-            </svg>
+        <dl class="stats" aria-label="Measured performance" id="stats">
+          <div>
+            <dt class="stat-name">Warm start</dt>
+            <dd class="stat-pair">
+              <span><b>395 ms</b><small>p50</small></span>
+              <span><b>708 ms</b><small>p95</small></span>
+            </dd>
           </div>
-        </div>
-
-        <dl class="stats reveal" aria-label="Measured performance" id="stats">
-          <div><dt>127 ms</dt><dd>warm session ready, p50</dd></div>
-          <div><dt>53 ms</dt><dd>exec round trip, p50</dd></div>
-          <div><dt>182 MiB</dt><dd>idle guest memory</dd></div>
-          <div><dt>0</dt><dd>accounts, keys, signups</dd></div>
+          <div>
+            <dt class="stat-name">Cold start</dt>
+            <dd class="stat-pair">
+              <span><b>2.87 s</b><small>p50</small></span>
+              <span><b>3.96 s</b><small>p95</small></span>
+            </dd>
+          </div>
         </dl>
-        <p class="stat-note" id="stat-note">Two-node Kata cluster, control 0.1.16, 2026-11-09. A baseline, not a promise. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/performance-cluster.md">Method and caveats</a>.</p>
+        <p class="stat-note" id="stat-note">Client-side, create to ready, payment and network included. Warm is a pool of 20 pre-booted guests; cold is an empty pool with the image cached. Control 0.1.16, 2026-11-09; 0.1.22 currently measures 548-595 ms warm. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/performance-cluster.md">Method and caveats</a>.</p>
       </section>
 
-      <section class="section" id="idea">
-        <div class="section-head">
-          <p class="kicker reveal">the idea</p>
-          <h2 class="reveal">Rent the machine,<br /><span class="serif">not the relationship.</span></h2>
-          <p class="lede reveal">No signup, no dashboard, no key rotation.</p>
-        </div>
-
-        <div class="laws">
-          <article class="law reveal">
-            <span class="law-num">01</span>
-            <h3>No account.</h3>
-            <p>The payment is the identity. A retried payment returns the same session instead of billing twice.</p>
-            <p class="law-note">one payment → one session</p>
-          </article>
-          <article class="law reveal">
-            <span class="law-num">02</span>
-            <h3>No peeking.</h3>
-            <p>Commands and files are sealed to the guest's key. The API and controller route ciphertext only.</p>
-            <p class="law-note">transport only · no hardware root of trust</p>
-          </article>
-          <article class="law reveal">
-            <span class="law-num">03</span>
-            <h3>No leftovers.</h3>
-            <p>Three things end the lease: the guest watchdog, the controller deadline, Kubernetes. The pod and its memory-backed workspace go with it.</p>
-            <p class="law-note">delete is idempotent</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section life" id="life">
+      <section class="section life" id="how">
         <div class="life-head">
           <div>
-            <p class="kicker reveal">the life</p>
-            <h2 class="reveal">Born, useful,<br /><span class="serif">gone.</span></h2>
+            <h2>Pay, wake, work,<br />gone.</h2>
           </div>
-          <p class="lede reveal">The lease is the only thing that can keep it alive.</p>
+          <p class="lede">No account, no API key, no leftovers. The payment is the identity.</p>
         </div>
 
         <ol class="timeline">
-          <li class="reveal">
-            <span class="time">0 ms</span>
+          <li>
+            <span class="time">01</span>
             <h3>Knock</h3>
-            <p>Post a spec and a public key. Get a price for that spec.</p>
+            <p>Ask for a machine and a price. The API replies with an x402 challenge.</p>
             <code>POST /v1/sessions → 402</code>
           </li>
-          <li class="reveal">
-            <span class="time">127 ms</span>
+          <li>
+            <span class="time">02</span>
             <h3>Wake</h3>
-            <p>Warm pool or cold boot. Capability and session come back once.</p>
-            <code>201 · READY</code>
+            <p>Pay. Get a capability token bound to the guest's key.</p>
+            <code>201 → READY</code>
           </li>
-          <li class="reveal">
-            <span class="time">300 s</span>
+          <li>
+            <span class="time">03</span>
             <h3>Work</h3>
-            <p>Sealed commands, files under <code>/workspace</code>, one foreground operation.</p>
-            <code>exec · file.put · http</code>
+            <p>Run commands, move files. The workspace lives as long as the lease.</p>
+            <code>exec · file.put · file.get</code>
           </li>
-          <li class="reveal">
-            <span class="time">0 s</span>
+          <li>
+            <span class="time">04</span>
             <h3>Gone</h3>
-            <p>Lease ends, pod deleted, workspace purged. There is nothing to clean up.</p>
+            <p>Destroy it, or let the deadline do it. Machine stopped, disk wiped.</p>
             <code>DELETE → 200</code>
           </li>
         </ol>
-
-        <div class="lease reveal" aria-hidden="true">
-          <span>lease, illustrated</span>
-          <div class="lease-track"><i></i></div>
-          <span>300 s</span>
-        </div>
       </section>
 
-      <section class="section" id="interfaces">
-        <div class="section-head">
-          <p class="kicker reveal">three handles</p>
-          <h2 class="reveal">Pick the smallest <span class="serif">handle.</span></h2>
-          <p class="lede reveal">Use the CLI or the SDK. Don't hand-roll the envelopes.</p>
-        </div>
-
-        <div class="rows reveal">
-          <a class="row" href="https://github.com/ejackson-vp/sandbox/blob/main/docs/cli.md">
-            <span class="row-label">CLI</span>
-            <span class="row-copy"><strong>One shot, JSON out</strong><small>Creates, uploads, runs, downloads, destroys.</small></span>
-            <code class="row-code">sandbox run --json -- python3 app.py</code>
-            <span class="row-arrow" aria-hidden="true">→</span>
-          </a>
-          <a class="row" href="https://github.com/ejackson-vp/sandbox/blob/main/docs/quickstart.md">
-            <span class="row-label">SDK</span>
-            <span class="row-copy"><strong>Typed client, auto-destroy</strong><small>Always cleans up, even when the command fails.</small></span>
-            <code class="row-code">await client.run({ command, files })</code>
-            <span class="row-arrow" aria-hidden="true">→</span>
-          </a>
-          <a class="row" href="https://github.com/ejackson-vp/sandbox/blob/main/docs/api.md">
-            <span class="row-label">HTTP</span>
-            <span class="row-copy"><strong>Raw routes, sealed bodies</strong><small>Capability header, envelopes, idempotency keys.</small></span>
-            <code class="row-code">POST /v1/sessions → 402 → 201</code>
-            <span class="row-arrow" aria-hidden="true">→</span>
-          </a>
-        </div>
-      </section>
-
-      <section class="section menu-section" id="menu">
+      <section class="section menu-section" id="pricing">
         <div class="menu-grid">
           <div class="menu-copy">
-            <p class="kicker reveal">the nickel menu</p>
-            <h2 class="reveal">A nickel buys<br /><span class="serif">five minutes.</span></h2>
-            <p class="lede reveal">Same machine at every size. The clock starts when it is ready.</p>
-            <p class="reveal menu-note">Prices are config, not economics. Live table at <code>GET /v1/pricing</code>. Payments are mock or testnet today.</p>
-            <div class="house-limits reveal">
-              <p class="house-limits-title">house limits</p>
-              <dl>
-                <div><dt>files</dt><dd>8 MiB per payload</dd></div>
-                <div><dt>output</dt><dd>256 KiB, then truncated</dd></div>
-                <div><dt>operations</dt><dd>one foreground at a time</dd></div>
-              </dl>
-            </div>
-            <a class="text-link reveal" href="https://github.com/ejackson-vp/sandbox/blob/main/docs/api.md#pricing">See the live price table <span aria-hidden="true">→</span></a>
+            <h2>A nickel buys<br />five minutes.</h2>
+            <p class="lede">Pick the lease before the clock starts. Same image, bigger box.</p>
+            <p class="menu-note">Example prices, not a checkout. Live table at <code>GET /v1/pricing</code>. Payments are mock or testnet today.</p>
+            <p class="menu-note">Limits: 8 MiB per file, 256 KiB of output, one command at a time.</p>
           </div>
 
-          <div class="check reveal">
+          <div class="check">
             <div class="check-head">
-              <span>SANDBOX / ONE SESSION</span>
-              <span>NO. 6174</span>
+              <span>THROWBOX · PRICE LIST</span>
+              <span>PER SESSION</span>
             </div>
             <table>
               <caption class="sr-only">Session tiers and prices</caption>
@@ -291,17 +226,13 @@
                   <th scope="row"><span class="tier">long</span><span class="spec">30 min · 2 vCPU · 4 GiB</span></th>
                   <td class="price">$0.20</td>
                 </tr>
-                <tr>
-                  <th scope="row"><span class="tier">custom</span><span class="spec">up to 30 min · 2 vCPU / 4 GiB ceiling</span></th>
-                  <td class="price">prorated</td>
-                </tr>
               </tbody>
             </table>
             <div class="check-total">
               <span>ONE (1) MACHINE</span>
               <span>NO SUBSCRIPTION</span>
             </div>
-            <p class="check-fine">Prices are illustrative defaults. Nothing renews. Nothing survives.</p>
+            <p class="check-fine">Nothing renews. Nothing survives.</p>
           </div>
         </div>
       </section>
@@ -309,16 +240,9 @@
       <section class="agents" id="agents">
         <div class="agents-inner">
           <div class="agents-copy">
-            <p class="kicker light reveal">for your agent</p>
-            <h2 class="reveal">Now hand the robot<br /><span class="serif">the manual.</span></h2>
-            <p class="lede reveal">Install, one-shot path, HTTP flow, limits, failure modes. One file.</p>
-            <ul class="agents-list reveal">
-              <li>Why hand-rolled envelopes fail</li>
-              <li>How to destroy in a <code>finally</code> block</li>
-              <li>What <code>outcome_unknown</code> means</li>
-              <li>What isolation does not promise</li>
-            </ul>
-            <div class="agents-actions reveal">
+            <h2>Now hand the robot<br />the manual.</h2>
+            <p class="lede">One file: install, HTTP flow, limits, failure modes, and what isolation does not promise.</p>
+            <div class="agents-actions">
               <button class="button butter" id="copy-prompt" type="button">
                 <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" /><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" /></svg>
                 Copy the handoff
@@ -328,11 +252,9 @@
             <p class="copy-note" id="copy-note" role="status" aria-live="polite"></p>
           </div>
 
-          <div class="dossier reveal">
+          <div class="dossier">
             <div class="dossier-head">
-              <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
               <span>handoff.txt</span>
-              <span class="dossier-tag">READ FIRST</span>
             </div>
             <pre><code><span class="comment"># tape this to your agent</span>
 Read <span class="mint">{origin}/llms.txt</span> first.
@@ -355,90 +277,39 @@ blindly retry a side effect.</code></pre>
         </div>
       </section>
 
-      <section class="section" id="run">
+      <section class="section" id="start">
         <div class="section-head">
-          <p class="kicker reveal">on your laptop</p>
-          <h2 class="reveal">Two minutes to <span class="serif">your own.</span></h2>
-          <p class="lede reveal">Same API, relay and guest as a real deployment.</p>
+          <h2>Use ours, or run the <br />whole thing.</h2>
+          <p class="lede">Same API and versions either way.</p>
         </div>
 
         <div class="run-grid">
-          <div class="recipe reveal">
+          <div class="recipe">
             <div class="recipe-head">
               <span class="recipe-num">01</span>
-              <h3>Local cluster</h3>
-              <button class="copy-btn" type="button" data-copy="make up&#10;make demo-session&#10;make down" aria-label="Copy local cluster commands">copy</button>
+              <h3>Hosted</h3>
+              <button class="copy-btn" type="button" data-copy="npm i -g @x402s/cli&#10;sandbox pricing --api-url {api}&#10;sandbox run --api-url {api} -- python3 app.py" aria-label="Copy hosted commands">copy</button>
             </div>
-            <pre><code><span class="cmd">make up</span>            <span class="comment"># kind + cilium + images + deploy</span>
-<span class="cmd">make demo-session</span>  <span class="comment"># pay, create, exec, upload, download</span>
-<span class="cmd">make down</span></code></pre>
-            <p>Needs Docker, <code>kind</code>, <code>kubectl</code>, the Cilium CLI, Node 24+ and Go 1.26+. Local clusters use <code>runc</code>, not microVMs. API on <code>http://localhost:8080</code>; <code>GET /healthz</code> is the cheapest check.</p>
+            <pre><code><span class="cmd">npm i -g @x402s/cli</span>
+<span class="cmd">sandbox pricing</span> <span class="comment">--api-url {api}</span>
+<span class="cmd">sandbox run</span> <span class="comment">--api-url {api} -- python3 app.py</span></code></pre>
+            <p>No cluster, no signup. Alpha, so expect downtime.</p>
           </div>
 
-          <div class="recipe reveal">
+          <div class="recipe">
             <div class="recipe-head">
               <span class="recipe-num">02</span>
-              <h3>No cluster</h3>
-              <button class="copy-btn" type="button" data-copy="npm ci&#10;make verify&#10;make test" aria-label="Copy verification commands">copy</button>
+              <h3>Your own cluster</h3>
+              <button class="copy-btn" type="button" data-copy="git clone https://github.com/ejackson-vp/sandbox&#10;cd sandbox&#10;make up&#10;make demo-session&#10;make down" aria-label="Copy local cluster commands">copy</button>
             </div>
-            <pre><code><span class="cmd">npm ci</span>
-<span class="cmd">make verify</span>  <span class="comment"># typecheck, structure lint, unit + property</span>
-<span class="cmd">make test</span>    <span class="comment"># adds integration against the guest binary</span></code></pre>
-            <p>Most of the system is testable in under a minute. <code>make security-test</code> needs a cluster and runs the packet-level isolation suite.</p>
+            <pre><code><span class="cmd">git clone</span> https://github.com/ejackson-vp/sandbox
+<span class="cmd">make up</span>            <span class="comment"># kind + cilium + images + deploy</span>
+<span class="cmd">make demo-session</span>  <span class="comment"># pay, create, exec, files, destroy</span></code></pre>
+            <p>Needs Docker, <code>kind</code>, <code>kubectl</code>, the Cilium CLI, Node 24+ and Go 1.26+. Local clusters use <code>runc</code>, not microVMs.</p>
           </div>
         </div>
-
-        <div class="callout reveal">
-          <span class="callout-icon" aria-hidden="true">!</span>
-          <p><strong>Alpha reference deployment, not a hosted service.</strong> Mock or testnet payments, no hardware attestation, checkpoints plaintext on disk. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md">What is missing, in order</a>.</p>
-        </div>
       </section>
 
-      <section class="section smallprint" id="smallprint">
-        <div class="section-head">
-          <p class="kicker reveal">the small print</p>
-          <h2 class="reveal">In large type, <span class="serif">because it matters.</span></h2>
-          <p class="lede reveal">Every claim has a test or a doc behind it. The gaps are listed the same way.</p>
-        </div>
-
-        <div class="claims">
-          <article class="claim yes reveal">
-            <h3>Holds today</h3>
-            <ul>
-              <li>The lease ends on time: guest watchdog, controller deadline, Kubernetes</li>
-              <li>Commands and files stay sealed in transit; the API, controller and relay see ciphertext</li>
-              <li>One Kata microVM per session, on tainted, default-deny nodes</li>
-              <li>The guest dials out to the relay; egress only through an allowlisting proxy on 443</li>
-              <li>No inbound sandbox networking</li>
-            </ul>
-          </article>
-          <article class="claim no reveal">
-            <h3>Not yet</h3>
-            <ul>
-              <li>No hardware root of trust: the dev attestation key ships in the repo</li>
-              <li>Checkpoints are plaintext on disk, readable by the storage admin</li>
-              <li>Mock or testnet payments, no mainnet</li>
-              <li>No GPUs, no arbitrary OCI images, no memory snapshots</li>
-              <li>Not parity with a general-purpose sandbox platform</li>
-            </ul>
-          </article>
-        </div>
-        <p class="claims-note">Read the <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md">guarantee matrix</a> and <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/threat-model.md">threat model</a> before repeating any of this as a security claim.</p>
-      </section>
-
-      <section class="closing">
-        <h2 class="reveal">Clone it. <span class="serif">It won't remember you.</span></h2>
-        <p class="lede reveal">Bring a cluster, read the protocol, or just read the code. The repo is the product.</p>
-        <div class="cta-row center reveal">
-          <a class="button primary" href="https://github.com/ejackson-vp/sandbox">Open on GitHub</a>
-          <a class="button ghost" href="llms.txt">Read llms.txt</a>
-        </div>
-        <p class="vitals reveal" id="vitals">
-          <i aria-hidden="true"></i>
-          <a href="https://github.com/ejackson-vp/sandbox">github.com/ejackson-vp/sandbox</a>
-          <span class="vitals-data" id="vitals-data"></span>
-        </p>
-      </section>
     </main>
 
     <footer class="footer">
@@ -451,9 +322,8 @@ blindly retry a side effect.</code></pre>
             <path d="M60 47 V58 Q60 60 58 60 H47" />
             <rect class="eye" x="25.5" y="25.5" width="13" height="13" rx="3.5" />
           </svg>
-          <span>sandbox</span>
+          <span>throwbox</span>
         </a>
-        <p>Pay once. Run code. Forget the box.</p>
       </div>
 
       <div class="footer-links">
@@ -488,11 +358,9 @@ blindly retry a side effect.</code></pre>
       </div>
 
       <div class="footer-bottom">
-        <span>© <span id="year">2026</span> sandbox contributors</span>
-        <span class="status"><i aria-hidden="true"></i> alpha · self-hosted</span>
-        <span>No cookies. No analytics. No idea who you are.</span>
+        <span>© <span id="year">2026</span> throwbox contributors</span>
       </div>
-      <p class="colophon">Set in your system's serif and mono. No fonts were downloaded. No cookies were set. This page is three files and a text document.</p>
+      <p class="colophon">Set in your system's sans and mono. No fonts were downloaded. Four files and no build step.</p>
     </footer>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

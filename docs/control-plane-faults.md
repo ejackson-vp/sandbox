@@ -295,7 +295,7 @@ Repository variables:
 | `SANDBOX_FAULT_MATRIX` | `full` | `full`, `smoke`, or comma-separated case names |
 | `SANDBOX_FAULT_KIND_CLUSTER` | `x402-sandbox` | kind cluster name recreated by `make up` |
 
-`existing` mode targets a long-lived cluster (homelab or tailnet). The secret
+`existing` mode targets a long-lived cluster (reference deployment or private network). The secret
 holds a kubeconfig whose context is already selected; the workflow writes it
 with mode 600 under `$RUNNER_TEMP`, never prints it, pins `KUBECTL_CONTEXT`
 from it, and never creates or deletes that cluster. Use a scoped credential

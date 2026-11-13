@@ -39,7 +39,7 @@ durability and checkpoint encryption are separate problems — see
 
 The RPO is the backup interval (6 hours by default). The RTO is the time to
 scale the controller down, run the restore job, verify counts and scale up:
-expect roughly 10 minutes for a small homelab database. Backups live on the
+expect roughly 10 minutes for a small single-node database. Backups live on the
 separate `controller-backups` PVC. That protects against a corrupt database or a
 bad migration, but **not** against losing the node or both PVCs. Copy the newest
 encrypted file off the cluster for disaster recovery.
@@ -64,7 +64,7 @@ does not re-encrypt old files, so retain the old key for the old backups.
    openssl rand -base64 32
    ```
 
-   Add the value as `backup-encryption-key` in `x402-secrets` (the homelab's
+   Add the value as `backup-encryption-key` in `x402-secrets` (the reference deployment's
    SOPS file, or local `deploy/kubernetes/02-secrets-dev.yaml`). If your local
    secret predates this key, rerun `scripts/dev-secrets.sh --force`.
 

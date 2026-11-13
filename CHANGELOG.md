@@ -308,9 +308,9 @@ the container registry.
 - Monitoring is split by ownership: this repository keeps the portable contract
   under `deploy/monitoring/contract/` (scrape list, SLO rules, Grafana
   dashboard, metric/SLO docs), and the cluster-specific VictoriaMetrics +
-  vmalert + Grafana stack moves to the private homelab repository. Object
+  vmalert + Grafana stack moves to the private GitOps repository. Object
   names, the dashboard uid and the scrape targets are unchanged.
-- Grafana's homelab memory request is raised to 256Mi (limit 512Mi) after the
+- Grafana's reference deployment memory request is raised to 256Mi (limit 512Mi) after the
   measured 228Mi steady state made it the first eviction candidate (#101).
 
 ### Fixed
@@ -331,7 +331,7 @@ the container registry.
   and relay, a bounded-label scrape contract, process/event-loop/GC metrics, a
   Grafana dashboard and a scrape manifest. The public ingress no longer serves
   `/metrics` (#37).
-- Lightweight homelab monitoring under `deploy/monitoring/`: VictoriaMetrics
+- Lightweight reference deployment monitoring under `deploy/monitoring/`: VictoriaMetrics
   single-node, Grafana and vmalert with 14-day retention, a provisioned
   dashboard and the issue #38 SLO rules (including target-down and
   blast-radius) (#38).

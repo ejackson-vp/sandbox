@@ -146,7 +146,7 @@ local-path checkpoint is a single-node feature.
 - **Workspace at rest:** suspendable sessions use a PVC, not a memory-backed
   `emptyDir`. A suspended workspace is **plaintext**: the node and storage
   administrators can read it, and no encryption at rest is provided by this
-  repository or by the homelab's `local-path` `standard` StorageClass. See
+  repository or by the reference deployment's `local-path` `standard` StorageClass. See
   [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) for why an encrypted
   StorageClass is not claimed as a guarantee, and
   [Checkpoint at rest, expiry and backup](#checkpoint-at-rest-expiry-and-backup)

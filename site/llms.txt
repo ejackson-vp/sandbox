@@ -1,12 +1,13 @@
-# sandbox
+# throwbox
 
 > Pay once with x402, get a temporary Linux machine. No account, no API key, no signup. The control plane routes sealed commands and files, and the VM is destroyed when the lease ends.
 
-This repository is an **alpha, self-hosted reference deployment**, not a hosted service. There is no documented public API host. Run it on your own cluster, or use the local demo at `http://localhost:8080`. Payments are **mock** or **testnet** only.
+This repository is an **alpha**. A hosted endpoint runs it, and the same code self-hosts. Payments are **mock** or **testnet** only: do not send mainnet funds.
 
 - Source: https://github.com/ejackson-vp/sandbox
 - Licence: MIT
 - Status: alpha
+- Hosted API base: `https://api.throwbox.dev` (DNS pending), routes under `/v1/...`
 - Local API base URL: `http://localhost:8080`
 
 ## Start here
@@ -17,7 +18,7 @@ This repository is an **alpha, self-hosted reference deployment**, not a hosted 
 - [HTTP API](https://github.com/ejackson-vp/sandbox/blob/main/docs/api.md): routes, envelopes, status codes.
 - [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md): what is enforced and what is not. Read before repeating a security claim.
 - [Threat model](https://github.com/ejackson-vp/sandbox/blob/main/docs/threat-model.md): STRIDE by component.
-- [Production readiness](https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md): the ordered gap to a hosted service.
+- [Production readiness](https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md): the ordered gap to production.
 - [Workload compatibility](https://github.com/ejackson-vp/sandbox/blob/main/docs/workload-compatibility.md): what actually runs in the guest.
 
 ## What an agent should do

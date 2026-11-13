@@ -14,7 +14,7 @@ retention period and no PVC.
 
 The runnable stack — VMSingle, vmalert, Grafana, namespace, NetworkPolicies,
 image pins, retention and Flux wiring — is cluster-specific and lives in the
-private `ejackson-vp/homelab` repository under `apps/sandbox-monitoring/`.
+private GitOps repository under `apps/sandbox-monitoring/`.
 
 ## Applying it
 
@@ -31,7 +31,7 @@ That creates three ConfigMaps in `monitoring`:
 | `vmalert-rules` | `sandbox-slo.yaml` | vmalert (`-rule=.../*.yaml`) or Prometheus (`rule_files`) |
 | `grafana-dashboard-sandbox` | `sandbox-control-plane.json` | Grafana file provider |
 
-The names are stable because the homelab stack mounts them by name. They are
+The names are stable because the reference stack mounts them by name. They are
 not a claim that you must run vmalert or Grafana: mount the files wherever
 your own stack reads rules and dashboards.
 
@@ -54,12 +54,12 @@ to `rule_files`. `promtool check rules` must stay green.
 Dashboard: import `grafana-dashboard.json` (or drop it in a provisioned
 directory). Its `DS_PROMETHEUS` input is a datasource variable, so it binds to
 whichever Prometheus-compatible datasource you select; the committed default
-is the homelab's `vmsingle` uid.
+is the reference deployment's `vmsingle` uid.
 
 ## Keeping the two forms in step
 
 VMSingle needs a full document (`global:` + `scrape_configs:`), not a bare
-list, so the homelab stack keeps a mirror at
+list, so the reference stack keeps a mirror at
 `apps/sandbox-monitoring/vmsingle-scrape-config.yaml`. Change the targets and
 labels in both places — the `role` label (`api`, `controller`, `relay`) is
 load-bearing for every rule and dashboard panel.

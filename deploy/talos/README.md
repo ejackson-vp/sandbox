@@ -1,6 +1,6 @@
 # Deploying to a real cluster (Talos)
 
-In the homelab this path is **reconciled by Flux** from `ejackson-vp/homelab`
+In the reference deployment this path is **reconciled by Flux** from the private GitOps repo
 (`apps/sandbox/release.yaml`); nothing here is applied by hand. Standalone, or to
 preview exactly what Flux will apply:
 
@@ -12,7 +12,7 @@ kubectl apply -k deploy/talos    # only if you are not running Flux
 This overlay does **not** create the `x402-secrets` Secret: the base ships no
 credentials. Create it in `sandbox-system` before applying — locally with
 `scripts/dev-secrets.sh`, on a real deployment from your secret store. The
-homelab applies it from the private repository (SOPS-encrypted).
+reference deployment applies it from the private repository (SOPS-encrypted).
 
 This is the overlay used for a two-node Talos cluster with the
 `kata-containers` system extension. It extends `deploy/kata`, so sandboxes run
@@ -89,7 +89,7 @@ stops a moved tag from changing what runs inside the VM.
 
 `PUBLIC_BASE_URL` defaults to a placeholder. Set it to the address clients use
 to reach the API. With the Tailscale operator this is the MagicDNS name of the
-API's `Ingress`, e.g. `https://sandbox.<tailnet>.ts.net`.
+API's `Ingress`, e.g. `https://sandbox.<your-tailnet>.ts.net`.
 
 ## 5. Monitoring
 
@@ -104,14 +104,14 @@ kubectl apply -k deploy/monitoring/contract  # three ConfigMaps, no workloads
 ```
 
 The runnable stack — VictoriaMetrics single-node, vmalert and Grafana — is
-cluster-specific and lives in the private homelab repository
+cluster-specific and lives in the private GitOps repository
 (`apps/sandbox-monitoring/`). Flux reconciles it there in three ordered steps:
 namespace, contract, stack. Nothing in this repository points at those
 workloads. By hand, apply the app first, then the namespace, contract and stack:
 
 ```bash
 kubectl apply -k deploy/talos
-# namespace + stack come from ejackson-vp/homelab:
+# namespace + stack come from the private GitOps repo:
 #   kubectl apply -k apps/sandbox-monitoring-namespace
 #   kubectl apply -k apps/sandbox-monitoring
 ```

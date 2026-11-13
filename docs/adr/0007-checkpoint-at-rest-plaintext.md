@@ -9,7 +9,7 @@ sandbox namespace. The volume is the checkpoint: the pod is deleted, the PVC is
 not. That puts a suspended session's files outside the guest's encryption
 boundary and inside the node/storage trust domain.
 
-The homelab's `standard` StorageClass is `local-path-provisioner`, which writes
+The reference deployment's `standard` StorageClass is `local-path-provisioner`, which writes
 into a directory on the node. There is no CSI driver, no `dm-crypt`, no
 encryption parameter, and no key that the guest or the controller holds. Issue 32
 asks for "checkpoint data at rest is unreadable without the session key". That is
@@ -30,7 +30,7 @@ that administrator from the trust domain cannot answer the issue as written.
    cluster-scoped read the controller could inspect a StorageClass object and an
    operator-declared label; it cannot verify that the CSI driver actually
    encrypts, and the PV exposes no such fact. A declared label is configuration
-   intent, not a guarantee, and it would fail closed on the homelab where no such
+   intent, not a guarantee, and it would fail closed on the reference deployment where no such
    class exists. An encrypted CSI class remains a valid *deployment* improvement
    for clouds that offer one (it protects a detached disk or a copied volume
    against someone who is not the node admin), and it is documented as such
