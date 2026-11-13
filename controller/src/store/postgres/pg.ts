@@ -48,6 +48,16 @@ export const READ_ONLY_QUERY_TIMEOUT_MS = 2_000;
 const READ_ONLY_CONNECT_TIMEOUT_MS = 1_000;
 
 /**
+ * How long the writer pool may spend establishing a connection.
+ *
+ * Matches the 1.5s ceiling on one leadership acquire attempt. Without it a
+ * blackholed host leaves the connect waiting for the OS TCP timeout (75 to
+ * 130 seconds), which outlives several lease renewals and turns one acquire
+ * attempt into a multi-minute stall.
+ */
+const WRITER_CONNECT_TIMEOUT_MS = 1_500;
+
+/**
  * Advisory-lock keys, scoped per database.
  *
  * Every lock is taken with the two-int form `(key, hashtext(current_database())::int)`.
@@ -106,7 +116,12 @@ export class PgConnection implements Querier {
     private readonly url: string,
     options: { max?: number } = {},
   ) {
-    this.pool = new pg.Pool({ connectionString: url, types, max: options.max ?? 10 });
+    this.pool = new pg.Pool({
+      connectionString: url,
+      types,
+      max: options.max ?? 10,
+      connectionTimeoutMillis: WRITER_CONNECT_TIMEOUT_MS,
+    });
     // A pool-level error is a connection that died while idle. It must not take
     // the process down, but it is worth surfacing: the next write will retry on
     // a fresh connection.

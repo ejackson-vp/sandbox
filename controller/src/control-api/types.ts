@@ -20,6 +20,14 @@ export interface ControlApiDeps {
    * that have no election to take part in.
    */
   leadership?: Pick<Leadership, "isLeader" | "onChange">;
+  /**
+   * True once the writer role has been acquired and startup recovery has
+   * finished. A replica can hold the Lease while this is false, so without it
+   * readiness answers 200 while the reconcile loop has not started.
+   *
+   * Omitted by unit tests and local runs, where there is no acquire step.
+   */
+  acquireSettled?: () => boolean;
   /** Optional event-driven nudge (the reconciler is not started in unit tests). */
   wake?: () => void;
   /** Optional lifecycle actions (the reconciler owns them). */
