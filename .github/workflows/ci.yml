@@ -71,10 +71,11 @@ jobs:
       # The published profile set is guest/profiles/runtime-images.conf; the
       # release workflow builds exactly those and nothing else.
       - run: ./guest/check-profiles.sh
-      # Unit and property run once, under instrumentation: the coverage floor in
-      # vitest.config.ts fails the build on a regression, and the json-summary
-      # here is what `coverage-badge` publishes. Running them twice (plain, then
-      # covered) measured the same files twice for no extra signal.
+      # Unit and property run once, under instrumentation: the per-module floors
+      # in vitest.config.ts fail the build on a regression, and this job's
+      # json-summary is one of the two reports `coverage-badge` merges. Running
+      # them twice (plain, then covered) measured the same files twice for no
+      # extra signal.
       - run: npm run test:coverage
       # Portable suites that no other job runs. They need no cluster or guest
       # binary; the browser compatibility case skips without its image.
@@ -235,23 +236,33 @@ jobs:
       - name: integration tests
         env:
           GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
-        run: npm run test:integration
+        # Instrumented so the badge can merge this suite with the unit one. The
+        # client and wiring code under `sdk` and `api` is only reached from here,
+        # so measuring it is worth 1068 lines the unit run never touches.
+        run: npm run test:integration:coverage
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: coverage-integration-report
+          path: coverage-integration/
+          retention-days: 14
 
-  # The README coverage badge is measured, not hand-maintained. The `unit` job
-  # above runs the portable suites (unit, property) under instrumentation and
-  # uploads the json-summary; this job turns it into a badge.
+  # The README coverage badge is measured, not hand-maintained. `unit` runs the
+  # unit and property suites under instrumentation; `integration` runs the same
+  # suite it always runs, instrumented. This job merges the two reports, because
+  # coverage is a union: a line counts if any suite ran it. Before the merge the
+  # badge read whatever the unit suite alone reached, which scored the client and
+  # wiring code at zero.
   #
-  # Integration is deliberately excluded: it already runs once in `integration`,
-  # and instrumenting a second concurrent copy is what made #128 and the
-  # `stale-frame-recovery` test flake. The cost is the line coverage only those
-  # tests reach (the controller lifecycle/reconciler paths); see CONTRIBUTING.md.
+  # The merge also owns the floor, since neither run can express a total only the
+  # pair reaches. The per-module floors in vitest.config.ts still gate `unit` on
+  # every pull request; this one gates a main push.
   #
   # Writes exactly one JSON file to the `badges` branch, which the README badge
   # reads. Main pushes only, and it never checks out or runs PR code: the
-  # artifact is produced by the trusted run, this job only publishes it.
+  # artifacts are produced by the trusted run, this job only merges and publishes.
   coverage-badge:
     name: coverage badge
-    needs: unit
+    needs: [unit, integration]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -262,8 +273,19 @@ jobs:
         with:
           name: coverage-report
           path: coverage
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: coverage-integration-report
+          path: coverage-integration
+      - name: Merge unit and integration coverage
+        # A few points under the merged totals, so a real drop fails the publish
+        # instead of only recolouring a badge.
+        run: >-
+          node scripts/coverage-merge.mjs coverage-merged
+          coverage/lcov.info coverage-integration/lcov.info
+          --floor-lines 74 --floor-branches 64 --floor-functions 75
       - name: Render badge JSON
-        run: node scripts/coverage-badge.mjs coverage/coverage-summary.json badge/coverage.json
+        run: node scripts/coverage-badge.mjs coverage-merged/coverage-summary.json badge/coverage.json
       - name: Publish to badges branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

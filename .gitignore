@@ -5,6 +5,7 @@ guest/bin/
 *.log
 .DS_Store
 coverage/
+coverage-*/
 __pycache__/
 *.pyc
 

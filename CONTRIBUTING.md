@@ -33,17 +33,23 @@ tests in ~4 s instead of ~24 s, verified three times under
 `--sequence.shuffle`.
 
 Coverage covers the shipped TypeScript (`shared`, `sdk`, `api`, `controller`,
-`cli`), not tests or the Go guest. It measures the **unit and property** suites
-only. Integration runs once per push in its own CI job, and instrumenting a
-concurrent second copy of that timing-sensitive suite is what made #128 flake
-(#145). Only the lines those suites reach are in the badge, which is why `sdk`
-and `api` sit in the forties while `shared` and `cli` are near ninety. That gap
-is client and wiring code whose only tests are end-to-end. CI publishes the
-number to the `badges` branch, which is what the README badge reads.
+`cli`), not tests or the Go guest. Two suites are measured and merged, because
+coverage is a union: the **unit and property** suites, and the **integration**
+suite. Integration used to be excluded, which scored the client and wiring code
+at zero even though end-to-end tests exercise it, so `sdk` and `api` read in the
+forties while `shared` and `cli` read near ninety. Measured together the total is
+about 78%, and integration on its own reaches 1068 lines no unit test touches.
+
+`scripts/coverage-merge.mjs` takes the maximum hit count per line, function and
+branch across both reports. It is the only place a total both suites reach can be
+gated, so it owns the merged floor, and CI publishes its output to the `badges`
+branch, which is what the README badge reads. `npm run test:integration:coverage`
+runs the second suite the same way CI does.
 
 `vitest.config.ts` sets a floor per module (plus a repo-wide one), a few points
 under each current total, so a regression fails `npm run test:coverage` and the
-`unit` job and names the module that moved.
+`unit` job and names the module that moved. That run is gated per pull request;
+the merged floor is gated on a main push.
 
 A test that imports `@x402s/shared/<entry>` measures `shared/src`, not
 `shared/dist`: the config aliases that specifier to the source entry. Without

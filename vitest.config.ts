@@ -66,24 +66,28 @@ export default defineConfig({
         "cli/src/**/*.ts",
       ],
       exclude: ["**/*.d.ts", "**/*.test.ts"],
-      // Floors, not targets. A drop fails `npm run test:coverage` instead of
-      // only shrinking a number nobody watches, and a per-module floor names
-      // the module that regressed rather than hiding it in a repo average.
+      // Floors, not targets: a drop fails `npm run test:coverage` and names the
+      // module that moved instead of shrinking a badge nobody watches. Each is
+      // ~4 points under its current total.
       //
-      // Each is ~4 points under its current total. They climb with the
-      // coverage plan (see CONTRIBUTING.md): `sdk` and `api` are low because
-      // their client and wiring code is only reached by the integration suite,
-      // which is not in this run yet.
-      thresholds: {
-        lines: 65,
-        branches: 58,
-        functions: 62,
-        "shared/src/**": { lines: 84, branches: 78, functions: 90 },
-        "cli/src/**": { lines: 90, branches: 85, functions: 78 },
-        "controller/src/**": { lines: 67, branches: 57, functions: 65 },
-        "api/src/**": { lines: 42, branches: 42, functions: 28 },
-        "sdk/src/**": { lines: 35, branches: 26, functions: 37 },
-      },
+      // A partial run (the integration suite on its own) is merged with this one
+      // before the badge is published, so its own total is below these floors
+      // and must not be gated on them. `scripts/coverage-merge.mjs` owns the
+      // merged floor instead.
+      ...(process.env.X402_COVERAGE_PARTIAL === "1"
+        ? { thresholds: { lines: 0, branches: 0, functions: 0 } }
+        : {
+            thresholds: {
+              lines: 65,
+              branches: 58,
+              functions: 62,
+              "shared/src/**": { lines: 84, branches: 78, functions: 90 },
+              "cli/src/**": { lines: 90, branches: 85, functions: 78 },
+              "controller/src/**": { lines: 67, branches: 57, functions: 65 },
+              "api/src/**": { lines: 42, branches: 42, functions: 28 },
+              "sdk/src/**": { lines: 35, branches: 26, functions: 37 },
+            },
+          }),
     },
   },
 });
