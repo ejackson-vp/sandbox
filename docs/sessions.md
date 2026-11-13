@@ -142,7 +142,7 @@ a prerequisite that is not ready leaves the session where it is.
 | While `SUSPENDING` | New controller finishes the checkpoint idempotently: stop guest, delete pod, purge relay, mark `SUSPENDED`. |
 | While `RESUMING` | New controller adopts the pod and continues the readiness handshake; the provisioning timeout is measured from the resume start, not the original payment. |
 | While `ACTIVE` | Lease deadline is in Postgres; the new controller enforces it and deletes the pod. |
-| Relay restarted (new process generation) | Relay recovery fences the interrupted request `outcome_unknown`, bumps `sessions.exec_epoch`, re-registers the session with its existing token hash, and holds the gate until the reconnected guest reports idle. The lease, Pod and workspace are unchanged. If the guest does not return, the session ends `failure:relay_lost` at the grace or 1 s before the lease, whichever is first, and is refunded; see `docs/adr/0012-guest-reconnects-after-relay-loss.md`. |
+| Relay restarted (new process generation) | Relay recovery fences the interrupted request `outcome_unknown`, bumps `sessions.exec_epoch`, re-registers the session with its existing token hash, and holds the gate until the reconnected guest reports idle. The lease, Pod and workspace are unchanged. With `RELAY_GUEST_ADDRESS=pod` the guest cannot follow a replaced Pod, so the same grace ends `relay_lost` and the session is refunded rather than resumed. If the guest does not return, the session ends `failure:relay_lost` at the grace or 1 s before the lease, whichever is first, and is refunded; see `docs/adr/0012-guest-reconnects-after-relay-loss.md`. |
 | While `TERMINATING` | Cleanup is idempotent and retried on the next tick. |
 
 ## Failure semantics

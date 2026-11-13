@@ -155,6 +155,13 @@ the container registry.
   dropped, not truncated, and keep the cache-only behaviour), and is cleared for
   the session in the same transaction as the terminal finalize. Request rows stay
   for audit. Additive and nullable: pre-v17 rows serve what they served before.
+- `RELAY_GUEST_ADDRESS` selects the address a guest dials: `service` (default)
+  uses the stable relay ClusterIP, `pod` uses the ready relay Pod IP. Pod mode
+  exists for clusters whose policy denies Service VIPs from guest netns (the
+  homelab Cilium does); it keeps sessions working but cannot follow a relay Pod
+  replacement, so the relay-loss grace ends the session `failure:relay_lost` and
+  the refund policy pays it out. See
+  [ADR 0012](docs/adr/0012-guest-reconnects-after-relay-loss.md).
 
 ### Security
 

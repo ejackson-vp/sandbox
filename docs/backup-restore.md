@@ -54,6 +54,13 @@ configuration in that layer:
   backup alone gives an RPO of a day. Decide the window, then verify the restore
   meets the RTO you wrote down.
 
+The homelab overlay takes a smaller step: a nightly `pg_dump` CronJob in
+`homelab/apps/sandbox/postgres-backup.yaml`, encrypted with the cluster's
+existing backup key, restored into a scratch database to prove it reads, and
+kept for seven days. That catches a bad migration or a deleted row. It is not
+disaster recovery, because the dump sits on a PVC on the same node as the
+primary; copy the files off-node or move to one of the two options above.
+
 ## Restore verification
 
 A restore you have never run is a guess. The check is the store contract suite,
