@@ -393,6 +393,37 @@ export class KubeProvisioner implements Provisioner {
    * across replicas, which is the misrouting the shard prevents.
    * A shard with no ready endpoint resolves to null.
    */
+  /**
+   * ClusterIP of a Service, for a guest-facing URL.
+   *
+   * Deliberately does not read the EndpointSlice: an endpoint address is a Pod
+   * IP, and a Pod IP does not survive the replacement this address exists to
+   * survive. At one replica `name` is the shardless Service; above one it is the
+   * session's per-shard Service (`relay-0`), which selects that ordinal only.
+   */
+  async getStableServiceAddress(
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ): Promise<{ host: string; port: number } | null> {
+    const serviceName = shard === undefined ? name : `${podPrefix ?? name}-${shard}`;
+    try {
+      const svc = await this.core.readNamespacedService({
+        name: serviceName,
+        namespace: this.controlNamespace,
+      });
+      const port = svc.spec?.ports?.[0]?.port;
+      const ip = svc.spec?.clusterIP;
+      // A headless Service has clusterIP "None": it has no address a guest
+      // without DNS could dial.
+      if (!port || !ip || ip === "None") return null;
+      return { host: ip, port };
+    } catch (err) {
+      if ((err as { code?: number }).code === 404) return null;
+      throw err;
+    }
+  }
+
   async getServiceAddress(
     name: string,
     shard?: number,

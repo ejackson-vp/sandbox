@@ -235,6 +235,28 @@ the container registry.
 
 ### Fixed
 
+- A relay restart now actually reconnects. The guest URL was a ready relay Pod
+  IP, so the replacement Pod's new IP left every supervisor on the shard dialling
+  a dead address, and the session survived only in name. The guest address is now
+  a stable ClusterIP: the `relay` Service at one replica and a per-shard
+  `relay-<n>` Service above one, created by `make dev-scale N`. The controller's
+  own admin address is unchanged. A guest cannot resolve DNS, so a Service name
+  was never an option; a Pod IP cannot survive replacement.
+- An operation the relay accepted and then lost is `outcome_unknown`. The relay's
+  response endpoint now returns a structured failure code
+  (`guest_disconnected`, `request_superseded`, `guest_error`,
+  `session_destroyed`) instead of one generic 409. The controller marks a link
+  loss `outcome_unknown` and answers `409 outcome_unknown`, leaving the
+  single-operation gate closed for the fence; a lookup and a same-id retry keep
+  answering that, even when the retry's payload hash differs. A guest-reported
+  error still answers `502 guest_error`. Previously the caller saw
+  `502 guest_error: "guest disconnected"`, the row was finished `error`, and a
+  lookup returned `410 result_expired`.
+- The `relay-kill` fault case waits for every guest to be registered and
+  connected on the replacement relay (new `sandbox_relay_connected_sessions`
+  gauge) before it starts the new operation, instead of treating `READY && !busy`
+  as sufficient. The workload probe no longer leaks kubectl "not found" stderr
+  into the fault logs.
 - A relay restart no longer kills a paid session. The relay registry is in
   memory, so a relay rollout dropped every guest socket on the shard; the
   supervisor exited with its link, the Pod went terminal, and the controller
@@ -253,7 +275,7 @@ the container registry.
   still `relay_lost` and not `lease_expired`; an overrun the lease check notices
   while the loss window is open is attributed to `relay_lost` too. A retry of the
   interrupted request id is `409 outcome_unknown` and is never re-executed. See
-  [ADR 0011](docs/adr/0012-guest-reconnects-after-relay-loss.md).
+  [ADR 0012](docs/adr/0012-guest-reconnects-after-relay-loss.md).
 - A create retry that already booted a Pod adopts it before `register_relay`
   replays, so it no longer rotates the guest token under a running guest.
 - Guest results carry `truncated` again. `Result.Truncated` and

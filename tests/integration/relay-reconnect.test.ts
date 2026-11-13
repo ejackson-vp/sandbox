@@ -318,6 +318,7 @@ async function forward(
     sessionId: run.sessionId,
     clientNonce: run.clientNonce,
     requestId,
+    op: "exec",
     ...payload,
   });
   await run.relayClient.request(run.sessionId, requestId, envelope, Date.now() + 120_000, epoch);
@@ -331,6 +332,33 @@ async function awaitResult(run: Run, requestId: string) {
     run.clientKeys.publicKey,
     run.clientKeys.privateKey,
   );
+}
+
+/** POST an operation through the control API, as a client does. */
+async function operate(
+  run: Run,
+  requestId: string,
+  payload: Record<string, unknown>,
+  waitMs: number,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const envelope = await sealJsonTo(fromBase64(run.guestPublicKey), {
+    v: 2,
+    sessionId: run.sessionId,
+    clientNonce: run.clientNonce,
+    requestId,
+    op: "exec",
+    ...payload,
+  });
+  const res = await fetch(
+    `http://127.0.0.1:${testPort(18893)}/internal/sessions/${run.sessionId}/operations`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-internal-token": ADMIN },
+      body: JSON.stringify({ requestId, envelope, op: "exec", waitMs }),
+    },
+  );
+  const text = await res.text();
+  return { status: res.status, body: text ? (JSON.parse(text) as Record<string, unknown>) : {} };
 }
 
 async function waitForGuestState(
@@ -476,6 +504,47 @@ describe("a relay restart does not kill a paid session", () => {
     // compensation. The reason is the contract this test owns.
     expect(terminal!.readyAt).not.toBeNull();
   }, 60_000);
+
+  it("classifies a link loss on the caller's request as outcome_unknown, not a guest error", async () => {
+    const run = await scenario(30_000, "classify");
+    active.push(run);
+
+    // The caller's POST is waiting on the relay when the guest's socket dies.
+    // The relay reports the link loss structurally, so the controller must fence
+    // the request rather than answer 502 "guest disconnected".
+    const requestId = "relay-reconnect-classify-01";
+    const pending = operate(run, requestId, {
+      command: ["sleep", "60"],
+      timeoutMs: 90_000,
+    }, 30_000);
+    await waitForGuestState(run, (state) => state.activeRequestId === requestId, "exec in flight");
+
+    // Kill the guest process: the socket closes while the operation is running.
+    await run.provisioner.deletePod(run.podName);
+
+    const response = await pending;
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ error: "outcome_unknown", requestId });
+    expect(await run.store.getExecRequest(run.sessionId, requestId)).toMatchObject({
+      state: "outcome_unknown",
+    });
+
+    // A lookup and a same-id retry answer with the outcome, never 410 or a
+    // reused idempotency key.
+    const looked = await fetch(
+      `http://127.0.0.1:${testPort(18893)}/internal/sessions/${run.sessionId}/operations/${requestId}?waitMs=0`,
+      { headers: { "x-internal-token": ADMIN } },
+    );
+    expect(looked.status).toBe(409);
+    expect(await looked.json()).toMatchObject({ error: "outcome_unknown", requestId });
+
+    const retried = await operate(run, requestId, {
+      command: ["sleep", "60"],
+      timeoutMs: 90_000,
+    }, 0);
+    expect(retried.status).toBe(409);
+    expect(retried.body).toMatchObject({ error: "outcome_unknown", requestId });
+  }, 90_000);
 
   it("keeps relay_lost inside a short lease, before the lease check, and refunds it", async () => {
     // 5s lease, 60s grace: without the lease bound the lease would expire first

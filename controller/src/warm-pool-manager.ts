@@ -372,7 +372,10 @@ export class WarmPoolManager {
     // case): skip the service lookups entirely, as the single pool did.
     const anyWanted = this.order.some((name) => this.state.get(name)!.target > 0);
     if (cfg.warmPoolSize > 0 && anyWanted) {
-      relayAddr = (await this.ctx.serviceAddress(cfg.relayServiceName)) ?? undefined;
+      // The guest URL in the warm pod is baked in at boot, so the relay half
+      // must be the ClusterIP: a Pod IP would strand the pod when the relay is
+      // replaced before it is claimed.
+      relayAddr = (await this.ctx.stableServiceAddress(cfg.relayServiceName)) ?? undefined;
       proxyAddr = (await this.ctx.serviceAddress(cfg.proxyServiceName)) ?? undefined;
     }
 

@@ -6,6 +6,24 @@ import { operationSchema, opLabel } from "../control-api-schemas.js";
 import { describeSession } from "../session-view.js";
 import type { ControlApiDeps } from "./types.js";
 
+/**
+ * Relay failure classes that mean the frame was accepted and the link was lost
+ * before an outcome existed. The command may have run, so the outcome is
+ * unknown: never a guest error, never a cache expiry, never a duplicate.
+ */
+function isLinkLoss(code: string): boolean {
+  return code === "guest_disconnected" || code === "request_superseded";
+}
+
+/** The answer for a fenced request, wherever the client asks about it. */
+function outcomeUnknown(requestId: string): Record<string, unknown> {
+  return {
+    error: "outcome_unknown",
+    requestId,
+    message: "the relay link was lost while this operation was in flight; its outcome is unknown",
+  };
+}
+
 export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void {
   const { cfg, store, relay } = deps;
   app.get("/internal/sessions/:id", async (req: Request, res: Response) => {
@@ -139,12 +157,15 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
           });
           return;
         }
-        if (record?.state === "outcome_unknown") {
-          res.status(409).json({
-            error: "outcome_unknown",
-            requestId,
-            message: "the controller restarted while this operation was in flight; its outcome is unknown",
-          });
+        // A retry that arrives after the link died must learn the outcome is
+        // unknown, not see a pending 202 or a reused-key error. The retry is not
+        // forwarded again: `claimOperation` stopped at the duplicate row.
+        if (existing.kind === "guest_error" && isLinkLoss(existing.code) && record?.state === "pending") {
+          await store.finishOperation(id, requestId, "outcome_unknown");
+        }
+        const latest = (await store.getExecRequest(id, requestId)) ?? record;
+        if (latest?.state === "outcome_unknown") {
+          res.status(409).json(outcomeUnknown(requestId));
           return;
         }
         res.status(202).json({
@@ -225,6 +246,24 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
       return;
     }
     if (outcome.kind === "guest_error") {
+      if (isLinkLoss(outcome.code)) {
+        // The relay accepted the frame and then lost the link. Marking the
+        // request `outcome_unknown` leaves the single-operation gate closed;
+        // the operation fence or relay recovery releases it once the guest is
+        // idle. Never report this as a guest failure.
+        await store.finishOperation(id, requestId, "outcome_unknown");
+        log.warn("operation_outcome_unknown", {
+          sessionId: id,
+          requestId,
+          relayCode: outcome.code,
+        });
+        res.status(409).json({
+          ...outcomeUnknown(requestId),
+          state: (await store.getSession(id))?.state,
+        });
+        return;
+      }
+      // The guest ran the operation and reported a failure: a real outcome.
       await store.finishOperation(id, requestId, "error");
       res.status(502).json({ error: "guest_error", message: outcome.message, requestId });
       return;
@@ -258,7 +297,12 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
         return;
       }
       if (outcome.kind === "guest_error") {
-        if (record.state === "pending") {
+        if (record.state === "pending" && isLinkLoss(outcome.code)) {
+          // The link died while this lookup was waiting. Fence the request and
+          // fall through to the outcome_unknown answer below; the row is the
+          // only place the outcome can be recorded.
+          await store.finishOperation(id, requestId, "outcome_unknown");
+        } else if (record.state === "pending") {
           await store.finishOperation(id, requestId, "error");
           res.status(502).json({ error: "guest_error", message: outcome.message, requestId });
           return;
@@ -287,14 +331,10 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
       return;
     }
     if (latest.state === "outcome_unknown") {
-      // The controller restarted with this request in flight. It may still be
-      // executing in the guest; the result was never observed. Never report
-      // success/failure or a plain cache expiry for it.
-      res.status(409).json({
-        error: "outcome_unknown",
-        requestId,
-        message: "the controller restarted while this operation was in flight; its outcome is unknown",
-      });
+      // The controller restarted, or the relay link was lost, with this request
+      // in flight. It may still be executing in the guest; the result was never
+      // observed. Never report success/failure or a plain cache expiry for it.
+      res.status(409).json(outcomeUnknown(requestId));
       return;
     }
     // Nothing in the relay and nothing on the row: the result is gone.

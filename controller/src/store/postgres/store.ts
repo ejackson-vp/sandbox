@@ -411,7 +411,7 @@ export class PostgresStore implements StoreBackend {
   finishOperation(
     sessionId: string,
     requestId: string,
-    outcome: "done" | "error" | "abandoned",
+    outcome: "done" | "error" | "abandoned" | "outcome_unknown",
     resultEnvelope?: string | null,
   ): Promise<void> {
     return this.operations.finishOperation(sessionId, requestId, outcome, resultEnvelope);

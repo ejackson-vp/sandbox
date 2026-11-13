@@ -24,7 +24,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { SandboxClient, SandboxError, type SessionHandle } from "@x402s/sdk";
 import { relayCreateRestart } from "./fault-scenarios/relay-create-restart.js";
 import { relayKill } from "./fault-scenarios/relay-kill.js";
-import { relayActive, relayPending } from "./relay-state.js";
+import { relayActive, relayConnected, relayPending } from "./relay-state.js";
 import { workloadRef } from "./workload-ref.js";
 
 const API = process.env.API_URL ?? "http://localhost:8080";
@@ -541,6 +541,7 @@ async function main(): Promise<void> {
           destroyAll,
           waitForStatuses,
           relayPending: (until, waitMs) => relayPending({ namespace: NS, until, waitMs }),
+          relayConnected: (until, waitMs) => relayConnected({ namespace: NS, until, waitMs }),
           podCount,
           capacity,
           waitForDrain,

@@ -23,12 +23,15 @@ spec:
 #
 # The relay registry is in process memory, so a session must always reach the
 # same replica. Each StatefulSet pod gets a stable ordinal name (`relay-0`), and
-# this Service publishes `<pod>.<service>` DNS names. PROXY/RELAY_HOST_TEMPLATE
-# on the controller uses those names, and RELAY_REPLICAS/PROXY_REPLICAS must be
-# raised in the same change as the StatefulSet's replicas: a count of 1 keeps
-# the ClusterIP Service above, a count above 1 switches provisioning to pod
-# names. Ship this object and the StatefulSet together; either alone leaves the
-# template unresolvable.
+# this Service publishes `<pod>.<service>` DNS names for the CONTROLLER's admin
+# calls (RELAY_HOST_TEMPLATE). A guest cannot resolve DNS and cannot dial a Pod
+# IP that changes on replacement, so the guest URL uses a ClusterIP instead: the
+# `relay` Service above at one replica, or one per-shard Service `relay-<n>`
+# selecting `statefulset.kubernetes.io/pod-name: relay-<n>` above one. Create
+# those with `make dev-scale N`; raising RELAY_REPLICAS without them defers
+# creates (the guest would have no address) rather than booting a guest against
+# a dead Pod IP. Hand this object and the StatefulSet together; either alone
+# leaves the controller's admin template unresolvable.
 apiVersion: v1
 kind: Service
 metadata:

@@ -30,6 +30,38 @@ k() {
   fi
 }
 
+# One ClusterIP Service per relay shard, selecting exactly that StatefulSet pod.
+#
+# A guest bakes its relay URL into the process at boot and cannot resolve DNS, so
+# above one replica it needs a stable per-shard address. A Pod IP is not stable:
+# replacing the pod changes it and every guest on that shard dials a dead
+# address. `relay-<n>` is the address the controller hands out; it exists only
+# while the shard does.
+ensure_relay_shard_services() {
+  local target="$1" n
+  for n in $(seq 0 $((MAX_REPLICAS - 1))); do
+    if [ "${target}" -gt 1 ] && [ "${n}" -lt "${target}" ]; then
+      cat <<EOF | k apply -f - >/dev/null
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-${n}
+  namespace: ${NAMESPACE}
+  labels: {app: relay, x402.io/relay-shard: "${n}"}
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: relay-${n}
+  ports:
+    - name: guest
+      port: 8443
+      targetPort: 8443
+EOF
+    else
+      k delete service "relay-${n}" --ignore-not-found >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 # A field that is absent (readyReplicas while a pod is starting) reads as 0.
 field() {
   local kind="$1" name="$2" path="$3" value
@@ -95,6 +127,9 @@ k patch configmap control-config --type merge \
   -p "{\"data\":{\"RELAY_REPLICAS\":\"${target}\",\"PROXY_REPLICAS\":\"${target}\"}}" >/dev/null
 
 k scale statefulset/relay statefulset/egress-proxy --replicas="${target}" >/dev/null
+
+echo "==> ensuring per-shard relay Services"
+ensure_relay_shard_services "${target}"
 
 # kind load replaces an image under the same tag; kubelet will not restart a pod
 # whose tag did not change, so a rebuild is invisible without this. The API and

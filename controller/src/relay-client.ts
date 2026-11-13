@@ -40,7 +40,13 @@ interface RelayClientOptions {
 type RelayResponse =
   | { kind: "envelope"; envelope: string }
   | { kind: "pending" }
-  | { kind: "guest_error"; message: string };
+  /**
+   * `code` is the relay's failure class: `guest_disconnected` and
+   * `request_superseded` are link losses whose outcome is unknown,
+   * `guest_error` is the guest reporting a failed operation, and
+   * `session_destroyed` means the session is being torn down.
+   */
+  | { kind: "guest_error"; code: string; message: string };
 
 interface RelayHealth {
   ok: boolean;
@@ -390,7 +396,13 @@ export class RelayClient {
       return { kind: "envelope", envelope: body.envelope };
     }
     if (res.status === 202) return { kind: "pending" };
-    if (res.status === 409) return { kind: "guest_error", message: body.message ?? body.error ?? "guest error" };
+    if (res.status === 409) {
+      return {
+        kind: "guest_error",
+        code: typeof body.error === "string" ? body.error : "guest_error",
+        message: body.message ?? body.error ?? "guest error",
+      };
+    }
     throw new RelayUnavailableError(res.status, body.error ?? `relay ${res.status}`);
   }
 

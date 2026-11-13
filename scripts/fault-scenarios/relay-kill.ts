@@ -12,7 +12,7 @@
  * Lives beside the harness so `scripts/control-faults.ts` stays reviewable; the
  * harness passes its own scenario helpers in.
  */
-import type { SandboxClient, SessionHandle } from "@x402s/sdk";
+import type { SandboxClient, SandboxError, SessionHandle } from "@x402s/sdk";
 
 type Entry = { client: SandboxClient; handle: SessionHandle };
 type Status = Awaited<ReturnType<SandboxClient["status"]>>;
@@ -35,6 +35,8 @@ interface RelayKillDeps {
     label: string,
   ): Promise<Status[]>;
   relayPending(until: number, waitMs: number): Promise<number>;
+  /** Registrations with a live guest socket, polled until `until`. */
+  relayConnected(until: number, waitMs: number): Promise<number>;
   podCount(): Promise<number>;
   capacity(): Promise<Capacity>;
   waitForDrain(deadline: number): Promise<{ pods: number; reservations: Capacity }>;
@@ -57,8 +59,9 @@ export async function relayKill(deps: RelayKillDeps): Promise<number> {
     const execs = handles.map(({ client, handle }, index) => client
       .exec(handle, { command: ["sleep", "300"], timeoutMs: 300_000, requestId: `relay-kill-${index}` })
       .then(
-        (result) => ({ ok: result.ok, error: result.ok ? "" : (result.error?.code ?? "operation_failed") }),
-        (err: Error) => ({ ok: false, error: err.message }),
+        (result) => ({ ok: result.ok, code: result.ok ? "" : (result.error?.code ?? "operation_failed") }),
+        // The SDK carries the server's error code; the message is prose.
+        (err: Error) => ({ ok: false, code: (err as SandboxError).code ?? err.message }),
       ));
     const pendingDeadline = Date.now() + 10_000;
     let pendingAtKill = 0;
@@ -72,18 +75,30 @@ export async function relayKill(deps: RelayKillDeps): Promise<number> {
     await deps.kill("relay");
     const execOutcomes = await Promise.all(execs);
 
-    // Every interrupted operation is a defined outcome (409 outcome_unknown) or
-    // a transport error the SDK surfaced: never a success, never re-executed.
+    // Every interrupted operation is a defined outcome: `outcome_unknown`,
+    // never a guest error, a cache expiry or a duplicate. A link loss may be
+    // reported by the SDK at any point in its poll loop, so the assertion is on
+    // the code, not on the message.
     const operationsUnresolved = execOutcomes.filter((outcome) => !outcome.ok).length;
-    const unknown = execOutcomes.filter((outcome) => outcome.error.includes("outcome_unknown")).length;
+    const unknown = execOutcomes.filter((outcome) => outcome.code === "outcome_unknown").length;
+    const guestErrors = execOutcomes.filter((outcome) => outcome.code === "guest_error").length;
 
-    // The guest reconnects and the fence clears: READY with the gate open.
+    // READY with the gate open is not enough after a relay restart: the row can
+    // be READY while the registry has no registration, and a new operation would
+    // then fail with `guest_not_available`. Wait until every guest is registered
+    // and connected on the replacement relay.
     await deps.waitForStatuses(
       handles,
       (status) => status.state === "READY" && !status.busy,
       90_000,
       "sessions after relay restart",
     );
+    const connectedAtConvergence = await deps.relayConnected(handles.length, 60_000);
+    if (connectedAtConvergence !== handles.length) {
+      throw new Error(
+        `relay reports ${connectedAtConvergence}/${handles.length} connected guests after the restart`,
+      );
+    }
     convergedMs = Date.now() - killedAt;
 
     const statuses = await Promise.all(handles.map(({ client, handle }) =>
@@ -119,11 +134,13 @@ export async function relayKill(deps: RelayKillDeps): Promise<number> {
       leasesUnchanged,
       operationsUnresolved,
       operationsOutcomeUnknown: unknown,
+      operationsGuestError: guestErrors,
+      connectedAtConvergence,
       newExecSucceeded,
       podCount: pods,
       reservations,
       execErrors: Object.entries(execOutcomes.reduce<Record<string, number>>((acc, outcome) => {
-        const key = outcome.error.split(":")[0] ?? "unknown";
+        const key = outcome.code === "" ? "ok" : outcome.code;
         acc[key] = (acc[key] ?? 0) + 1;
         return acc;
       }, {})).map(([error, count]) => ({ error, count })),
@@ -134,7 +151,7 @@ export async function relayKill(deps: RelayKillDeps): Promise<number> {
     if (survived !== handles.length) process.exitCode = 1;
     if (!leasesUnchanged) process.exitCode = 1;
     if (operationsUnresolved !== handles.length) process.exitCode = 1;
-    if (unknown === 0) process.exitCode = 1;
+    if (unknown !== handles.length || guestErrors !== 0) process.exitCode = 1;
     if (newExecSucceeded !== handles.length) process.exitCode = 1;
     if (pods !== deps.count || reservations.allocated !== deps.count) process.exitCode = 1;
     if (convergedMs > deps.budgetMs) {

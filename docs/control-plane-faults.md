@@ -201,13 +201,17 @@ never becomes ready, the create must fail before READY with a refundable reason
   retries with backoff if the generation changed. A registration that landed
   on a terminating relay is therefore discarded instead of being treated as
   success.
-- **Endpoint re-resolution and Pod reprovision.** The relay endpoint is a ready
-  Pod IP, not a stable ClusterIP (a Kata guest cannot use the ClusterIP). The
-  controller does not cache it, re-resolves it after registration, and, if the
-  relay generation changes after the Pod was created but before the guest
-  connects, deletes that Pod and creates it again against the current endpoint.
-  A create that would otherwise sit on a dead IP now converges in a few
-  seconds instead of timing out.
+- **Stable guest address and Pod reprovision.** The guest URL is the relay
+  Service ClusterIP (`relay`, or the session shard's `relay-<n>` above one
+  replica), not an endpoint Pod IP: a Kata guest cannot resolve DNS but it can
+  dial a ClusterIP, which survives the backend Pod being replaced. The
+  controller still re-resolves it after registration, and, if the relay
+  generation changes after the Pod was created but before the guest connects,
+  deletes that Pod and creates it again against the current endpoints. A create
+  that would otherwise sit on a dead address converges in a few seconds instead
+  of timing out. (The guest used to be handed a ready Pod IP, which is why the
+  live-session restart stranded every guest; see
+  [Relay restart during a live session](#relay-restart-during-a-live-session).)
 - **Fresh admin connections.** Relay admin calls send `Connection: close`.
   A Kubernetes Service DNATs an existing keep-alive socket to the old Pod even
   after its endpoint is removed, so without this the controller can keep
@@ -277,8 +281,14 @@ for, so the customer lost the remaining lease.
 Now the guest reconnects (ADR 0012), and the controller treats a relay generation
 change as a recovery boundary:
 
+- the guest URL is a stable ClusterIP, so the reconnecting supervisor reaches
+  the replacement Pod at all. Creating a session with an endpoint Pod IP was
+  what left every guest on the shard dialling a dead address,
 - the in-flight request becomes `outcome_unknown` and `sessions.exec_epoch` is
-  bumped once (the `pending -> outcome_unknown` transition is the guard),
+  bumped once (the `pending -> outcome_unknown` transition is the guard). The
+  relay reports the loss as `guest_disconnected`/`request_superseded`, and the
+  control API answers `409 outcome_unknown`; a guest-reported error is still a
+  `502 guest_error`,
 - the session is re-registered on the current generation with the token hash it
   already has,
 - `OperationFence` holds the gate until the reconnected guest reports its slot
@@ -315,6 +325,10 @@ processes on the same address, a real Postgres store and the real reconciler:
 
 `tests/unit/relay-recovery.test.ts` pins detection (once per change), the
 READY/ACTIVE registration set, the idle hold and the grace outcome;
+`tests/unit/operation-outcome.test.ts` pins the link-loss classification
+(including a same-id retry with a different payload hash), and
+`tests/integration/relay-reconnect.test.ts` asserts the caller's in-flight POST
+gets `outcome_unknown` when the guest socket dies;
 `tests/unit/relay-recovery-store.test.ts` pins the exactly-once fence;
 `tests/unit/relay.test.ts` pins reconnect acceptance and the refusal of a frame
 below the floor after the re-registration.
@@ -323,8 +337,10 @@ below the floor after the re-registration.
 
 `make test-control-faults TARGET=relay` (matrix case `relay-kill`) now requires
 survival rather than fail-closed: no terminal session, unchanged leases,
-`outcome_unknown` for every interrupted operation, a successful new exec per
-session, and Pods/reservations still allocated. **This expectation was changed
+`outcome_unknown` for every interrupted operation, every guest connected on the
+replacement relay (the new `sandbox_relay_connected_sessions` gauge) before the
+new exec, a successful new exec per session, and Pods/reservations still
+allocated. **This expectation was changed
 without a cluster run**; the local cases above are what was executed here.
 
 ## Scheduled runs (nightly)

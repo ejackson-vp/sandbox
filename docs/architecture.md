@@ -102,8 +102,14 @@ An encrypted RPC switch, not a proxy or a tunnel:
   drops it. The controller re-registers a `READY`/`ACTIVE` session on the new
   generation with the token hash it already has, and the guest reconnects to
   the same registration (`docs/adr/0012-guest-reconnects-after-relay-loss.md`),
+- the guest dials a stable ClusterIP, not an endpoint Pod IP: the `relay`
+  Service at one replica, a per-shard `relay-<n>` Service above one. That is
+  what lets a baked-in URL survive the relay Pod being replaced,
 - frames: `request`/`cancel`/`shutdown` down, `response`/`error` up,
 - correlates opaque envelopes by id, caches responses for 5 minutes,
+- a frame it cannot answer for reports why: `guest_disconnected` and
+  `request_superseded` are link losses whose outcome is unknown, `guest_error`
+  is the guest reporting a failed operation,
 - rejects >8 pending requests per session and >24 MiB frames,
 - per-session execution-epoch floor: a frame below it is refused
   (`stale_epoch`) and an already-forwarded frame is withdrawn
