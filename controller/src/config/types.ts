@@ -77,6 +77,8 @@ export interface ControllerConfig {
   proxyEnabled: boolean;
   relayBaseUrl: string;
   relayServiceName: string;
+  /** Guest-facing relay address: stable Service VIP or ready Pod IP. */
+  relayGuestAddress: "pod" | "service";
   proxyServiceName: string;
   /**
    * Headless Services that publish per-pod endpoint hostnames (`relay-0`).

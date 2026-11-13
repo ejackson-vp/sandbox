@@ -16,6 +16,13 @@ import { createHash } from "node:crypto";
 
 /** The placement-relevant subset of the controller config. */
 export interface DataPlanePlacement {
+  /**
+   * How a guest addresses the relay: `service` uses the stable ClusterIP,
+   * `pod` uses the ready endpoint Pod IP. `pod` exists for clusters whose
+   * policy denies Service VIPs from guest netns; it loses relay-restart
+   * continuity, so the controller's relay-loss compensation must cover it.
+   */
+  relayGuestAddress: "pod" | "service";
   relayReplicas: number;
   relayHostTemplate: string;
   relayPort: number;

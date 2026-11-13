@@ -43,6 +43,13 @@ export class DataPlaneEndpoints {
    * StatefulSet Pod only.
    */
   async relayAddress(sessionId: string): Promise<Endpoint | null> {
+    // Some clusters deny Service VIPs from guest netns even when the backend
+    // Pod is allowed. `pod` keeps the session working there; the relay-loss
+    // grace/refund path covers the fact that a replacement Pod changes the
+    // address. Default stays `service`.
+    if (this.ctx.cfg.relayGuestAddress === "pod") {
+      return this.endpoint("relay", sessionId);
+    }
     const shard = pinnedShard(this.ctx.cfg, "relay", sessionId);
     return shard === null
       ? this.ctx.stableServiceAddress(this.ctx.cfg.relayServiceName)

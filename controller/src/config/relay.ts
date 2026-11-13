@@ -17,6 +17,7 @@ type RelayServiceSettings = Pick<
   | "proxyEnabled"
   | "relayBaseUrl"
   | "relayServiceName"
+  | "relayGuestAddress"
   | "proxyServiceName"
   | "relayHeadlessService"
   | "proxyHeadlessService"
@@ -27,6 +28,12 @@ type DataPlanePlacement = Pick<
   "relayReplicas" | "proxyReplicas" | "relayHostTemplate" | "proxyHostTemplate" | "shardIndex"
 >;
 
+function parseGuestAddress(value: string | undefined): "pod" | "service" {
+  if (value === undefined || value === "" || value === "service") return "service";
+  if (value === "pod") return "pod";
+  throw new Error(`RELAY_GUEST_ADDRESS must be "service" or "pod", got ${value}`);
+}
+
 export function parseRelayServices(
   env: NodeJS.ProcessEnv,
   role: Role,
@@ -35,6 +42,7 @@ export function parseRelayServices(
     relayEnabled: bool(env.RELAY_ENABLED, role === "all" || role === "relay"),
     proxyEnabled: bool(env.PROXY_ENABLED, role === "all" || role === "proxy"),
     relayBaseUrl: env.RELAY_URL ?? "http://127.0.0.1:8443",
+    relayGuestAddress: parseGuestAddress(env.RELAY_GUEST_ADDRESS),
     relayServiceName: env.RELAY_SERVICE_NAME ?? "relay",
     proxyServiceName: env.PROXY_SERVICE_NAME ?? "egress-proxy",
     relayHeadlessService:
