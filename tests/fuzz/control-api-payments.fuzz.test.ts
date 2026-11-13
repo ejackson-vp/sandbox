@@ -175,7 +175,7 @@ afterAll(async () => {
 
 async function call(
   path: string,
-  init: { method?: string; body?: unknown; token?: string | null } = {},
+  init: { method?: string; body?: unknown; raw?: string; token?: string | null } = {},
 ): Promise<Answer> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   const token = init.token === undefined ? ADMIN : init.token;
@@ -183,7 +183,11 @@ async function call(
   const res = await fetch(`${base}${path}`, {
     method: init.method ?? "POST",
     headers,
-    ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    ...(init.raw !== undefined
+      ? { body: init.raw }
+      : init.body !== undefined
+        ? { body: JSON.stringify(init.body) }
+        : {}),
   });
   const text = await res.text();
   let parsed: unknown;
@@ -207,9 +211,8 @@ const segment = fc
 /**
  * JSON the parser actually hands to a route. `express.json({strict: true})`
  * refuses a top-level primitive before any handler runs, so only arrays and
- * objects can reach the code under test. (That parser refusal is answered by
- * the control API's generic backstop as a 500; the gap is reported with this
- * change rather than pinned as expected behaviour.)
+ * objects can reach the code under test. That refusal is pinned separately
+ * below, because the two API surfaces used to disagree on it.
  */
 const parsedJson = fc.oneof(
   fc.array(fc.jsonValue(), { maxLength: 5 }),
@@ -250,6 +253,17 @@ describe("control API payment routes", () => {
     ]) {
       const res = await call(path, { body: {}, token: null });
       expect(res.status).toBe(401);
+    }
+  });
+
+  it("answers a top-level primitive the way the public API does", async () => {
+    // `express.json({strict:true})` refuses these before any route runs. The
+    // answer is the client's, not an outage, and it used to be a 500 here while
+    // the public API answered 400 for the same bytes.
+    for (const raw of ["0", "null", '"x"', "true"]) {
+      const res = await call("/internal/payment-intents/claim", { raw });
+      expect(res.status, `body ${raw}`).toBe(400);
+      expect(res.body).toMatchObject({ error: "invalid_json" });
     }
   });
 
