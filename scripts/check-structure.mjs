@@ -34,6 +34,11 @@ const EXCLUDED_DIRS = new Set([
   "coverage",
   "dist",
   "node_modules",
+  // Stryker copies the project into .stryker-tmp/ and writes its HTML report to
+  // reports/. Both are generated, neither is tracked, and walking the sandbox
+  // copy would count every file twice.
+  ".stryker-tmp",
+  "reports",
 ]);
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".go"]);
 

@@ -31,10 +31,13 @@
     "test:property": "vitest run tests/property --fileParallelism",
     "test:portable": "vitest run tests/transfers tests/workloads tests/compatibility --fileParallelism",
     "test:coverage": "vitest run tests/unit tests/property --coverage --fileParallelism",
+    "mutation": "stryker run",
     "lint:structure": "node scripts/check-structure.mjs && node scripts/check-singletons.mjs",
     "coupling": "node scripts/coupling.mjs"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^10.1.1",
+    "@stryker-mutator/vitest-runner": "^10.1.1",
     "@types/express": "^5.0.0",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
