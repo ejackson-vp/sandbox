@@ -68,6 +68,10 @@ jobs:
       # here instead of passing (#144).
       - run: npx tsc -p tsconfig.tests.json --noEmit
       - run: npm run lint:structure
+      # The Talos overlay, the release map and the Kyverno allowlist must name
+      # one release. Offline on purpose: a registry digest cannot be re-derived
+      # from a tag deterministically, so the committed map is the link.
+      - run: node scripts/check-deploy-pins.mjs
       # The published profile set is guest/profiles/runtime-images.conf; the
       # release workflow builds exactly those and nothing else.
       - run: ./guest/check-profiles.sh

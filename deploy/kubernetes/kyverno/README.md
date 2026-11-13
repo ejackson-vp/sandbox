@@ -34,23 +34,27 @@ namespace rather than being a manual step.
 helm repo add kyverno https://kyverno.github.io/kyverno
 helm install kyverno kyverno/kyverno -n kyverno --create-namespace --set admissionController.replicas=1
 
-# 2. The policy. Rule 2 fails closed until the digests are filled in.
+# 2. The policy. The allowlist carries the current release's three digests.
 kubectl apply -f deploy/kubernetes/kyverno/guest-image-policy.yaml
 kubectl get clusterpolicy sandbox-guest-image-pinned
 ```
 
-`REPLACE_WITH_RELEASED_*_DIGEST` placeholders are intentional. Until they are
-replaced, every guest pod in an `enforce` namespace is rejected, which is the
-correct failure: a policy that admits an unfilled allowlist is worse than no
-policy.
+An empty or stale allowlist rejects every guest pod in an `enforce` namespace,
+which is the correct failure: a policy that admits anything the controller asks
+for is not a second check. The digests now come from
+`deploy/release-pins.json` and are validated offline by
+`scripts/check-deploy-pins.mjs`; before that map existed the file carried
+`REPLACE_WITH_RELEASED_*_DIGEST` placeholders and had never been applied.
 
 ## Keep the allowlist in step with the deployment
 
-Rule 2 duplicates three values that live in `deploy/kubernetes/03-config.yaml`:
-`GUEST_IMAGE_DIGEST`, and `RUNTIME_PROFILES.<profile>.digest` for each profile.
-Change them in the same commit, or the next rollout is rejected. The release
-digests are in the release assets (`sandbox-guest*.sigstore.json`) and in
-`docs/release-process.md`.
+Rule 2 duplicates the three values `deploy/talos/kustomization.yaml` deploys:
+`GUEST_IMAGE_DIGEST` and `RUNTIME_PROFILES.<profile>.digest` for each profile.
+They are also recorded in `deploy/release-pins.json`, and
+`node scripts/check-deploy-pins.mjs` fails when any of the three files disagrees,
+so the rollout cannot be rejected by an allowlist that missed the bump. The
+digests are in the release assets (`sandbox-guest*.sigstore.json`) and in the
+release body.
 
 ## Local kind
 

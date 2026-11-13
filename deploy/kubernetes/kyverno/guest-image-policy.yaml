@@ -58,7 +58,7 @@ spec:
           sandbox guest pods must run <repository>@sha256:<64 hex>: the
           repositories are x402-sandbox/guest (local builds) and
           ghcr.io/ejackson-vp/sandbox-guest (releases). A tag-only reference
-          (":dev", ":latest", ":0.1.25") or a different repository is rejected
+          (":dev", ":latest", ":0.1.31") or a different repository is rejected
           because it can be repointed after review.
         foreach:
           - list: "request.object.spec.[containers, initContainers][]"
@@ -73,8 +73,12 @@ spec:
     # 2. The digest is the released one.                                #
     # ---------------------------------------------------------------- #
     # Update this list in the same change as GUEST_IMAGE_DIGEST /
-    # RUNTIME_PROFILES in deploy/kubernetes/03-config.yaml. A missing entry is
+    # RUNTIME_PROFILES in deploy/talos/kustomization.yaml. A missing entry is
     # a rejected pod, not a silently unpinned one.
+    #
+    # scripts/check-deploy-pins.mjs compares this set against the release map
+    # (deploy/release-pins.json), so a digest that moves in one place and not
+    # the other fails CI instead of failing admission on a live cluster.
     #
     # The local-kind exception is the namespace label above: a kind build has a
     # machine-specific digest (deploy/kind/apply.sh reads it out of containerd),
@@ -91,7 +95,7 @@ spec:
       validate:
         message: >-
           this guest image digest is not the released one. Deploy the digest in
-          deploy/kubernetes/03-config.yaml (GUEST_IMAGE_DIGEST and
+          deploy/talos/kustomization.yaml (GUEST_IMAGE_DIGEST and
           RUNTIME_PROFILES) and add it here in the same change. On a local kind
           cluster, label the namespace x402.io/image-policy=dev-unpinned instead
           (deploy/kubernetes/kyverno/README.md).
@@ -103,9 +107,9 @@ spec:
                   - key: "{{ element.image }}"
                     operator: NotIn
                     value:
-                      # base image, GUEST_IMAGE_DIGEST
-                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:REPLACE_WITH_RELEASED_BASE_DIGEST"
-                      # python profile, RUNTIME_PROFILES.python.digest
-                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:REPLACE_WITH_RELEASED_PYTHON_DIGEST"
-                      # node profile, RUNTIME_PROFILES.node.digest
-                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:REPLACE_WITH_RELEASED_NODE_DIGEST"
+                      # base image, GUEST_IMAGE_DIGEST (release 0.1.30)
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:4872ec154b43fd4a09b6272abb7b5ab3923e4bb754caefefd3c4f9c54c3a398d"
+                      # python profile, RUNTIME_PROFILES.python.digest (0.1.30)
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:eb78d226ac40b3285252777562dd1a6b291db1fe797924927d0af9a9d800e49e"
+                      # node profile, RUNTIME_PROFILES.node.digest (0.1.30)
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:b9ce875fc6ed7820469305b771b6730eb274aa289da6eacc48c20061243cbd60"

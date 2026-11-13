@@ -68,6 +68,9 @@ jobs:
       # existed and the runtime profile pin set was out of sync.
       - run: npx tsc -p tsconfig.tests.json --noEmit
       - run: npm run lint:structure
+      # Same pin check as the `unit` job: a release must not ship an overlay
+      # that deploys two different releases.
+      - run: node scripts/check-deploy-pins.mjs
       - run: ./guest/check-profiles.sh
       # Same list as the `unit` job in ci.yml, coverage included: the floor in
       # vitest.config.ts is a gate, so it has to hold for a release too.
