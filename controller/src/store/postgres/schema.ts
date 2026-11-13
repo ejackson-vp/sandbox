@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS payment_ledger (
   reason TEXT,
   refund_tx TEXT,
   settlement_nonce TEXT,
+  source TEXT NOT NULL DEFAULT 'x402',
   refund_attempts INTEGER NOT NULL DEFAULT 0,
   refund_last_error TEXT,
   refund_next_attempt_at BIGINT,
@@ -89,6 +90,14 @@ CREATE TABLE IF NOT EXISTS payer_budgets (
   creates INTEGER NOT NULL DEFAULT 0,
   spend TEXT NOT NULL DEFAULT '0',
   updated_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payer_allowlist (
+  address TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  max_tier TEXT NOT NULL,
+  max_concurrent INTEGER NOT NULL,
+  created_at BIGINT NOT NULL,
+  disabled_at BIGINT
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -256,6 +265,17 @@ const LADDER: ReadonlyArray<{ from: number; sql: string }> = [
           CREATE INDEX IF NOT EXISTS payment_ledger_refund_due
             ON payment_ledger(status, refund_next_attempt_at, refund_claimed_at)
             WHERE status IN ('REFUND_PENDING','REFUND_SENDING');`,
+  },
+  {
+    // Free entitlement for a proven allowlisted payer (ADR 0013). Additive:
+    // `source` defaults to 'x402' so every existing row keeps its meaning, and
+    // the allowlist table is new. `max_tier` and `max_concurrent` are the
+    // entry's own ceilings on top of the shared budgets.
+    from: 19,
+    sql: `CREATE TABLE IF NOT EXISTS payer_allowlist (
+            address TEXT PRIMARY KEY, label TEXT NOT NULL, max_tier TEXT NOT NULL,
+            max_concurrent INTEGER NOT NULL, created_at BIGINT NOT NULL, disabled_at BIGINT);
+          ALTER TABLE payment_ledger ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'x402';`,
   },
 ];
 

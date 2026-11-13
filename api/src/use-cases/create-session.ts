@@ -23,6 +23,7 @@ import {
   type CreateSessionUseCaseDeps,
   type PaymentTimings,
 } from "./create-session-contract.js";
+import { allowlistPaymentKey, resolveAllowance } from "./create-session-allowlist.js";
 import { completeEntitlement } from "./create-session-completion.js";
 import {
   admitPayer,
@@ -74,20 +75,33 @@ export async function createSession(
   if (!proven.ok) return proven.result;
   const { key, authorizer, challengeNonce } = proven.value;
 
-  const burned = await burnChallenge(deps, challengeNonce, key, requirement);
+  // Free entitlement for a proven allowlisted address (ADR 0013). This is the
+  // check point: after the commitment signature proved the address, before any
+  // facilitator call, so a free session is never settled or charged.
+  const allowance = await resolveAllowance(deps, authorizer, spec);
+  if (allowance?.kind === "unavailable") return allowance.result;
+  const free = allowance?.kind === "allowed";
+  // A free session gets its own key, derived from the proven address and the
+  // burned challenge, so it cannot collide with or replay a real payment.
+  const ledgerKey = free ? allowlistPaymentKey(authorizer, challengeNonce) : key;
+
+  const burned = await burnChallenge(deps, challengeNonce, ledgerKey, requirement);
   if (!burned.ok) return burned.result;
 
-  const budget = await reserveBudget(deps, authorizer, requirement);
+  const budget = await reserveBudget(
+    deps,
+    allowance?.kind === "allowed" ? allowance.budgetKey : authorizer,
+    free ? "0" : requirement.amount,
+  );
   if (!budget.ok) return budget.result;
-
   const commitment = `${body.clientPublicKey}:${body.clientNonce}`;
-  const capability = deps.capabilityFor(key, commitment);
+  const capability = deps.capabilityFor(ledgerKey, commitment);
   const capabilityHash = sha256Hex(capability);
 
-  const hold = await holdCapacity(deps, key, specDigest, spec);
+  const hold = await holdCapacity(deps, ledgerKey, specDigest, spec);
   if (!hold.ok) return hold.result;
 
-  const claimed = await claimPaymentIntent(deps, key, specDigest, requirement, commitment);
+  const claimed = await claimPaymentIntent(deps, ledgerKey, specDigest, requirement, commitment);
   if (!claimed.ok) return claimed.result;
   const { token: claimToken, recovered } = claimed.value;
   const timings: PaymentTimings = { verifyMs: 0, settleMs: 0 };
@@ -97,7 +111,7 @@ export async function createSession(
       deps,
       {
         claimToken,
-        key,
+        key: ledgerKey,
         commitment,
         capability,
         capabilityHash,
@@ -108,9 +122,22 @@ export async function createSession(
         payload,
         receivedAt,
         timings,
+        ...(allowance?.kind === "allowed"
+          ? { allowance: { label: allowance.label, budgetKey: allowance.budgetKey } }
+          : {}),
       },
       settled,
     );
+
+  if (free) {
+    // No verify, no settle: the address is proven and the allowance is the
+    // payment. The ledger row says amount 0, source allowlist, and the label.
+    log.info("allowlist_entitlement_granted", {
+      paymentKeyPrefix: ledgerKey.slice(0, 12),
+      tier: spec.tier,
+    });
+    return complete({ payer: authorizer });
+  }
 
   // Recovery path: a previous attempt may have settled before crashing. The
   // chain is asked first (F-10), then the facilitator lookup for anything the

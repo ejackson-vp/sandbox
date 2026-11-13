@@ -34,6 +34,7 @@ never a session without a ledger row, or a ledger row without its entitlement.
 | `payment_key` | x402 payment key; primary key |
 | `session_id` | session that consumed the payment; unique |
 | `payer`, `amount`, `asset`, `network`, `mode` | payment identity |
+| `source` | `x402` (default) or `allowlist`; an allowlist row is always `amount = "0"` (schema v19, [ADR 0013](adr/0013-free-entitlement-from-proven-address.md)) |
 | `status` | `SETTLED`, `REFUND_PENDING`, `REFUND_SENDING`, `REFUNDED` |
 | `reason` | why a refund was requested |
 | `refund_tx` | mock transaction id or operator-supplied real transaction id |
@@ -144,6 +145,19 @@ paths cannot refund twice. Housekeeping also scans terminal-before-READY
 sessions whose ledger is still `SETTLED`, terminal `relay_lost` sessions whose
 ledger is still `SETTLED`, and settlement rows with no session (`unsettled:*`,
 `duplicate:*`), repairing a crash between the write and the policy.
+
+## Free sessions
+
+An allowlisted wallet (ADR 0013) gets a session with no payment: the row is
+written with `amount = "0"`, `source = 'allowlist'`, the entry's label in
+`reason`, and the payer address that signed the commitment. No EIP-3009
+authorisation was used, so `settlement_nonce` is `null` and no facilitator was
+called.
+
+A $0 row is never a refund candidate: the three refund queries filter
+`source = 'x402'`, so a free session that ends before READY does not queue a
+refund for money that never moved. Everything else applies unchanged: the same
+intent claim, ledger transaction and idempotent replay as a paid session.
 
 ## Double charges
 

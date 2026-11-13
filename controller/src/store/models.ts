@@ -21,6 +21,9 @@ export type StoreHealth =
       schemaVersion?: number;
     };
 
+/** How an entitlement was paid for. `allowlist` rows are always `amount = "0"`. */
+export type PaymentSource = "x402" | "allowlist";
+
 export interface PaymentRecord {
   paymentKey: string;
   network: string;
@@ -33,6 +36,18 @@ export interface PaymentRecord {
   mode: PaymentMode;
   /** EIP-3009 authorisation nonce, when the payload carried one. */
   settlementNonce?: string | null;
+  /** Defaults to `x402` on rows written before schema v19. */
+  source?: PaymentSource;
+  /**
+   * Operator label of the allowlist entry that granted a free session. Recorded
+   * in the ledger's `reason`, so a $0 row explains itself.
+   */
+  label?: string;
+  /**
+   * Budget row this payment charges. Allowlisted payers use `allow:<address>`
+   * so a free session can never consume a paying payer's window.
+   */
+  budgetKey?: string;
 }
 
 export interface SessionRecord {
@@ -182,6 +197,8 @@ export interface PaymentLedgerRecord {
   asset: string;
   network: string;
   mode: PaymentMode;
+  /** `x402` for a paid row; `allowlist` for a $0 entitlement (ADR 0013). */
+  source: PaymentSource;
   status: LedgerStatus;
   reason: string | null;
   refundTransaction: string | null;
@@ -224,6 +241,32 @@ export interface UnclaimedLedgerEntry {
   refundTransaction?: string | null;
   settlementNonce: string | null;
 }
+
+/**
+ * One allowlist entry, as the operator set it (ADR 0013).
+ *
+ * `maxTier` and `maxConcurrent` are ceilings on what a free session may
+ * consume, applied on top of the shared per-window and concurrency budgets.
+ */
+export interface PayerAllowlistEntry {
+  address: string;
+  label: string;
+  maxTier: SessionTier;
+  maxConcurrent: number;
+  createdAt: number;
+  disabledAt: number | null;
+}
+
+/**
+ * The authorize answer. A refusal names why, so the API can distinguish "not on
+ * the list" (the normal 402 path) from a broken lookup (fail closed with 503).
+ */
+export type AllowlistDecision =
+  | { allowed: true; label: string; maxTier: SessionTier; maxConcurrent: number }
+  | {
+      allowed: false;
+      reason: "not_allowlisted" | "disabled" | "tier_not_allowed" | "concurrency_exhausted";
+    };
 
 export interface PaymentIntentRecord {
   paymentKey: string;
@@ -501,6 +544,7 @@ export function mapLedger(r: Record<string, unknown>): PaymentLedgerRecord {
     asset: r.asset as string,
     network: r.network as string,
     mode: r.mode as PaymentMode,
+    source: ((r.source as PaymentSource | undefined) ?? "x402") as PaymentSource,
     status: r.status as LedgerStatus,
     reason: (r.reason as string | null) ?? null,
     refundTransaction: (r.refund_tx as string | null) ?? null,

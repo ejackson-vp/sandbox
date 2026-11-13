@@ -225,17 +225,19 @@ export async function burnChallenge(
  * Durable per-payer and global budget (#48), before any capacity hold, intent
  * claim or settlement. The in-memory buckets are the first line; this one
  * survives a restart, and the global row cannot be influenced by a client-chosen
- * field. `authorizer` is proven here: the commitment signature recovers to it,
- * so the budget key is a key the caller controls.
+ * field. `payerKey` is proven here: the commitment signature recovers to the
+ * address, so the budget key is a key the caller controls. An allowlisted payer
+ * passes `allow:<address>` so a free session charges its own row rather than
+ * the paying one (ADR 0013).
  */
 export async function reserveBudget(
   deps: CreateSessionUseCaseDeps,
-  authorizer: `0x${string}`,
-  requirement: PaymentRequirements,
+  payerKey: string,
+  amountAtomic: string,
 ): Promise<Ok<BudgetDecision> | Failed> {
   let budget: BudgetDecision;
   try {
-    budget = await deps.controller.reserveBudget(authorizer, requirement.amount);
+    budget = await deps.controller.reserveBudget(payerKey, amountAtomic);
   } catch (err) {
     log.error("budget_reservation_failed", { error: (err as Error).message });
     return {

@@ -122,6 +122,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   metrics.histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS);
   metrics.histogram("sandbox_session_create_duration_seconds", "Create request duration", LATENCY_BUCKETS);
   metrics.counter("sandbox_sessions_created_total", "Session create requests by outcome");
+  metrics.counter("sandbox_sessions_total", "Sessions created by entitlement source");
 
   const resourceInfo = {
     url: `${config.publicBaseUrl}/v1/sessions`,

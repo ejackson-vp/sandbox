@@ -39,6 +39,7 @@ const REQUIREMENT = {
 /** Everything the handler may call on the controller, defaulted to "admit". */
 interface ControllerStub {
   preflightCapacity: ReturnType<typeof vi.fn>;
+  authorizeAllowlistedPayer: ReturnType<typeof vi.fn>;
   holdCapacity: ReturnType<typeof vi.fn>;
   claimIntent: ReturnType<typeof vi.fn>;
   completeIntent: ReturnType<typeof vi.fn>;
@@ -54,6 +55,10 @@ interface ControllerStub {
 function admittingController(): ControllerStub {
   return {
     preflightCapacity: vi.fn(async () => ({ admitted: true as const, reservationId: "r" })),
+    authorizeAllowlistedPayer: vi.fn(async () => ({
+      allowed: false as const,
+      reason: "not_allowlisted" as const,
+    })),
     holdCapacity: vi.fn(async () => ({ admitted: true as const, nodeId: "n", reservation: { nodeId: "n" } })),
     claimIntent: vi.fn(async () => ({ status: "claimed" as const, recovered: false, token: "t", expiresAt: 1 })),
     completeIntent: vi.fn(async () => ({ sessionId: "sbx_test", state: "PAID" as const, created: true })),
@@ -106,6 +111,10 @@ export async function postCreate(
       verifyPayment?: (...args: unknown[]) => Promise<unknown>;
       settlePayment?: (...args: unknown[]) => Promise<unknown>;
     };
+    /** Sign the commitment with a different wallet (F-02 negative case). */
+    commitmentSigner?: { signMessage(args: { message: string }): Promise<`0x${string}`> };
+    /** Override PAYER_ALLOWLIST_ENABLED for the create. Defaults to on. */
+    allowlistEnabled?: boolean;
   } = {},
 ): Promise<CreateResult> {
   const account = privateKeyToAccount(generatePrivateKey());
@@ -136,7 +145,7 @@ export async function postCreate(
   const settlementNonce = (authorization?.nonce ?? `0x${"0".repeat(64)}`) as `0x${string}`;
 
   if (body.clientSignature === undefined) {
-    body.clientSignature = await account.signMessage({
+    body.clientSignature = await (opts.commitmentSigner ?? account).signMessage({
       message: clientCommitmentMessage({
         paymentKey: key,
         clientPublicKey: body.clientPublicKey as string,
@@ -175,6 +184,7 @@ export async function postCreate(
       platformLimits: loadPlatformLimits({}),
       network: MOCK_NETWORK,
       paymentMode: "mock",
+      payerAllowlistEnabled: opts.allowlistEnabled ?? true,
       capabilityTtlSeconds: 60,
       intentStaleMs: 30_000,
     },

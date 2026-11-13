@@ -31,8 +31,13 @@ export const intentClaimSchema = z.object({
 
 /** Reserve one create against the durable budget (#48). */
 export const budgetReserveSchema = z.object({
-  /** The payer address the requester proved it controls; omitted for a global check. */
-  payer: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  /**
+   * The budget subject: the payer address the requester proved it controls, or
+   * `allow:<address>` for a free allowlist session (ADR 0013), which is a
+   * separate row so a free session cannot spend a paid one's window. Omitted
+   * for a global check.
+   */
+  payer: z.string().regex(/^(0x[0-9a-fA-F]{40}|allow:0x[0-9a-fA-F]{40})$/).optional(),
   amount: z.string().regex(/^\d{1,30}$/),
 });
 
@@ -102,9 +107,24 @@ export const completeSchema = z.object({
     payTo: z.string().min(2).max(128),
     payer: z.string().min(2).max(128).optional(),
     transaction: z.string().min(1).max(256).optional(),
-    mode: z.enum(["mock", "testnet"]),
+    mode: z.enum(["mock", "testnet", "mainnet"]),
     settlementNonce: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
+    /**
+     * `x402` (default) or `allowlist`. An allowlist row is written with
+     * `amount = "0"` and `source = "allowlist"` (ADR 0013).
+     */
+    source: z.enum(["x402", "allowlist"]).optional(),
+    /** Operator label of the allowlist entry; kept in the ledger's reason. */
+    label: z.string().min(1).max(128).optional(),
+    /** Budget row to charge, `allow:<address>` for a free session. */
+    budgetKey: z.string().min(1).max(256).optional(),
   }),
+});
+
+/** Authorize a proven payer address for a free session (ADR 0013). */
+export const allowlistAuthorizeSchema = z.object({
+  address: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  tier: z.enum(["short", "standard", "extended", "long", "custom"]),
 });
 
 export const operationSchema = z.object({

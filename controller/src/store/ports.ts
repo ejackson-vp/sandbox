@@ -1,4 +1,5 @@
 import type {
+  AllowlistDecision,
   ChallengeBurnResult,
   ClaimOperationResult,
   ClaimedRefund,
@@ -13,7 +14,7 @@ import type {
   SessionState,
   StoreHealth,
 } from "./models.js";
-import type { PaymentMode } from "@x402s/shared/protocol";
+import type { PaymentMode, SessionTier } from "@x402s/shared/protocol";
 import type { ReservationStore } from "../capacity/reservation-store.js";
 import type { ClaimToken } from "@x402s/shared/durable";
 import type { BudgetDecision, BudgetLimits } from "./budget-decision.js";
@@ -231,6 +232,12 @@ export interface ControlApiStore {
     staleMs: number,
     requirementsJson?: string | null,
   ): Promise<IntentClaimResult>;
+  /**
+   * Decide whether a proven payer address gets a free session (ADR 0013).
+   * Enforced inside one transaction under an address-scoped lock, so two
+   * concurrent creates cannot both pass the concurrency ceiling.
+   */
+  authorizeAllowlistedPayer(address: string, tier: SessionTier): Promise<AllowlistDecision>;
   /** Single-use challenge nonce (#47): mint, burn, and never resurrect. */
   issueChallengeNonce(
     nonce: string,

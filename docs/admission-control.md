@@ -90,6 +90,10 @@ Three properties matter more than the numbers:
   and a settled payment cannot be invisible to the budget.
 - **Concurrency is counted from live rows**, not a counter, so a crash cannot
   leak a slot.
+- **An allowlisted payer gets its own namespace.** A free session (ADR 0013)
+  reserves under `allow:<address>` and counts only `source = 'allowlist'` live
+  sessions, so it can never consume or exhaust the paying payer's window. The
+  entry's own `max_concurrent` applies on top.
 
 A rejection is `429` with the budget that refused, the seconds until the window
 resets and what is left:

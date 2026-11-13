@@ -28,6 +28,24 @@ export interface TierDefinition {
 
 export type TierTable = Record<Exclude<SessionTier, "custom">, TierDefinition>;
 
+/**
+ * Preset tiers from smallest to largest. `custom` is deliberately absent: it is
+ * not comparable with a configured maximum, so `tierWithinMax` refuses it
+ * rather than guessing where it sits.
+ */
+export const TIER_ORDER = ["short", "standard", "extended", "long"] as const;
+
+/** Rank of a preset tier, or -1 for `custom`. */
+export function tierRank(tier: SessionTier): number {
+  return (TIER_ORDER as readonly string[]).indexOf(tier);
+}
+
+/** Whether a requested tier is at or below an allowlist entry's maximum. */
+export function tierWithinMax(tier: SessionTier, maxTier: SessionTier): boolean {
+  const rank = tierRank(tier);
+  return rank >= 0 && rank <= tierRank(maxTier);
+}
+
 export const DEFAULT_TIERS: TierTable = {
   short: { durationSeconds: 60, cpuMillis: 500, memoryMiB: 512, diskMiB: 256, priceUsd: "$0.02" },
   standard: { durationSeconds: 300, cpuMillis: 1000, memoryMiB: 1024, diskMiB: 1024, priceUsd: "$0.05" },

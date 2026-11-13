@@ -1,10 +1,11 @@
 /**
- * Mutation testing for the three modules where a surviving mutant is a bug
- * rather than a style opinion:
+ * Mutation testing for the modules where a surviving mutant is a bug rather
+ * than a style opinion:
  *
  *   shared/src/payment.ts              pricing and x402 scheme validation
  *   controller/src/control-api/payments.ts  the internal money routes
  *   sdk/src/transfers.ts               client-side transfer orchestration
+ *   api/src/use-cases/create-session-allowlist.ts  the free-entitlement check
  *
  * Line coverage says those lines ran. A mutant that survives says the test ran
  * the line and asserted nothing about it, which is the only signal that finds a
@@ -39,6 +40,10 @@ export default {
     "shared/src/payment.ts",
     "controller/src/control-api/payments.ts",
     "sdk/src/transfers.ts",
+    // The allowlist check is a trust boundary (ADR 0013): a mutant that flips
+    // "not allowed" into "allowed", or changes the derived key or budget
+    // namespace, must fail a test rather than grant a free session.
+    "api/src/use-cases/create-session-allowlist.ts",
   ],
 
   // Unit, fuzz and the portable transfer contract only. Integration

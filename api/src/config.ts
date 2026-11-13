@@ -96,6 +96,12 @@ export interface ApiConfig {
   createIpRateRefill: number;
   readRateBurst: number;
   readRateRefill: number;
+  /**
+   * Whether a proven allowlisted address may be granted a free session
+   * (ADR 0013). Off by default: this is a trust-boundary feature, so it is
+   * turned on deliberately rather than shipping enabled.
+   */
+  payerAllowlistEnabled: boolean;
   tiers: TierTable;
   platformLimits: PlatformLimits;
 }
@@ -364,6 +370,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     createIpRateRefill: int(env.CREATE_IP_RATE_REFILL, 10, 1, 100_000),
     readRateBurst: int(env.READ_RATE_BURST, 2_400, 1, 100_000),
     readRateRefill: int(env.READ_RATE_REFILL, 200, 1, 100_000),
+    payerAllowlistEnabled: bool(env.PAYER_ALLOWLIST_ENABLED, false),
     tiers: loadTiers(env),
     platformLimits: loadPlatformLimits(env),
   };

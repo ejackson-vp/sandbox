@@ -68,6 +68,15 @@ export interface EntitlementRequest {
     mode: PaymentMode;
     /** EIP-3009 authorisation nonce, so a refund can be keyed by it (#31). */
     settlementNonce?: string | null;
+    /**
+     * `x402` for a settled payment; `allowlist` for a $0 entitlement granted to
+     * a proven allowlisted address (ADR 0013).
+     */
+    source?: "x402" | "allowlist";
+    /** Operator label of the allowlist entry; recorded in the ledger's reason. */
+    label?: string;
+    /** Budget row to charge: `allow:<address>` for a free session. */
+    budgetKey?: string;
   };
 }
 
