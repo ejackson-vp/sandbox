@@ -100,6 +100,24 @@ The suite is the one `npm run test:store-contract` runs. It skips unless
 `DATABASE_URL` is set, which is what makes it safe to point at a scratch
 database and dangerous to point at a primary.
 
+## Verified by
+
+`tests/integration/restore-drill.test.ts` (`npm run test:restore-drill`) is the
+executable version of the check above. It seeds a source database with a settled
+payment, a refunded duplicate charge, an unclaimed refund row and a READY session
+interrupted mid-operation, copies it with `CREATE DATABASE … TEMPLATE …` (a
+server-side copy, so no `pg_dump` binary to install or version to match), and
+asserts against the copy: all four ledger rows match column for column, the
+settled key is still rejected by `payments_pkey` (SQLSTATE 23505) so a replay
+cannot charge twice, the interrupted operation finishes, replaying its request id
+is refused as a duplicate, and a new settlement succeeds on the copy. It needs
+`DATABASE_URL`, and it runs in the `postgres contract` CI job, so a change that
+breaks the copy fails a pull request instead of a quarterly drill.
+
+It does not cover point-in-time recovery, a cross-region restore, or the
+Kubernetes objects around the database (pods, PVCs, the Lease): it proves the
+database copy is usable, not that a backup exists or that the cluster recovers.
+
 ## What is not covered
 
 - **Checkpoint workspaces.** A suspendable workspace is a plaintext per-session

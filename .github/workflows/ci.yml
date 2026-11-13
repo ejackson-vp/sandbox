@@ -122,6 +122,10 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:store-contract
+      # Restore drill: seed a database, copy it with CREATE DATABASE … TEMPLATE,
+      # then assert the payment, ledger and in-flight session survived the copy
+      # (docs/backup-restore.md). Same service container, no extra binaries.
+      - run: npm run test:restore-drill
 
   # Short deterministic budget so PR CI stays fast. The longer soak runs are
   # documented in CONTRIBUTING.md; the nightly fault lane owns the soak.
