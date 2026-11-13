@@ -317,7 +317,135 @@ jobs:
           git -C "$tmp" push -q --force \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
 
+  # The isolation claim is the third pillar of the README, and until now it was
+  # only ever checked by a human with a laptop cluster. This runs the
+  # packet-level suite against a real kind + Cilium cluster on a hosted runner.
+  #
+  # Path-scoped, because a full build takes about fifteen minutes and a docs
+  # change cannot move a packet. The gate is a step inside the job rather than
+  # `on.pull_request.paths`: a path-filtered workflow leaves a required check
+  # sitting at "Expected" and blocks the very merge it was meant to protect.
+  # This way the check always reports, in seconds when nothing relevant moved.
+  #
+  # The cluster is runc, not Kata. Nested virtualisation is not available on a
+  # hosted runner, so the microVM half of the release gate stays in
+  # `nightly-faults.yml` on the self-hosted runner.
+  isolation:
+    name: isolation (kind + cilium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The scope gate diffs against the base branch, so the history has to
+          # be there.
+          fetch-depth: 0
+
+      - name: decide whether this change can move a packet
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          # Third pillar paths: what runs in the sandbox, what it can dial, and
+          # the policy that decides both. A dependency bump counts, because the
+          # relay is a WebSocket transport.
+          pattern='^(deploy/|tests/security/|guest/|Dockerfile\.control|Makefile$|package-lock\.json$|\.github/workflows/ci\.yml$|scripts/install-ci-cluster-tools\.sh$|vitest\.security\.config\.ts$|controller/src/(relay/|k8s|egress-proxy|tokens)|controller/src/config/(egress|relay|tls|kubernetes)\.ts|shared/src/(ip|capability)\.ts|shared/src/entries/(ip|crypto)\.ts)'
+
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            {
+              echo "relevant=true"
+              echo "reason=not a pull request: main pushes, dispatch and the schedule always run it"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
+          matched="$(printf '%s\n' "${changed}" | grep -E "${pattern}" || true)"
+
+          if [ -n "${matched}" ]; then
+            count="$(printf '%s\n' "${matched}" | wc -l | tr -d ' ')"
+            {
+              echo "relevant=true"
+              echo "reason=${count} relevant path(s) changed: $(printf '%s' "${matched}" | head -3 | tr '\n' ' ')"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "relevant=false"
+              echo "reason=no path that can change what runs in the sandbox or what it can dial"
+            } >> "$GITHUB_OUTPUT"
+            echo "::notice title=isolation skipped::${count:-0} relevant paths changed"
+          fi
+
+      - name: report the scope decision
+        run: |
+          {
+            echo "### isolation (kind + cilium)"
+            echo ""
+            echo "\`relevant=${{ steps.scope.outputs.relevant }}\`"
+            echo ""
+            echo "${{ steps.scope.outputs.reason }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: install kind, kubectl and the Cilium CLI
+        if: steps.scope.outputs.relevant == 'true'
+        run: ./scripts/install-ci-cluster-tools.sh
+
+      - if: steps.scope.outputs.relevant == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - if: steps.scope.outputs.relevant == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: guest/go.mod
+          cache-dependency-path: guest/go.sum
+
+      - if: steps.scope.outputs.relevant == 'true'
+        run: npm ci
+
+      - name: build the cluster and deploy from this checkout
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          KIND_CLUSTER: x402-sandbox
+        # `make up` creates kind, installs Cilium with kubeProxyReplacement off,
+        # builds both images, loads them and waits for every rollout. The kind
+        # config maps host 8080 to the API NodePort, so API_URL works unchanged.
+        run: make up
+
+      - name: run the packet-level isolation suite
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          GUEST_BINARY: ${{ github.workspace }}/guest/bin/x402-guest
+          KIND_CLUSTER: x402-sandbox
+          API_URL: http://localhost:8080
+        run: mkdir -p artifacts/security && npm run test:security -- --reporter=default --reporter=junit --outputFile.junit=artifacts/security/junit.xml
+
+      - name: dump the cluster state
+        if: failure() && steps.scope.outputs.relevant == 'true'
+        run: |
+          set +e
+          mkdir -p artifacts/security
+          {
+            kubectl get nodes -o wide
+            kubectl -n sandbox-system get pods -o wide
+            kubectl -n sandbox-system describe pods
+            kubectl -n sandbox-system get networkpolicy -o yaml
+            kubectl -n kube-system logs -l k8s-app=cilium --tail=200
+          } > artifacts/security/cluster-state.txt 2>&1
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure() && steps.scope.outputs.relevant == 'true'
+        with:
+          name: isolation-cluster-state
+          path: artifacts/security/
+          retention-days: 14
+
   # Cluster-backed tests (network isolation, warm pool, checkpoint portability)
-  # need kind + Cilium and are intentionally run locally:
-  #   make up && make security-test
-  #   make demo-portability
+  # that need a Kata runtime are intentionally run locally or on the fault
+  # runner: nested virtualisation is not available on a hosted runner.
+  #   make up && make security-isolation

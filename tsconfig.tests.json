@@ -33,5 +33,12 @@
       "@x402s/sdk": ["./sdk/src/index.ts"]
     }
   },
-  "include": ["tests/**/*.ts", "scripts/**/*.ts", "scripts/**/*.mjs", "vitest.config.ts"]
+  "include": [
+    "tests/**/*.ts",
+    "scripts/**/*.ts",
+    "scripts/**/*.mjs",
+    "vitest.config.ts",
+    "vitest.security.config.ts",
+    "vitest.shared.ts"
+  ]
 }

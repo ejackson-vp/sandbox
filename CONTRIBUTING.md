@@ -71,6 +71,19 @@ make kata                # switch the deployment to the Kata RuntimeClass
 make security-isolation  # release gate: both suites, Kata boot probe, digests
 ```
 
+`make security-test` needs a cluster and a deployment, and no database: it runs
+under `vitest.security.config.ts`, which drops the root config's Postgres
+precondition. The same suite runs in CI as the `isolation` job, on a hosted
+runner with kind and Cilium, but only for a pull request that touches something
+which can move a packet (the NetworkPolicy, the relay, the egress proxy, the
+guest, the manifests) or that changes the relay's dependencies. Everything else
+skips the job in seconds, and the check still reports either way, so it can be
+made a required check without leaving merges hanging on a check that never runs.
+
+The Kata half of the release gate stays on the fault runner. Nested
+virtualisation is not available on a hosted runner, so `make security-isolation`
+is still the only place both halves run together.
+
 ## Fuzzing
 
 The guest parsers, the relay frame handling and the API schemas are fuzzed.

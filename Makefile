@@ -250,10 +250,12 @@ kata:
 	$(KUBECTL) -n $(NAMESPACE) rollout restart deploy/controller
 	$(KUBECTL) -n $(NAMESPACE) rollout status deploy/controller --timeout=300s
 
+# The isolation suite needs a cluster, not a database, so it runs under
+# vitest.security.config.ts rather than the root config's Postgres precondition.
 security-network: guest cli
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest \
 	KIND_CLUSTER=$(KIND_CLUSTER) API_URL=$(API_URL) \
-	npx vitest run tests/security
+	npm run test:security
 
 logs:
 	$(KUBECTL) -n $(NAMESPACE) logs -l app=controller -f --tail=100 --prefix
