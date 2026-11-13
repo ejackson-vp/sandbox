@@ -14,9 +14,16 @@ spec:
   policyTypes: ["Ingress", "Egress"]
 ---
 # Public API: reachable from the ingress proxy (and any in-cluster caller) on
-# 3000. The ingress rule below deliberately has no `from:` — the port is the
-# boundary — but sandbox pods still cannot reach it because their egress policy
-# has no rule for this namespace.
+# 3000. The first rule deliberately has no `from:` — the port is the boundary —
+# but sandbox pods still cannot reach it because their egress policy has no rule
+# for this namespace.
+#
+# The second rule is the public path: the cloudflared tunnel
+# (deploy/kubernetes/cloudflared) dials the API Service on 3000. It is explicit
+# rather than leaning on the port-only rule above, because a deployment that
+# scopes that rule to the Tailscale namespace for operator access (the homelab
+# does) would otherwise leave the tunnel answering 502. The Tailscale Ingress
+# stays in place for operators; it is no longer the public path.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -28,6 +35,12 @@ spec:
   policyTypes: ["Ingress", "Egress"]
   ingress:
     - ports:
+        - protocol: TCP
+          port: 3000
+    - from:
+        - podSelector:
+            matchLabels: {app: cloudflared}
+      ports:
         - protocol: TCP
           port: 3000
   egress:
@@ -279,3 +292,56 @@ spec:
         - protocol: TCP
           port: 3002
   egress: []
+---
+# The public tunnel. It is default-denied by `default-deny-all` like every other
+# pod in this namespace, so both directions are stated here: out to Cloudflare's
+# edge, out to the API, and no inbound route except the readiness listener the
+# kubelet probes.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cloudflared
+  namespace: sandbox-system
+spec:
+  podSelector:
+    matchLabels: {app: cloudflared}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # The `--metrics` listener only. The tunnel is outbound; Cloudflare does not
+    # dial into the cluster. Nothing else has a route here: the sandbox namespace
+    # has no egress rule into this namespace, and no other control-plane role
+    # selects this pod.
+    - ports:
+        - protocol: TCP
+          port: 2000
+  egress:
+    # Cloudflare edge. Port 7844 carries both transports: QUIC over UDP and the
+    # HTTP/2 fallback over TCP. No other destination is reachable, so a
+    # compromised tunnel client cannot be used as a general egress proxy.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: UDP
+          port: 7844
+        - protocol: TCP
+          port: 7844
+    # The origin.
+    - to:
+        - podSelector:
+            matchLabels: {app: api}
+      ports:
+        - protocol: TCP
+          port: 3000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

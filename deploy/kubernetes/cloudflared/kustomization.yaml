@@ -1,0 +1,16 @@
+# cloudflared — the public ingress for the hosted beta.
+#
+# This directory is not part of the base `deploy/kubernetes` kustomization. The
+# tunnel exists only where the API is published on a public host, so the overlay
+# that sets PUBLIC_BASE_URL composes it:
+#
+#   deploy/overlays/throwbox  ->  kubectl kustomize deploy/overlays/throwbox
+#
+# The Tailscale Ingress stays in place and is still the operator path. It is no
+# longer the public one.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml

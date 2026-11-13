@@ -111,7 +111,7 @@ const prompt = [
   "- Keep input and returned files under 8 MiB. Command output truncates at 256 KiB.",
   "- Pass secrets through env, never inline in a command string.",
   "- There is no inbound networking. Use a service plus the relay HTTP operations.",
-  "- This is an alpha reference deployment with no hardware attestation. Do not treat it as confidential computing.",
+  "- This is a hosted beta with no hardware attestation and no verified isolation. Do not treat it as confidential computing.",
 ].join("\n");
 
 const promptButton = document.querySelector("#copy-prompt");
