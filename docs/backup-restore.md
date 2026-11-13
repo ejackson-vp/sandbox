@@ -102,21 +102,25 @@ database and dangerous to point at a primary.
 
 ## Verified by
 
-`tests/integration/restore-drill.test.ts` (`npm run test:restore-drill`) is the
-executable version of the check above. It seeds a source database with a settled
-payment, a refunded duplicate charge, an unclaimed refund row and a READY session
-interrupted mid-operation, copies it with `CREATE DATABASE … TEMPLATE …` (a
-server-side copy, so no `pg_dump` binary to install or version to match), and
-asserts against the copy: all four ledger rows match column for column, the
-settled key is still rejected by `payments_pkey` (SQLSTATE 23505) so a replay
-cannot charge twice, the interrupted operation finishes, replaying its request id
-is refused as a duplicate, and a new settlement succeeds on the copy. It needs
-`DATABASE_URL`, and it runs in the `postgres contract` CI job, so a change that
-breaks the copy fails a pull request instead of a quarterly drill.
+`tests/integration/restore-drill.test.ts` (`npm run test:restore-drill`) is a CI
+approximation of the check above, not a replacement for it. It seeds a source
+database with a settled payment, a refunded duplicate charge, an unclaimed refund
+row and a READY session interrupted mid-operation, copies it with
+`CREATE DATABASE … TEMPLATE …`, and asserts against the copy that the invariants
+survive: all four ledger rows match column for column, the settled key is still
+rejected by `payments_pkey` (SQLSTATE 23505) so a replay cannot charge twice, the
+interrupted operation finishes, replaying its request id is refused as a
+duplicate, and a new settlement succeeds on the copy. It needs `DATABASE_URL`,
+runs in the `postgres contract` CI job, and is excluded from
+`npm run test:integration` so it runs once per pull request.
 
-It does not cover point-in-time recovery, a cross-region restore, or the
-Kubernetes objects around the database (pods, PVCs, the Lease): it proves the
-database copy is usable, not that a backup exists or that the cluster recovers.
+The copy is a server-side `TEMPLATE` of a cleanly closed source, which is not a
+production restore path: CloudNativePG `bootstrap.recovery`, pgBackRest and the
+homelab `pg_dump` CronJob all replay WAL or restore a dump. The drill also says
+nothing about point-in-time recovery, a cross-region restore, or the Kubernetes objects
+around the database (pods, PVCs, the Lease). It proves a copied database is
+usable and its invariants hold; the drill against a real restored artifact is
+still required every quarter.
 
 ## What is not covered
 

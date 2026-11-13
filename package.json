@@ -21,7 +21,7 @@
     "test:unit": "vitest run tests/unit --fileParallelism",
     "test:store-contract": "vitest run tests/unit/store-contract-postgres.test.ts",
     "test:restore-drill": "vitest run tests/integration/restore-drill.test.ts",
-    "test:integration": "vitest run tests/integration",
+    "test:integration": "vitest run tests/integration --exclude \"**/restore-drill.test.ts\"",
     "test:security": "vitest run tests/security",
     "test:fuzz": "vitest run tests/fuzz",
     "clean": "rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist",

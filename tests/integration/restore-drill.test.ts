@@ -36,11 +36,6 @@ import { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { limitsFor, paymentFixture, sessionFixture } from "../helpers/store-fixtures.js";
 import { runId } from "../helpers/test-store.js";
 
-/**
- * The suite harness fails the run when `DATABASE_URL` is missing. This guard is
- * belt and braces: under a config without that harness the drill skips at import
- * rather than throwing while the file is collected.
- */
 const ADMIN_URL = process.env.DATABASE_URL?.trim() ?? "";
 
 /**
@@ -111,9 +106,10 @@ async function snapshot(database: string): Promise<Snapshot> {
     );
     const rows = {} as Record<Table, pg.QueryResultRow[]>;
     for (const table of TABLES) {
-      // `ORDER BY 1` is a primary key on every table here, so two copies holding
-      // the same rows compare equal without a per-table sort key.
-      const res = await client.query(`SELECT * FROM ${table} ORDER BY 1`);
+      // `ORDER BY 1, 2` is unique for every table here: `exec_requests` has a
+      // composite key `(session_id, id)`, so its first column alone does not
+      // order two requests of the same session deterministically.
+      const res = await client.query(`SELECT * FROM ${table} ORDER BY 1, 2`);
       rows[table] = res.rows;
     }
     return { schemaVersion: Number(version.rows[0]?.version ?? 0), rows };
