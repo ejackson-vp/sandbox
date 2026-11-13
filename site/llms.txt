@@ -2,12 +2,18 @@
 
 > Pay once with x402, get a temporary Linux machine. No account, no API key, no signup. The control plane routes sealed commands and files, and the VM is destroyed when the lease ends.
 
-This repository is an **alpha, self-hosted reference deployment**, not a hosted service. There is no documented public API host. Run it on your own cluster, or use the local demo at `http://localhost:8080`. Payments are **mock** or **testnet** only.
+**sandbox** is a hosted beta at `https://api.throwbox.dev`. Payments there are **real USDC on Base**, priced per session, and the price comes from `GET /v1/pricing` rather than from this document. The source is MIT and self-hostable; `deploy/overlays/throwbox` is the public deployment. Free access is by invitation.
+
+Isolation between sessions has **not been verified** on the hosted deployment. There is no hardware attestation, no encrypted checkpoint and no SLA. Read [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md) before repeating anything here as a security claim.
 
 - Source: https://github.com/ejackson-vp/sandbox
 - Licence: MIT
-- Status: alpha
-- Local API base URL: `http://localhost:8080`
+- Status: beta
+- Hosted API base: `https://api.throwbox.dev`
+- Local API base: `http://localhost:8080`
+- Live pricing: `GET https://api.throwbox.dev/v1/pricing`
+
+This repository's CLI and SDK still ship `mock` and `testnet` payment modes only. The hosted service settles through its own facilitator; do not point the `testnet` payer at it, and do not hardcode a price.
 
 ## Start here
 
@@ -17,7 +23,7 @@ This repository is an **alpha, self-hosted reference deployment**, not a hosted 
 - [HTTP API](https://github.com/ejackson-vp/sandbox/blob/main/docs/api.md): routes, envelopes, status codes.
 - [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md): what is enforced and what is not. Read before repeating a security claim.
 - [Threat model](https://github.com/ejackson-vp/sandbox/blob/main/docs/threat-model.md): STRIDE by component.
-- [Production readiness](https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md): the ordered gap to a hosted service.
+- [Production readiness](https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md): the ordered gap between the hosted beta and a production service.
 - [Workload compatibility](https://github.com/ejackson-vp/sandbox/blob/main/docs/workload-compatibility.md): what actually runs in the guest.
 
 ## What an agent should do
@@ -94,7 +100,7 @@ sandbox create --duration 15m --cpu 2 --memory 2Gi --disk 2Gi
 import { SandboxClient } from "@x402s/sdk";
 
 const client = new SandboxClient({
-  apiUrl: "http://localhost:8080",
+  apiUrl: "http://localhost:8080", // local. The hosted API is https://api.throwbox.dev
   paymentMode: "mock",
 });
 
@@ -184,21 +190,22 @@ A checkpoint is **disk only**. Processes, memory and sockets do not survive. Res
 
 | Limit | Value |
 | --- | --- |
-| Tiers | `short` 60 s / 0.5 vCPU / 512 MiB / 256 MiB / $0.02 |
-| | `standard` 300 s / 1 vCPU / 1 GiB / 1 GiB / $0.05 |
-| | `extended` 900 s / 2 vCPU / 2 GiB / 2 GiB / $0.10 |
-| | `long` 1800 s / 2 vCPU / 4 GiB / 4 GiB / $0.20 |
+| Tiers | `short` 60 s / 0.5 vCPU / 512 MiB / 256 MiB |
+| | `standard` 300 s / 1 vCPU / 1 GiB / 1 GiB |
+| | `extended` 900 s / 2 vCPU / 2 GiB / 2 GiB |
+| | `long` 1800 s / 2 vCPU / 4 GiB / 4 GiB |
 | Custom ceiling | 2 vCPU / 4 GiB / 8 GiB, up to 30 minutes by default |
 | Workspace | `/workspace`, paths confined to it |
 | File or archive | 8 MiB per payload |
 | Command output | 256 KiB, then truncated |
 | Command time | `min(requested, remaining lease, maxCommandSeconds)` |
+| Result wait | `waitMs` up to 90 000 ms, then `202 pending` |
 | Listing | 5000 entries |
 | Concurrency | one active foreground operation per session |
 | Processes | pod `pids.max` 1024; `maxProcesses` is advisory |
 | Networking | no inbound; egress only through an allowlisting proxy on 443 |
 
-Prices are configuration (`SESSION_TIERS`), not economics. Read `GET /v1/pricing` for the live table.
+Prices are configuration (`SESSION_TIERS`), not economics. Read `GET /v1/pricing` on the API you are calling for the live table; never hardcode a price in a client. The 90 s `waitMs` cap is deliberate: a longer request is killed by the edge proxy at 100 s, so the client never sees the `202` it needs to poll.
 
 ## Error codes
 
@@ -229,7 +236,14 @@ Command-level errors (`ok: false`) include `path_outside_workspace`, `quota_exce
 
 ## Security scope, in one paragraph
 
-The transport is sealed client-side to the guest's ephemeral key. The API, controller, relay, database and payment layer route ciphertext and hold no decryption key. Isolation between sandboxes is the Kata VM boundary, not cryptography. There is **no hardware root of trust**: the development attestation key ships in the repository, so anyone can produce the binding. Suspended workspace PVCs are plaintext at rest and readable by the node or storage administrator. Do not describe this system as confidential computing, attested, or provider-blind. The full matrix is in [security-guarantees.md](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md).
+The transport is sealed client-side to the guest's ephemeral key. The API, controller, relay, database and payment layer route ciphertext and hold no decryption key. Isolation between sandboxes is designed as the Kata VM boundary, not cryptography, and it has **not been verified on the hosted deployment**: no guest-kernel check has been run there, so do not rely on it yet. There is **no hardware root of trust**: the development attestation key ships in the repository, so anyone can produce the binding. Suspended workspace PVCs are plaintext at rest and readable by the node or storage administrator. Do not describe this system as confidential computing, attested, provider-blind or isolated. The full matrix is in [security-guarantees.md](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md).
+
+## Hosted beta: rules, refunds, data
+
+- **Acceptable use.** Run work you have the right to do. Not allowed: attacking or scanning systems you do not own, spam, crypto mining, illegal content, escaping the sandbox, or reaching another session, the cluster network or its metadata service. Report abuse to abuse@throwbox.dev.
+- **Refunds.** Full refund to the paying wallet if a session never reaches READY, or if the service ends it because the relay could not recover (`failure:relay_lost`). No refund for a session the client destroys, or for one that simply expires after READY. Refunds are queued in the payment ledger and sent by a separate worker, so they are not instant; a refund that cannot be sent automatically stays queued for an operator.
+- **Data.** Session metadata (tier, limits, timings, state), the paying wallet address and the payment ledger are recorded. Commands, file contents and output are ciphertext to the API, controller and relay. The guest sees what it runs, and a suspended workspace is plaintext on disk.
+- **No SLA.** One region, one control-plane node, one Postgres primary. Free access is by invitation.
 
 ## Local verification
 
