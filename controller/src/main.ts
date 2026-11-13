@@ -4,11 +4,19 @@
  * One container image runs all three roles so that a local run needs no
  * orchestration; in Kubernetes they are separate Deployments with separate
  * NetworkPolicies (ROLE=controller|relay|proxy).
+ *
+ * `start()` is the whole boot path and returns a stop handle; `main()` is only
+ * the signal wiring around it. The split exists for coverage: a spawned child
+ * process reports none, so the only way to prove this file starts a role is to
+ * run it in the test process and stop it again
+ * (tests/integration/process-boot.test.ts). `node controller/dist/main.js`
+ * still calls `main`, so the container behaves exactly as it did.
  */
 import http from "node:http";
 import https from "node:https";
 import type { Server } from "node:http";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { loadControllerConfig, makeProvisioner, makeRelayClient, type ControllerConfig } from "./config.js";
 import { openStore } from "./store-backend.js";
 import type { StoreBackend } from "./store/backend.js";
@@ -30,7 +38,12 @@ import {
   startMetricsServer,
 } from "@x402s/shared/runtime";
 
-async function main(): Promise<void> {
+export interface ControllerProcess {
+  /** Stop whichever role this process runs and release everything it holds. */
+  stop(): Promise<void>;
+}
+
+export async function start(): Promise<ControllerProcess> {
   const cfg = loadControllerConfig();
 
   // Register metric families eagerly (bounded labels only).
@@ -92,11 +105,12 @@ async function main(): Promise<void> {
     // A replacement relay has an empty registry. Wake the controller so
     // PROVISIONING sessions re-register now instead of on the next poll.
     notifyControllerReady(relayOpts);
-    installShutdown(async () => {
-      closeMetrics();
-      await relay.close();
-    });
-    return;
+    return {
+      stop: async () => {
+        closeMetrics();
+        await relay.close();
+      },
+    };
   }
 
   if (cfg.role === "proxy") {
@@ -116,11 +130,12 @@ async function main(): Promise<void> {
       allowedPorts: cfg.allowedPorts,
       deniedCidrs: cfg.deniedCidrs,
     });
-    installShutdown(async () => {
-      closeMetrics();
-      await proxy.close();
-    });
-    return;
+    return {
+      stop: async () => {
+        closeMetrics();
+        await proxy.close();
+      },
+    };
   }
 
   // controller (or "all": controller + relay + proxy in one process)
@@ -304,24 +319,36 @@ async function main(): Promise<void> {
     },
   });
 
-  installShutdown(async () => {
+  const stop = async (): Promise<void> => {
     // Order: stop scheduling, refuse writes, then hand the lease over.
     reconciler.stop();
     ledgerAudit.stop();
     await store.setWritesBlocked(true);
     await leadership.stop();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    if (tlsServer) await new Promise<void>((resolve) => tlsServer!.close(() => resolve()));
+    await closeServer(server);
+    if (tlsServer) await closeServer(tlsServer);
     for (const fn of shutdown) await fn();
     closeMetrics();
     await store.close();
-  });
+  };
 
   await leadership.start();
   if (!leadership.isLeader()) {
     // A standby: readyz answers 503 until the lease moves.
     log.info("leadership_standby", { mode: leadership.mode, identity: leadership.identity });
   }
+
+  return { stop };
+}
+
+async function main(): Promise<void> {
+  const starting = start();
+  // Registered before the await so a SIGTERM during leadership acquisition
+  // still takes the graceful path instead of Node's default exit. The handler
+  // waits for the handle rather than a flag: `installShutdown` is already
+  // single-shot, so a second signal while `starting` is pending returns early.
+  installShutdown(async () => (await starting).stop());
+  await starting;
 }
 
 async function listenRelay(relay: RelayServer, cfg: ControllerConfig): Promise<void> {
@@ -348,6 +375,12 @@ function listen(server: http.Server, port: number): Promise<void> {
   });
 }
 
+function closeServer(server: http.Server): Promise<void> {
+  // The callback receives an error when the server was never listening; every
+  // caller here only wants "it is closed now", so the error is not propagated.
+  return new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
 function installShutdown(fn: () => Promise<void>): void {
   let done = false;
   const run = async (signal: string) => {
@@ -366,7 +399,25 @@ function installShutdown(fn: () => Promise<void>): void {
   process.on("SIGINT", () => void run("SIGINT"));
 }
 
-main().catch((err) => {
-  log.error("fatal_startup_error", { error: (err as Error).message });
-  process.exit(1);
-});
+/**
+ * `start` is exported so tests can run the boot path in-process. The module has
+ * to know whether it was executed or imported, or importing it in a test would
+ * start a second listener. When the check cannot answer, the process runs: a
+ * server that silently does nothing is the worse failure.
+ */
+function invokedAsScript(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return true;
+  try {
+    return realpathSync(entry) === fileURLToPath(import.meta.url);
+  } catch {
+    return true;
+  }
+}
+
+if (invokedAsScript()) {
+  main().catch((err) => {
+    log.error("fatal_startup_error", { error: (err as Error).message });
+    process.exit(1);
+  });
+}
