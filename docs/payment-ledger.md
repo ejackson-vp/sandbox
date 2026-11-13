@@ -257,6 +257,72 @@ Metrics: `sandbox_refunds_total{mode,result}` (policy outcomes),
 Logs carry a 12-character payment key prefix, never the full key; the
 idempotency key contains the payment key, so it is not logged either.
 
+## Ledger audit
+
+Three paths move money: `completeEntitlement` writes the payment, ledger and
+session in one transaction; the refund worker claims and sends; settlement
+recovery writes a ledger row for a payment that settled without an entitlement.
+Each path is guarded on its own, and nothing compared their results with each
+other. A settled intent with no ledger row, or a ledger row that says service
+was delivered for an intent that failed, was invisible until a human reconciled
+a spreadsheet.
+
+`controller/src/ledger-audit.ts` is that comparison. It is a pure function over a
+bounded snapshot, and `controller/src/ledger-audit-collector.ts` publishes it
+from the existing metrics scrape. There is no timer, no transaction, no writer
+lock and no write: two `SELECT`s run in autocommit, and a standby replica runs
+them too, because reading is what it is for.
+
+What it checks:
+
+| Metric sample | Meaning |
+|---|---|
+| `sandbox_ledger_divergence{reason="settled_without_ledger"}` | The intent is `settled`, the ledger has no row with that payment key. Money moved and the books did not keep it. |
+| `sandbox_ledger_divergence{reason="intent_failed_ledger_settled"}` | The intent is `failed`, the ledger row is `SETTLED`. The outbox says refused, the books say delivered. The duplicate-charge path records `REFUNDED` or `REFUND_PENDING`, so it is not a false positive. |
+| `sandbox_ledger_divergence{reason="duplicate_refund_claim"}` | Two ledger rows in `REFUND_SENDING` share one settlement nonce, so one signed authorisation is being refunded twice. `payment_key` cannot repeat, the nonce is the identity that can. |
+| `sandbox_sessions_stale{phase}` | A non-terminal session is past its deadline by more than the grace period. The deadline is `lease_expires_at` at READY, otherwise `created_at + max_lifetime_seconds` (protocol maximum when null). |
+| `sandbox_ledger_audit_failures_total` | A scrape could not read the snapshot. The gauges keep their last good values instead of showing zero. |
+
+The snapshot is capped at 500 rows per source, so a count at the cap is a floor,
+not a total. The stale check adds 60 seconds of slack, which keeps the
+reconciler's own decision latency out of the signal.
+
+It deliberately does not check:
+
+- the chain, the facilitator or the refund provider. It reads this database, so
+  a transfer made outside these three paths has no row here to compare;
+- amounts, fees or net settlement. The ledger records the payment amount, and
+  the intent's `requirements_json` is recorded at claim time, not proof of what
+  moved;
+- ledger rows with no intent. Every writer of the ledger starts from an intent
+  row, so an orphan would be a manual edit; `GET /internal/payments` is the
+  exhaustive view;
+- an intent still `claimed`. Settlement recovery leaves it claimed after writing
+  the ledger, which is the documented settle-then-crash shape;
+- a refund the provider sent but the worker never recorded. The row stays
+  `REFUND_SENDING` and the pending gauge is the signal, not a divergence.
+
+Alert on:
+
+```promql
+# money moved with no ledger row
+sandbox_ledger_divergence{reason="settled_without_ledger"} > 0
+
+# these two are always a bug, not a slow path
+sandbox_ledger_divergence{reason="intent_failed_ledger_settled"} > 0
+sandbox_ledger_divergence{reason="duplicate_refund_claim"} > 0
+
+# cleanup that is not finishing, by phase
+sandbox_sessions_stale{phase="TERMINATING"} > 0
+
+# the audit itself stopped running
+increase(sandbox_ledger_audit_failures_total[15m]) > 0
+```
+
+A flagged key is looked up with
+`GET /internal/payments/<paymentKey>`; the metric never carries a payment key or
+a session id as a label.
+
 ## Operator endpoints
 
 These are internal, protected by the controller admin token; they are not

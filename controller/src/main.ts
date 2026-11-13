@@ -16,6 +16,7 @@ import { createControlApi } from "./control-api.js";
 import { createRelay, notifyControllerReady, type RelayServer } from "./relay.js";
 import { createEgressProxy } from "./egress-proxy.js";
 import { Reconciler } from "./reconciler.js";
+import { createLedgerAuditCollector } from "./ledger-audit-collector.js";
 import { OperationFence } from "./operation-fence.js";
 import { CapacityService } from "./capacity/service.js";
 import { bindLeadership, SoloLeadership, type Leadership } from "./leadership.js";
@@ -49,6 +50,15 @@ async function main(): Promise<void> {
   metrics.counter("sandbox_sessions_created_total", "Entitlements created");
   metrics.counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED");
   metrics.counter("sandbox_refunds_total", "Payment refund outcomes");
+  metrics.gauge(
+    "sandbox_ledger_divergence",
+    "Payment intent and ledger pairs whose books disagree, by reason",
+  );
+  metrics.gauge("sandbox_sessions_stale", "Non-terminal sessions past their deadline, by phase");
+  metrics.counter(
+    "sandbox_ledger_audit_failures_total",
+    "Ledger audit scrapes that could not read the store",
+  );
   metrics.counter("sandbox_budget_rejections_total", "Create-budget rejections by scope");
   metrics.counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason");
   metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE");
@@ -130,6 +140,11 @@ async function main(): Promise<void> {
     ? makeLeaseLeadership(cfg)
     : new SoloLeadership(cfg.leaderIdentity);
   const store: StoreBackend = await openStore(cfg, { writer: leadership.isLeader() });
+  // Scrape-time, not a timer: the audit costs one read per scrape, and a
+  // standby may run it because it only reads. A failed read increments its own
+  // counter and leaves the gauges at their last good values.
+  const ledgerAudit = createLedgerAuditCollector({ store });
+  collectors.push(() => ledgerAudit.collect());
   log.info("leadership_mode", {
     mode: leadership.mode,
     identity: leadership.identity,

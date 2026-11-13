@@ -31,6 +31,7 @@ import {
 } from "../models.js";
 import { boundedFailureReason } from "../failure-reasons.js";
 import type { BudgetDecision, BudgetLimits } from "../budget-decision.js";
+import type { LedgerAuditLimits } from "../../ledger-audit.js";
 import type { ClaimToken } from "@x402s/shared/durable";
 import type { ReservationStore } from "../../capacity/reservation-store.js";
 import type { StoreBackend } from "../backend.js";
@@ -40,6 +41,7 @@ import { PgSessionRepository } from "./sessions.js";
 import { PgBudgetRepository } from "./budgets.js";
 import { PgPaymentRepository } from "./payments.js";
 import { PgLedgerRepository } from "./ledger.js";
+import { PgLedgerAuditRepository } from "./ledger-audit.js";
 import { PgChallengeNonceRepository } from "./challenges.js";
 import { PgOperationRepository } from "./operations.js";
 import { PgReservationRepository } from "./reservations.js";
@@ -65,6 +67,7 @@ export class PostgresStore implements StoreBackend {
   private readonly sessions: PgSessionRepository;
   private readonly payments: PgPaymentRepository;
   private readonly ledgerRepo: PgLedgerRepository;
+  private readonly ledgerAudit: PgLedgerAuditRepository;
   private readonly challengeRepo: PgChallengeNonceRepository;
   private readonly operations: PgOperationRepository;
   private readonly budgetRepo: PgBudgetRepository;
@@ -74,6 +77,7 @@ export class PostgresStore implements StoreBackend {
     this.budgetRepo = new PgBudgetRepository(conn);
     this.payments = new PgPaymentRepository(conn, this.sessions, this.budgetRepo, budgetWindowMs);
     this.ledgerRepo = new PgLedgerRepository(conn);
+    this.ledgerAudit = new PgLedgerAuditRepository(conn);
     this.challengeRepo = new PgChallengeNonceRepository(conn);
     this.operations = new PgOperationRepository(conn);
     this.reservations = new PgReservationRepository(conn);
@@ -266,6 +270,12 @@ export class PostgresStore implements StoreBackend {
 
   listStaleClaimedIntents(olderThan: number, limit: number) {
     return this.ledgerRepo.listStaleClaimedIntents(olderThan, limit);
+  }
+
+  /* ---------------- ledger audit (read-only) ---------------- */
+
+  readLedgerAudit(nowMs: number, limits: LedgerAuditLimits) {
+    return this.ledgerAudit.read(nowMs, limits);
   }
 
   /* ---------------- session reads and writes ---------------- */
