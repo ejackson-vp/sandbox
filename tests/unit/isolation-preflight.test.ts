@@ -32,15 +32,25 @@ describe("isolation preflight decision", () => {
     expect(result).toEqual({ ok: true, mode: "run", runner: RUNNER, message: "" });
   });
 
-  it("skips only on an explicit acknowledgement, and says so", () => {
-    const result = decide({ runner: "", evidence: "none" });
+  it("skips only on an explicit acknowledgement from a dispatch run", () => {
+    const result = decide({ runner: "", evidence: "none", dispatch: true });
     expect(result.ok).toBe(true);
     expect(result.mode).toBe("skip");
     // A skipped job still needs somewhere to run the warning step.
     expect(result.runner).toBe(JSON.stringify(["ubuntu-latest"]));
     expect(result.message).toContain("Isolation suites were not run for this tag");
-    expect(result.message).toContain("ISOLATION_EVIDENCE=none");
+    expect(result.message).toContain("isolation_skip=true");
     expect(result.message).toContain("unverified");
+  });
+
+  it("refuses the acknowledgement on a tag push, which is how the gate was skipped", () => {
+    // This is the regression: until PR3 the skip came from a repository
+    // variable, so a tag push could pass the gate without running anything.
+    const result = decide({ runner: "", evidence: "none", dispatch: false });
+    expect(result.ok).toBe(false);
+    expect(result.mode).toBeNull();
+    expect(result.message).toContain("only accepted from a workflow_dispatch run");
+    expect(result.message).toContain("SANDBOX_ISOLATION_RUNNER");
   });
 
   it("blocks when neither is set, so the skip cannot be accidental", () => {
@@ -48,7 +58,7 @@ describe("isolation preflight decision", () => {
     expect(result.ok).toBe(false);
     expect(result.mode).toBeNull();
     expect(result.message).toContain("SANDBOX_ISOLATION_RUNNER");
-    expect(result.message).toContain("ISOLATION_EVIDENCE=none");
+    expect(result.message).toContain("isolation_skip=true");
   });
 
   it("does not accept an unknown acknowledgement value", () => {
@@ -65,10 +75,11 @@ describe("isolation preflight decision", () => {
   });
 
   it("never silently combines a runner with an acknowledgement", () => {
-    // The runner wins: the suites run even if a stale acknowledgement remains.
-    const result = decide({ runner: RUNNER, evidence: "none" });
+    // The runner wins: the suites run even if the acknowledgement was also set.
+    const result = decide({ runner: RUNNER, evidence: "none", dispatch: true });
     expect(result.mode).toBe("run");
     expect(result.message).toBe("");
+    expect(decide({ runner: RUNNER, evidence: "none" }).mode).toBe("run");
   });
 
   it("renders one warning block shared by the summary and the release notes", () => {
@@ -90,6 +101,9 @@ describe("isolation preflight CLI", () => {
       stdout = execFileSync(process.execPath, [SCRIPT, "preflight"], {
         env: {
           ...process.env,
+          // Pinned so the result does not depend on the event that happened to
+          // start this CI run. A dispatch test overrides it explicitly.
+          GITHUB_EVENT_NAME: "push",
           GITHUB_OUTPUT: outputFile,
           GITHUB_STEP_SUMMARY: summaryFile,
           ...env,
@@ -116,12 +130,27 @@ describe("isolation preflight CLI", () => {
     expect(result.summary).toBe("");
   });
 
-  it("state 2: acknowledgement set, exits 0 and records the warning", () => {
-    const result = run({ SANDBOX_ISOLATION_RUNNER: "", ISOLATION_EVIDENCE: "none" });
+  it("state 2: dispatch acknowledgement, exits 0 and records the warning", () => {
+    const result = run({
+      SANDBOX_ISOLATION_RUNNER: "",
+      ISOLATION_EVIDENCE: "none",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+    });
     expect(result.status).toBe(0);
     expect(result.output).toMatchObject({ mode: "skip", runner: JSON.stringify(["ubuntu-latest"]) });
     expect(result.summary).toContain("Isolation suites were not run for this tag");
-    expect(result.summary).toContain("ISOLATION_EVIDENCE=none");
+    expect(result.summary).toContain("isolation_skip=true");
+  });
+
+  it("state 2 is unreachable from a tag push, even with the old variable set", () => {
+    const result = run({
+      SANDBOX_ISOLATION_RUNNER: "",
+      ISOLATION_EVIDENCE: "none",
+      GITHUB_EVENT_NAME: "push",
+    });
+    expect(result.status).toBe(1);
+    expect(result.output).toEqual({});
+    expect(result.stdout).toContain("only accepted from a workflow_dispatch run");
   });
 
   it("state 3: neither set, exits 1 with no mode and an error annotation", () => {

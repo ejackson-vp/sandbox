@@ -20,7 +20,8 @@ build with a different runtime tree, not a separate product. See
 A release is **staged**: the version, `major.minor` and `latest` tags are only
 created after both images pass the Trivy gate and the isolation suites run
 against the same digests. A failed scan or an unrun isolation suite leaves
-nothing deployable behind.
+nothing deployable behind. Only a hand-dispatched run can choose to skip the
+suite, and that choice is written on the release body; a tag push cannot.
 
 ## Job graph
 
@@ -70,7 +71,7 @@ attestations are preserved. No image is rebuilt at promotion time.
 isolation as UNVERIFIED because nothing in CI executed them. The `isolation` job
 exists to turn those into evidence. It is honest by default: `promote` needs it,
 so a suite that did not run blocks the tag. A release owner can skip it on
-purpose, never by accident; see
+purpose, but only by dispatching the release by hand; see
 [Deliberately skipping the gate](#deliberately-skipping-the-gate).
 
 What it does:
@@ -125,18 +126,29 @@ has not executed anywhere; the first green run produces the evidence.
 
 Three states, decided by `scripts/isolation-preflight.mjs`:
 
-| `SANDBOX_ISOLATION_RUNNER` | `ISOLATION_EVIDENCE` | Outcome |
+| `SANDBOX_ISOLATION_RUNNER` | Trigger | Outcome |
 |---|---|---|
-| set (JSON label array) | anything | the suites run; the acknowledgement is ignored |
-| unset | `none` | the suites are skipped and the release is stamped |
-| unset | unset | the tag fails at `isolation-preflight` |
+| set (JSON label array) | any | the suites run; the skip input is ignored |
+| unset | `workflow_dispatch` with `isolation_skip: true` | the suites are skipped and the release is stamped |
+| unset | tag push, or a dispatch without the input | the tag fails at `isolation-preflight` |
 
-A skip is a recorded decision, not a side effect of a missing runner. To take
-it, set the acknowledgement on the repository:
+A skip is a recorded decision, not a side effect of a missing runner. It is also
+no longer a repository setting: `release.yml` used to read the variable
+`ISOLATION_EVIDENCE`, which meant one variable made every tag push a no-op that
+still reported success. Every release from v0.1.26 to v0.1.30 shipped that way.
+The variable is not read by the workflow any more, and the script refuses the
+acknowledgement unless `GITHUB_EVENT_NAME` is `workflow_dispatch`, so restoring
+it cannot restore the skip.
+
+To take the skip, dispatch the release yourself against the tag:
 
 ```bash
-gh variable set ISOLATION_EVIDENCE --repo ejackson-vp/sandbox --body none
+gh workflow run release.yml --ref v0.1.31 -f isolation_skip=true
 ```
+
+Everything else (test, images, scan, attest) runs as it would on a tag push, and
+the `promote` job still refuses a ref that is not a version tag, so a dispatch
+against a branch is a rehearsal that cannot publish.
 
 The release then completes, and the following block appears at the top of the
 job summary and of the GitHub Release body:
@@ -146,23 +158,17 @@ job summary and of the GitHub Release body:
 
 The Cilium packet-level suite and the Kata boot probe did not execute, so
 tenant isolation is **unverified** and the control and guest image digests
-were **not verified** by them. This release continues only because the
-repository variable `ISOLATION_EVIDENCE=none` acknowledges the skip.
+were **not verified** by them. This release continues only because a
+workflow_dispatch run set `isolation_skip=true` (acknowledgement `none`):
+a tag push cannot take this path.
 
-Set `SANDBOX_ISOLATION_RUNNER`, re-run the release, and remove
-`ISOLATION_EVIDENCE`. See docs/release-process.md#isolation-gate.
+Set `SANDBOX_ISOLATION_RUNNER` and re-run the release without the skip
+input. See docs/release-process.md#isolation-gate.
 ```
 
-The acknowledgement must be removed as soon as a runner exists:
-
-```bash
-gh variable delete ISOLATION_EVIDENCE --repo ejackson-vp/sandbox
-```
-
-A stale acknowledgement is ignored while a runner is set, but it would silently
-re-enable skips if the runner variable were ever unset or mistyped, and the
-notes would then claim the skip was deliberate. Removing it restores the
-fail-closed default: no runner, no acknowledgement, no tag.
+There is nothing to clean up afterwards: the input belongs to that one dispatch
+run. A skip cannot leak into the next tag, which is the property the repository
+variable did not have.
 
 ## Profile images
 

@@ -79,8 +79,12 @@ controller cannot verify it. See
 | `ghcr.io/ejackson-vp/sandbox-control` | api, controller, relay, egress proxy, facilitator |
 | `ghcr.io/ejackson-vp/sandbox-guest` | the sandbox runtime that runs inside the microVM |
 
-Bump `newTag` in `kustomization.yaml` and `GUEST_IMAGE` together — they are the
-same release.
+Bump `newTag` in `kustomization.yaml` and `GUEST_IMAGE` together, and update
+`deploy/release-pins.json` and the Kyverno allowlist in the same change. They are
+one release, and `scripts/check-deploy-pins.mjs` fails the build when the overlay,
+the map and the allowlist name different ones. That check exists because this overlay once shipped
+control 0.1.30 with guest 0.1.25: both tags resolved, and the deployed pair
+silently lacked the relay reconnect fix ADR 0012 relies on.
 
 `GUEST_IMAGE_DIGEST` is set from the release output and the controller refuses
 to start with the dev placeholder when `KUBERNETES_ENABLED=true` (the cluster

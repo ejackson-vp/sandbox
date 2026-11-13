@@ -53,6 +53,8 @@ const PVCS = /^\/api\/v1\/namespaces\/[^/]+\/persistentvolumeclaims$/;
 const PVC = /^\/api\/v1\/namespaces\/[^/]+\/persistentvolumeclaims\/([^/]+)$/;
 const NODES = /^\/api\/v1\/nodes$/;
 const NODE = /^\/api\/v1\/nodes\/([^/]+)$/;
+const RUNTIMECLASSES = /^\/apis\/node\.k8s\.io\/v1\/runtimeclasses$/;
+const RUNTIMECLASS = /^\/apis\/node\.k8s\.io\/v1\/runtimeclasses\/([^/]+)$/;
 
 const REASONS: Record<number, string> = {
   403: "Forbidden",
@@ -105,6 +107,7 @@ export class FakeApiServer {
   private readonly pods = new Map<string, unknown>();
   private readonly pvcs = new Map<string, unknown>();
   private readonly nodes = new Map<string, unknown>();
+  private readonly runtimeClasses = new Map<string, unknown>();
   private readonly failures: Failure[] = [];
   private server: http.Server | undefined;
   private port = 0;
@@ -151,6 +154,15 @@ export class FakeApiServer {
 
   seedNode(node: unknown): this {
     return this.seed(this.nodes, node);
+  }
+
+  /**
+   * A cluster-scoped `node.k8s.io/v1` RuntimeClass. Startup verification reads
+   * exactly one by name, so an unseeded class is a 404, which is also the
+   * "overlay forgot the object" case the controller must refuse.
+   */
+  seedRuntimeClass(runtimeClass: unknown): this {
+    return this.seed(this.runtimeClasses, runtimeClass);
   }
 
   /**
@@ -272,6 +284,26 @@ export class FakeApiServer {
     const node = NODE.exec(request.path);
     if (node && request.method === "GET") {
       return this.read(this.nodes, "nodes", decodeURIComponent(node[1] ?? ""));
+    }
+
+    if (RUNTIMECLASSES.test(request.path) && request.method === "GET") {
+      return {
+        status: 200,
+        body: {
+          apiVersion: "node.k8s.io/v1",
+          kind: "RuntimeClassList",
+          items: [...this.runtimeClasses.values()],
+        },
+      };
+    }
+
+    const runtimeClass = RUNTIMECLASS.exec(request.path);
+    if (runtimeClass && request.method === "GET") {
+      return this.read(
+        this.runtimeClasses,
+        "runtimeclasses",
+        decodeURIComponent(runtimeClass[1] ?? ""),
+      );
     }
 
     return statusFailure(

@@ -121,3 +121,35 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: sandbox-controller-nodes
+---
+# Startup proof that the sandbox actually runs on a microVM runtime
+# (docs/adr/0005). The controller reads the RuntimeClass named by RUNTIME_CLASS
+# and refuses to start unless its handler is on the microVM allowlist. Without
+# this rule that read is a 403 and the controller fails closed, which is the
+# intended failure mode: a cluster that cannot answer the question must not be
+# trusted to run guests.
+#
+# get only, and one cluster-scoped read. The controller never writes a
+# RuntimeClass: changing the isolation boundary is an operator action through the
+# overlay, not something the process can do to itself.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sandbox-controller-runtimeclasses
+rules:
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sandbox-controller-runtimeclasses
+subjects:
+  - kind: ServiceAccount
+    name: sandbox-controller
+    namespace: sandbox-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sandbox-controller-runtimeclasses

@@ -246,9 +246,11 @@ Two independent controls decide which guest image a session runs:
    (`controller/src/runtime-profiles.ts`), so a moved tag cannot change what runs
    inside the VM.
 2. **The API server**, via Kyverno, rejects a guest pod whose image is not
-   `<repository>@sha256:<64 hex>` in an allowed repository, or whose digest is
-   not one of the released digests. Manifests and install steps live in
-   [deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md).
+   `<repository>@sha256:<64 characters>` in an allowed repository, or whose
+   digest is not one of the released digests. The shape rule uses `?` wildcards
+   rather than a hex regex because Kyverno's deny conditions have no regex
+   operator; the allowlist is what pins the exact digest. Manifests and install
+   steps live in [deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md).
 
 The second control exists because the first one depends on the controller being
 honest. It is inert unless an operator installs Kyverno, and it is not part of

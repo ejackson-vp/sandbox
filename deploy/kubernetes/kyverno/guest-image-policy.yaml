@@ -12,6 +12,12 @@
 # deploy/kubernetes/kustomization.yaml, so this file is inert until an operator
 # applies it. See README.md beside this file for the install and the local-kind
 # exception.
+#
+# Executed against Kyverno v1.13.4 by scripts/kyverno-policy-test.sh. That run
+# found the file had never been installable: deny conditions have no
+# `Matches`/`NotMatches` operator, and `NotIn` is deprecated, so the API server
+# rejected the ClusterPolicy itself. Rule 1 uses `AnyNotIn` with `?` wildcards
+# and rule 2 uses `AnyNotIn`; both are accepted by 1.13 and by 1.20.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -21,10 +27,13 @@ metadata:
     policies.kyverno.io/category: Supply chain
     policies.kyverno.io/severity: high
     policies.kyverno.io/subject: Pod
-    policies.kyverno.io/minversion: "1.11"
+    # Claim only what has been executed: scripts/kyverno-policy-test.sh runs on
+    # 1.13.4. The `AnyNotIn` operator rule 1 needs is not documented for older
+    # releases, and the previous "1.11" was never tested against any version.
+    policies.kyverno.io/minversion: "1.13"
     policies.kyverno.io/description: >-
       A sandbox guest pod must run an image reference of the form
-      <repository>@sha256:<64 hex>. A tag, a foreign repository, or a digest that
+      <repository>@sha256:<64 characters>. A tag, a foreign repository, or a digest that
       is not on the released allowlist is rejected. Both rules read their scope
       from the namespace label x402.io/image-policy, which
       deploy/kubernetes/00-namespaces.yaml sets to "enforce" on
@@ -38,7 +47,7 @@ spec:
   background: true
   rules:
     # ---------------------------------------------------------------- #
-    # 1. The reference is repository@sha256:<64 hex>.                   #
+    # 1. The reference is repository@sha256:<64 chars>.                 #
     # ---------------------------------------------------------------- #
     # This rule runs for "enforce" and for the documented local-kind
     # "dev-unpinned" mode: the digest shape is never relaxed, only the
@@ -55,26 +64,37 @@ spec:
                     values: ["enforce", "dev-unpinned"]
       validate:
         message: >-
-          sandbox guest pods must run <repository>@sha256:<64 hex>: the
+          sandbox guest pods must run <repository>@sha256:<64 characters>: the
           repositories are x402-sandbox/guest (local builds) and
           ghcr.io/ejackson-vp/sandbox-guest (releases). A tag-only reference
-          (":dev", ":latest", ":0.1.25") or a different repository is rejected
+          (":dev", ":latest", ":0.1.31") or a different repository is rejected
           because it can be repointed after review.
+        # `AnyNotIn` with `?` wildcards, not a regex: Kyverno's deny conditions
+        # have no `Matches`/`NotMatches` operator (1.13 rejects a policy that
+        # uses one), and `?` matches one character. That is a 64-character
+        # digest suffix, not strictly 64 hex characters; rule 2's allowlist is
+        # what pins the exact digest, and a non-hex suffix cannot be pulled.
         foreach:
           - list: "request.object.spec.[containers, initContainers][]"
             deny:
               conditions:
                 any:
                   - key: "{{ element.image }}"
-                    operator: NotMatches
-                    value: "^(x402-sandbox/guest|ghcr\\.io/ejackson-vp/sandbox-guest)@sha256:[0-9a-f]{64}$"
+                    operator: AnyNotIn
+                    value:
+                      - "x402-sandbox/guest@sha256:????????????????????????????????????????????????????????????????"
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:????????????????????????????????????????????????????????????????"
 
     # ---------------------------------------------------------------- #
     # 2. The digest is the released one.                                #
     # ---------------------------------------------------------------- #
     # Update this list in the same change as GUEST_IMAGE_DIGEST /
-    # RUNTIME_PROFILES in deploy/kubernetes/03-config.yaml. A missing entry is
+    # RUNTIME_PROFILES in deploy/talos/kustomization.yaml. A missing entry is
     # a rejected pod, not a silently unpinned one.
+    #
+    # scripts/check-deploy-pins.mjs compares this set against the release map
+    # (deploy/release-pins.json), so a digest that moves in one place and not
+    # the other fails CI instead of failing admission on a live cluster.
     #
     # The local-kind exception is the namespace label above: a kind build has a
     # machine-specific digest (deploy/kind/apply.sh reads it out of containerd),
@@ -91,7 +111,7 @@ spec:
       validate:
         message: >-
           this guest image digest is not the released one. Deploy the digest in
-          deploy/kubernetes/03-config.yaml (GUEST_IMAGE_DIGEST and
+          deploy/talos/kustomization.yaml (GUEST_IMAGE_DIGEST and
           RUNTIME_PROFILES) and add it here in the same change. On a local kind
           cluster, label the namespace x402.io/image-policy=dev-unpinned instead
           (deploy/kubernetes/kyverno/README.md).
@@ -101,11 +121,13 @@ spec:
               conditions:
                 any:
                   - key: "{{ element.image }}"
-                    operator: NotIn
+                    # `NotIn` is deprecated in 1.13; `AnyNotIn` is the same
+                    # negative membership test and is what 1.20 keeps.
+                    operator: AnyNotIn
                     value:
-                      # base image, GUEST_IMAGE_DIGEST
-                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:REPLACE_WITH_RELEASED_BASE_DIGEST"
-                      # python profile, RUNTIME_PROFILES.python.digest
-                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:REPLACE_WITH_RELEASED_PYTHON_DIGEST"
-                      # node profile, RUNTIME_PROFILES.node.digest
-                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:REPLACE_WITH_RELEASED_NODE_DIGEST"
+                      # base image, GUEST_IMAGE_DIGEST (release 0.1.30)
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:4872ec154b43fd4a09b6272abb7b5ab3923e4bb754caefefd3c4f9c54c3a398d"
+                      # python profile, RUNTIME_PROFILES.python.digest (0.1.30)
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:eb78d226ac40b3285252777562dd1a6b291db1fe797924927d0af9a9d800e49e"
+                      # node profile, RUNTIME_PROFILES.node.digest (0.1.30)
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:b9ce875fc6ed7820469305b771b6730eb274aa289da6eacc48c20061243cbd60"

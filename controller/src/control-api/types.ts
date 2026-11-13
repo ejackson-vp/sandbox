@@ -30,6 +30,18 @@ export interface ControlApiDeps {
   acquireSettled?: () => boolean;
   /** Optional event-driven nudge (the reconciler is not started in unit tests). */
   wake?: () => void;
+  /**
+   * Isolation boundary the process verified at startup. Present on the
+   * controller and `all` roles, absent on relay/proxy pods, which neither
+   * provision nor read the RuntimeClass. Echoed by `/internal/healthz` so a
+   * post-incident audit can see the handler without the pod logs.
+   */
+  runtime?: {
+    executionMode: string;
+    runtimeClass: string;
+    /** Verified handler, or null when the check does not apply (dev mode). */
+    handler: string | null;
+  };
   /** Optional lifecycle actions (the reconciler owns them). */
   suspend?: (id: string) => Promise<void>;
   resume?: (id: string) => Promise<void>;
