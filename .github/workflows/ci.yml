@@ -272,13 +272,12 @@ jobs:
       # a floor set a few points below the measured total (29.0% on 2026-11-13,
       # floor 26%).
       #
-      # continue-on-error on purpose: this job is a required check, so a floor
-      # miss would block every merge, and a brand new gate should not do that
-      # before it has held for a few runs. The step still goes red and the
-      # report still uploads, so a miss is visible without blocking. Drop
-      # continue-on-error once the floor has survived a week of main pushes.
+      # Gating, not advisory. It ran with continue-on-error while the floor was
+      # unproven on Linux, because this job is a required check and a floor miss
+      # would have blocked every merge. It has now passed on main, so a miss
+      # should block: a floor that only colours a report is the thing nobody
+      # watches.
       - name: go coverage
-        continue-on-error: true
         run: ./scripts/go-coverage.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()

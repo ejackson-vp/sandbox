@@ -304,12 +304,12 @@ describe("settle refuses malformed payloads before touching the nonce store", ()
     expect(store.claims).toEqual([]);
   });
 
-  it("answers malformed_payload when validation itself throws", async () => {
-    // `accepted.payTo` is read before any shape check on accepted, so a
-    // decoded payload with the field missing throws inside `validate`. Verify
-    // promises a named refusal for that, not an exception. Settle has no
-    // wrapper and does throw here; that gap is reported, not asserted as
-    // correct, so this test covers verify only.
+  it("answers malformed_payload for an accepted block with a field missing", async () => {
+    // `accepted.payTo` used to be read before any shape check on accepted, so a
+    // decoded payload with the field missing threw inside `validate`. Verify
+    // swallowed that and said "could not parse payment" while settle let it
+    // escape and the facilitator's handler turned it into a 500. The shape is
+    // now checked first, so both entry points refuse it by name.
     const payload = {
       x402Version: 2,
       accepted: { ...requirements(), payTo: undefined },
@@ -319,7 +319,7 @@ describe("settle refuses malformed payloads before touching the nonce store", ()
     const verify = await facilitator().scheme.verify(payload, requirements());
     expect(verify.isValid).toBe(false);
     expect(verify.invalidReason).toBe("malformed_payload");
-    expect(verify.invalidMessage).toBe("could not parse payment");
+    expect(verify.invalidMessage).toBe("accepted requirements are incomplete");
   });
 });
 
@@ -457,5 +457,43 @@ describe("the payment binding checks", () => {
       reason: "amount_mismatch",
       message: "authorization value differs from requirements",
     });
+  });
+});
+
+describe("a malformed payload is the caller's fault on both entry points", () => {
+  it("refuses a settle whose accepted requirements omit the recipient", async () => {
+    // `verify` swallowed the throw from `accepted.payTo.toLowerCase()` and
+    // answered malformed_payload, while `settle` let it escape and the mock
+    // facilitator's handler turned a client-controlled payload into a 500.
+    const payload = await authorizedPayload(clientAccount(), {});
+    const incomplete = {
+      ...payload,
+      accepted: { ...requirements(), payTo: undefined },
+    } as unknown as PaymentPayload;
+
+    const { scheme, store } = facilitator();
+    const verify = await scheme.verify(incomplete, requirements());
+    expect(verify.isValid).toBe(false);
+    expect(verify.invalidReason).toBe("malformed_payload");
+
+    const settle = await scheme.settle(incomplete, requirements());
+    expect(settle.success).toBe(false);
+    expect(settle.errorReason).toBe("malformed_payload");
+    // Nothing was reserved, so a corrected payload can still settle.
+    expect(store.claims).toHaveLength(0);
+  });
+
+  it("refuses a settle whose accepted amount or asset is missing", async () => {
+    const payload = await authorizedPayload(clientAccount(), {});
+    for (const field of ["amount", "asset"] as const) {
+      const incomplete = {
+        ...payload,
+        accepted: { ...requirements(), [field]: undefined },
+      } as unknown as PaymentPayload;
+      const { scheme } = facilitator();
+      const settle = await scheme.settle(incomplete, requirements());
+      expect(settle.success, field).toBe(false);
+      expect(settle.errorReason, field).toBe("malformed_payload");
+    }
   });
 });
