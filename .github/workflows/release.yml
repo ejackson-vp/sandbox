@@ -18,6 +18,23 @@ on:
   push:
     tags:
       - "v*"
+  # A release can be re-run by hand, and that is the only way to skip the
+  # isolation suites. The input exists so a skip is one deliberate click by
+  # someone with write access, recorded on the release notes; it is not a
+  # repository variable any more, because `ISOLATION_EVIDENCE=none` silently
+  # turned every tag since v0.1.26 into a no-op.
+  #
+  # Dispatch against the tag you mean (`gh workflow run release.yml --ref
+  # v0.1.31 -f isolation_skip=true`). Dispatch against a branch still works for
+  # a rehearsal, and `promote` refuses a ref that is not a version tag.
+  workflow_dispatch:
+    inputs:
+      isolation_skip:
+        description: >-
+          Ship without the Cilium/Kata isolation suites. Only honoured on this
+          dispatch path; the skip is stamped on the release body.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -304,9 +321,13 @@ jobs:
   #
   # Three states, decided by scripts/isolation-preflight.mjs (unit-tested):
   #   SANDBOX_ISOLATION_RUNNER set -> run the suites
-  #   ISOLATION_EVIDENCE=none      -> skip on purpose, and say so loudly
+  #   dispatch + isolation_skip    -> skip on purpose, and say so loudly
   #   neither                      -> fail the tag
-  # A skip is never implicit: forgetting to configure a runner still blocks.
+  # The variable this job used to read, ISOLATION_EVIDENCE, is gone: it made a
+  # tag push skippable from repository settings, which is how every release since
+  # v0.1.26 shipped with the gate "passing" without running. The script also
+  # refuses the acknowledgement when GITHUB_EVENT_NAME is not workflow_dispatch,
+  # so restoring the variable cannot restore the skip.
   isolation-preflight:
     name: isolation runner preflight
     runs-on: ubuntu-latest
@@ -319,7 +340,7 @@ jobs:
         id: check
         env:
           SANDBOX_ISOLATION_RUNNER: ${{ vars.SANDBOX_ISOLATION_RUNNER }}
-          ISOLATION_EVIDENCE: ${{ vars.ISOLATION_EVIDENCE }}
+          ISOLATION_EVIDENCE: ${{ inputs.isolation_skip && 'none' || '' }}
         run: node scripts/isolation-preflight.mjs preflight
 
   isolation:
@@ -348,7 +369,7 @@ jobs:
         if: needs.isolation-preflight.outputs.mode != 'run'
         env:
           SANDBOX_ISOLATION_RUNNER: ${{ vars.SANDBOX_ISOLATION_RUNNER }}
-          ISOLATION_EVIDENCE: ${{ vars.ISOLATION_EVIDENCE }}
+          ISOLATION_EVIDENCE: ${{ inputs.isolation_skip && 'none' || '' }}
         run: node scripts/isolation-preflight.mjs summary
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -518,7 +539,9 @@ jobs:
         id: isolation-note
         env:
           SANDBOX_ISOLATION_RUNNER: ${{ vars.SANDBOX_ISOLATION_RUNNER }}
-          ISOLATION_EVIDENCE: ${{ vars.ISOLATION_EVIDENCE }}
+          # The dispatch input, not a repository variable: a tag push has no
+          # input, so its notes can never claim a deliberate skip.
+          ISOLATION_EVIDENCE: ${{ inputs.isolation_skip && 'none' || '' }}
         run: node scripts/isolation-preflight.mjs release-note
 
       - name: Publish release

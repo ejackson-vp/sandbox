@@ -145,9 +145,11 @@ the container registry.
   the packet-level isolation suite, and records the tested digests in
   `artifacts/isolation/tested-images.json`. `promote` needs it, so a release
   cannot be tagged when the suite did not run. A release owner can skip the
-  gate only by setting the repository variable `ISOLATION_EVIDENCE=none`, which
-  stamps a warning into the job summary and the top of the release notes;
-  without a runner or that acknowledgement the tag still fails. See
+  gate only by dispatching the release with `isolation_skip=true`, which stamps
+  a warning into the job summary and the top of the release notes; a tag push
+  cannot skip, and without a runner the tag still fails. The repository variable
+  `ISOLATION_EVIDENCE` is no longer read: it made every tag push since v0.1.26 a
+  no-op that still reported success. See
   [docs/release-process.md](docs/release-process.md#isolation-gate).
 - `sandbox_relay_connection_resets_total{mode="tcp_reset"|"terminate"}` records
   which mechanism ended a guest link after an epoch withdrawal (#128). The

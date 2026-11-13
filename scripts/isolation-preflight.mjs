@@ -3,15 +3,17 @@
  * blocks the tag.
  *
  * `security-review/RELEASE_GATE.md` treats isolation as evidence, so the gate
- * fails closed by default. Eric's decision: a release owner may skip it on
- * purpose, but only by stating so in a repository variable, and the skip is
- * stamped on the job summary and the release notes. Neither variable set is
- * still a failure, so a skip cannot happen by forgetting to configure a runner.
+ * fails closed by default. A release owner may still ship without it, but only
+ * by dispatching the release by hand with `isolation_skip: true`. A tag push
+ * cannot skip: the repository variable this used to read (`ISOLATION_EVIDENCE`)
+ * made every tag since v0.1.26 a no-op, so the acknowledgement is now an input
+ * that only exists on a workflow_dispatch run and is stamped on the job summary
+ * and the release notes when it is used.
  *
  * Three states:
- *   SANDBOX_ISOLATION_RUNNER set   -> run the suites (preferred)
- *   ISOLATION_EVIDENCE=none        -> skip, and record the acknowledgement
- *   neither                        -> fail the tag
+ *   SANDBOX_ISOLATION_RUNNER set         -> run the suites (preferred)
+ *   dispatch + ISOLATION_EVIDENCE=none   -> skip, and record the acknowledgement
+ *   neither                              -> fail the tag
  *
  * Exported for tests; run directly by the workflow.
  */
@@ -25,10 +27,13 @@ export const EVIDENCE_VALUES = ["none"];
 const RUNNER_PLACEHOLDER = JSON.stringify(["ubuntu-latest"]);
 
 /**
- * @param {{ runner?: string, evidence?: string }} input
+ * @param {{ runner?: string, evidence?: string, dispatch?: boolean }} input
+ *   `dispatch` is true only for a `workflow_dispatch` run. Evidence is refused
+ *   otherwise, so a tag push cannot reach the skip state even if a future edit
+ *   pipes the old repository variable back into the environment.
  * @returns {{ ok: boolean, mode: "run" | "skip" | null, runner: string, message: string }}
  */
-export function decide({ runner, evidence } = {}) {
+export function decide({ runner, evidence, dispatch = false } = {}) {
   const rawRunner = String(runner ?? "").trim();
   const rawEvidence = String(evidence ?? "").trim();
 
@@ -59,17 +64,33 @@ export function decide({ runner, evidence } = {}) {
     return { ok: true, mode: "run", runner: rawRunner, message: "" };
   }
 
+  if (rawEvidence && !EVIDENCE_VALUES.includes(rawEvidence)) {
+    // Checked before the trigger so a typo is answered as a typo, not as a
+    // policy violation the reader has to work out for themselves.
+    return {
+      ok: false,
+      mode: null,
+      runner: "",
+      message:
+        `ISOLATION_EVIDENCE='${rawEvidence}' is not a recognised acknowledgement ` +
+        `(expected: ${EVIDENCE_VALUES.join(", ")})`,
+    };
+  }
+
+  if (rawEvidence && !dispatch) {
+    return {
+      ok: false,
+      mode: null,
+      runner: "",
+      message:
+        "ISOLATION_EVIDENCE is only accepted from a workflow_dispatch run. A tag push " +
+        "must run the suites: set SANDBOX_ISOLATION_RUNNER. To ship without them, " +
+        "re-run the release with `gh workflow run release.yml --ref <tag> -f " +
+        "isolation_skip=true`, which stamps the skip on the release notes.",
+    };
+  }
+
   if (rawEvidence) {
-    if (!EVIDENCE_VALUES.includes(rawEvidence)) {
-      return {
-        ok: false,
-        mode: null,
-        runner: "",
-        message:
-          `ISOLATION_EVIDENCE='${rawEvidence}' is not a recognised acknowledgement ` +
-          `(expected: ${EVIDENCE_VALUES.join(", ")})`,
-      };
-    }
     return {
       ok: true,
       mode: "skip",
@@ -85,7 +106,8 @@ export function decide({ runner, evidence } = {}) {
     runner: "",
     message:
       "no isolation runner and no acknowledgement: set SANDBOX_ISOLATION_RUNNER " +
-      "(preferred), or ISOLATION_EVIDENCE=none to record a deliberate skip",
+      "(preferred), or re-run the release with `gh workflow run release.yml --ref " +
+      "<tag> -f isolation_skip=true` to record a deliberate skip on the notes",
   };
 }
 
@@ -99,11 +121,12 @@ export function skippedMessage(evidence = "none") {
     "",
     "The Cilium packet-level suite and the Kata boot probe did not execute, so",
     "tenant isolation is **unverified** and the control and guest image digests",
-    "were **not verified** by them. This release continues only because the",
-    `repository variable \`ISOLATION_EVIDENCE=${evidence}\` acknowledges the skip.`,
+    "were **not verified** by them. This release continues only because a",
+    `workflow_dispatch run set \`isolation_skip=true\` (acknowledgement \`${evidence}\`):`,
+    "a tag push cannot take this path.",
     "",
-    "Set `SANDBOX_ISOLATION_RUNNER`, re-run the release, and remove",
-    "`ISOLATION_EVIDENCE`. See docs/release-process.md#isolation-gate.",
+    "Set `SANDBOX_ISOLATION_RUNNER` and re-run the release without the skip",
+    "input. See docs/release-process.md#isolation-gate.",
   ].join("\n");
 }
 
@@ -128,10 +151,16 @@ function writeMultiline(name, value) {
   appendFileSync(process.env.GITHUB_OUTPUT, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
 }
 
+/** A skip is possible only on a dispatch run; the workflow enforces it too. */
+function isDispatch() {
+  return process.env.GITHUB_EVENT_NAME === "workflow_dispatch";
+}
+
 function preflight() {
   const result = decide({
     runner: process.env.SANDBOX_ISOLATION_RUNNER,
     evidence: process.env.ISOLATION_EVIDENCE,
+    dispatch: isDispatch(),
   });
   if (!result.ok) {
     console.log(`::error title=Isolation gate not configured::${result.message}`);
@@ -143,7 +172,9 @@ function preflight() {
   if (result.mode === "skip") {
     console.log(result.message);
     appendSummary(result.message);
-    console.log("::warning title=Isolation gate skipped::ISOLATION_EVIDENCE is set, so the suites did not run.");
+    console.log(
+      "::warning title=Isolation gate skipped::the dispatch run set isolation_skip, so the suites did not run.",
+    );
     return;
   }
   console.log(`isolation gate: runner ${result.runner}`);
@@ -153,6 +184,7 @@ function summary() {
   const result = decide({
     runner: process.env.SANDBOX_ISOLATION_RUNNER,
     evidence: process.env.ISOLATION_EVIDENCE,
+    dispatch: isDispatch(),
   });
   if (result.mode !== "skip") return;
   console.log(result.message);
@@ -170,6 +202,7 @@ function releaseNote() {
   const result = decide({
     runner: process.env.SANDBOX_ISOLATION_RUNNER,
     evidence: process.env.ISOLATION_EVIDENCE,
+    dispatch: isDispatch(),
   });
   const body = result.mode === "skip" ? result.message : "";
   writeMultiline("body", body);
