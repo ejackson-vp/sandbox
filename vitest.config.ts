@@ -42,15 +42,21 @@ export default defineConfig({
       ...(process.env.X402_COVERAGE_PARTIAL === "1"
         ? { thresholds: { lines: 0, branches: 0, functions: 0 } }
         : {
+            // Floors are a ratchet: each one sits a couple of points under the
+            // measured number for that package, so a change that adds untested
+            // code fails here instead of quietly lowering the total. Measured
+            // at the security-first branch (unit + property): global 77.5,
+            // shared 91.0, cli 95.3, controller 80.4, api 58.4, sdk 52.2.
+            // Every module added by that branch is at or above 90% lines.
             thresholds: {
-              lines: 65,
-              branches: 58,
-              functions: 62,
-              "shared/src/**": { lines: 84, branches: 78, functions: 90 },
-              "cli/src/**": { lines: 90, branches: 85, functions: 78 },
-              "controller/src/**": { lines: 67, branches: 57, functions: 65 },
-              "api/src/**": { lines: 42, branches: 42, functions: 28 },
-              "sdk/src/**": { lines: 35, branches: 26, functions: 37 },
+              lines: 75,
+              branches: 68,
+              functions: 72,
+              "shared/src/**": { lines: 89, branches: 84, functions: 94 },
+              "cli/src/**": { lines: 93, branches: 88, functions: 83 },
+              "controller/src/**": { lines: 78, branches: 69, functions: 76 },
+              "api/src/**": { lines: 56, branches: 58, functions: 42 },
+              "sdk/src/**": { lines: 50, branches: 35, functions: 48 },
             },
           }),
     },
