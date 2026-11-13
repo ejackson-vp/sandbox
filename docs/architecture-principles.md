@@ -129,24 +129,35 @@ guest/websockets.go             polled WebSocket window
 
 ## Module size budget
 
-`npm run lint:structure` fails any `.ts`/`.go` module over 650 lines, and it
-counts everything under `tests/` as well. The budget is a backstop, not a
-target: most modules are 100–350 lines, and 550 is the number to aim at. The
-ceiling stays at 650 until the modules above 550 are split, and it never goes
-up. Split by use case or adapter, never by arbitrary line count.
+`npm run lint:structure` fails any counted source file over 650 lines. The scan
+walks the repo from the root and skips only generated directories (`node_modules`,
+`dist`, `bin`, `coverage`, `artifacts`, `.git` and friends), so `tests/`,
+`verification/`, `site/`, `examples/` and the repo root are all in scope: moving
+a file just outside a root cannot hide it. Counted extensions are `.ts`, `.tsx`,
+`.mts`, `.cts` and `.go`, matched case-insensitively. The budget is a backstop,
+not a target: most modules are 100–350 lines, and 550 is the number to aim at.
+The ceiling stays at 650 until the modules above 550 are split, and it never
+goes up. Split by use case or adapter, never by arbitrary line count.
 
-The check is a ratchet that only shrinks. `scripts/check-structure.mjs` carries
-an explicit `BASELINE` map of the files that are over budget today, each pinned
-to its exact line count. It fails in three cases:
+`scripts/check-structure.mjs` carries an explicit `BASELINE` map of the files
+that are over budget today, each pinned to its exact line count. It fails in
+four cases:
 
-- a file over budget that is not in `BASELINE`;
-- a `BASELINE` entry that is at or under budget, so the entry must be deleted;
-- a `BASELINE` entry whose line count moved in either direction, so the number
-  cannot go stale.
+- a file over budget that is not in `BASELINE`, because a new file gets a
+  smaller module, not an entry;
+- a baselined file that grew, because the pinned count may only go down and the
+  file has to be split;
+- a baselined file that shrank, because the count is lowered in the same change
+  and the entry is deleted once the file fits;
+- an entry that is at or under budget, or whose file is gone.
 
-Every failure prints the whole baseline, and the message says which of the three
-rules was broken. A new file gets a smaller module, not an entry. An entry is
-deleted when its file is split.
+Every failure prints the whole baseline, and the message names the rule that was
+broken.
+
+The script cannot see the map's previous value. Growing a file and raising its
+number in the same commit reads as a clean baseline, so that direction is
+enforced by review of the `BASELINE` diff, not by the check. Treat a diff that
+adds an entry or raises a number as a failed review.
 
 Completed slices:
 
