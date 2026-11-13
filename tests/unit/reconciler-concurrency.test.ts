@@ -194,16 +194,19 @@ describe("reconciler phase concurrency", () => {
     await waitFor(() => started === 1);
 
     // Simulate a second pass overlapping the first (the guard a wake-driven
-    // pass or a future per-session queue would rely on).
+    // pass or a future per-session queue would rely on). The in-flight set moved
+    // to the dispatcher with the split, so the guard is probed there.
     const rerun = vi.fn(async () => undefined);
-    const phase = (reconciler as unknown as {
-      reconcilePhase: (
-        phase: "readiness",
-        sessions: SessionRecord[],
-        run: (s: SessionRecord) => Promise<void>,
-      ) => Promise<void>;
-    }).reconcilePhase.bind(reconciler);
-    await phase("readiness", [slow], rerun);
+    const dispatcher = (reconciler as unknown as {
+      dispatcher: {
+        run: (
+          phase: "readiness",
+          sessions: SessionRecord[],
+          run: (s: SessionRecord) => Promise<void>,
+        ) => Promise<number>;
+      };
+    }).dispatcher;
+    await dispatcher.run("readiness", [slow], rerun);
 
     expect(rerun).not.toHaveBeenCalled();
     expect(started).toBe(1);

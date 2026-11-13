@@ -13,6 +13,10 @@
  *
  * Deadline enforcement never depends on the untrusted guest cooperating: the
  * controller's clock decides, and pod deletion is the backstop.
+ *
+ * This file is the tick, the phase order and the state switch. Bounded dispatch,
+ * lease/health policy and clock reporting live in `reconciler/`, so the policy
+ * seams can be read without the scheduler around them.
  */
 import { HttpSettlementLookup, LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import type { ControllerConfig } from "./config.js";
@@ -32,10 +36,12 @@ import { HttpRefundExecutor, RefundWorker } from "./refund-worker.js";
 import { SettlementRecovery } from "./settlement-recovery.js";
 import { OperationFence } from "./operation-fence.js";
 import { RelayRecovery } from "./relay-recovery.js";
-import { runBounded } from "./bounded-queue.js";
 import { ServiceAddressResolver } from "./service-address.js";
 import { cadenceFor } from "./reconcile-cadence.js";
-import { ClockGuard, type ClockJump } from "./clock-guard.js";
+import { ClockGuard } from "./clock-guard.js";
+import { PhaseDispatcher } from "./reconciler/dispatch.js";
+import { LeaseHealth } from "./reconciler/lease-health.js";
+import { reportClockJump } from "./reconciler/clock-report.js";
 
 export { LifecycleError } from "./lifecycle.js";
 
@@ -73,16 +79,10 @@ export class Reconciler {
   private housekeepingRunning = false;
   private running = false;
   private wakeRequested = false;
-  /**
-   * Sessions a pass is currently reconciling. No later pass may run one of
-   * these again: lease expiry and termination are stateful, so two concurrent
-   * attempts on one id would race.
-   */
-  private readonly inFlight = new Set<string>();
-  /** Last pod-health probe per session (guards K8s API traffic). */
-  private readonly healthCheckedAt = new Map<string, number>();
-  /** Consecutive *successful* probes reporting a missing/terminal pod. */
-  private readonly healthStrikes = new Map<string, number>();
+  /** Bounded concurrency and the per-session in-flight set. */
+  private readonly dispatcher: PhaseDispatcher;
+  /** Pod health and the lease deadline for a READY/ACTIVE session. */
+  private readonly lease: LeaseHealth;
   /** Proxy addresses are stable; the relay endpoint is not (see serviceAddress). */
   private readonly serviceAddresses: ServiceAddressResolver;
   private readonly ctx: ReconcilerContext;
@@ -107,10 +107,17 @@ export class Reconciler {
       // that noticed the jump. It is fire-and-forget by construction: its own
       // body catches, and a report must never be the reason a pass fails.
       onJump: (jump) => {
-        void this.reportClockJump(jump);
+        void reportClockJump(
+          { store: deps.store, jumpCount: this.clock.jumpCount },
+          jump,
+        );
       },
     });
     this.now = () => this.clock.now();
+    this.dispatcher = new PhaseDispatcher({
+      concurrency: deps.cfg.reconcileConcurrency,
+      now: () => this.now(),
+    });
     this.serviceAddresses = new ServiceAddressResolver(() => this.now());
     const capacity = deps.capacity ?? new CapacityService({
       cfg: deps.cfg,
@@ -138,6 +145,13 @@ export class Reconciler {
     this.relayRecovery =
       deps.relayRecovery ??
       new RelayRecovery(deps.cfg, deps.store, deps.relay, this.fence, () => this.now());
+    this.lease = new LeaseHealth({
+      store: deps.store,
+      provisioner: deps.provisioner,
+      relayRecovery: this.relayRecovery,
+      leaseGraceMs: deps.cfg.leaseGraceMs,
+      now: () => this.now(),
+    });
     // Both are inert unless configured: recovery needs a facilitator that
     // exposes a settlement lookup, and the worker needs an operator-owned
     // refund endpoint. With neither, real-mode refunds stay REFUND_PENDING.
@@ -228,7 +242,7 @@ export class Reconciler {
       // Readiness first, terminal cleanup second: cleanup may delete a pod
       // that a terminating session is still shutting down gracefully, so the
       // two phases stay ordered even though each is internally concurrent.
-      const dispatched = await this.reconcilePhase("readiness", due, async (session) => {
+      const dispatched = await this.dispatcher.run("readiness", due, async (session) => {
         try {
           await this.reconcileSession(session);
         } catch (err) {
@@ -245,7 +259,7 @@ export class Reconciler {
       const terminal = (await this.deps.store.listTerminalWithPod()).filter(
         (session) => session.podName,
       );
-      await this.reconcilePhase("cleanup", terminal, async (session) => {
+      await this.dispatcher.run("cleanup", terminal, async (session) => {
         await this.deps.provisioner.deletePod(session.podName!, 0).catch(() => undefined);
         await this.deps.store.clearPod(session.id);
       });
@@ -321,100 +335,6 @@ export class Reconciler {
     }
   }
 
-  /**
-   * A wall-clock step. The guard has already decided it is a step, not drift;
-   * this reports the readings and the sessions the step moved, because "the
-   * clock jumped" alone does not tell an operator whether anything was
-   * affected. A session whose immutable deadline falls inside the jumped window
-   * is the one that ends early (forward) or late (backward).
-   */
-  private async reportClockJump(jump: ClockJump): Promise<void> {
-    const low = Math.min(jump.from, jump.to);
-    const high = Math.max(jump.from, jump.to);
-    let affected: string[] = [];
-    try {
-      affected = (await this.deps.store.listNonTerminal())
-        .filter(
-          (session) =>
-            session.leaseExpiresAt !== null &&
-            session.leaseExpiresAt >= low &&
-            session.leaseExpiresAt <= high,
-        )
-        .map((session) => session.id);
-    } catch {
-      // Reporting must never be the reason a reconcile pass fails.
-    }
-    log.warn("clock_skew_detected", {
-      from: new Date(jump.from).toISOString(),
-      to: new Date(jump.to).toISOString(),
-      deltaMs: jump.deltaMs,
-      direction: jump.direction,
-      affectedSessions: affected.length,
-      affectedSessionIds: affected.slice(0, 20),
-      jumps: this.clock.jumpCount,
-    });
-  }
-
-  /**
-   * Run one reconcile phase with bounded concurrency.
-   *
-   * Sessions already in flight are skipped (they are picked up by the next
-   * pass), which is the per-session serialization guarantee. Queue depth and
-   * queue wait are exported with a bounded `phase` label so a burst shows up
-   * before it becomes tail latency; session ids never enter metrics.
-   */
-  private async reconcilePhase(
-    phase: "readiness" | "cleanup",
-    sessions: readonly SessionRecord[],
-    run: (session: SessionRecord) => Promise<void>,
-  ): Promise<number> {
-    const labels = { phase };
-    const depth = metrics.gauge(
-      "sandbox_reconcile_queue_depth",
-      "Sessions waiting for a reconcile worker, by phase",
-    );
-    const wait = metrics.histogram(
-      "sandbox_reconcile_queue_wait_seconds",
-      "Time a session waited for a reconcile worker, by phase",
-      LATENCY_BUCKETS,
-    );
-    const active = metrics.gauge(
-      "sandbox_reconcile_in_flight",
-      "Sessions currently being reconciled, by phase",
-    );
-    const eligible = sessions.filter((session) => !this.inFlight.has(session.id));
-    depth.set(labels, eligible.length);
-    let dispatched = 0;
-    try {
-      await runBounded(
-        eligible,
-        async (session) => {
-          if (this.inFlight.has(session.id)) return;
-          this.inFlight.add(session.id);
-          dispatched += 1;
-          active.inc(labels);
-          try {
-            await run(session);
-          } finally {
-            this.inFlight.delete(session.id);
-            active.dec(labels);
-          }
-        },
-        {
-          concurrency: this.deps.cfg.reconcileConcurrency,
-          now: () => this.now(),
-          onStart: (waitMs, remaining) => {
-            wait.observe(waitMs / 1000, labels);
-            depth.set(labels, remaining);
-          },
-        },
-      );
-    } finally {
-      depth.set(labels, 0);
-    }
-    return dispatched;
-  }
-
   /** Slow path: pool replenishment and orphan reaping, off the readiness tick. */
   private async housekeeping(): Promise<void> {
     if (this.housekeepingRunning) return;
@@ -468,7 +388,7 @@ export class Reconciler {
         break;
       case "READY":
       case "ACTIVE":
-        await this.enforceLease(session);
+        await this.lease.enforce(session);
         break;
       case "SUSPENDING":
         await this.lifecycle.reconcileSuspend(session);
@@ -483,8 +403,7 @@ export class Reconciler {
 
   private async terminate(session: SessionRecord): Promise<void> {
     await this.termination.terminate(session);
-    this.healthCheckedAt.delete(session.id);
-    this.healthStrikes.delete(session.id);
+    this.lease.forget(session.id);
   }
 
   /** Lifecycle actions are exposed for the internal control API. */
@@ -535,66 +454,4 @@ export class Reconciler {
       { cache: name !== this.deps.cfg.relayServiceName },
     );
   }
-
-  private async enforceLease(session: SessionRecord): Promise<void> {
-    // Detect a dead guest/pod between operations (crash, OOM, relay loss).
-    // Probed at most every 2s per session to bound Kubernetes API traffic.
-    //
-    // Safety: a failed probe (timeout, 429, connection reset) must never
-    // terminate a paid session. Only a successful read that reports the pod
-    // missing or terminal counts, and it must happen twice in a row.
-    const readyAt = session.readyAt ?? 0;
-    if (session.podName && this.ctx.now() - readyAt > 2000 && this.ctx.now() - (this.healthCheckedAt.get(session.id) ?? 0) > 2000) {
-      this.healthCheckedAt.set(session.id, this.ctx.now());
-      try {
-        const pod = await this.ctx.provisioner.getPod(session.podName);
-        if (!pod || pod.phase === "Failed" || pod.phase === "Succeeded") {
-          const strikes = (this.healthStrikes.get(session.id) ?? 0) + 1;
-          this.healthStrikes.set(session.id, strikes);
-          if (strikes >= 2) {
-            await this.ctx.store.requestTermination(session.id, "failure:guest_exited", {
-              code: "guest_exited",
-              message: "the sandbox guest exited before the lease ended",
-            });
-            this.healthStrikes.delete(session.id);
-            return;
-          }
-        } else {
-          this.healthStrikes.delete(session.id);
-        }
-      } catch (err) {
-        log.warn("pod_health_probe_failed", { sessionId: session.id, error: (err as Error).message });
-      }
-    }
-    const deadline = session.leaseExpiresAt;
-    if (deadline === null) return;
-    const now = this.ctx.now();
-    if (now > deadline + this.ctx.cfg.leaseGraceMs) {
-      // The lease is over. If the session is inside a relay-loss window, the
-      // reason is the relay loss: the guest had no link to run anything on, and
-      // the refund policy compensates `relay_lost` but not an ordinary lease
-      // expiry. Relay recovery normally decides this a second before the lease
-      // (RELAY_LOSS_LEASE_MARGIN_MS); this is the backstop for a delayed scan.
-      const relayLost = this.relayRecovery.awaitingReconnect(session.id);
-      await this.ctx.store.requestTermination(
-        session.id,
-        relayLost ? "failure:relay_lost" : "lease_expired",
-        relayLost
-          ? {
-              code: "relay_lost",
-              message: "the lease ended while the guest was disconnected after a relay loss",
-            }
-          : undefined,
-      );
-      log.warn("sandbox_lease_expired", {
-        sessionId: session.id,
-        state: session.state,
-        overrunMs: now - deadline,
-        ...(relayLost ? { reason: "relay_lost" } : {}),
-      });
-    }
-  }
-
-
 }
-
