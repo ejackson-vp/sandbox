@@ -67,7 +67,7 @@ of the interrupted request id is `409 outcome_unknown` from the request row.
 - A relay restart no longer kills a paid session. The lease, the Pod, the
   workspace and the shard's reservations are unchanged; the next operation is
   admitted after the reconnected guest reports idle.
-- The guest URL is stable across Pod replacement. It is a ClusterIP, never an
+- The guest URL is stable across Pod replacement by default: a ClusterIP, never an
   endpoint Pod IP: the shardless `relay` Service at one replica, and one
   per-shard Service `relay-<n>` (selecting
   `statefulset.kubernetes.io/pod-name: relay-<n>`) above one. A guest runs with
@@ -113,6 +113,10 @@ of the interrupted request id is `409 outcome_unknown` from the request row.
   the relay dying and the scan noticing, a new operation can be claimed with the
   old epoch and then fail at the relay (`409 guest_not_available`) because the
   registration is gone. It is never executed twice and the client retries.
+- **Pod-IP mode has no continuity.** A relay Pod replacement leaves the guest
+  dialling the old IP. The grace ends the session `relay_lost` and refunds it.
+  Only the default Service mode can resume; fixing Pod-IP mode requires a
+  CNI-level stable address, not another policy.
 - **An unreachable relay also starts the grace.** The scan cannot tell "the
   relay was replaced" from "the control plane is stalled", so a relay that does
   not answer for `RELAY_LOSS_GRACE_MS` (or until the lease bound) ends live
