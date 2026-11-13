@@ -96,6 +96,55 @@ describe("provisioning relay endpoint", () => {
     expect(serviceAddress).not.toHaveBeenCalled();
   });
 
+  it("uses the ready Pod IP when RELAY_GUEST_ADDRESS=pod", async () => {
+    const cfg = loadControllerConfig({
+      ADMIN_TOKEN: "p".repeat(24),
+      ROLE: "all",
+      EXECUTION_MODE: "dev",
+      ALLOW_INSECURE_DEV: "true",
+      KUBERNETES_ENABLED: "false",
+      DATABASE_URL: testDatabaseUrl(),
+      RELAY_ADMIN_TOKEN: "r".repeat(24),
+      WAKE_TOKEN: "w".repeat(24),
+      PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
+      RELAY_GUEST_ADDRESS: "pod",
+    });
+    const serviceAddress = vi.fn(async () => ({ host: "10.0.0.1", port: 8443 }));
+    const stableServiceAddress = vi.fn(async () => ({ host: "10.96.0.7", port: 8443 }));
+    const createPod = vi.fn(async (spec: { relayUrl: string }) => ({
+      podName: "sbx-pod",
+      relayUrl: spec.relayUrl,
+    }));
+    const provisioning = new Provisioning(
+      {
+        cfg,
+        store: { mergeTimings: vi.fn(), setRelayToken: vi.fn() } as unknown as PostgresStore,
+        provisioner: { createPod } as unknown as Provisioner,
+        relay: {
+          registerCurrent: vi.fn(async () => ({ generation: "g", attempts: 1 })),
+        } as unknown as RelayClient,
+        capacity: {} as never,
+        snapshotter: {} as never,
+        now: () => Date.now(),
+        serviceAddress,
+        stableServiceAddress,
+      },
+      {} as WarmPoolManager,
+    );
+
+    await provisioning.createPod(
+      session(),
+      { host: "10.0.0.1", port: 8443 },
+      { host: "10.0.0.9", port: 3128 },
+    );
+
+    expect(createPod.mock.calls[0]?.[0].relayUrl).toBe(
+      "ws://10.0.0.1:8443/guest?session=sbx_relay_endpoint",
+    );
+    expect(serviceAddress).toHaveBeenCalled();
+    expect(stableServiceAddress).not.toHaveBeenCalled();
+  });
+
   it("falls back to the caller's stable address when the Service read races", async () => {
     const cfg = loadControllerConfig({
       ADMIN_TOKEN: "p".repeat(24),
