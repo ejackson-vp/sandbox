@@ -187,6 +187,13 @@ concrete next step.
   path for double-charge disputes. Durable per-payer and global spend/create
   budgets are implemented (#48, schema v14); the numbers still need to be
   sized against real traffic.
+- Facilitator: `FACILITATOR_URL` defaults to the public testnet facilitator and
+  to the local mock facilitator in mock mode. CDP is supported with
+  `FACILITATOR_API_KEY_ID` and `FACILITATOR_API_KEY_SECRET` (both or neither,
+  https only), which mint a short-lived ES256 JWT per request. Every call has
+  `FACILITATOR_TIMEOUT_MS` (default 20 s); `verify` and `supported` retry a
+  bounded number of times, and `settle` never does, because the nonce makes it
+  idempotent at the facilitator and a lost answer is resolved on chain.
 - Mainnet: `PAYMENT_MODE=mainnet` plus an explicit `NETWORK` (`eip155:8453`),
   a real `PAY_TO`, an explicit `FACILITATOR_URL` and `PAYMENT_RPC_URL` for the
   on-chain settlement check. There is no mainnet default for any of them, and

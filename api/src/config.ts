@@ -50,6 +50,15 @@ export interface ApiConfig {
   network: string;
   payTo: string;
   facilitatorUrl: string;
+  /** Per-attempt budget for a facilitator HTTP call. */
+  facilitatorTimeoutMs: number;
+  /** CDP API key id. Set with the secret, or not at all. */
+  facilitatorApiKeyId?: string;
+  /**
+   * CDP API key secret. Never logged, never put in an error message, and only
+   * accepted over an https FACILITATOR_URL.
+   */
+  facilitatorApiKeySecret?: string;
   /**
    * JSON-RPC endpoint used to read EIP-3009 authorization state on chain.
    * Unset on the mock path and on a testnet deployment without an RPC. Mainnet
@@ -155,6 +164,32 @@ function parsePayment(
     throw new Error(`PAY_TO must be a real receiving address in ${paymentMode} mode`);
   }
   return { paymentMode, network: requestedNetwork, payTo, facilitatorUrl };
+}
+
+/**
+ * Facilitator client configuration.
+ *
+ * The auth pair is all-or-nothing: half a CDP key would fail at the first
+ * payment with an opaque 401, so it is refused at startup instead. A bearer
+ * token over plaintext is a leaked credential, so the pair requires https.
+ */
+function parseFacilitator(env: NodeJS.ProcessEnv, facilitatorUrl: string): Pick<
+  ApiConfig,
+  "facilitatorTimeoutMs" | "facilitatorApiKeyId" | "facilitatorApiKeySecret"
+> {
+  const apiKeyId = (env.FACILITATOR_API_KEY_ID ?? "").trim();
+  const apiKeySecret = (env.FACILITATOR_API_KEY_SECRET ?? "").trim();
+  if ((apiKeyId.length === 0) !== (apiKeySecret.length === 0)) {
+    throw new Error("FACILITATOR_API_KEY_ID and FACILITATOR_API_KEY_SECRET must be set together");
+  }
+  if (apiKeyId.length > 0 && !facilitatorUrl.startsWith("https://")) {
+    throw new Error("FACILITATOR_API_KEY_* requires an https FACILITATOR_URL");
+  }
+  return {
+    facilitatorTimeoutMs: int(env.FACILITATOR_TIMEOUT_MS, 20_000, 1_000, 120_000),
+    ...(apiKeyId.length > 0 ? { facilitatorApiKeyId: apiKeyId } : {}),
+    ...(apiKeySecret.length > 0 ? { facilitatorApiKeySecret: apiKeySecret } : {}),
+  };
 }
 
 /**
@@ -281,6 +316,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
 
   const chainVerification = parseChainVerification(env, payment.paymentMode, payment.network);
 
+  const facilitator = parseFacilitator(env, payment.facilitatorUrl);
+
   // Real money is never granted on a facilitator's word alone: mainnet must be
   // able to confirm the EIP-3009 nonce on chain before it grants, and before it
   // can recover a settle-then-crash.
@@ -307,6 +344,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     metricsPort: int(env.METRICS_PORT, DEFAULT_METRICS_PORT, 0, 65535),
     metricsHost: env.METRICS_HOST ?? "0.0.0.0",
     ...payment,
+    ...facilitator,
     ...chainVerification,
     ...credentials,
     controllerUrl,

@@ -61,6 +61,46 @@ describe("api config guards", () => {
   });
 });
 
+describe("facilitator client configuration", () => {
+  it("defaults to a bounded per-call timeout", () => {
+    expect(loadConfig(base).facilitatorTimeoutMs).toBe(20_000);
+  });
+
+  it("requires both halves of a CDP key pair, or neither", () => {
+    expect(() => loadConfig({ ...base, FACILITATOR_API_KEY_ID: "id" })).toThrow(/set together/);
+    expect(() => loadConfig({ ...base, FACILITATOR_API_KEY_SECRET: "secret" })).toThrow(
+      /set together/,
+    );
+  });
+
+  it("refuses to send a key over plaintext", () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        FACILITATOR_URL: "http://facilitator.example.test",
+        FACILITATOR_API_KEY_ID: "id",
+        FACILITATOR_API_KEY_SECRET: "secret",
+      }),
+    ).toThrow(/https/);
+  });
+
+  it("accepts a key pair over https without exposing it on the config surface", () => {
+    const cfg = loadConfig({
+      ...base,
+      FACILITATOR_URL: "https://api.cdp.coinbase.com/platform/v2/x402",
+      FACILITATOR_API_KEY_ID: "id",
+      FACILITATOR_API_KEY_SECRET: "secret",
+    });
+    expect(cfg.facilitatorApiKeyId).toBe("id");
+    expect(cfg.facilitatorApiKeySecret).toBe("secret");
+  });
+
+  it("rejects a timeout outside the accepted range", () => {
+    expect(() => loadConfig({ ...base, FACILITATOR_TIMEOUT_MS: "10" })).toThrow();
+    expect(() => loadConfig({ ...base, FACILITATOR_TIMEOUT_MS: "999999" })).toThrow();
+  });
+});
+
 describe("mainnet mode", () => {
   // The complete configuration: every mainnet assertion satisfied. Each test
   // below removes or breaks exactly one of them.

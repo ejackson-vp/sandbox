@@ -146,6 +146,65 @@ describe("chain-verified settlement", () => {
     expect(result.body.error).toBe("payment_settlement_rejected:nonce_already_used");
     expect(result.controller.completeIntent).not.toHaveBeenCalled();
   });
+  it("completes when the settle answer is lost but the nonce is on chain", async () => {
+    const isSettled = vi.fn(async () => true);
+    const result = await postCreate(
+      () => undefined,
+      {
+        settlementVerifier: { isSettled },
+        resourceServer: settledResourceServer(async () => {
+          throw new Error("socket hang up");
+        }),
+      },
+    );
+
+    // No second settle: the chain answers, so the entitlement completes now
+    // instead of the client retrying into payment_in_progress.
+    expect(result.status).toBe(201);
+    expect(result.controller.completeIntent).toHaveBeenCalledWith(
+      result.paymentKey,
+      expect.objectContaining({
+        payment: expect.objectContaining({ payer: result.authorizer }),
+      }),
+    );
+  });
+
+  it("refuses a lost settle the chain has not seen", async () => {
+    const result = await postCreate(
+      () => undefined,
+      {
+        settlementVerifier: { isSettled: async () => false },
+        resourceServer: settledResourceServer(async () => {
+          throw new Error("socket hang up");
+        }),
+      },
+    );
+
+    expect(result.status).toBe(402);
+    expect(result.body.error).toBe("payment_settle_failed");
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+    // Nothing can be granted, but the intent stays claimed: the transfer may
+    // still land after this answer.
+    expect(result.controller.failIntent).not.toHaveBeenCalled();
+  });
+
+  it("completes a settlement_pending answer the chain confirms", async () => {
+    const result = await postCreate(
+      () => undefined,
+      {
+        settlementVerifier: { isSettled: async () => true },
+        resourceServer: settledResourceServer(async () => ({
+          success: false,
+          errorReason: "settlement_pending",
+          transaction: "",
+          network: "mock:local",
+        })),
+      },
+    );
+
+    expect(result.status).toBe(201);
+    expect(result.controller.completeIntent).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("USDC authorizationState verifier", () => {

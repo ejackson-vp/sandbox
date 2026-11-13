@@ -390,6 +390,23 @@ async function deferUnknownSettlement(
 }
 
 /**
+ * A settle whose answer was lost may still have landed. Ask the chain before
+ * answering: a settled nonce completes the entitlement now, instead of leaving
+ * the client to retry into `payment_in_progress` until the claim goes stale.
+ */
+async function recoverLostSettle(
+  deps: CreateSessionUseCaseDeps,
+  payload: PaymentPayload,
+  key: string,
+): Promise<Ok<SettledPayment> | null> {
+  if (!deps.settlementVerifier) return null;
+  if ((await confirmSettledOnChain(deps.settlementVerifier, payload)) !== "settled") return null;
+  log.warn("payment_recovered_after_lost_settle", { paymentKeyPrefix: key.slice(0, 12) });
+  const payer = paymentAuthorizer(payload) ?? undefined;
+  return { ok: true, value: payer ? { payer } : {} };
+}
+
+/**
  * Verify, check the controller is up, then settle. A settlement failure keeps
  * the capacity hold until its TTL so recovery cannot over-allocate.
  *
@@ -459,6 +476,8 @@ export async function verifyAndSettle(
       error: failure.reason,
     });
     await deferUnknownSettlement(deps, key, "settle_error");
+    const recovered = await recoverLostSettle(deps, payload, key);
+    if (recovered) return recovered;
     return { ok: false, result: paymentRequired(requirement, "payment_settle_failed") };
   }
 
@@ -484,6 +503,8 @@ export async function verifyAndSettle(
         reason: settle.errorReason,
       });
       await deferUnknownSettlement(deps, key, settle.errorReason ?? "settlement_pending");
+      const recovered = await recoverLostSettle(deps, payload, key);
+      if (recovered) return recovered;
       return { ok: false, result: paymentRequired(requirement, "payment_settle_failed") };
     }
     await deps.controller.failIntent(key, settle.errorReason ?? "settlement_rejected").catch(() => undefined);

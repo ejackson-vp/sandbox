@@ -12,7 +12,7 @@
  */
 import express, { type NextFunction, type Request, type Response } from "express";
 import { ZodError } from "zod";
-import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
+import { x402ResourceServer } from "@x402/core/server";
 import type { Network, PaymentRequirements } from "@x402/core/types";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
@@ -34,6 +34,7 @@ import type { ApiConfig } from "./config.js";
 import { RateLimiter } from "./admission.js";
 import { ControllerClient } from "./controller-client.js";
 import { buildSettlementVerifier } from "./payments/settlement-confirmation.js";
+import { createFacilitatorClient } from "./payments/facilitator-client.js";
 import type { ChainSettlementVerifier } from "./payments/settlement-verifier.js";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
@@ -91,8 +92,9 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   const resourceServer =
     deps.resourceServer ??
     (() => {
-      const client = new HTTPFacilitatorClient({ url: config.facilitatorUrl });
-      const s = new x402ResourceServer(client);
+      // The deployment's own port: bounded timeouts, retries only on the reads,
+      // and CDP bearer auth when a key pair is configured.
+      const s = new x402ResourceServer(createFacilitatorClient(config));
       return s;
     })();
 
