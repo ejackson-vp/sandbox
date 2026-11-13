@@ -130,12 +130,13 @@ still owns retries, refunds and session convergence for the faults below.
 
 Each run records time from injection to convergence, terminal states, Pod count
 and reservation counts, then destroys all sessions and requires an empty
-workload namespace and zero reservations. `ACTION=pause` freezes the target
-process with `SIGSTOP` for `PAUSE_MS` (default 3 s) and resumes it with
-`SIGCONT`; `REPEAT` runs the selected scenario multiple times and prints
-min/p50/p95/max convergence. `CONVERGENCE_BUDGET_MS` defaults to 30 s for
-`TARGET=api` and 60 s for the controller/relay targets (120 s for the lifecycle
-scenario); a run that exceeds its budget exits nonzero.
+workload namespace and zero reservations. `ACTION=pause` freezes one pod of the
+target with `SIGSTOP` for `PAUSE_MS` (default 3 s) and resumes it with
+`SIGCONT`; with two relay shards that is one shard, so the other shard's
+sessions never see the stall. `REPEAT` runs the selected scenario multiple times
+and prints min/p50/p95/max convergence. `CONVERGENCE_BUDGET_MS` defaults to 30 s
+for `TARGET=api` and 60 s for the controller/relay targets (120 s for the
+lifecycle scenario); a run that exceeds its budget exits nonzero.
 
 ### Observed results
 

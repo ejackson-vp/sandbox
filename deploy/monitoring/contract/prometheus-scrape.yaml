@@ -1,7 +1,9 @@
-# One scrape job covers all three control-plane roles. Each role runs one
-# replica in the homelab, so DNS targets are enough; a scaled deployment should
-# switch to pod discovery with `containerPort: metrics` (the pods already name
-# the port `metrics`).
+# One scrape job covers all three control-plane roles. The relay runs two shards,
+# so it is scraped by its stable per-pod names rather than the shardless `relay`
+# Service: a DNS target behind two pods alternates between two independent
+# processes and every counter delta resets on the switch. A scaled api or
+# controller should move to pod discovery with `containerPort: metrics` (the pods
+# already name the port `metrics`).
 #
 # This is the bare-list contract for an existing Prometheus.
 # `vmsingle-scrape-config.yaml` mirrors the same targets in the full-document
@@ -31,6 +33,9 @@ data:
           labels:
             role: controller
         - targets:
-            - relay.sandbox-system.svc.cluster.local:9100
+            # Fully qualified: the stable pod names resolve inside sandbox-system
+            # only, and Prometheus scrapes from another namespace.
+            - relay-0.relay-headless.sandbox-system.svc.cluster.local:9100
+            - relay-1.relay-headless.sandbox-system.svc.cluster.local:9100
           labels:
             role: relay

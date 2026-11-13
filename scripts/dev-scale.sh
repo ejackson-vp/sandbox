@@ -37,6 +37,13 @@ k() {
 # replacing the pod changes it and every guest on that shard dials a dead
 # address. `relay-<n>` is the address the controller hands out; it exists only
 # while the shard does.
+#
+# The committed default is two shards, so relay-0 and relay-1 already live in
+# deploy/kubernetes/12-relay.yaml. This keeps the cluster's Services in step with
+# the N you ask for here; N=1 removes them (nothing to address) and `make deploy`
+# restores the committed two. Changing the committed count means changing the
+# manifest, not only this script: scripts/check-singletons.mjs requires one
+# Service per shard.
 ensure_relay_shard_services() {
   local target="$1" n
   for n in $(seq 0 $((MAX_REPLICAS - 1))); do

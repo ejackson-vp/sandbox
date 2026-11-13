@@ -23,16 +23,18 @@ namespace and nothing else.
 
 ## Scrape contract
 
-One job covers all three control-plane roles. Each role runs one replica in the
-homelab, so DNS targets are enough; a scaled deployment should switch to pod
-discovery with `containerPort: metrics` (the pods already name the port
-`metrics`).
+One job covers all three control-plane roles. The api and controller run one
+replica in the homelab, so DNS targets are enough. The relay runs two shards, so
+it is scraped by both stable pod names; a single Service target would alternate
+between two independent processes and reset every counter delta. A scaled api or
+controller should likewise move to pod discovery with `containerPort: metrics`
+(the pods already name the port `metrics`).
 
 | Role | Target | Port |
 | --- | --- | --- |
 | API | `api.sandbox-system.svc.cluster.local` | `9100` |
 | Controller | `controller.sandbox-system.svc.cluster.local` | `9100` |
-| Relay | `relay.sandbox-system.svc.cluster.local` | `9100` |
+| Relay | `relay-0.relay-headless.sandbox-system.svc.cluster.local` and `relay-1.…` | `9100` |
 
 The job adds `role: api|controller|relay`. Every rule and dashboard panel
 selects on that label, so it is part of the contract, not a convenience.

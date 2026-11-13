@@ -62,8 +62,10 @@ Cost drivers:
 
 - The sandbox node is tainted and dedicated; each session is one pod with hard
   limits, so the node's allocatable capacity is the practical concurrency cap.
-- The relay is a single in-memory switch in this prototype: ~2 000 sessions per
-  relay instance, 8 pending requests per session, 24 MiB frames.
+- The relay is a single in-memory switch per instance: ~2 000 sessions per relay
+  instance, 8 pending requests per session, 24 MiB frames. The committed
+  deployment runs two shards, so the cluster-wide ceiling is ~4 000, and the
+  node's allocatable capacity is still the practical cap.
 - The controller reconciles serially; at a few hundred pods the 250 ms tick is
   the dominant cost. Production would shard or use informers.
 

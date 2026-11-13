@@ -151,20 +151,44 @@ Measured on a two-node cluster, same namespace, same policies:
 | `runc` pod | OK | OK |
 | `kata` pod | OK | **timeout** |
 
-The controller therefore resolves Services to a **ready EndpointSlice address**
-and hands that to the guest (`getServiceAddress` in `controller/src/k8s.ts`).
-Pod IPs are routed normally in every runtime, so this works for both `runc` and
-Kata. It falls back to the ClusterIP when no endpoint is ready.
+The controller resolves two different things for two different reasons:
 
-With `RELAY_REPLICAS` or `PROXY_REPLICAS` above 1 it resolves the endpoint whose
-hostname is `<service>-<shard>` (the StatefulSet pod name behind the headless
-Service), so a sharded guest also gets an IP. A shard with no ready endpoint
-fails provisioning instead of falling back to a name or another shard.
+- the **egress proxy** to a ready EndpointSlice address (`getServiceAddress` in
+  `controller/src/k8s.ts`). A proxy replacement only breaks egress for the rest
+  of the session, so a Pod IP is acceptable, and Pod IPs are routed normally in
+  every runtime. With `PROXY_REPLICAS` above 1 it resolves the endpoint whose
+  hostname is `egress-proxy-<shard>` (the StatefulSet pod name behind the
+  headless Service).
+- the **relay** to a ClusterIP (`getStableServiceAddress`), never an endpoint
+  Pod IP. The guest URL is baked into the pod at create, and a Pod IP dies with
+  the relay pod. At one relay replica that is the `relay` Service; at two it is
+  the session shard's `relay-<n>` Service, a ClusterIP whose only selector is
+  `statefulset.kubernetes.io/pod-name: relay-<n>`, so it reaches exactly the pod
+  that holds the session. A shard with no ready endpoint fails provisioning
+  instead of falling back to a name, another shard, or a dead Pod IP.
+
+The Kata caveat above still applies to the relay: where a guest cannot reach a
+Service VIP, `RELAY_GUEST_ADDRESS=pod` makes the guest dial the shard's endpoint
+Pod IP instead. That mode keeps sessions working but cannot follow a relay pod
+replacement, so a restart ends the affected sessions with `relay_lost` rather
+than reconnecting them (ADR 0012). Two shards do not change that: they halve how
+many sessions a restart touches, not what a replacement costs a guest that holds
+a Pod IP.
+
+The controller's admin calls take a third path: mTLS to
+`relay-<n>.relay-headless:8444`, because the controller runs in-cluster with
+working DNS. Sharding therefore requires the relay server certificate to carry a
+`relay-<n>.relay-headless` SAN per shard. `scripts/dev-secrets.sh` issues
+`relay-0` through `relay-9` for a local cluster; a deployed `relay-tls` Secret is
+issued elsewhere and has to list the shards actually in use.
 
 Consequences worth knowing:
 
-- The guest is pinned to one replica for the life of the process; the controller
-  caches the address for 30 s.
+- A guest is pinned to one shard for the life of the process. The guest token
+  carries the shard and the relay refuses a mismatch with 421.
+- The controller caches the ClusterIP for 30 s; the relay's endpoint Pod IP
+  (when `RELAY_GUEST_ADDRESS=pod`) is resolved on every use, because a
+  replacement changes it.
 - The controller's Role needs `get`/`list` on `endpointslices` in
   `discovery.k8s.io`. Without it every reconcile fails with 403, which surfaces
   as a paid session stuck in `PAID` until it times out.
