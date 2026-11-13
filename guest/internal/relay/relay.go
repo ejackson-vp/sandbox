@@ -142,7 +142,8 @@ func dialValidated(ctx context.Context, rawURL string) (*websocket.Conn, *http.R
 	if (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" {
 		return nil, nil, fmt.Errorf("relay url must be ws or wss with a host")
 	}
-	return websocket.Dial(ctx, parsed.String(), &websocket.DialOptions{ // lgtm[go/request-forgery]
+	// lgtm[go/request-forgery]
+	return websocket.Dial(ctx, parsed.String(), &websocket.DialOptions{
 		CompressionMode: websocket.CompressionDisabled,
 	})
 }
