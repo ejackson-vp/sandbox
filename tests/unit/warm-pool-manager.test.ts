@@ -27,6 +27,32 @@ describe("warm claim endpoint", () => {
     expect(url).toMatch(/^ws:\/\/relay-[01]:8443\/guest\?session=/);
     expect(url).not.toContain("relay-pod");
   });
+
+  it("uses the relay Pod IP when the cluster denies Service VIPs", async () => {
+    // The cold path already honoured RELAY_GUEST_ADDRESS; the warm path picked a
+    // ClusterIP itself, so on a Kata cluster every warm pod timed out until the
+    // pool recycled it. Both paths now make one decision.
+    const h = harness({ env: { WARM_POOL_SIZE: "1", RELAY_GUEST_ADDRESS: "pod" } });
+    h.pods.push(warmPod("base", h.manager.poolFor("base")!.identity(), digestBase));
+    expect(await h.claim()).toBe(true);
+    expect(h.claims[0]!.claim.relayUrl).toContain("ws://relay-pod:8443");
+  });
+});
+
+describe("warm pod creation address", () => {
+  it("boots against the Pod IP in pod mode", async () => {
+    const h = harness({ env: { WARM_POOL_SIZE: "1", RELAY_GUEST_ADDRESS: "pod" } });
+    await h.reconcile();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]!.relayUrl).toContain("ws://relay-pod:8443");
+  });
+
+  it("boots against the ClusterIP by default", async () => {
+    const h = harness({ env: { WARM_POOL_SIZE: "1" } });
+    await h.reconcile();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]!.relayUrl).toContain("ws://relay:8443");
+  });
 });
 
 describe("warm pool manager budgeting", () => {

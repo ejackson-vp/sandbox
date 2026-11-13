@@ -64,6 +64,8 @@ data:
   # RELAY_GUEST_ADDRESS=service (the default) the relay is that shard's
   # `relay-<n>` ClusterIP, while the proxy stays an endpoint Pod IP. A proxy
   # replacement therefore still breaks egress for the rest of a session.
+  # The warm pool resolves the relay the same way. If it did not, warm and cold
+  # guests would dial different addresses on the same cluster.
   # Update these and the StatefulSet replicas in 12-relay.yaml / 13-egress-proxy.yaml
   # in the same change; a mismatch silently reintroduces per-replica state, and
   # scripts/check-singletons.mjs fails when the relay count and the StatefulSet

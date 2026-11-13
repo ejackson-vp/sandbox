@@ -2,10 +2,10 @@
 
 The sandbox is **deny-all by default**. Only two outbound destinations exist:
 
-| Destination | Port | Why |
-| --- | --- | --- |
+| Destination             | Port | Why                                               |
+| ----------------------- | ---- | ------------------------------------------------- |
 | `relay` (control plane) | 8443 | the encrypted operation channel (guest-initiated) |
-| `egress-proxy` | 3128 | the only path to the public internet |
+| `egress-proxy`          | 3128 | the only path to the public internet              |
 
 Everything else — other sandboxes, the Kubernetes API, kubelets, node IPs, cloud
 metadata (`169.254.169.254`), cluster Services, and the local network — is
@@ -16,12 +16,12 @@ blocked by Cilium NetworkPolicy and verified by `tests/security/network.test.ts`
 The two relay listeners have different callers and different credentials. They
 are never interchangeable:
 
-| Path | Port | Transport | Credential | Caller |
-| --- | --- | --- | --- | --- |
-| guest WebSocket | 8443 | plaintext HTTP/WS | per-session guest bearer token | sandbox guest |
-| relay control | 8444 | mTLS | client certificate `CN=controller` | controller only |
-| readiness/liveness | 8443 | plaintext HTTP | none (bounded, non-secret body) | kubelet |
-| controller wake | 3001 | plaintext HTTP | low-privilege `x-wake-token` | relay only |
+| Path               | Port | Transport         | Credential                         | Caller          |
+| ------------------ | ---- | ----------------- | ---------------------------------- | --------------- |
+| guest WebSocket    | 8443 | plaintext HTTP/WS | per-session guest bearer token     | sandbox guest   |
+| relay control      | 8444 | mTLS              | client certificate `CN=controller` | controller only |
+| readiness/liveness | 8443 | plaintext HTTP    | none (bounded, non-secret body)    | kubelet         |
+| controller wake    | 3001 | plaintext HTTP    | low-privilege `x-wake-token`       | relay only      |
 
 The control listener is served by `https.createServer` with `requestCert`,
 `rejectUnauthorized` and a client CA. The expected `CN=controller` is enforced on
@@ -146,10 +146,10 @@ backend identity that is never resolved.
 
 Measured on a two-node cluster, same namespace, same policies:
 
-| From | To relay pod IP | To relay ClusterIP |
-| --- | --- | --- |
-| `runc` pod | OK | OK |
-| `kata` pod | OK | **timeout** |
+| From       | To relay pod IP | To relay ClusterIP |
+| ---------- | --------------- | ------------------ |
+| `runc` pod | OK              | OK                 |
+| `kata` pod | OK              | **timeout**        |
 
 The controller resolves two different things for two different reasons:
 
@@ -174,6 +174,15 @@ replacement, so a restart ends the affected sessions with `relay_lost` rather
 than reconnecting them (ADR 0012). Two shards do not change that: they halve how
 many sessions a restart touches, not what a replacement costs a guest that holds
 a Pod IP.
+
+Warm-pool guests take the same decision. A warm pod dials the relay before any
+session exists, and it used to pick a ClusterIP itself regardless of
+`RELAY_GUEST_ADDRESS`, so on a cluster that denies Service VIPs from the guest
+netns every warm pod timed out and was recycled until the pool was empty while
+cold sessions worked. Both paths now resolve through
+`DataPlaneEndpoints.relayAddress`, so a cluster gets one addressing mode, not
+two. A warm pod that holds a Pod IP is stranded by a relay replacement exactly
+like a claimed one: it fails its next dial and the pool replaces it.
 
 The controller's admin calls take a third path: mTLS to
 `relay-<n>.relay-headless:8444`, because the controller runs in-cluster with

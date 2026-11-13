@@ -63,8 +63,10 @@ export class Provisioning implements CreatePath {
   constructor(
     private readonly ctx: ProvisioningContext,
     private readonly warm: WarmPoolManager,
+    /** Shared with the warm pool so a warm and a cold guest dial the same address. */
+    endpoints?: DataPlaneEndpoints,
   ) {
-    this.endpoints = new DataPlaneEndpoints(ctx);
+    this.endpoints = endpoints ?? new DataPlaneEndpoints(ctx);
     this.admission = new ProvisioningAdmission(ctx);
     this.pods = new PodCreation({ ...ctx, endpoints: this.endpoints });
     this.podStatus = new PodStatus(ctx);
