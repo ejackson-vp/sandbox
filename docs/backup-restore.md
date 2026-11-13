@@ -100,6 +100,28 @@ The suite is the one `npm run test:store-contract` runs. It skips unless
 `DATABASE_URL` is set, which is what makes it safe to point at a scratch
 database and dangerous to point at a primary.
 
+## Verified by
+
+`tests/integration/restore-drill.test.ts` (`npm run test:restore-drill`) is a CI
+approximation of the check above, not a replacement for it. It seeds a source
+database with a settled payment, a refunded duplicate charge, an unclaimed refund
+row and a READY session interrupted mid-operation, copies it with
+`CREATE DATABASE … TEMPLATE …`, and asserts against the copy that the invariants
+survive: all four ledger rows match column for column, the settled key is still
+rejected by `payments_pkey` (SQLSTATE 23505) so a replay cannot charge twice, the
+interrupted operation finishes, replaying its request id is refused as a
+duplicate, and a new settlement succeeds on the copy. It needs `DATABASE_URL`,
+runs in the `postgres contract` CI job, and is excluded from
+`npm run test:integration` so it runs once per pull request.
+
+The copy is a server-side `TEMPLATE` of a cleanly closed source, which is not a
+production restore path: CloudNativePG `bootstrap.recovery`, pgBackRest and the
+homelab `pg_dump` CronJob all replay WAL or restore a dump. The drill also says
+nothing about point-in-time recovery, a cross-region restore, or the Kubernetes objects
+around the database (pods, PVCs, the Lease). It proves a copied database is
+usable and its invariants hold; the drill against a real restored artifact is
+still required every quarter.
+
 ## What is not covered
 
 - **Checkpoint workspaces.** A suspendable workspace is a plaintext per-session
