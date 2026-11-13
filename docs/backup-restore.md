@@ -63,42 +63,96 @@ primary; copy the files off-node or move to one of the two options above.
 
 ## Restore verification
 
-A restore you have never run is a guess. The check is the store contract suite,
-run against the restored database, because it proves the payment, session,
-transition and reservation invariants survived the copy, not just that `pg_dump`
-exited zero.
+A restore you have never run is a guess. The check is the store contract suite
+run against a database restored from the artifact, because it proves the
+payment, session, transition and reservation invariants survived the restore,
+not just that `pg_dump` exited zero.
 
-1. Restore into a **scratch** database, never over the primary:
+### The homelab dump
 
-   ```bash
-   # CloudNativePG: a recovery cluster
-   kubectl apply -f restore-cluster.yaml     # bootstrap.recovery, no application traffic
+`make test-restore-dump DUMP=<file>` (`node scripts/restore-dump.mjs <file>`)
+runs the whole loop:
 
-   # pgBackRest: restore to a new data directory, then start a throwaway server
-   pgbackrest --stanza=sandbox --pg1-path=/restore/data --delta restore
-   ```
+- creates `sbx_restore_<stamp>_<pid>_<random>`, a name no deployed database has;
+- decrypts with `openssl enc -d -aes-256-cbc -pbkdf2` when the file starts with
+  `Salted__` and `BACKUP_ENCRYPTION_KEY` is set, and streams it into
+  `pg_restore --no-owner --no-privileges --exit-on-error`;
+- prints the schema version and the row counts it found in the copy;
+- runs the store contract (`tests/restore/`) against that copy;
+- drops the database on success, on failure and on `SIGINT`/`SIGTERM`, unless
+  `--keep` is passed;
+- exits non-zero on any failure.
 
-2. Point the suite at it. It truncates every table, so the target must be the
-   restored copy and nothing else:
+`DATABASE_URL` is the admin connection. The script creates and drops its own
+database and never writes to the one named in that URL. It needs `pg_restore`
+and `openssl` on `PATH`, from a client at least as new as the server that wrote
+the dump (`postgresql-client`, or `brew install libpq`).
 
-   ```bash
-   DATABASE_URL='postgres://sandbox:<pw>@127.0.0.1:5433/sandbox?sslmode=disable' \
-     npm run test:store-contract
-   ```
+Get a dump onto the machine first. It lives on the `postgres-backups` PVC, so
+copying it out needs a pod with that volume mounted; `homelab/apps/sandbox/README.md`
+has that command. Then:
 
-   A local server from the restored directory works too: start `postgres` on a
-   spare port with `-D /restore/data`, run the suite, then stop it.
+```sh
+export BACKUP_ENCRYPTION_KEY="$(kubectl -n sandbox-system get secret x402-secrets \
+  -o jsonpath='{.data.backup-encryption-key}' | base64 -d)"
+export DATABASE_URL='postgres://postgres:<pw>@127.0.0.1:5451/sandbox'
 
-3. Run a create/exec/destroy smoke test against a controller pointed at the
-   restored database, and confirm a known `payments.payment_key` has its
-   `payment_ledger` row.
+make test-restore-dump DUMP=postgres-<stamp>.dump.enc
+```
 
-4. Record the RTO, the backup age and any step that was not in this page. Repeat
-   quarterly, and after any change to the backup layer.
+A pass ends with `survived the dump, the restore and the store contract` and a
+green contract suite. A truncated file, a wrong key or a dump this build
+cannot use all exit 1 with the failing step named. `--keep` leaves the copy in
+place for the smoke test below and prints the `DROP DATABASE` command.
 
-The suite is the one `npm run test:store-contract` runs. It skips unless
-`DATABASE_URL` is set, which is what makes it safe to point at a scratch
-database and dangerous to point at a primary.
+Note what `npm run test:store-contract` does **not** do: with `DATABASE_URL`
+pointed at a restored database it creates a fresh `sbx_test_…` database from
+that URL and runs there, so the contract never runs against the restored copy.
+That is why the script uses `npm run test:store-contract-restored`, which runs
+the same suite against `SBX_RESTORE_DATABASE_URL` exactly as given.
+
+### A CloudNativePG or pgBackRest recovery instance
+
+Those restores produce a running database rather than a file, so point the same
+suite at a database in the recovery instance. It truncates every table, so use
+a throwaway instance or a database named for the drill:
+
+```sh
+SBX_RESTORE_DATABASE_URL='postgres://sandbox:<pw>@127.0.0.1:5433/sbx_restore_drill' \
+  npm run test:store-contract-restored
+```
+
+`tests/restore/store-contract.test.ts` refuses a database whose name does not
+start with `sbx_restore_`. Set `SBX_RESTORE_ALLOW_ANY_DB=1` only on a recovery
+instance you are willing to empty.
+
+### Schema versions
+
+`sandbox_schema.version` is the dump's schema version. The script reads it,
+prints it, and acts on it the way the controller does at start-up
+(`migratePostgres` in `controller/src/store/postgres/schema.ts`):
+
+- **Older than this checkout.** The contract fixture opens a writer on the copy,
+  so the additive ladder runs before the first test and migrates the copy to
+  `SCHEMA_VERSION`. That is the production start-up path, so it proves the
+  ladder runs against the artifact and existing rows survive it. It does not
+  prove the old schema behaves, because nothing asserts against the pre-migration
+  state.
+- **The same version.** No ladder, the suite runs as written.
+- **Newer than this build.** `migratePostgres` throws
+  `refusing to downgrade`, the controller would not start on it either, and the
+  script stops before running the contract and says so. Restore with the build
+  that wrote the dump.
+- **No version row.** Treated as v0 and the base schema is applied. The script
+  separately refuses a dump without `sessions`, `payments` and
+  `payment_ledger`, so an unrelated database is not mistaken for a backup.
+
+### After the restore
+
+Run a create/exec/destroy smoke test against a controller pointed at the kept
+copy, and confirm a known `payments.payment_key` has its `payment_ledger` row.
+Record the RTO, the backup age and any step that was not on this page. Repeat
+quarterly, and after any change to the backup layer.
 
 ## Verified by
 
@@ -117,10 +171,31 @@ runs in the `postgres contract` CI job, and is excluded from
 The copy is a server-side `TEMPLATE` of a cleanly closed source, which is not a
 production restore path: CloudNativePG `bootstrap.recovery`, pgBackRest and the
 homelab `pg_dump` CronJob all replay WAL or restore a dump. The drill also says
-nothing about point-in-time recovery, a cross-region restore, or the Kubernetes objects
-around the database (pods, PVCs, the Lease). It proves a copied database is
-usable and its invariants hold; the drill against a real restored artifact is
-still required every quarter.
+nothing about point-in-time recovery, a cross-region restore, or the Kubernetes
+objects around the database (pods, PVCs, the Lease).
+
+`scripts/restore-dump.mjs` closes the artifact half: it takes a real
+`pg_dump -Fc` file, decrypts it the way the CronJob encrypted it, restores it,
+and runs the contract against the restored copy. `tests/unit/restore-dump.test.ts`
+pins its decisions without a server (argument parsing, the scratch name, the
+encryption sniff, and the schema-version branch). It is not in CI: no runner
+holds the `postgres-backups` PVC or the backup key, and the nightly faults job
+runs against a cluster that backs nothing up. The quarterly drill is still a
+human with the key, and this is the command they run.
+
+What is still unproven:
+
+- **The data, as opposed to the schema.** The contract truncates every table
+  before each test, so the row counts the script prints are for the operator to
+  read, not assertions. An accidentally empty `sessions` table would pass the
+  contract. Check the counts and the smoke test.
+- **Anything off-node.** The homelab dump lands on the same local-path PVC as
+  the primary. It catches a bad migration or a deleted row; it is not disaster
+  recovery, and no drill here changes that.
+- **WAL replay and PITR.** No test in this repository replays WAL,
+  bootstraps a CloudNativePG recovery cluster or restores a pgBackRest repo.
+- **The Kubernetes objects around the database.** Restoring rows does not
+  restore the StatefulSet, the PVCs or the Lease.
 
 ## What is not covered
 
