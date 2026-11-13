@@ -54,7 +54,7 @@ a family to catch an id-shaped label before it reaches storage.
 | File | Contract |
 | --- | --- |
 | [`contract/prometheus-scrape.yaml`](contract/prometheus-scrape.yaml) | The scrape job, bare-list form for `additionalScrapeConfigs` |
-| [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Fifteen SLO rules, portable Prometheus/vmalert rule file |
+| [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Nineteen SLO rules, portable Prometheus/vmalert rule file |
 | [`contract/grafana-dashboard.json`](contract/grafana-dashboard.json) | `Sandbox control plane`, uid `sandbox-control-plane` |
 | [`contract/kustomization.yaml`](contract/kustomization.yaml) | Renders the three ConfigMaps, namespace `monitoring` |
 | [`contract/README.md`](contract/README.md) | How to consume the ConfigMaps, including with an existing Prometheus |
@@ -137,6 +137,11 @@ evaluators all load them unchanged.
 | `SandboxWarmPoolDrainThrash` | at least 5 idle drains and 5 growths in 1h, per profile | 30m | warning |
 | `SandboxMetricsTargetDown` | `up{job="sandbox-control"} == 0` | 2m | critical |
 | `SandboxBlastRadius` | controller or relay down with ≥5 relay sessions in the last 15m | 5m | critical |
+| `SandboxLedgerDivergence` | any `sandbox_ledger_divergence{reason}` above zero | 1m | critical |
+| `SandboxSessionsStale` | at least 3 sessions past their deadline in one phase | 15m | warning |
+| `SandboxLedgerAuditStale` | audit age above two sampling intervals (600 s at the default) | 5m | warning |
+| `SandboxLedgerAuditNeverSampled` | audit age series absent, so no sample has ever succeeded | 15m | warning |
+| `SandboxLedgerAuditFailing` | audit read failures in every 15m window | 15m | warning |
 
 `SandboxMetricsTargetDown` is the leading indicator: when a process is gone its
 application gauges go stale rather than low, so the per-role alerts alone would
@@ -177,6 +182,27 @@ you run more than one, use `max by (profile)` for
 `sandbox_warm_pool_budget` and `sandbox_warm_pool_pods`, and leave the counters
 summed.
 
+**The ledger audit rules handle a missing series explicitly.**
+`sandbox_ledger_divergence`, `sandbox_sessions_stale` and
+`sandbox_ledger_audit_age_seconds` are created by the first successful audit
+sample, so they are absent, not zero, until the sampler has read the store
+once. A `> 0` or `> threshold` comparison matches nothing in that state, which
+is why `SandboxLedgerAuditNeverSampled` is `absent(sandbox_ledger_audit_age_seconds)`
+held for 15 minutes: a controller that has never managed to read the database
+has no divergence series to alert on, and silence there would look like a clean
+ledger. `SandboxLedgerAuditFailing` covers the other half, read failures after a
+success, where the last good counts are kept on purpose. The five audit rules
+drop the `role` selector for the same reason as the warm-pool rules: the
+families are exported only by the controller.
+
+**The audit age threshold follows the sampler, not a fixed guess.**
+`SandboxLedgerAuditStale` fires at 600 s, which is two
+`LEDGER_AUDIT_INTERVAL_MS` intervals at the 300000 default. The sampler accepts
+one second to one hour, so change the expression together with the interval and
+keep the recorded reason. A divergence is only as fast as the next sample: at
+the default, a page can lag the event by up to five minutes, and that is the
+cost of moving the read off the scrape path.
+
 **The rules do not deliver notifications.** The rule file carries no receiver.
 The homelab stack evaluates with `-notifier.blackhole`, so alerts are visible as
 `ALERTS` series and in the dashboard but nothing pages. Any other deployment is
@@ -202,6 +228,11 @@ state back to the queried store; vmalert does, a bare Prometheus exposes
 Panels 14 to 17 cover the profile warm pools: target against live pods, claim
 outcomes, growth decisions and idle drains. They aggregate by `profile`, so
 `base`, `python` and `node` stay comparable even though they share one budget.
+
+Panels 18 and 19 cover the ledger audit: divergence counts by reason and stale
+session counts by phase, then the audit age in seconds. They are the visual
+counterpart of the four non-divergence audit rules, and they make the freshness
+of the divergence panel obvious at a glance.
 
 ## Portable usage
 
@@ -252,6 +283,10 @@ are recorded in the homelab repository.
   pool, not derived from capacity.
 - **Blast-radius threshold** of five sessions is a starting point for a
   single-tenant homelab, not a capacity-derived number.
+- **Ledger divergence is only as fresh as the audit sample.** At the 300 s
+  default, a divergence pages up to five minutes after the rows disagree. A
+  sampler that has never read the database exports no divergence series at all,
+  which is what `SandboxLedgerAuditNeverSampled` covers.
 - **The contract names two ConfigMaps after their homelab consumers**
   (`vmalert-rules`, `grafana-dashboard-sandbox`). That keeps the live
   installation adoptable without recreation; a downstream consumer that mounts

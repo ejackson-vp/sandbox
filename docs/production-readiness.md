@@ -127,7 +127,9 @@ concrete next step.
   set — create p95, provisioning timeout rate, queue wait, relay pending,
   reconcile p95, create-route 409s (the current proxy for
   `reconciliation_pending`), warm pool empty — plus target-down and
-  blast-radius. `reconciliation_pending` is not yet a per-code counter, and the
+  blast-radius, and the ledger audit rules (divergence, stale sessions, audit
+  freshness and audit read failures). `reconciliation_pending` is not yet a
+  per-code counter, and the
   warm-pool rule is inactive while `WARM_POOL_SIZE=0`. Settlement-failure,
   PVC-full, orphan-pod and database alerts are still not implemented. The rule
   file carries no receiver and the homelab stack evaluates with

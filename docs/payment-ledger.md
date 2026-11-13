@@ -326,25 +326,36 @@ It deliberately does not check:
 Alert on:
 
 ```promql
-# money moved with no ledger row
+# money moved with no ledger row (SandboxLedgerDivergence, critical)
 sandbox_ledger_divergence{reason="settled_without_ledger"} > 0
 
-# these two are always a bug, not a slow path
+# these two are always a bug, not a slow path (also SandboxLedgerDivergence)
 sandbox_ledger_divergence{reason="intent_failed_ledger_settled"} > 0
 sandbox_ledger_divergence{reason="duplicate_refund_claim"} > 0
 
-# cleanup that is not finishing, by phase
-sandbox_sessions_stale{phase="TERMINATING"} > 0
+# cleanup that is not finishing, three or more sessions in one phase
+# (SandboxSessionsStale; one long-lived session does not fire it)
+max by (phase) (sandbox_sessions_stale) >= 3
 
-# no successful sample for two default intervals (2 x 300 s)
+# no successful sample for two default intervals (2 x 300 s, and the rule
+# is two intervals, not 600 s, if LEDGER_AUDIT_INTERVAL_MS changes)
+# (SandboxLedgerAuditStale)
 sandbox_ledger_audit_age_seconds > 600
 
-# the audit itself is failing
+# the sampler has never completed a sample, so the families above are absent
+# rather than zero (SandboxLedgerAuditNeverSampled)
+absent(sandbox_ledger_audit_age_seconds)
+
+# the audit is failing some reads but still succeeding enough to stay fresh
+# (SandboxLedgerAuditFailing)
 increase(sandbox_ledger_audit_failures_total[15m]) > 0
 ```
 
-If `LEDGER_AUDIT_INTERVAL_MS` is raised, raise the age threshold with it: the
-rule is two intervals, not 600 seconds.
+The rules live in
+`deploy/monitoring/contract/rules/sandbox-slo.yaml` and are listed with their
+`for:` windows in `deploy/monitoring/README.md#alerts`. If
+`LEDGER_AUDIT_INTERVAL_MS` is raised, raise the age threshold with it: the rule
+is two intervals, not 600 seconds.
 
 A flagged key is looked up with
 `GET /internal/payments/<paymentKey>`; the metric never carries a payment key or

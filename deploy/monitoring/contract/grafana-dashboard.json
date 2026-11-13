@@ -268,6 +268,43 @@
       ],
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Ledger audit findings",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 64 },
+      "targets": [
+        {
+          "expr": "max by (reason) (sandbox_ledger_divergence)",
+          "legendFormat": "divergence {{reason}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (phase) (sandbox_sessions_stale)",
+          "legendFormat": "stale {{phase}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Ledger audit age",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 64 },
+      "targets": [
+        {
+          "expr": "max(sandbox_ledger_audit_age_seconds)",
+          "legendFormat": "seconds since last sample",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
     }
   ],
   "refresh": "30s",

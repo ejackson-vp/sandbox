@@ -291,7 +291,7 @@ export async function startHarness(options: HarnessOptions): Promise<Harness> {
       FACILITATOR_URL: facilitatorUrl,
       CONTROLLER_URL: controllerUrl,
       CONTROLLER_ADMIN_TOKEN: ADMIN,
-      CAPABILITY_SECRET: "capability-secret-0123456789",
+      CAPABILITY_SECRET: "test-only-capability-secret",
       PUBLIC_BASE_URL: apiUrl,
       ALLOW_INSECURE_DEV: "true",
       PAYMENT_INTENT_STALE_MS: "1000",
