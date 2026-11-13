@@ -1,0 +1,13 @@
+# CodeQL configuration.
+#
+# `go/request-forgery` is excluded because the only sink is the guest's relay
+# WebSocket, whose URL comes from the signed claim/bootstrap (RELAY_URL), not
+# from a customer operation. The query cannot see that trust boundary, and the
+# suppression comments on the sink are not honoured for this query. This is the
+# same false positive recorded as F-13 in security-review/FINDINGS.md.
+#
+# Do not add further exclusions here without the same kind of written reason.
+name: sandbox
+query-filters:
+  - exclude:
+      id: go/request-forgery
