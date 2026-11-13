@@ -41,18 +41,16 @@ const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".go"]);
  * the number is lowered in the same change rather than drifting. An entry is
  * deleted only once the file fits, which the guard also enforces.
  *
- * What the script cannot see is the previous value of the map: growing a file
- * and raising its number in the same commit reads as a clean baseline. That one
- * is caught by reviewing this diff, not by the check, so keep the diff empty
- * unless a file got smaller.
+ * It is empty. The last two entries were the split test suites
+ * (tests/integration/api-flow.test.ts and tests/unit/cli-commands.test.ts),
+ * now four use-case files each. Nothing is over the 650 ceiling, so there
+ * should be no reason to add an entry: split the module instead.
  *
- * No issue tracks the remaining splits yet, so there is nothing to cite here.
- * When one is filed, add its number.
+ * What the script cannot see is the previous value of the map: growing a file
+ * and adding or raising an entry in the same commit reads as a clean baseline.
+ * That one is caught by reviewing this diff, not by the check.
  */
-const BASELINE = new Map([
-  ["tests/integration/api-flow.test.ts", 1228],
-  ["tests/unit/cli-commands.test.ts", 1001],
-]);
+const BASELINE = new Map();
 
 function countLines(path) {
   // Count real lines: a file ending in "\n" must not gain a phantom line.
@@ -150,7 +148,7 @@ if (offenders.length + unused.length + grew.length + shrank.length > 0) {
       console.error(`  ${path}: ${now}, baselined at ${baseline}`);
     }
   }
-  printBaseline();
+  if (BASELINE.size > 0) printBaseline();
   process.exit(1);
 }
 

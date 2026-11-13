@@ -140,8 +140,10 @@ The ceiling stays at 650 until the modules above 550 are split, and it never
 goes up. Split by use case or adapter, never by arbitrary line count.
 
 `scripts/check-structure.mjs` carries an explicit `BASELINE` map of the files
-that are over budget today, each pinned to its exact line count. It fails in
-four cases:
+that are over budget today, each pinned to its exact line count. It is empty:
+the last two entries, `tests/integration/api-flow.test.ts` (1,228) and
+`tests/unit/cli-commands.test.ts` (1,001), were split by use case. The guard
+fails in four cases:
 
 - a file over budget that is not in `BASELINE`, because a new file gets a
   smaller module, not an entry;
@@ -151,8 +153,8 @@ four cases:
   and the entry is deleted once the file fits;
 - an entry that is at or under budget, or whose file is gone.
 
-Every failure prints the whole baseline, and the message names the rule that was
-broken.
+Every failure prints the remaining baseline, and the message names the rule that
+was broken.
 
 The script cannot see the map's previous value. Growing a file and raising its
 number in the same commit reads as a clean baseline, so that direction is
@@ -195,11 +197,10 @@ Next slices:
 3. Extend the `shared/src` layer guard to the other workspaces and enable
    `exactOptionalPropertyTypes` (a dependency-cruiser config would replace the
    hand-rolled check in `scripts/check-structure.mjs`).
-4. Split the modules that sit above 550 lines: `controller/src/provisioning.ts`
-   (595), `controller/src/reconciler.ts` (600),
-   `tests/integration/api-flow.test.ts` (1228) and
-   `tests/unit/cli-commands.test.ts` (1001). Then delete the `BASELINE` map and
-   lower `MAX_LINES` to 550.
+4. Split the two modules that still sit above 550 lines:
+   `controller/src/provisioning.ts` (595) and `controller/src/reconciler.ts`
+   (600). Both fit under the temporary 650 ceiling, so they have to go before
+   `MAX_LINES` can be lowered to 550.
 
 ## Testing strategy
 

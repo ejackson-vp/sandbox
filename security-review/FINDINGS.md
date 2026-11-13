@@ -285,7 +285,7 @@ into a v2 one; the API and SDK ship together.
 restart durability, cap, and the route refusing a spent nonce before capacity,
 intent claim or settlement), `tests/unit/sdk-payment-nonce.test.ts` (no cache,
 same payload on retry, no retry for a payment rejection),
-`tests/integration/api-flow.test.ts` (full handshake and idempotent replay).
+`tests/integration/api-payments.test.ts` (full handshake and idempotent replay).
 
 **Residual:** an attacker who captures the challenge *and* the signed request and
 submits first wins that race. Without wallet proof on every capability use, a

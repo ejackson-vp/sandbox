@@ -58,7 +58,7 @@ seams that do not exist in the base revision).
 
 ### F-02 — receipt replay and client binding
 
-`tests/integration/api-flow.test.ts` (full stack, real guest process):
+`tests/integration/api-payments.test.ts` (full stack, real guest process):
 
 | Test | Assertion |
 |---|---|
