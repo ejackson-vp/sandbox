@@ -10,10 +10,50 @@ import { join, posix, relative } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 // Ratchet: 550 is the target. Temporarily 650 because two controller modules
-// are above it (provisioning.ts, reconciler.ts). Lower this as they are split;
-// never raise it again.
+// (provisioning.ts, reconciler.ts) are above the 550 target. Lower this as they
+// are split; never raise it again.
 const MAX_LINES = 650;
-const ROOTS = ["shared/src", "sdk/src", "api/src", "controller/src", "cli/src", "scripts", "guest"];
+// `tests` is in the roots on purpose: leaving it out made the two largest
+// tracked source files in the repo invisible to the guard.
+const ROOTS = [
+  "shared/src",
+  "sdk/src",
+  "api/src",
+  "controller/src",
+  "cli/src",
+  "scripts",
+  "guest",
+  "tests",
+];
+
+/**
+ * The over-budget files, and the exact line count each one is at today.
+ *
+ * This is a ratchet that only shrinks. Fixing a file means splitting it and
+ * deleting its entry here; a fresh file over the budget gets no entry at all,
+ * it gets a smaller module. An entry is pinned to one number so a baselined
+ * file cannot quietly grow, and shrinking one by a line still fails so the
+ * number is updated in the same change: the map is never allowed to be stale.
+ *
+ * No issue tracks the remaining splits yet, so there is nothing to cite here.
+ * When one is filed, add its number.
+ */
+const BASELINE = new Map([
+  ["tests/integration/api-flow.test.ts", 1228],
+  ["tests/unit/cli-commands.test.ts", 1001],
+]);
+
+function countLines(path) {
+  // Count real lines: a file ending in "\n" must not gain a phantom line.
+  return readFileSync(path, "utf8").replace(/\n$/, "").split("\n").length;
+}
+
+function printBaseline() {
+  console.error(`baseline (over ${MAX_LINES} lines, pinned to the exact count):`);
+  for (const [path, lines] of [...BASELINE].sort((a, b) => b[1] - a[1])) {
+    console.error(`  ${lines}\t${path}`);
+  }
+}
 
 function* files(dir) {
   for (const entry of readdirSync(dir)) {
@@ -29,20 +69,53 @@ function* files(dir) {
 }
 
 const offenders = [];
+const unused = [];
+const drifted = [];
+const seen = new Set();
+
 for (const root of ROOTS) {
   for (const path of files(join(ROOT, root))) {
-    // Count real lines: a file ending in "\n" must not gain a phantom line.
-    const text = readFileSync(path, "utf8").replace(/\n$/, "");
-    const lines = text.split("\n").length;
-    if (lines > MAX_LINES) offenders.push({ path: relative(ROOT, path), lines });
+    const rel = relative(ROOT, path);
+    const lines = countLines(path);
+    const baseline = BASELINE.get(rel);
+    seen.add(rel);
+    if (baseline === undefined) {
+      if (lines > MAX_LINES) offenders.push({ path: rel, lines });
+    } else if (lines <= MAX_LINES) {
+      // Fixed, or deleted: the entry has to go in the same change.
+      unused.push({ path: rel, lines, baseline });
+    } else if (lines !== baseline) {
+      drifted.push({ path: rel, lines, baseline });
+    }
   }
 }
+for (const [rel, baseline] of BASELINE) {
+  if (!seen.has(rel)) unused.push({ path: rel, lines: 0, baseline });
+}
 
-if (offenders.length > 0) {
-  console.error(`files over ${MAX_LINES} lines:`);
-  for (const { path, lines } of offenders.sort((a, b) => b.lines - a.lines)) {
-    console.error(`  ${lines}\t${path}`);
+if (offenders.length + unused.length + drifted.length > 0) {
+  if (offenders.length > 0) {
+    console.error(`files over ${MAX_LINES} lines that are not in BASELINE:`);
+    for (const { path, lines } of offenders.sort((a, b) => b.lines - a.lines)) {
+      console.error(`  ${lines}\t${path}`);
+    }
   }
+  if (unused.length > 0) {
+    console.error(
+      "BASELINE entries at or under budget (delete them, the ratchet only shrinks):",
+    );
+    for (const { path, lines, baseline } of unused.sort((a, b) => b.baseline - a.baseline)) {
+      const now = lines === 0 ? "gone or no longer counted" : `${lines} lines now`;
+      console.error(`  ${path}: ${now}, baselined at ${baseline}`);
+    }
+  }
+  if (drifted.length > 0) {
+    console.error("BASELINE entries whose line count changed (update the number in the same change):");
+    for (const { path, lines, baseline } of drifted.sort((a, b) => b.lines - a.lines)) {
+      console.error(`  ${path}: ${lines} lines now, baselined at ${baseline}`);
+    }
+  }
+  printBaseline();
   process.exit(1);
 }
 
@@ -289,6 +362,7 @@ if (
 }
 
 console.log(
-  `structure ok: every module is <= ${MAX_LINES} lines; ${modules.length} shared modules layered, ` +
+  `structure ok: every module is <= ${MAX_LINES} lines (${BASELINE.size} baselined); ` +
+    `${modules.length} shared modules layered, ` +
     `${entryOwners.size} symbols over ${sharedEntries.length} entries, no root barrel`,
 );

@@ -34,9 +34,8 @@ import type { BudgetDecision, BudgetLimits } from "./budget-decision.js";
  *
  * **Every method returns a `Promise`.** `node:sqlite` was synchronous, so the
  * first adapter could return values directly; no network client can, so the
- * ports are `Promise`-returning and the synchronous adapter satisfied them with
- * `async` methods. The async shape is the contract, and it is what made the
- * Postgres adapter possible.
+ * ports are `Promise`-returning. The async shape is the contract, and it is
+ * what made the Postgres adapter possible.
  *
  * A consequence callers must respect: a store call is an interleaving point. Two
  * calls that used to be adjacent now have a tick between them, so a read

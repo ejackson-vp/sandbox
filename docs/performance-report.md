@@ -541,8 +541,9 @@ What would prevent safely serving arbitrary untrusted customer workloads today:
 1. **Shared-kernel execution.** Development mode is ordinary pods on the host
    kernel. There is no VM boundary and no hardware attestation. Kata exists as a
    configuration (`deploy/kata/`) but has not been validated on KVM hardware.
-2. **Single points of failure.** One controller (SQLite on one PVC), one relay
-   with in-memory state, one API replica. Relay/controller restarts interrupt
+2. **Single points of failure.** One controller, one Postgres primary (one PVC
+   for the database, not the controller), one relay with in-memory state, one
+   API replica. Relay/controller restarts interrupt
    paid sessions (measured in §6).
 3. **Admission control.** The default create limiter (30 burst, 1/s) throttles
    agent fleets long before capacity is exhausted. Production needs

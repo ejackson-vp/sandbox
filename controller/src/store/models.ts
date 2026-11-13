@@ -134,8 +134,8 @@ export const MAX_PERSISTED_RESULT_BYTES = 1024 * 1024;
 
 /**
  * The value to store in `exec_requests.result_envelope`, or null when there is
- * nothing to store. Applied at the write site in both adapters so the bound is
- * one decision, not two.
+ * nothing to store. Applied at the write site in the Postgres adapter so the
+ * bound is one decision.
  */
 export function persistableResultEnvelope(envelope: string | null | undefined): string | null {
   if (!envelope) return null;

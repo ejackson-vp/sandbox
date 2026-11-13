@@ -1,19 +1,19 @@
 /**
  * Admission of one reservation: the decision the reservation adapter persists.
  *
- * Pure: no SQL, no clock, no I/O. The adapter reads the row stored for this
- * identity, hands it here with `now`, and persists what comes back. Which
+ * Pure: no SQL, no clock, no I/O. The Postgres adapter reads the row stored for
+ * this identity, hands it here with `now`, and persists what comes back. Which
  * request is refused, which hold is extended, and which reservation leaves the
- * accounting snapshot are therefore decided once instead of twice, so the two
- * adapters cannot drift on a decision that moves capacity.
+ * accounting snapshot are therefore decided in one place, off the SQL, so a
+ * query change cannot move capacity.
  *
  * The row shape and its mapping live here too: they are the input to that
- * decision and are identical in both dialects.
+ * decision.
  */
 import type { ResourceVector, ReservationState } from "./types.js";
 import type { AdmitOptions, ReservationRecord } from "./reservation-store.js";
 
-/** A `reservations` row exactly as both adapters select it. */
+/** A `reservations` row exactly as the Postgres adapter selects it. */
 export interface ReservationRow {
   id: string;
   payment_key: string | null;

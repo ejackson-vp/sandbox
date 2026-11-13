@@ -129,10 +129,24 @@ guest/websockets.go             polled WebSocket window
 
 ## Module size budget
 
-`npm run lint:structure` fails any `.ts`/`.go` module over 550 lines. The
-budget is a backstop, not a target: most modules are 100–350 lines. If a module
-grows past the budget, split it by use case or adapter, not by arbitrary line
-count.
+`npm run lint:structure` fails any `.ts`/`.go` module over 650 lines, and it
+counts everything under `tests/` as well. The budget is a backstop, not a
+target: most modules are 100–350 lines, and 550 is the number to aim at. The
+ceiling stays at 650 until the modules above 550 are split, and it never goes
+up. Split by use case or adapter, never by arbitrary line count.
+
+The check is a ratchet that only shrinks. `scripts/check-structure.mjs` carries
+an explicit `BASELINE` map of the files that are over budget today, each pinned
+to its exact line count. It fails in three cases:
+
+- a file over budget that is not in `BASELINE`;
+- a `BASELINE` entry that is at or under budget, so the entry must be deleted;
+- a `BASELINE` entry whose line count moved in either direction, so the number
+  cannot go stale.
+
+Every failure prints the whole baseline, and the message says which of the three
+rules was broken. A new file gets a smaller module, not an entry. An entry is
+deleted when its file is split.
 
 Completed slices:
 
@@ -170,6 +184,11 @@ Next slices:
 3. Extend the `shared/src` layer guard to the other workspaces and enable
    `exactOptionalPropertyTypes` (a dependency-cruiser config would replace the
    hand-rolled check in `scripts/check-structure.mjs`).
+4. Split the modules that sit above 550 lines: `controller/src/provisioning.ts`
+   (595), `controller/src/reconciler.ts` (600),
+   `tests/integration/api-flow.test.ts` (1228) and
+   `tests/unit/cli-commands.test.ts` (1001). Then delete the `BASELINE` map and
+   lower `MAX_LINES` to 550.
 
 ## Testing strategy
 

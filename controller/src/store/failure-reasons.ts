@@ -3,8 +3,8 @@
  *
  * Free-text reasons reach the store from the interpreter, so anything not on
  * this list collapses to `other`: a new string must not grow the label's
- * cardinality by accident. Shared by both adapters so the metric is identical
- * whichever backend is configured.
+ * cardinality by accident. The Postgres adapter is the only writer, so the
+ * label cannot vary with the store.
  */
 const PROVISION_FAILURE_REASONS = new Set([
   "provisioning_timeout",

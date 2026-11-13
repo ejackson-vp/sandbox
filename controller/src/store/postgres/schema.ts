@@ -1,9 +1,9 @@
 /**
  * Postgres schema and migration ladder.
  *
- * The tables, columns, uniques and indexes are those of the schema the Postgres
- * adapter was ported to (v17), plus the additive steps above it. Two dialect
- * differences are deliberate and are called out where they occur:
+ * The tables, columns, uniques and indexes are those the original adapter
+ * shipped at v17, plus the additive steps above it. Two Postgres choices are
+ * deliberate and are called out where they occur:
  *
  *   - epoch milliseconds are `BIGINT`, because 2026 is past `int4`'s ceiling.
  *     The pool decodes int8 as a number (`postgres/pg.ts`), so records map
