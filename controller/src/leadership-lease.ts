@@ -437,10 +437,26 @@ export class LeaseLeadership extends BaseLeadership {
   }
 }
 
+/**
+ * Everything `LeaseLeadership` accepts, minus the three fields that come from
+ * configuration.
+ *
+ * The tests that need two replicas and a partition use this to substitute a fake
+ * `LeaseClient` and a test clock. Production passes nothing and gets the
+ * Kubernetes client and the real clocks, exactly as before.
+ */
+export type LeaseLeadershipOverrides = Partial<
+  Omit<LeaseLeadershipOptions, "namespace" | "name" | "identity">
+>;
+
 /** Lease-based leadership for a cluster; the identity is the pod name. */
-export function makeLeaseLeadership(cfg: ControllerConfig): LeaseLeadership {
+export function makeLeaseLeadership(
+  cfg: ControllerConfig,
+  overrides: LeaseLeadershipOverrides = {},
+): LeaseLeadership {
   return new LeaseLeadership({
-    client: new KubeLeaseClient(),
+    ...overrides,
+    client: overrides.client ?? new KubeLeaseClient(),
     namespace: cfg.controlNamespace,
     name: cfg.leaderLeaseName,
     identity: cfg.leaderIdentity,
