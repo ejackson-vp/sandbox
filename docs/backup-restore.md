@@ -77,11 +77,56 @@ runs the whole loop:
 - decrypts with `openssl enc -d -aes-256-cbc -pbkdf2` when the file starts with
   `Salted__` and `BACKUP_ENCRYPTION_KEY` is set, and streams it into
   `pg_restore --no-owner --no-privileges --exit-on-error`;
-- prints the schema version and the row counts it found in the copy;
+- prints the schema version;
+- fingerprints every money and session table in the copy and in the database the
+  dump came from, and compares them (below);
 - runs the store contract (`tests/restore/`) against that copy;
 - drops the database on success, on failure and on `SIGINT`/`SIGTERM`, unless
   `--keep` is passed;
 - exits non-zero on any failure.
+
+The comparison has to run before the contract, because the contract truncates
+every table. By the time it passes there are no rows left to check.
+
+```sh
+[restore-dump] data: source 127.0.0.1:5453/sandbox (read-only, full scan)
+[restore-dump] data payments           rows=12      fp=707fdcd25c47390d94f707cdd6bfd45b match (1 ms copy, 0 ms source)
+[restore-dump] data exec_requests      rows=36      fp=5ae31a59113368ff52dcdf94e00e34d0 match (1 ms copy, 0 ms source)
+[restore-dump] data total              rows=102     fp=a5e551dcb4da4de53e69dc5bdbb12786 match (8 tables, full scan of both databases, 36 ms)
+[restore-dump] PASS: sbx_restore_… survived the dump, the restore, the row comparison and the store contract (schema v18, 12 sessions, total fp a5e551dcb4da4de53e69dc5bdbb12786)
+```
+
+Per table it prints `count(*)` and an md5 of the rows, in primary-key order,
+hashed as `md5(ROW(<columns sorted by name>)::text)`. Missing, duplicated and
+altered rows all change at least one of the two numbers. `exec_requests` is
+ordered by `(session_id, id)` and text keys sort with `COLLATE "C"`, so a copy on
+a cluster with a different locale still hashes the same way. Both connections
+run `default_transaction_read_only = on`; the check only reads.
+
+The cost is one sequential scan of each table on each database, plus a sort by
+primary key when the planner does not use the key's index, and about 32 bytes of
+aggregate state per row per side while the hash is built. Nothing is sampled.
+The run prints rows and milliseconds per table, and a note for a table over a
+million rows, so measure it once against the real database before a drill.
+
+A mismatch exits 1 and names the table with both numbers:
+
+```sh
+[restore-dump] FAIL: the restored copy does not match the source (1 of 8 tables differ)
+[restore-dump]   payment_ledger: source rows=11 fp=02be7602dc5692b21234b0533949c7a0, copy rows=12 fp=1bb4df5fc2772b3d4b7b1e6894b3ac91
+[restore-dump]   total: source rows=101 fp=3c28ad991e62ff9a88ce7363aebefd25, copy rows=102 fp=a5e551dcb4da4de53e69dc5bdbb12786
+```
+
+The source defaults to the database named in `DATABASE_URL`, read only.
+`--compare-url` points the comparison at another database (the source of the
+dump, if the admin connection is somewhere else). If that database has no
+`payments`, `payment_ledger` or `sessions`, the run says so and fingerprints the
+copy only: a laptop with an artifact and no source can still prove the schema,
+not the rows. `--no-compare` does the same deliberately.
+
+A dump older than the source will differ, and the check reports it. That is
+drift, not corruption: the numbers name the tables that moved. Restoring a
+week-old artifact against a live database is the one case to expect a mismatch.
 
 `DATABASE_URL` is the admin connection. The script creates and drops its own
 database and never writes to the one named in that URL. It needs `pg_restore`
@@ -100,10 +145,13 @@ export DATABASE_URL='postgres://postgres:<pw>@127.0.0.1:5451/sandbox'
 make test-restore-dump DUMP=postgres-<stamp>.dump.enc
 ```
 
-A pass ends with `survived the dump, the restore and the store contract` and a
-green contract suite. A truncated file, a wrong key or a dump this build
-cannot use all exit 1 with the failing step named. `--keep` leaves the copy in
-place for the smoke test below and prints the `DROP DATABASE` command.
+A pass ends with `survived the dump, the restore, the row comparison and the
+store contract` and a green contract suite. The `total fp` on that line is the
+fingerprint of the copy, so two runs of the same artifact print the same number.
+A truncated file, a wrong key, a corrupt archive or a dump this build cannot use
+all exit 1 with the failing step named, and so does a row that did not come back.
+`--keep` leaves the copy in place for the smoke test below and prints the
+`DROP DATABASE` command.
 
 Note what `npm run test:store-contract` does **not** do: with `DATABASE_URL`
 pointed at a restored database it creates a fresh `sbx_test_…` database from
@@ -176,19 +224,28 @@ objects around the database (pods, PVCs, the Lease).
 
 `scripts/restore-dump.mjs` closes the artifact half: it takes a real
 `pg_dump -Fc` file, decrypts it the way the CronJob encrypted it, restores it,
-and runs the contract against the restored copy. `tests/unit/restore-dump.test.ts`
-pins its decisions without a server (argument parsing, the scratch name, the
-encryption sniff, and the schema-version branch). It is not in CI: no runner
-holds the `postgres-backups` PVC or the backup key, and the nightly faults job
-runs against a cluster that backs nothing up. The quarterly drill is still a
-human with the key, and this is the command they run.
+compares every money and session table against the database the dump came from,
+and runs the contract against the restored copy. A table that lost rows, gained a
+duplicate or changed a value fails the run with the table and both fingerprints
+named, before the contract has a chance to truncate anything.
+`tests/unit/restore-dump.test.ts` and `tests/unit/restore-verify.test.ts` pin its
+decisions without a server (argument parsing, the scratch name, the encryption
+sniff, the schema-version branch, and what the fingerprint hashes and orders by).
+It is not in CI: no runner holds the `postgres-backups` PVC or the backup key,
+and the nightly faults job runs against a cluster that backs nothing up. The
+quarterly drill is still a human with the key, and this is the command they run.
 
 What is still unproven:
 
-- **The data, as opposed to the schema.** The contract truncates every table
-  before each test, so the row counts the script prints are for the operator to
-  read, not assertions. An accidentally empty `sessions` table would pass the
-  contract. Check the counts and the smoke test.
+- **The rows, when there is no source to compare with.** The comparison needs
+  the database the dump came from. `--no-compare`, or a `DATABASE_URL` database
+  with no sandbox tables, drops the run back to schema and counts, and says so
+  in the output. Comparing a week-old artifact against a live source also shows
+  legitimate drift, which reads as a mismatch: check the dump's age before
+  believing it.
+- **Columns that only one side has.** A dump taken before a ladder step is
+  compared on the columns both sides share, and the skipped columns are named.
+  An altered value in a column the dump predates is not seen.
 - **Anything off-node.** The homelab dump lands on the same local-path PVC as
   the primary. It catches a bad migration or a deleted row; it is not disaster
   recovery, and no drill here changes that.
