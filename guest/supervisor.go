@@ -119,6 +119,44 @@ func (s *supervisor) serve(ctx context.Context) error {
 	}
 }
 
+// frameAction is what the read loop does with one inbound frame.
+type frameAction int
+
+const (
+	// actionIgnore is a frame that parsed but carries nothing to act on.
+	// Dropping it is the whole response, and it is the right one for a request
+	// with no id or no envelope: neither can be answered.
+	actionIgnore frameAction = iota
+	actionRequest
+	actionCancel
+	actionShutdown
+	// actionUnknown is a frame type this build does not implement.
+	actionUnknown
+)
+
+// frameActionFor is the gate between an unauthenticated frame and execution.
+// It is the only decision the read loop makes before handleRequest, so it is a
+// function rather than a case in the loop: a fuzz target can then assert that a
+// hostile or truncated frame is ignored instead of dispatched.
+func frameActionFor(frame *relay.Frame) frameAction {
+	switch frame.Type {
+	case "request":
+		if frame.ID == "" || frame.Envelope == "" {
+			return actionIgnore
+		}
+		return actionRequest
+	case "cancel":
+		if frame.ID == "" {
+			return actionIgnore
+		}
+		return actionCancel
+	case "shutdown":
+		return actionShutdown
+	default:
+		return actionUnknown
+	}
+}
+
 // serveLink reads frames until the link fails, the lease ends or the controller
 // asks the guest to stop. In-flight operations are bound to this link's context,
 // so a read error cancels them before the caller reconnects.
@@ -143,23 +181,20 @@ func (s *supervisor) serveLink(ctx context.Context) error {
 			}
 			return fmt.Errorf("relay read: %w", err)
 		}
-		switch frame.Type {
-		case "request":
-			if frame.ID == "" || frame.Envelope == "" {
-				continue
-			}
+		switch frameActionFor(frame) {
+		case actionRequest:
 			s.handlers.Add(1)
 			go func(conn *relay.Client, frame *relay.Frame) {
 				defer s.handlers.Done()
 				s.handleRequest(linkCtx, conn, frame)
 			}(s.conn, frame)
-		case "cancel":
+		case actionCancel:
 			s.cancel(frame.ID)
-		case "shutdown":
+		case actionShutdown:
 			logEvent("guest_shutdown_requested", map[string]any{"sessionId": s.sessionID, "reason": frame.Reason})
 			s.shutdownAll()
 			return nil
-		default:
+		case actionUnknown:
 			logEvent("guest_unknown_frame", map[string]any{"type": frame.Type})
 		}
 	}

@@ -257,6 +257,90 @@ export async function readNextDue(
 }
 
 /**
+ * The name `testDatabaseName` writes, read from the end:
+ *
+ *   sbx_test_<namespace>_<run-id>_<pid>_<random>
+ *
+ * The namespace may contain underscores, so the last three fields are the ones
+ * to anchor on. A name that does not match is not one of ours, and guessing at
+ * it is how a prune drops a database somebody else is using.
+ */
+const TEST_DATABASE_PATTERN = /^sbx_test_.+_(\d+)_(\d+)_[0-9a-f]+$/;
+
+/** The worker pid embedded in a test database name, or null if it is not one. */
+export function testDatabasePid(name: string): number | null {
+  const match = TEST_DATABASE_PATTERN.exec(name);
+  if (!match) return null;
+  const pid = Number(match[2]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+/**
+ * Whether a pid still exists.
+ *
+ * `kill(pid, 0)` sends no signal and only checks that the process is there.
+ * ESRCH is the one answer that means "gone": EPERM means it exists under
+ * another user and is alive.
+ */
+function pidIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/**
+ * Drop the test databases of runs that died without their teardown.
+ *
+ * Teardown only runs if the process reaches it. A SIGKILL, a cancelled CI job
+ * or an OOM-killed mutation worker skips it, and nothing collected the
+ * leftovers: a shared Postgres accumulated thousands of `sbx_test_%` databases
+ * until it could no longer resize a shared memory segment.
+ *
+ * Pruning at setup means the next run cleans up after the killed one. Liveness
+ * is the pid in the name, so a run that is still working keeps its databases.
+ * Pid reuse makes this lossy in the safe direction on purpose: a recycled pid
+ * reads as alive, the database survives, and no live run is ever dropped. A
+ * name that cannot be parsed is left alone for the same reason.
+ *
+ * The normal path pays one catalog query and one `kill(pid, 0)` per row; the
+ * only per-database work is the drops themselves.
+ */
+export async function pruneOrphanTestDatabases(
+  log: (message: string) => void = (message) => console.log(message),
+): Promise<string[]> {
+  const client = await adminClient();
+  const found = await client.query<{ datname: string }>(
+    "SELECT datname FROM pg_database WHERE datname LIKE 'sbx\\_test\\_%'",
+  );
+  const orphans = found.rows
+    .map((row) => row.datname)
+    .filter((name) => {
+      const pid = testDatabasePid(name);
+      return pid !== null && !pidIsRunning(pid);
+    });
+
+  const dropped: string[] = [];
+  for (const name of orphans) {
+    const identifier = `"${name.replaceAll('"', '""')}"`;
+    try {
+      await client.query(`DROP DATABASE IF EXISTS ${identifier} WITH (FORCE)`);
+      dropped.push(name);
+    } catch (err) {
+      // A failed drop must not fail the run: the database is still an orphan
+      // and the next run retries it.
+      log(`test-store: could not drop orphaned database ${name}: ${(err as Error).message}`);
+    }
+  }
+  if (dropped.length > 0) {
+    log(`test-store: pruned ${dropped.length} orphaned test database(s) from killed runs`);
+  }
+  return dropped;
+}
+
+/**
  * Drop every database this run created.
  *
  * `WITH (FORCE)` disconnects a worker that leaked a pool, which is exactly the

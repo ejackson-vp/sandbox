@@ -226,6 +226,24 @@ func (c *Client) SendStatus(ctx context.Context, activeRequestID string, epoch i
 	})
 }
 
+// DecodeFrame parses one relay control frame.
+//
+// This is the guest's only inbound frame parser, and it runs before anything in
+// the frame is authenticated. It is deliberately separable from the socket so a
+// fuzz target can drive the real parser instead of a copy: a truncated or
+// hostile frame must come back as an error and a nil frame, never as a partly
+// populated frame the caller might act on.
+func DecodeFrame(data []byte) (*Frame, error) {
+	var frame Frame
+	if err := json.Unmarshal(data, &frame); err != nil {
+		return nil, fmt.Errorf("invalid relay frame: %w", err)
+	}
+	if frame.Type == "" {
+		return nil, errors.New("relay frame missing type")
+	}
+	return &frame, nil
+}
+
 // Read returns the next control frame.
 func (c *Client) Read(ctx context.Context) (*Frame, error) {
 	for {
@@ -236,14 +254,7 @@ func (c *Client) Read(ctx context.Context) (*Frame, error) {
 		if typ != websocket.MessageText {
 			continue
 		}
-		var frame Frame
-		if err := json.Unmarshal(data, &frame); err != nil {
-			return nil, fmt.Errorf("invalid relay frame: %w", err)
-		}
-		if frame.Type == "" {
-			return nil, fmt.Errorf("relay frame missing type")
-		}
-		return &frame, nil
+		return DecodeFrame(data)
 	}
 }
 

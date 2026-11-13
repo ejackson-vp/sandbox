@@ -96,24 +96,48 @@ func FuzzSupervisorDecrypt(f *testing.F) {
 	})
 }
 
-// FuzzFrameDecode feeds arbitrary relay control frames through the guest's
-// JSON decoder. Frame parsing happens before any authentication, so a
-// truncated or hostile frame must yield a zero-valued frame or an error, never
-// a panic.
+// FuzzFrameDecode drives the guest's inbound frame parser and the pre-auth
+// dispatch decision. Frame parsing happens before any authentication, so a
+// truncated or hostile frame must decode to an error, or to a frame the read
+// loop ignores, and must never panic or be dispatched.
+//
+// It calls the two functions the supervisor's read loop actually uses,
+// relay.DecodeFrame and frameActionFor, rather than a re-implementation: a
+// target that only did json.Unmarshal measured the standard library and reached
+// no guest statement at all.
 func FuzzFrameDecode(f *testing.F) {
 	f.Add([]byte(`{"type":"request","id":"req-1","envelope":"AAAA","deadlineMs":1}`))
+	f.Add([]byte(`{"type":"request","id":"","envelope":""}`))
 	f.Add([]byte(`{"type":"status","activeRequestId":"","epoch":2}`))
 	f.Add([]byte(`{"type":"claim","claim":{"sessionId":"sbx_1"}}`))
+	f.Add([]byte(`{"type":"cancel","id":""}`))
 	f.Add([]byte(`{"type":"shutdown","reason":"lease ended"}`))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(``))
 	f.Add([]byte(`{"type":`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		var frame relay.Frame
-		err := json.Unmarshal(data, &frame)
+		frame, err := relay.DecodeFrame(data)
 		if err != nil {
+			// A rejected frame must not come back half-populated, or a caller
+			// that checked the error loosely would act on it anyway.
+			if frame != nil {
+				t.Fatal("decode returned a frame together with an error")
+			}
 			return
+		}
+		switch frameActionFor(frame) {
+		case actionRequest:
+			// The read loop hands this frame to handleRequest, which decrypts
+			// before it executes anything. An empty id or envelope can never be
+			// answered or decrypted, so it must not reach that point.
+			if frame.ID == "" || frame.Envelope == "" {
+				t.Fatalf("dispatched a request with id=%q and %d-byte envelope", frame.ID, len(frame.Envelope))
+			}
+		case actionCancel:
+			if frame.ID == "" {
+				t.Fatal("dispatched a cancel with no request id")
+			}
 		}
 		if frame.Claim != nil && len(frame.Claim.SessionID) > 1<<20 {
 			t.Fatalf("claim session id is unbounded: %d bytes", len(frame.Claim.SessionID))

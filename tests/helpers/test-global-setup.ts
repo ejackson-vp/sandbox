@@ -8,6 +8,7 @@
  */
 import pg from "pg";
 import teardown from "./test-global-teardown.js";
+import { pruneOrphanTestDatabases } from "./test-store.js";
 
 /** Vitest has one global setup hook; returning a function is its teardown. */
 export default async function setup(): Promise<() => Promise<void>> {
@@ -42,5 +43,14 @@ export default async function setup(): Promise<() => Promise<void>> {
   }
 
   process.env.SBX_TEST_RUN_ID = String(process.pid);
+  // This run's databases do not exist yet, and every live run's are protected
+  // by the pid in their name, so this is the moment that is safe to prune: it
+  // is the one place that cleans up after a run that was killed before its
+  // teardown. Failing to prune must not stop the suite.
+  try {
+    await pruneOrphanTestDatabases();
+  } catch (err) {
+    console.warn(`test-store: could not prune orphaned test databases: ${(err as Error).message}`);
+  }
   return teardown;
 }
