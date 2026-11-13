@@ -150,14 +150,19 @@ describe("solo leadership", () => {
     const seen: boolean[] = [];
     solo.onChange((isLeader) => seen.push(isLeader));
     expect(solo.isLeader()).toBe(false);
+    expect(solo.generation()).toBe(0);
 
     await solo.start();
     expect(solo.isLeader()).toBe(true);
     expect(seen).toEqual([true]);
+    // One bump per transition: this is the value bindLeadership stamps an
+    // acquire with, to tell a write it ordered from one it inherited.
+    expect(solo.generation()).toBe(1);
 
     await solo.stop();
     expect(solo.isLeader()).toBe(false);
     expect(seen).toEqual([true, false]);
+    expect(solo.generation()).toBe(2);
   });
 
   it("notifies only on a transition", async () => {
@@ -168,6 +173,7 @@ describe("solo leadership", () => {
     await solo.stop();
     await solo.stop();
     expect(seen).toEqual([true, false]);
+    expect(solo.generation()).toBe(2);
   });
 });
 
@@ -448,6 +454,11 @@ describe("leadership hooks", () => {
     release();
     await Promise.resolve();
     await Promise.resolve();
-    expect(order).toEqual(["stop", "release"]);
+    // The second stop/release pair is the repair, not a second stand-down: the
+    // acquire settled after the role was gone, and this hook is the one that
+    // calls `setWritesBlocked(false)` in production. The library closes the
+    // guard again rather than leaving the caller to notice. The loop still never
+    // starts.
+    expect(order).toEqual(["stop", "release", "stop", "release"]);
   });
 });
