@@ -5,9 +5,10 @@ name: mutation
 # lane answers "did the tests that ran actually assert anything?" once a day,
 # and publishes the HTML report so a survivor can be triaged like a bug.
 #
-# `thresholds.break` is null on purpose (see stryker.config.mjs), so a run
-# cannot fail this workflow on a low score. `npm run mutation` still exits
-# non-zero on a crash, a compile error or a failing test, which is the signal
+# `thresholds.break` is a real gate (see stryker.config.mjs), set at `low`
+# rather than just under the current score, so this lane fails when the suite
+# stops asserting rather than when somebody changes one branch. A non-zero exit
+# also covers a crash, a compile error or a failing test, which is the signal
 # that the setup itself broke.
 on:
   schedule:
