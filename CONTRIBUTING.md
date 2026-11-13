@@ -34,14 +34,23 @@ tests in ~4 s instead of ~24 s, verified three times under
 
 Coverage covers the shipped TypeScript (`shared`, `sdk`, `api`, `controller`,
 `cli`), not tests or the Go guest. It measures the **unit and property** suites
-only: integration runs once per push in its own CI job, and instrumenting a
-second concurrent copy of that timing-sensitive suite is what made #128 flake
-(#145). The lines only integration reaches, mostly the controller lifecycle and
-reconciler paths, are therefore not in the badge. CI publishes the number to the
-`badges` branch, which is what the README badge reads. `vitest.config.ts` also
-sets a floor of 55% lines / 45% branches / 45% functions, a few points under the
-current totals, so a real drop fails `npm run test:coverage` and the `unit` job
-instead of only shrinking a badge nobody watches.
+only. Integration runs once per push in its own CI job, and instrumenting a
+concurrent second copy of that timing-sensitive suite is what made #128 flake
+(#145). Only the lines those suites reach are in the badge, which is why `sdk`
+and `api` sit in the forties while `shared` and `cli` are near ninety. That gap
+is client and wiring code whose only tests are end-to-end. CI publishes the
+number to the `badges` branch, which is what the README badge reads.
+
+`vitest.config.ts` sets a floor per module (plus a repo-wide one), a few points
+under each current total, so a regression fails `npm run test:coverage` and the
+`unit` job and names the module that moved.
+
+A test that imports `@x402s/shared/<entry>` measures `shared/src`, not
+`shared/dist`: the config aliases that specifier to the source entry. Without
+it, the durable-call protocol read 0% because its property test drove the built
+copy. `@x402s/sdk` is deliberately not aliased, because `cli-args.test.ts`
+imports the built package on purpose and needs the class identity the shipped
+build has.
 
 `npm run typecheck` also compiles `tests/` and `scripts/` through
 `tsconfig.tests.json`. Vitest strips types with esbuild and never checks them, so

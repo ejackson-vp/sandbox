@@ -19,6 +19,26 @@ const tsSpecifierPlugin = {
 
 export default defineConfig({
   plugins: [tsSpecifierPlugin],
+  resolve: {
+    // `@x402s/shared/<entry>` is a package export, so it resolves to
+    // `shared/dist`, and the coverage report scored the `shared/src` file those
+    // property tests actually exercise as untested. The durable-call protocol
+    // (shared/src/durable, 100 lines) is covered by
+    // tests/property/durable-external.test.ts and read 0%.
+    //
+    // Pointing the specifier at the source entry instead makes the report
+    // measure the file the test drives. `sdk` is deliberately not aliased:
+    // cli-args.test.ts imports the built package on purpose, because the CLI
+    // resolves @x402s/sdk to sdk/dist and an instanceof check needs the same
+    // class identity the shipped build has.
+    alias: [
+      { find: /^@x402s\/shared$/, replacement: resolve(import.meta.dirname, "shared/src/index.ts") },
+      {
+        find: /^@x402s\/shared\/(.+)$/,
+        replacement: resolve(import.meta.dirname, "shared/src/entries/$1.ts"),
+      },
+    ],
+  },
   test: {
     include: ["tests/**/*.test.ts"],
     testTimeout: 60_000,
@@ -46,13 +66,23 @@ export default defineConfig({
         "cli/src/**/*.ts",
       ],
       exclude: ["**/*.d.ts", "**/*.test.ts"],
-      // A floor under the badge, so a drop fails the build instead of only
-      // shrinking a number nobody watches. Set ~4 points below the current
-      // totals (59.4 / 52.6 / 53.2) to leave room for normal movement.
+      // Floors, not targets. A drop fails `npm run test:coverage` instead of
+      // only shrinking a number nobody watches, and a per-module floor names
+      // the module that regressed rather than hiding it in a repo average.
+      //
+      // Each is ~4 points under its current total. They climb with the
+      // coverage plan (see CONTRIBUTING.md): `sdk` and `api` are low because
+      // their client and wiring code is only reached by the integration suite,
+      // which is not in this run yet.
       thresholds: {
-        lines: 55,
-        branches: 45,
-        functions: 45,
+        lines: 65,
+        branches: 58,
+        functions: 62,
+        "shared/src/**": { lines: 84, branches: 78, functions: 90 },
+        "cli/src/**": { lines: 90, branches: 85, functions: 78 },
+        "controller/src/**": { lines: 67, branches: 57, functions: 65 },
+        "api/src/**": { lines: 42, branches: 42, functions: 28 },
+        "sdk/src/**": { lines: 35, branches: 26, functions: 37 },
       },
     },
   },
