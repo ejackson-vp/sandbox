@@ -8,6 +8,7 @@ import type {
   EntitlementRequest,
   SessionSpec,
   SessionState,
+  SessionTier,
   ControllerSessionView,
 } from "@x402s/shared/protocol";
 import type { ReadinessReport } from "@x402s/shared/protocol";
@@ -74,6 +75,14 @@ export type BudgetDecision =
       remaining: BudgetRemaining;
       windowResetsAt: number;
     };
+
+/**
+ * The allowlist answer (ADR 0013). Mirrors the controller's `AllowlistDecision`;
+ * the API does not import the controller workspace.
+ */
+export type AllowlistDecision =
+  | { allowed: true; label: string; maxTier: SessionTier; maxConcurrent: number }
+  | { allowed: false; reason: string };
 
 export type CapacityDecision =
   | { admitted: true; nodeId: string; reservation: { nodeId: string } }
@@ -229,6 +238,22 @@ export class ControllerClient {
     return this.call<BudgetDecision>(
       "/internal/budgets/reserve",
       { method: "POST", body: JSON.stringify({ ...(payer ? { payer } : {}), amount: amountAtomic }) },
+      5_000,
+    );
+  }
+
+  /* ---------------- payer allowlist (ADR 0013) ---------------- */
+
+  /**
+   * Ask whether a proven address gets a free session at this tier. The
+   * address must be the one the commitment signature recovered, never a
+   * request field. A transport failure throws, and the caller refuses:
+   * an unproven allowance must not buy an entitlement.
+   */
+  async authorizeAllowlistedPayer(address: string, tier: SessionTier): Promise<AllowlistDecision> {
+    return this.call<AllowlistDecision>(
+      "/internal/payer-allowlist/authorize",
+      { method: "POST", body: JSON.stringify({ address, tier }) },
       5_000,
     );
   }

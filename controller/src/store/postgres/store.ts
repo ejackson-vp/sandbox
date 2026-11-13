@@ -17,8 +17,11 @@
  * `open()` is a factory rather than a constructor because opening runs DDL.
  */
 import { metrics } from "@x402s/shared/runtime";
+import type { SessionTier } from "@x402s/shared/protocol";
 import {
   NON_TERMINAL_STATE_SQL,
+  type AllowlistDecision,
+  type AllowlistEntryInput,
   type ChallengeBurnResult,
   type ClaimedRefund,
   type LedgerStatus,
@@ -42,6 +45,7 @@ import { PgBudgetRepository } from "./budgets.js";
 import { PgPaymentRepository } from "./payments.js";
 import { PgLedgerRepository } from "./ledger.js";
 import { PgLedgerAuditRepository } from "./ledger-audit.js";
+import { PgAllowlistRepository } from "./allowlist.js";
 import { PgChallengeNonceRepository } from "./challenges.js";
 import { PgOperationRepository } from "./operations.js";
 import { PgReservationRepository } from "./reservations.js";
@@ -69,6 +73,7 @@ export class PostgresStore implements StoreBackend {
   private readonly ledgerRepo: PgLedgerRepository;
   private readonly ledgerAudit: PgLedgerAuditRepository;
   private readonly challengeRepo: PgChallengeNonceRepository;
+  private readonly allowlistRepo: PgAllowlistRepository;
   private readonly operations: PgOperationRepository;
   private readonly budgetRepo: PgBudgetRepository;
 
@@ -79,6 +84,7 @@ export class PostgresStore implements StoreBackend {
     this.ledgerRepo = new PgLedgerRepository(conn);
     this.ledgerAudit = new PgLedgerAuditRepository(conn);
     this.challengeRepo = new PgChallengeNonceRepository(conn);
+    this.allowlistRepo = new PgAllowlistRepository(conn);
     this.operations = new PgOperationRepository(conn);
     this.reservations = new PgReservationRepository(conn);
   }
@@ -183,6 +189,24 @@ export class PostgresStore implements StoreBackend {
 
   burnChallengeNonce(nonce: string, paymentKey: string): Promise<ChallengeBurnResult> {
     return this.challengeRepo.burn(nonce, paymentKey, Date.now());
+  }
+
+  /* ---------------- payer allowlist (ADR 0013) ---------------- */
+
+  authorizeAllowlistedPayer(address: string, tier: SessionTier): Promise<AllowlistDecision> {
+    return this.allowlistRepo.authorize(address, tier);
+  }
+
+  listAllowlist() {
+    return this.allowlistRepo.list();
+  }
+
+  upsertAllowlist(input: AllowlistEntryInput, now: number) {
+    return this.allowlistRepo.upsert(input, now);
+  }
+
+  disableAllowlist(address: string, now: number): Promise<boolean> {
+    return this.allowlistRepo.disable(address, now);
   }
 
   pruneChallengeNonces(): Promise<number> {

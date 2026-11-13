@@ -23,6 +23,7 @@ import {
 } from "@x402s/shared/runtime";
 import { constantTimeEqual } from "./secrets.js";
 import { createCapacityRouter } from "./capacity/routes.js";
+import { registerAllowlistRoutes } from "./control-api/allowlist.js";
 import { registerBudgetRoutes } from "./control-api/budgets.js";
 import { registerChallengeNonceRoutes } from "./control-api/challenges.js";
 import { registerPaymentRoutes } from "./control-api/payments.js";
@@ -184,6 +185,8 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   registerChallengeNonceRoutes(app, deps);
 
   registerBudgetRoutes(app, deps);
+
+  registerAllowlistRoutes(app, deps);
 
   registerSessionRoutes(app, deps);
 

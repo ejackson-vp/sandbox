@@ -12,6 +12,7 @@
  * instead of creating a second one.
  */
 import { randomBytes } from "node:crypto";
+import type { PaymentMode } from "@x402s/shared/protocol";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import {
   asClaimToken,
@@ -157,7 +158,7 @@ export class PgPaymentRepository {
       payTo: row.pay_to as string,
       payer: (row.payer as string | undefined) ?? undefined,
       transaction: (row.tx as string | undefined) ?? undefined,
-      mode: row.mode as "mock" | "testnet",
+      mode: row.mode as PaymentMode,
     };
   }
 
@@ -243,13 +244,21 @@ export class PgPaymentRepository {
 
         if (duplicate) {
           // The charge is recorded and refunded; the second session is refused.
+          // A $0 allowlist attempt has nothing to send back, so it is recorded
+          // as refunded for the same reason the mock path is: there is no
+          // provider transfer to wait for.
           const reason = "duplicate_client_nonce";
-          const refunded = payment.mode === "mock";
+          const refunded = payment.mode === "mock" || payment.source === "allowlist";
+          const refundReference = refunded
+            ? payment.source === "allowlist"
+              ? `allowlist:not-charged:${payment.paymentKey.slice(0, 12)}`
+              : `mock:refund:${payment.paymentKey.slice(0, 12)}:${now.toString(36)}`
+            : null;
           await tx.query(
             `INSERT INTO payment_ledger
                (payment_key, session_id, payer, amount, asset, network, mode, status, reason,
-                refund_tx, settlement_nonce, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)
+                refund_tx, settlement_nonce, source, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
              ON CONFLICT DO NOTHING`,
             [
               payment.paymentKey,
@@ -261,12 +270,12 @@ export class PgPaymentRepository {
               payment.mode,
               refunded ? "REFUNDED" : "REFUND_PENDING",
               reason,
-              refunded ? `mock:refund:${payment.paymentKey.slice(0, 12)}:${now.toString(36)}` : null,
+              refunded ? refundReference : null,
               payment.settlementNonce ?? null,
+              payment.source ?? "x402",
               now,
             ],
-          );
-          // Owned by this token: a concurrent reclaim cannot have its claim
+          );          // Owned by this token: a concurrent reclaim cannot have its claim
           // failed out from under it.
           await tx.query(
             `UPDATE payment_intents SET status = 'failed', reason = $1, claim_token = NULL,
@@ -280,8 +289,8 @@ export class PgPaymentRepository {
         await tx.query(
           `INSERT INTO payment_ledger
              (payment_key, session_id, payer, amount, asset, network, mode, status, reason,
-              refund_tx, settlement_nonce, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'SETTLED',NULL,NULL,$8,$9,$9)`,
+              refund_tx, settlement_nonce, source, created_at, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'SETTLED',$8,NULL,$9,$10,$11,$11)`,
           [
             payment.paymentKey,
             session.id,
@@ -290,7 +299,11 @@ export class PgPaymentRepository {
             payment.asset,
             payment.network,
             payment.mode,
+            // A $0 allowlist row records its operator label here, so the books
+            // explain a session that moved no money.
+            payment.source === "allowlist" ? (payment.label ?? "allowlist") : null,
             payment.settlementNonce ?? null,
+            payment.source ?? "x402",
             now,
           ],
         );
@@ -308,7 +321,15 @@ export class PgPaymentRepository {
         if ((settled.rowCount ?? 0) === 0) throw new PaymentClaimLostError(paymentKey);
 
         // Spend commits with the ledger row, to the verified payer (#48).
-        await this.budgets.recordSpend(tx, payment.payer ?? "", payment.amount, now, this.budgetWindowMs);
+        // Allowlisted payers use a namespaced key, so a free session can never
+        // consume or exhaust a paying payer's window (ADR 0013).
+        await this.budgets.recordSpend(
+          tx,
+          payment.budgetKey ?? payment.payer ?? "",
+          payment.amount,
+          now,
+          this.budgetWindowMs,
+        );
         return { sessionId: session.id, created: true };
       });
 

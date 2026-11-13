@@ -14,6 +14,7 @@
 import { NON_TERMINAL_STATE_SQL } from "../models.js";
 import {
   GLOBAL_BUDGET_KEY,
+  budgetSubject,
   decideBudget,
   payerBudgetKey,
   type BudgetDecision,
@@ -121,17 +122,26 @@ export class PgBudgetRepository {
     );
   }
 
-  private async liveSessions(tx: Tx, payer: string | null): Promise<number> {
-    const res = payer
-      ? await tx.query<{ n: number }>(
-          `SELECT COUNT(*) AS n FROM sessions s
-             JOIN payment_ledger l ON l.session_id = s.id
-            WHERE lower(l.payer) = $1 AND s.state IN (${NON_TERMINAL_STATE_SQL})`,
-          [payer.toLowerCase()],
-        )
-      : await tx.query<{ n: number }>(
-          `SELECT COUNT(*) AS n FROM sessions WHERE state IN (${NON_TERMINAL_STATE_SQL})`,
-        );
+  /**
+   * Live sessions for one budget subject. The subject decides the namespace:
+   * `allow:` counts free sessions for that address, a bare address counts paid
+   * ones, so the two rows cannot exhaust each other (ADR 0013).
+   */
+  private async liveSessions(tx: Tx, subject: string | null): Promise<number> {
+    if (!subject) {
+      const all = await tx.query<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM sessions WHERE state IN (${NON_TERMINAL_STATE_SQL})`,
+      );
+      return Number(all.rows[0]?.n ?? 0);
+    }
+    const { payer, source } = budgetSubject(subject);
+    const res = await tx.query<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM sessions s
+         JOIN payment_ledger l ON l.session_id = s.id
+        WHERE lower(l.payer) = $1 AND l.source = $2
+          AND s.state IN (${NON_TERMINAL_STATE_SQL})`,
+      [payer, source],
+    );
     return Number(res.rows[0]?.n ?? 0);
   }
 

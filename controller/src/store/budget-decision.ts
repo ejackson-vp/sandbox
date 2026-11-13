@@ -24,6 +24,22 @@ export function payerBudgetKey(payer: string): string {
   return `payer:${payer.toLowerCase()}`;
 }
 
+/**
+ * The ledger identity a budget subject counts live sessions for.
+ *
+ * A payer subject is a bare address and counts paid sessions. An `allow:`
+ * subject counts free sessions for the same address, so the two namespaces
+ * cannot consume each other's concurrency (ADR 0013). Keeping the mapping here
+ * means the store's count query and the reservation key cannot disagree.
+ */
+export function budgetSubject(subject: string): { payer: string; source: "x402" | "allowlist" } {
+  const normalized = subject.toLowerCase();
+  const prefix = "allow:";
+  return normalized.startsWith(prefix)
+    ? { payer: normalized.slice(prefix.length), source: "allowlist" }
+    : { payer: normalized, source: "x402" };
+}
+
 export interface BudgetLimits {
   windowMs: number;
   payerCreates: number;

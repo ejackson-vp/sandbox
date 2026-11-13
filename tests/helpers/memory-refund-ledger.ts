@@ -47,6 +47,7 @@ export function pendingRow(key = KEY, now = 1_000_000): PaymentLedgerRecord {
     asset: "mock:usdc",
     network: "mock:local",
     mode: "testnet",
+    source: "x402",
     status: "REFUND_PENDING",
     reason: "no_service_delivered",
     refundTransaction: null,

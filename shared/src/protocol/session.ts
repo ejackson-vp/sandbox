@@ -10,6 +10,18 @@ import type {
   SessionTier,
 } from "./lifecycle.js";
 
+/**
+ * How a session was paid for, stamped on the payment, the ledger and the
+ * response.
+ *
+ * `mock` has no economic security and needs `ALLOW_INSECURE_DEV=true`;
+ * `testnet` settles a documented testnet network; `mainnet` moves real money
+ * and is reachable only with an explicit `PAYMENT_MODE=mainnet` plus the
+ * startup assertions in `api/src/config.ts`. A ledger row's mode is evidence of
+ * what moved, so the three are never collapsed into two.
+ */
+export type PaymentMode = "mock" | "testnet" | "mainnet";
+
 export interface CreateSessionRequest {
   /** Preset tier. If omitted, `durationSeconds` + limits are required. */
   tier?: SessionTier;
@@ -47,7 +59,7 @@ export interface CreateSessionRequest {
 }
 
 export interface PaymentSummary {
-  mode: "mock" | "testnet";
+  mode: PaymentMode;
   network: string;
   scheme: string;
   asset: string;

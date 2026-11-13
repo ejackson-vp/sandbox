@@ -72,8 +72,10 @@ export class PgLedgerRepository {
 
   listUnrefundedTerminalBeforeReady(): Promise<PaymentLedgerRecord[]> {
     return this.many(
+      // `source = 'x402'`: a $0 allowlist row has nothing to send back, and a
+      // REFUND_PENDING row for it would be pure operator noise (ADR 0013).
       `SELECT l.* FROM payment_ledger l JOIN sessions s ON s.id = l.session_id
-        WHERE l.status = 'SETTLED' AND s.ready_at IS NULL
+        WHERE l.status = 'SETTLED' AND l.source = 'x402' AND s.ready_at IS NULL
           AND s.state IN ('FAILED','EXPIRED','DESTROYED')
         ORDER BY l.updated_at ASC LIMIT 100`,
     );
@@ -82,7 +84,7 @@ export class PgLedgerRepository {
   listUnclaimedSettled(): Promise<PaymentLedgerRecord[]> {
     return this.many(
       `SELECT * FROM payment_ledger
-        WHERE status = 'SETTLED'
+        WHERE status = 'SETTLED' AND source = 'x402'
           AND (session_id LIKE 'unsettled:%' OR session_id LIKE 'duplicate:%')
         ORDER BY updated_at ASC LIMIT 100`,
     );
@@ -100,7 +102,7 @@ export class PgLedgerRepository {
   listRelayLostSettled(): Promise<PaymentLedgerRecord[]> {
     return this.many(
       `SELECT l.* FROM payment_ledger l JOIN sessions s ON s.id = l.session_id
-        WHERE l.status = 'SETTLED'
+        WHERE l.status = 'SETTLED' AND l.source = 'x402'
           AND s.state IN ('FAILED','EXPIRED','DESTROYED')
           AND (s.termination_reason IN ('failure:relay_lost','relay_lost')
                OR s.failure_code = 'relay_lost')

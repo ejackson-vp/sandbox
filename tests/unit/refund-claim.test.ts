@@ -19,6 +19,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { asClaimToken } from "@x402s/shared/durable";
+import type { PaymentMode } from "@x402s/shared/protocol";
 import type { PaymentRecord, SessionRecord } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { RefundWorkerStore } from "../../controller/src/store/ports.js";
@@ -90,7 +91,7 @@ async function seedPending(store: PostgresStore, key: string): Promise<void> {
   });
 }
 
-function paymentRecord(key: string, mode: "mock" | "testnet"): PaymentRecord {
+function paymentRecord(key: string, mode: PaymentMode): PaymentRecord {
   return {
     paymentKey: key,
     network: "mock:local",

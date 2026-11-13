@@ -12,7 +12,7 @@
  */
 import express, { type NextFunction, type Request, type Response } from "express";
 import { ZodError } from "zod";
-import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
+import { x402ResourceServer } from "@x402/core/server";
 import type { Network, PaymentRequirements } from "@x402/core/types";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
@@ -34,6 +34,9 @@ import type { ApiConfig } from "./config.js";
 import { RateLimiter } from "./admission.js";
 import { createConnectionLimiter } from "./connection-limit.js";
 import { ControllerClient } from "./controller-client.js";
+import { buildSettlementVerifier } from "./payments/settlement-confirmation.js";
+import { createFacilitatorClient } from "./payments/facilitator-client.js";
+import type { ChainSettlementVerifier } from "./payments/settlement-verifier.js";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 import { createSessionHandler } from "./routes/create-session.js";
@@ -62,6 +65,8 @@ interface ApiDeps {
   resourceServer?: x402ResourceServer;
   /** Injectable for tests. */
   settlementLookup?: SettlementLookup;
+  /** Injectable for tests: bypasses the viem client. */
+  settlementVerifier?: ChainSettlementVerifier;
 }
 
 export async function createApp(deps: ApiDeps): Promise<express.Express> {
@@ -80,11 +85,17 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
       ? new HttpSettlementLookup(config.facilitatorUrl)
       : new UnsupportedSettlementLookup());
 
+  // F-10: a chain read is authoritative and needs no facilitator answer, so it
+  // replaces the unsupported lookup for EVM networks. Absent here, the previous
+  // behaviour is unchanged.
+  const settlementVerifier = deps.settlementVerifier ?? buildSettlementVerifier(config);
+
   const resourceServer =
     deps.resourceServer ??
     (() => {
-      const client = new HTTPFacilitatorClient({ url: config.facilitatorUrl });
-      const s = new x402ResourceServer(client);
+      // The deployment's own port: bounded timeouts, retries only on the reads,
+      // and CDP bearer auth when a key pair is configured.
+      const s = new x402ResourceServer(createFacilitatorClient(config));
       return s;
     })();
 
@@ -92,7 +103,10 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     if (config.paymentMode === "mock") {
       resourceServer.register(MOCK_NETWORK, new MockExactServerScheme());
     } else {
-      resourceServer.register("eip155:84532", new ExactEvmScheme());
+      // Testnet and mainnet register the same scheme against the configured
+      // network, so enabling mainnet is a configuration change, not a code
+      // change: Base Sepolia today, Base mainnet when PAYMENT_MODE=mainnet.
+      resourceServer.register(config.network as Network, new ExactEvmScheme());
     }
   }
   await retry(
@@ -109,6 +123,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   metrics.histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS);
   metrics.histogram("sandbox_session_create_duration_seconds", "Create request duration", LATENCY_BUCKETS);
   metrics.counter("sandbox_sessions_created_total", "Session create requests by outcome");
+  metrics.counter("sandbox_sessions_total", "Sessions created by entitlement source");
 
   const resourceInfo = {
     url: `${config.publicBaseUrl}/v1/sessions`,
@@ -303,6 +318,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
       controller,
       resourceServer,
       settlementLookup,
+      settlementVerifier,
       requirementFor,
       payment402,
       capabilityFor,

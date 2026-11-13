@@ -18,6 +18,7 @@ were rejected, and the cost we accepted.
 | [0010](0010-controller-ha-storage.md) | Controller HA targets a multi-reader store, not an RWX volume | accepted |
 | [0011](0011-durable-external-calls.md) | Durable external calls are claimed, fenced and deduped | accepted |
 | [0012](0012-guest-reconnects-after-relay-loss.md) | A guest reconnects after a relay link loss | accepted |
+| [0013](0013-free-entitlement-from-proven-address.md) | A proven address gets a free session from a stable allowlist | accepted |
 
 ## Writing a record
 
