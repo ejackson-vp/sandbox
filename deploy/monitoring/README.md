@@ -35,8 +35,9 @@ controller should likewise move to pod discovery with `containerPort: metrics`
 | API | `api.sandbox-system.svc.cluster.local` | `9100` |
 | Controller | `controller.sandbox-system.svc.cluster.local` | `9100` |
 | Relay | `relay-0.relay-headless.sandbox-system.svc.cluster.local` and `relay-1.…` | `9100` |
+| Egress proxy | `egress-proxy-0.egress-proxy-headless.sandbox-system.svc.cluster.local` | `9100` |
 
-The job adds `role: api|controller|relay`. Every rule and dashboard panel
+The job adds `role: api|controller|relay|proxy`. Every rule and dashboard panel
 selects on that label, so it is part of the contract, not a convenience.
 
 The application never exposes `/metrics` on the service listener or the public
@@ -207,13 +208,14 @@ keep the recorded reason. A divergence is only as fast as the next sample: at
 the default, a page can lag the event by up to five minutes, and that is the
 cost of moving the read off the scrape path.
 
-**The egress rules need the proxy as a scrape target.** `sandbox_egress_bytes_total`
-and `sandbox_egress_limit_total` are exported only by the proxy role, and the
-proxy is **not** in the shipped scrape config: the three targets are api,
-controller and relay. Add
-`egress-proxy.sandbox-system.svc.cluster.local:9100` with `role: proxy` (or read
-it by port-forward) before expecting either rule to fire. They do not select on
-`role`, so a target scraped without the label still evaluates them. The bytes
+**The egress rules are scraped from the proxy by pod name.** `sandbox_egress_bytes_total`
+and `sandbox_egress_limit_total` are exported only by the proxy role, and it is a
+separate target in the shipped scrape config:
+`egress-proxy-0.egress-proxy-headless.sandbox-system.svc.cluster.local:9100`
+with `role: proxy`, scraped by pod name for the same reason the relay is. The
+`allow-metrics-scrape` policy admits `app=egress-proxy` on 9100 and nothing else.
+They do not select on `role`, so a target scraped without the label still
+evaluates them. The bytes
 counter carries the same total under `scope="session"` and `scope="global"` by
 construction, because every chunk is charged to both budgets: the expressions
 select one scope and never sum across them. `SandboxEgressBytesNearCap` hardcodes

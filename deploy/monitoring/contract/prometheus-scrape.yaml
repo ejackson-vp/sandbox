@@ -1,9 +1,9 @@
-# One scrape job covers all three control-plane roles. The relay runs two shards,
-# so it is scraped by its stable per-pod names rather than the shardless `relay`
-# Service: a DNS target behind two pods alternates between two independent
-# processes and every counter delta resets on the switch. A scaled api or
-# controller should move to pod discovery with `containerPort: metrics` (the pods
-# already name the port `metrics`).
+# One scrape job covers all four control-plane roles. The relay and the egress
+# proxy run as StatefulSets, so they are scraped by their stable per-pod names
+# rather than the shardless Service: a DNS target behind two pods alternates
+# between two independent processes and every counter delta resets on the
+# switch. A scaled api or controller should move to pod discovery with
+# `containerPort: metrics` (the pods already name the port `metrics`).
 #
 # This is the bare-list contract for an existing Prometheus.
 # `vmsingle-scrape-config.yaml` mirrors the same targets in the full-document
@@ -39,3 +39,10 @@ data:
             - relay-1.relay-headless.sandbox-system.svc.cluster.local:9100
           labels:
             role: relay
+        - targets:
+            # The only exporter of sandbox_egress_bytes_total and
+            # sandbox_egress_limit_total. Without this target the egress byte
+            # rules evaluate against no data and never fire.
+            - egress-proxy-0.egress-proxy-headless.sandbox-system.svc.cluster.local:9100
+          labels:
+            role: proxy

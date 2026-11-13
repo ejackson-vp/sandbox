@@ -34,6 +34,12 @@ spec:
     - name: proxy
       port: 3128
       targetPort: 3128
+    # Scraped by name, so a scaled proxy follows the relay's pattern: one
+    # stable pod name per ordinal, never a Service VIP that alternates between
+    # two independent processes and resets every counter delta.
+    - name: metrics
+      port: 9100
+      targetPort: 9100
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -76,6 +82,8 @@ spec:
           command: ["node", "controller/dist/main.js"]
           ports:
             - containerPort: 3128
+            - containerPort: 9100
+              name: metrics
           envFrom:
             - configMapRef: {name: control-config}
           env:
