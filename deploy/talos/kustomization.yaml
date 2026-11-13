@@ -30,9 +30,9 @@ resources:
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: 0.1.29
-  # 0.1.9 adds the mTLS controller listener and the inlined release gate. (npm removed from the
-  # runtime, Go 1.27.3 + x/crypto 0.58.0 in the guest).
+    newTag: 0.1.30
+  # 0.1.30 runs two relay shards and fixes the warm pool's relay addressing:
+  # it now follows RELAY_GUEST_ADDRESS instead of always dialling a ClusterIP.
 
 patches:
   - target:
