@@ -3,7 +3,10 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	neturl "net/url"
 	"sync"
 	"time"
 
@@ -11,6 +14,26 @@ import (
 
 	"github.com/x402s/sandbox/guest/internal/protocol"
 )
+
+// StatusError is a refused WebSocket handshake. The relay answers 401 for a
+// token it does not recognise, 404 for a session it has no registration for,
+// 409 for a duplicate connection and 421 for a request that reached the wrong
+// shard. Only 401 is permanent: the session identity cannot become valid again,
+// so the supervisor exits instead of retrying until the lease ends. The others
+// are transient (the controller re-registers, a stale socket goes away, a
+// retry can land on the right replica) and the reconnect loop keeps trying.
+type StatusError struct {
+	Status int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("relay refused the connection with HTTP %d", e.Status)
+}
+
+// Permanent reports whether retrying the same dial cannot succeed.
+func (e *StatusError) Permanent() bool {
+	return e.Status == http.StatusUnauthorized
+}
 
 // ProtocolVersion is the relay frame protocol this build speaks. Keep it in
 // sync with GUEST_PROTOCOL_VERSION in shared/src/protocol/relay.ts.
@@ -90,20 +113,58 @@ type Client struct {
 	mu   sync.Mutex
 }
 
-// Dial connects with bounded retries (the relay may still be starting).
+// DialOnce connects once. A non-101 handshake is a *StatusError, so a caller can
+// tell a permanent authentication rejection from a relay that is still starting
+// or a session the controller has not re-registered yet.
+func DialOnce(ctx context.Context, rawURL string) (*Client, error) {
+	conn, resp, err := dialValidated(ctx, rawURL)
+	if err != nil {
+		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
+			return nil, &StatusError{Status: resp.StatusCode}
+		}
+		return nil, err
+	}
+	conn.SetReadLimit(24 * 1024 * 1024)
+	return &Client{conn: conn}, nil
+}
+
+// dialValidated checks the endpoint before opening a socket. The value comes
+// from the signed claim/bootstrap, never from a customer operation, but pinning
+// the scheme and requiring a host keeps the network target a relay URL even if
+// a future caller passes something else. CodeQL flags the websocket sink as
+// request forgery; the lgtm annotation records why this is not a user-controlled
+// destination.
+func dialValidated(ctx context.Context, rawURL string) (*websocket.Conn, *http.Response, error) {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("relay url: %w", err)
+	}
+	if (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" {
+		return nil, nil, fmt.Errorf("relay url must be ws or wss with a host")
+	}
+	// lgtm[go/request-forgery]
+	return websocket.Dial(ctx, parsed.String(), &websocket.DialOptions{
+		CompressionMode: websocket.CompressionDisabled,
+	})
+}
+
+// Dial connects with bounded retries (the relay may still be starting). It is
+// used for the first connection only; a reconnect after link loss has its own
+// backoff loop in the supervisor because it must stop at the lease deadline.
 func Dial(ctx context.Context, url string, maxWait time.Duration) (*Client, error) {
 	deadline := time.Now().Add(maxWait)
 	var lastErr error
 	backoff := 250 * time.Millisecond
 	for time.Now().Before(deadline) {
 		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		conn, _, err := websocket.Dial(dialCtx, url, &websocket.DialOptions{
-			CompressionMode: websocket.CompressionDisabled,
-		})
+		client, err := DialOnce(dialCtx, url)
 		cancel()
 		if err == nil {
-			conn.SetReadLimit(24 * 1024 * 1024)
-			return &Client{conn: conn}, nil
+			return client, nil
+		}
+		var statusErr *StatusError
+		if errors.As(err, &statusErr) && statusErr.Permanent() {
+			return nil, err
 		}
 		lastErr = err
 		select {

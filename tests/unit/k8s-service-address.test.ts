@@ -46,6 +46,77 @@ function provisioner(
   return new KubeProvisioner("sandbox-workloads", "sandbox-system", kubeConfig);
 }
 
+/**
+ * A Service lookup that returns a different spec per requested name, so a
+ * sharded read can be told apart from the shardless one.
+ */
+function stableProvisioner(
+  services: Record<string, { port?: number; clusterIP?: string }>,
+): KubeProvisioner {
+  const requested: string[] = [];
+  const core = {
+    readNamespacedService: async ({ name }: { name: string }) => {
+      requested.push(name);
+      const service = services[name];
+      if (!service) {
+        const err = new Error(`services "${name}" not found`) as Error & { code?: number };
+        err.code = 404;
+        throw err;
+      }
+      return {
+        spec: {
+          ports: service.port === undefined ? [] : [{ port: service.port }],
+          clusterIP: service.clusterIP,
+        },
+      };
+    },
+  };
+  const kubeConfig = {
+    makeApiClient: () => core,
+  } as unknown as k8s.KubeConfig;
+  return new KubeProvisioner("sandbox-workloads", "sandbox-system", kubeConfig);
+}
+
+describe("getStableServiceAddress", () => {
+  it("returns the Service ClusterIP, not a Pod IP", async () => {
+    const kube = stableProvisioner({
+      relay: { port: 8443, clusterIP: "10.96.0.7" },
+    });
+    await expect(kube.getStableServiceAddress("relay")).resolves.toEqual({
+      host: "10.96.0.7",
+      port: 8443,
+    });
+  });
+
+  it("reads the per-shard Service named after the pod ordinal", async () => {
+    const kube = stableProvisioner({
+      "relay-0": { port: 8443, clusterIP: "10.96.1.1" },
+      "relay-1": { port: 8443, clusterIP: "10.96.1.2" },
+    });
+    await expect(kube.getStableServiceAddress("relay", 0, "relay")).resolves.toEqual({
+      host: "10.96.1.1",
+      port: 8443,
+    });
+    await expect(kube.getStableServiceAddress("relay", 1, "relay")).resolves.toEqual({
+      host: "10.96.1.2",
+      port: 8443,
+    });
+  });
+
+  it("refuses a headless Service, which has no address a guest can dial", async () => {
+    const kube = stableProvisioner({
+      "relay-headless": { port: 8443, clusterIP: "None" },
+    });
+    await expect(kube.getStableServiceAddress("relay-headless")).resolves.toBeNull();
+  });
+
+  it("returns null for a missing Service or a Service with no ports", async () => {
+    const kube = stableProvisioner({ relay: { clusterIP: "10.96.0.7" } });
+    await expect(kube.getStableServiceAddress("relay")).resolves.toBeNull();
+    await expect(kube.getStableServiceAddress("relay-3", 3, "relay")).resolves.toBeNull();
+  });
+});
+
 describe("getServiceAddress", () => {
   it("returns the first ready endpoint address, not the ClusterIP", async () => {
     const kube = provisioner({ port: 8443, clusterIP: "10.96.0.1" }, [

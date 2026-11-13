@@ -3,7 +3,7 @@
  * Executable model of the sandbox control plane: session lifecycle, payment
  * intent, the single-operation slot, capacity reservation and the
  * execution-epoch fence, under client retries, controller crash/restart and
- * relay loss.
+ * relay loss (with guest reconnect and the relay-loss grace).
  *
  * This is not a product specification. It is a bounded, deliberately abstract
  * model whose job is to check temporal invariants that example- and
@@ -29,8 +29,18 @@
  *
  * Deliberate abstraction: there is one controller process (the store is the
  * single writer), so a crash is an epoch bump rather than a lost process; the
- * relay is a boolean plus a pending-frame count; time is not modelled, so hold
- * expiry and lease expiry are nondeterministic environment steps.
+ * relay is a boolean ("this session is registered on the current relay
+ * process") plus a pending-frame count; time is not modelled, so hold expiry,
+ * lease expiry and the relay-loss grace are nondeterministic environment steps.
+ *
+ * Relay loss (ADR 0011) is three actions: RelayRestart drops the registration
+ * and the guest link and fences any operation in flight (epoch bump + held
+ * gate); ReregisterRelay puts the session back on the current generation;
+ * RelayGraceExpired is the bounded-grace outcome, the only relay-loss path that
+ * ends a session. A session that re-registers and reconnects keeps its lease.
+ * The fence's disconnect release requires that no registration exists: once the
+ * session is registered again, only the reconnected guest's idle status may
+ * clear the gate.
  *
  * The fence (#19) is modelled as state, not as a call into OperationFence:
  *
@@ -62,6 +72,7 @@ CONSTANTS
   Requests,      \* set of operation (exec) request ids per session
   NodeCapacity,  \* compute slots on the (single) node, in reservation units
   MaxRestarts,   \* bound on controller crash/restart cycles
+  MaxRelayRestarts, \* bound on relay restart cycles per bounded run
   PodIds         \* Pod instances a session may ever hold at once
 
 States ==
@@ -87,16 +98,20 @@ RStates == {"NONE", "ATTACHED", "ALLOCATED", "SUSPENDED", "RELEASING", "RELEASED
 \* capacity is returned only once the Pod object is observed gone.
 ComputingRStates == {"ATTACHED", "ALLOCATED", "RELEASING"}
 
-Finals == {"NONE", "DESTROYED", "EXPIRED", "FAILED"}
+\* `final` is the terminal outcome chosen at termination. It matches `state`
+\* except for RELAY_LOST: that is written as FAILED, but the reason is what the
+\* refund policy keys on, so it is a distinct value here.
+Finals == {"NONE", "DESTROYED", "EXPIRED", "FAILED", "RELAY_LOST"}
 
 \* Session execution epochs. The store's exec_epoch starts at 1 and is bumped
-\* once per restart for sessions that had an interrupted request, so a bounded
-\* run with MaxRestarts crashes never needs more than MaxRestarts + 1 values.
-Epochs == 1 .. MaxRestarts + 1
+\* once for a session that had an operation in flight across either a controller
+\* restart or a relay restart, so a bounded run never needs more than
+\* MaxRestarts + MaxRelayRestarts + 1 values.
+Epochs == 1 .. MaxRestarts + MaxRelayRestarts + 1
 
 \* A guest's high-water mark starts at 0 ("no epoch observed") and can reach
 \* the largest session epoch.
-HighWater == 0 .. MaxRestarts + 1
+HighWater == 0 .. MaxRestarts + MaxRelayRestarts + 1
 
 \* The guest's own view of its single execution slot.
 GuestStatuses == {"unknown", "idle"} \cup Requests
@@ -297,15 +312,19 @@ ChargeSession(s, p) ==
                  relayPending, fence, fenceReq, recovered, startGen>>
 
 \* refunds.ts: a settled session that never reached READY gets a refund
-\* obligation; mock mode settles it immediately, real modes wait for an
-\* operator. Recording the obligation is what makes the outcome explicit.
+\* obligation, and so does a READY session ended by the relay-loss grace: the
+\* paid time after the loss was undeliverable. A client destroy or an ordinary
+\* lease expiry after READY stays settled. Mock mode settles immediately, real
+\* modes wait for the worker. Recording the obligation is what makes the
+\* outcome explicit.
 MarkRefundPending(p) ==
   /\ refund[p] = "none"
   /\ charges[p] = 1
   /\ \E s \in Sessions :
        /\ settledTo[p] = s
        /\ state[s] \in TerminalStates
-       /\ ~everReady[s]
+       /\ \/ ~everReady[s]
+          \/ final[s] = "RELAY_LOST"
   /\ refund' = [refund EXCEPT ![p] = "pending"]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, reservations, resPayment, pod, creating, pvc, relay,
@@ -445,8 +464,11 @@ ResumeRequest(s) ==
 (* Guest connection and status                                         *)
 (* ------------------------------------------------------------------ *)
 
-\* A guest (re)connects to an existing relay registration. A fresh supervisor
-\* starts with no execution epoch and publishes an idle status on hello.
+\* A guest reconnects to an existing relay registration. The supervisor survives
+\* the link loss, so its execution-epoch high-water mark survives too (ADR 0011)
+\* and a frame below it is still rejected. It publishes an idle status on hello.
+\* A fresh supervisor (first boot, resume) starts at 0 via GuestReady or
+\* GuestStopped.
 GuestConnect(s) ==
   /\ state[s] \in ReadyStates
   /\ relay[s]
@@ -454,29 +476,67 @@ GuestConnect(s) ==
   /\ guest[s] = {}
   /\ guestConnected' = [guestConnected EXCEPT ![s] = TRUE]
   /\ guestStatus' = [guestStatus EXCEPT ![s] = "idle"]
-  /\ guestEpoch' = [guestEpoch EXCEPT ![s] = 0]
   /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
   /\ relayPending' = [relayPending EXCEPT ![s] = 0]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pod, creating, pvc,
                  relay, slots, guest, slotEpoch, final, epoch, execEpoch, fence,
-                 fenceReq, recovered, startGen>>
+                 fenceReq, recovered, startGen, guestEpoch>>
 
-\* The relay link drops. The supervisor exits when its link is gone, so the
-\* command cannot still be running; the relay's detach clears its pending set.
-\* This is the "no guest is connected" branch of OperationFence.
+\* The relay link drops. The link loss aborts the command it was carrying, so
+\* the guest slot empties; the supervisor keeps its high-water mark and is
+\* expected to reconnect (GuestConnect), so the fence does not treat this as
+\* "the command is gone for good" while a registration still exists.
 GuestDisconnect(s) ==
   /\ guestConnected[s]
   /\ guestConnected' = [guestConnected EXCEPT ![s] = FALSE]
   /\ guest' = [guest EXCEPT ![s] = {}]
   /\ guestStatus' = [guestStatus EXCEPT ![s] = "unknown"]
-  /\ guestEpoch' = [guestEpoch EXCEPT ![s] = 0]
   /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
   /\ relayPending' = [relayPending EXCEPT ![s] = 0]
   /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
                  charges, refund, reservations, resPayment, pod, creating, pvc,
                  relay, slots, slotEpoch, final, epoch, execEpoch, fence, fenceReq,
-                 recovered, startGen>>
+                 recovered, startGen, guestEpoch>>
+
+\* The relay process is replaced: its in-memory registration is gone and every
+\* guest socket on the shard drops. Any operation holding the gate is fenced
+\* exactly like a controller restart (epoch bump, held gate); the session itself
+\* stays READY/ACTIVE with its lease, Pod and workspace.
+RelayRestart(s) ==
+  /\ state[s] \in ReadyStates
+  /\ relay[s]
+  /\ \/ slots[s] = {}
+     \/ execEpoch[s] < MaxRestarts + MaxRelayRestarts + 1
+  /\ execEpoch' = [execEpoch EXCEPT ![s] =
+        IF slots[s] # {} THEN execEpoch[s] + 1 ELSE execEpoch[s]]
+  /\ fence' = [fence EXCEPT ![s] =
+        IF slots[s] # {} THEN "held" ELSE fence[s]]
+  /\ fenceReq' = [fenceReq EXCEPT ![s] =
+        IF slots[s] # {} /\ fence[s] # "held"
+        THEN CHOOSE r \in slots[s] : TRUE
+        ELSE fenceReq[s]]
+  /\ relay' = [relay EXCEPT ![s] = FALSE]
+  /\ guest' = [guest EXCEPT ![s] = {}]
+  /\ guestConnected' = [guestConnected EXCEPT ![s] = FALSE]
+  /\ guestStatus' = [guestStatus EXCEPT ![s] = "unknown"]
+  /\ admittedEpoch' = [admittedEpoch EXCEPT ![s] = 0]
+  /\ relayPending' = [relayPending EXCEPT ![s] = 0]
+  /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
+                 charges, refund, reservations, resPayment, pod, creating, pvc,
+                 slots, slotEpoch, final, epoch, guestEpoch, recovered, startGen>>
+
+\* The controller re-registers the session on the relay serving now, with the
+\* token hash it already has. The guest can dial again after this step.
+ReregisterRelay(s) ==
+  /\ state[s] \in ReadyStates
+  /\ ~relay[s]
+  /\ relay' = [relay EXCEPT ![s] = TRUE]
+  /\ UNCHANGED <<created, state, payOf, everReady, intent, intentEpoch, settledTo,
+                 charges, refund, reservations, resPayment, pod, creating, pvc,
+                 slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
+                 guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
+                 fenceReq, recovered, startGen>>
 
 (* ------------------------------------------------------------------ *)
 (* Termination, cleanup, release                                       *)
@@ -495,8 +555,16 @@ RequestDestroy(s) ==
                  fenceReq, recovered, startGen>>
 
 \* lease_expired, max lifetime or suspended expiry.
+\*
+\* A READY/ACTIVE session whose relay link is lost is not lease-expired: relay
+\* recovery declares the loss at min(lostAt + grace, leaseExpiresAt - margin),
+\* which is before `enforceLease` may run (leaseExpiresAt + leaseGraceMs), and
+\* this guard is the abstraction of that ordering. The reason matters: the
+\* refund policy compensates `relay_lost`, not an ordinary lease expiry.
 ExpireLease(s) ==
   /\ state[s] \in LeaseExpirableStates
+  /\ \/ state[s] \notin ReadyStates
+     \/ (relay[s] /\ guestConnected[s])
   /\ state' = [state EXCEPT ![s] = "TERMINATING"]
   /\ final' = [final EXCEPT ![s] = "EXPIRED"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
@@ -505,11 +573,15 @@ ExpireLease(s) ==
                  guestStatus, guestEpoch, admittedEpoch, relayPending, fence,
                  fenceReq, recovered, startGen>>
 
-\* Relay loss fails the session closed: in-flight operations are abandoned, the
-\* payment is kept (service was delivered), and the workload is torn down.
-RelayLost(s) ==
-  /\ relay[s]
-  /\ state[s] \in {"PROVISIONING", "READY", "ACTIVE", "SUSPENDING", "RESUMING"}
+\* The relay-loss grace expired: the guest did not reconnect inside the bound,
+\* or the session had no registration left to reconnect to. This is the only
+\* relay-loss path that ends a session, and it is distinct from a guest crash
+\* (`failure:relay_lost`, not `guest_exited`). In-flight operations stay
+\* `outcome_unknown`; the payment is kept because service was delivered.
+RelayGraceExpired(s) ==
+  /\ state[s] \in ReadyStates
+  /\ \/ ~relay[s]
+     \/ ~guestConnected[s]
   /\ state' = [state EXCEPT ![s] = "TERMINATING"]
   /\ relay' = [relay EXCEPT ![s] = FALSE]
   /\ slots' = [slots EXCEPT ![s] = {}]
@@ -521,7 +593,7 @@ RelayLost(s) ==
   /\ relayPending' = [relayPending EXCEPT ![s] = 0]
   /\ fence' = [fence EXCEPT ![s] = "none"]
   /\ fenceReq' = [fenceReq EXCEPT ![s] = "none"]
-  /\ final' = [final EXCEPT ![s] = "FAILED"]
+  /\ final' = [final EXCEPT ![s] = "RELAY_LOST"]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, slotEpoch,
                  epoch, execEpoch, recovered, startGen>>
@@ -616,7 +688,8 @@ Finalize(s) ==
   /\ slots[s] = {}
   /\ guest[s] = {}
   /\ fence[s] = "none"
-  /\ state' = [state EXCEPT ![s] = final[s]]
+  /\ state' = [state EXCEPT ![s] =
+        IF final[s] = "RELAY_LOST" THEN "FAILED" ELSE final[s]]
   /\ UNCHANGED <<created, payOf, everReady, intent, intentEpoch, settledTo, charges,
                  refund, reservations, resPayment, pod, creating, pvc, relay,
                  slots, guest, slotEpoch, final, epoch, execEpoch, guestConnected,
@@ -724,15 +797,19 @@ FinishOp(s, r) ==
 
 \* OperationFence.reconcile, the only action that releases a recovery fence.
 \* It requires the gate it is holding, no relay frame still awaiting a guest
-\* response, and either the guest's own idle status or no connected guest.
-\* A connected guest that has never reported status ("unknown") keeps the gate
-\* closed: failing closed is the contract.
+\* response, and either the reconnected guest's own idle status or a session
+\* that has no registration left (the guest is not expected back, and the link
+\* loss already aborted the command). A registered session with no connected
+\* guest waits for the reconnect: ADR 0011 replaced "the supervisor exits with
+\* its link" with "the same supervisor reconnects". A connected guest that has
+\* never reported status ("unknown") keeps the gate closed too.
 FenceRelease(s) ==
   /\ recovered
   /\ fenced(s)
   /\ slots[s] = {fenceReq[s]}
   /\ relayPending[s] = 0
-  /\ \/ ~guestConnected[s]
+  /\ \/ /\ ~guestConnected[s]
+        /\ ~relay[s]
      \/ /\ guestConnected[s]
         /\ guestStatus[s] = "idle"
   /\ slots' = [slots EXCEPT ![s] = {}]
@@ -818,13 +895,14 @@ ProvisionActions == \E s \in Sessions : Provision(s)
 
 PodActions == \E s \in Sessions : CreatePod(s) \/ RecordPod(s) \/ GuestReady(s)
 
-ConnectionActions == \E s \in Sessions : GuestConnect(s) \/ GuestDisconnect(s)
+ConnectionActions ==
+  \E s \in Sessions : GuestConnect(s) \/ GuestDisconnect(s) \/ ReregisterRelay(s)
 
 SuspendActions ==
   \E s \in Sessions : SuspendRequest(s) \/ GuestStopped(s) \/ ResumeRequest(s)
 
 TerminateActions ==
-  \E s \in Sessions : RequestDestroy(s) \/ ExpireLease(s) \/ RelayLost(s)
+  \E s \in Sessions : RequestDestroy(s) \/ ExpireLease(s) \/ RelayGraceExpired(s)
                       \/ ProvisioningTimeout(s)
 
 CleanupActions ==
@@ -976,10 +1054,12 @@ TerminalDoesNotHoldCompute ==
   \A s \in Sessions :
     state[s] \in TerminalStates => reservations[s] \in {"RELEASING", "RELEASED"}
 
-\* I11. READY implies the workload and relay it promises.
-ReadyImpliesPodAndRelay ==
+\* I11. READY implies the workload it promises. It no longer implies a relay
+\* registration: a relay restart drops that for as long as the reconnect takes,
+\* which is exactly the window RelayGraceExpired bounds.
+ReadyImpliesPod ==
   \A s \in Sessions :
-    state[s] \in {"READY", "ACTIVE", "SUSPENDING"} => pod[s] # "none" /\ relay[s]
+    state[s] \in {"READY", "ACTIVE", "SUSPENDING"} => pod[s] # "none"
 
 \* I12. SUSPENDED implies a checkpoint, no compute, and no live guest.
 SuspendedImpliesCheckpoint ==
@@ -992,12 +1072,15 @@ ReservationBoundToPayment ==
   \A s \in Sessions :
     reservations[s] \in (ComputingRStates \cup {"SUSPENDED"}) => resPayment[s] # "none"
 
-\* I14. A refund is only ever issued for a session that delivered no service.
-RefundOnlyWhenNoService ==
+\* I14. A refund is only ever issued for a session that delivered no service, or
+\* for one whose service was cut short by relay loss. A client destroy and an
+\* ordinary lease expiry after READY stay settled.
+RefundOnlyWhenNoServiceOrRelayLoss ==
   \A p \in Payments :
     refund[p] # "none" =>
       \E s \in Sessions :
-        settledTo[p] = s /\ state[s] \in TerminalStates /\ ~everReady[s]
+        settledTo[p] = s /\ state[s] \in TerminalStates
+          /\ (~everReady[s] \/ final[s] = "RELAY_LOST")
 
 \* I15. A session that was never charged has no reservation and no workload.
 NoEntitlementWithoutPayment ==
@@ -1057,6 +1140,13 @@ ProvisionFairness ==
 SuspendFairness ==
   \A s \in Sessions : WF_vars(GuestStopped(s))
 
+\* A guest that can reconnect does, and the controller re-registers a session
+\* whose registration was lost. Without this, a held relay-loss fence would be
+\* reported as a liveness violation rather than as a stutter.
+ConnectionFairness ==
+  /\ \A s \in Sessions : WF_vars(GuestConnect(s))
+  /\ \A s \in Sessions : WF_vars(ReregisterRelay(s))
+
 CleanupFairness ==
   /\ \A s \in Sessions : WF_vars(KillGuest(s))
   /\ \A s \in Sessions : WF_vars(DeleteWorkspace(s))
@@ -1072,7 +1162,11 @@ OperationFairness ==
   /\ \A s \in Sessions, r \in Requests : WF_vars(GuestResponse(s, r))
   /\ \A s \in Sessions, r \in Requests : WF_vars(GuestDone(s, r))
   /\ \A s \in Sessions, r \in Requests : WF_vars(FinishOp(s, r))
-  /\ \A s \in Sessions : WF_vars(FenceRelease(s))
+  \* Strong fairness: the release condition alternates as a guest reconnects and
+  \* drops again. The reconciler retries every tick, so a gate that is repeatedly
+  \* releasable is released; weak fairness alone leaves a fair connect/disconnect
+  \* cycle that starves the release.
+  /\ \A s \in Sessions : SF_vars(FenceRelease(s))
 
 RecoveryFairness == WF_vars(RecoverInterruptedOps)
 
@@ -1081,8 +1175,8 @@ RefundFairness ==
   /\ \A p \in Payments : WF_vars(MarkRefunded(p))
 
 Fairness ==
-  ProvisionFairness /\ SuspendFairness /\ CleanupFairness /\ ReleaseFairness
-  /\ OperationFairness /\ RecoveryFairness /\ RefundFairness
+  ProvisionFairness /\ SuspendFairness /\ ConnectionFairness /\ CleanupFairness
+  /\ ReleaseFairness /\ OperationFairness /\ RecoveryFairness /\ RefundFairness
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 

@@ -14,6 +14,7 @@ import type {
   StoreHealth,
 } from "./models.js";
 import type { ReservationStore } from "../capacity/reservation-store.js";
+import type { ClaimToken } from "@x402s/shared/durable";
 import type { BudgetDecision, BudgetLimits } from "./budget-decision.js";
 
 /**
@@ -164,11 +165,11 @@ export interface RefundWorkerStore {
    */
   claimRefunds(request: RefundClaimRequest): Promise<ClaimedRefund[]>;
   /** Provider paid: SENDING -> REFUNDED, only for the claim owner. */
-  completeRefundClaim(paymentKey: string, claimToken: string, transaction: string): Promise<boolean>;
+  completeRefundClaim(paymentKey: string, claimToken: ClaimToken, transaction: string): Promise<boolean>;
   /** Provider declined: SENDING -> PENDING with one failed attempt counted. */
   releaseRefundClaim(
     paymentKey: string,
-    claimToken: string,
+    claimToken: ClaimToken,
     error: string,
     nextAttemptAt: number,
   ): Promise<boolean>;
@@ -241,7 +242,11 @@ export interface ControlApiStore {
   finishOperation(
     sessionId: string,
     requestId: string,
-    outcome: "done" | "error" | "abandoned",
+    /**
+     * `outcome_unknown` marks the request fenced and leaves the single-operation
+     * gate closed; only the operation fence or relay recovery may release it.
+     */
+    outcome: "done" | "error" | "abandoned" | "outcome_unknown",
     /** The sealed result to keep with the row; omitted or over the bound, none is stored. */
     resultEnvelope?: string | null,
   ): Promise<void>;
@@ -270,6 +275,22 @@ export interface FenceStore {
   listFencedSessions(): Promise<SessionRecord[]>;
 }
 
+/**
+ * Relay generation change recovery: find the sessions a relay restart could
+ * have stranded, fence the operation each one had in flight, and end the
+ * session that cannot get its guest back.
+ */
+export interface RelayRecoveryStore {
+  listRelaySessions(limit: number, after?: string | null): Promise<SessionRecord[]>;
+  /** Exactly-once: the pending -> outcome_unknown transition bumps the epoch. */
+  recoverSessionOperation(sessionId: string): Promise<{ requestId: string | null; epoch: number | null }>;
+  requestTermination(
+    id: string,
+    reason: string,
+    failure?: { code: string; message: string },
+  ): Promise<boolean>;
+}
+
 /** The reconcile scheduler's own view: due selection plus the cleanup sweep. */
 interface SchedulerStore {
   clearPod(id: string): Promise<void>;
@@ -294,6 +315,7 @@ export type ReconcilerStore = ProvisioningStore &
   WarmPoolStore &
   CapacityStore &
   FenceStore &
+  RelayRecoveryStore &
   SchedulerStore &
   RefundWorkerStore &
   SettlementRecoveryStore;

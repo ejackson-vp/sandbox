@@ -14,6 +14,13 @@
 import { randomBytes } from "node:crypto";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import {
+  asClaimToken,
+  claimLease,
+  deadlinePassed,
+  isHeldBy,
+  leaseExpiresAt,
+} from "@x402s/shared/durable";
+import {
   DuplicateEntitlementError,
   mapIntent,
   PaymentAlreadyRedeemedError,
@@ -68,8 +75,9 @@ export class PgPaymentRepository {
     requirementsJson: string | null = null,
   ): Promise<IntentClaimResult> {
     const now = Date.now();
-    const token = randomBytes(16).toString("hex");
-    const expiresAt = now + staleMs;
+    const lease = claimLease(asClaimToken(randomBytes(16).toString("hex")), now, staleMs);
+    const token = lease.token;
+    const expiresAt = leaseExpiresAt(lease);
     const ageCutoff = now - staleMs;
 
     return this.conn.tx(async (tx) => {
@@ -82,7 +90,7 @@ export class PgPaymentRepository {
         if (existing.status === "failed") {
           return { status: "failed", reason: existing.reason };
         }
-        const leaseExpired = existing.claimExpiresAt !== null && now >= existing.claimExpiresAt;
+        const leaseExpired = deadlinePassed(existing.claimExpiresAt, now);
         if (!leaseExpired && now - existing.updatedAt < staleMs) {
           return { status: "in_progress" };
         }
@@ -189,7 +197,7 @@ export class PgPaymentRepository {
         if (intent.status === "settled" && intent.sessionId) {
           return { sessionId: intent.sessionId, created: false };
         }
-        if (intent.status !== "claimed" || intent.claimToken !== claimToken) {
+        if (intent.status !== "claimed" || !isHeldBy(intent.claimToken, claimToken)) {
           throw new PaymentClaimLostError(paymentKey);
         }
 

@@ -68,6 +68,69 @@ export class PgOperationRepository {
     return res.rows.map(mapSession);
   }
 
+  /**
+   * Sessions whose guest link the relay owns. A READY/ACTIVE session with a
+   * credential and a Pod is the set the relay-recovery scan must cover: those
+   * are the ones a relay restart would otherwise strand. `after` is the scan's
+   * cursor, so a page larger than the per-pass limit is still covered over
+   * successive passes instead of starving the tail.
+   */
+  async listRelaySessions(limit: number, after: string | null = null): Promise<SessionRecord[]> {
+    const res = await this.conn.query<RawSession>(
+      `SELECT ${SESSION_COLUMNS} FROM sessions
+        WHERE state IN ('READY', 'ACTIVE')
+          AND relay_token_hash IS NOT NULL
+          AND pod_name IS NOT NULL
+          AND ($2::text IS NULL OR id > $2)
+        ORDER BY id
+        LIMIT $1`,
+      [Math.max(1, Math.trunc(limit)), after],
+    );
+    return res.rows.map(mapSession);
+  }
+
+  /**
+   * Fence one session's interrupted operation after a relay generation change.
+   *
+   * The transition `pending -> outcome_unknown` is the guard, so this is
+   * exactly once: the caller that wins it bumps the session epoch, and a
+   * second scan of the same session finds nothing pending and changes nothing.
+   * Only the request actually holding the gate is fenced; a request row that is
+   * pending while the gate is free is left to the normal finish path.
+   */
+  async recoverSessionOperation(
+    sessionId: string,
+  ): Promise<{ requestId: string | null; epoch: number | null }> {
+    return this.conn.tx(async (tx) => {
+      const now = Date.now();
+      const fenced = await tx.query<{ id: string }>(
+        `UPDATE exec_requests r
+            SET state = 'outcome_unknown', updated_at = $1
+           FROM sessions s
+          WHERE s.id = $2
+            AND s.active_request_id = r.id
+            AND r.session_id = s.id
+            AND r.state = 'pending'
+          RETURNING r.id`,
+        [now, sessionId],
+      );
+      const requestId = fenced.rows[0]?.id ?? null;
+      if (!requestId) {
+        // Nothing pending: either the gate is free or the request was fenced by
+        // an earlier recovery. `null` epoch means "no transition happened", so
+        // a caller cannot mistake this for a second bump.
+        return { requestId: null, epoch: null };
+      }
+      const bumped = await tx.query<{ exec_epoch: number }>(
+        `UPDATE sessions SET exec_epoch = exec_epoch + 1, updated_at = $1
+          WHERE id = $2 AND active_request_id = $3
+          RETURNING exec_epoch`,
+        [now, sessionId, requestId],
+      );
+      return { requestId, epoch: bumped.rows[0]?.exec_epoch ?? null };
+    });
+  }
+
   async clearFencedGate(sessionId: string, requestId: string, epoch: number): Promise<boolean> {
     const now = Date.now();
     const res = await this.conn.write(
@@ -108,13 +171,20 @@ export class PgOperationRepository {
           [requestId, sessionId, op, session.execEpoch, payloadHash, now],
         );
         if ((inserted.rowCount ?? 0) === 0) {
-          // The first claim owns the id. Read its payload back and decide whether
-          // this retry is the same request (`duplicate`) or a reused key.
-          const existing = await tx.query<{ payload_hash: string | null }>(
-            "SELECT payload_hash FROM exec_requests WHERE session_id = $1 AND id = $2",
+          // The first claim owns the id. Read its state and payload back.
+          const existing = await tx.query<{ payload_hash: string | null; state: string }>(
+            "SELECT payload_hash, state FROM exec_requests WHERE session_id = $1 AND id = $2",
             [sessionId, requestId],
           );
-          const stored = existing.rows[0]?.payload_hash ?? null;
+          const row = existing.rows[0];
+          // A fenced request is answered with its outcome, not with the
+          // idempotency-key verdict: the id is spent either way, and the client
+          // must learn that the operation's outcome is unknown. Reporting
+          // `idempotency_key_reused` there hides the only answer it can act on.
+          if (row?.state === "outcome_unknown") {
+            return { ok: false, code: "duplicate", state: session.state, requestId };
+          }
+          const stored = row?.payload_hash ?? null;
           if (payloadDiffers(stored, payloadHash)) {
             return { ok: false, code: "idempotency_key_reused", state: session.state, requestId };
           }
@@ -153,7 +223,7 @@ export class PgOperationRepository {
   async finishOperation(
     sessionId: string,
     requestId: string,
-    outcome: "done" | "error" | "abandoned",
+    outcome: "done" | "error" | "abandoned" | "outcome_unknown",
     resultEnvelope?: string | null,
   ): Promise<void> {
     // One bound and one rule: too large is stored as
@@ -172,6 +242,11 @@ export class PgOperationRepository {
         [outcome, envelope, now, sessionId, requestId],
       );
       if ((finished.rowCount ?? 0) === 0) return;
+      // `outcome_unknown` fences the gate, it does not release it: the guest may
+      // still be running the command or reconnecting, so only
+      // `OperationFence`/relay recovery may clear `active_request_id` after the
+      // guest reports idle. Every other outcome is the end of the operation.
+      if (outcome === "outcome_unknown") return;
       await tx.query(
         `UPDATE sessions
             SET active_request_id = NULL,

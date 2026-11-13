@@ -58,6 +58,10 @@ function harness() {
         name === cfg.proxyServiceName
           ? { host: "10.0.0.9", port: 3128 }
           : { host: "10.0.0.1", port: 8443 },
+      stableServiceAddress: async (name: string) =>
+        name === cfg.proxyServiceName
+          ? { host: "10.0.0.9", port: 3128 }
+          : { host: "10.0.0.1", port: 8443 },
     },
     {} as WarmPoolManager,
   );

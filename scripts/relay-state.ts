@@ -19,6 +19,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 export const RELAY_PENDING_GAUGE = "sandbox_relay_pending_requests";
 /** Operations the guests themselves report as running. */
 export const RELAY_ACTIVE_GAUGE = "sandbox_relay_active_requests";
+/** Registrations that currently have a live guest socket. */
+export const RELAY_CONNECTED_GAUGE = "sandbox_relay_connected_sessions";
 
 interface RelayGaugeOptions {
   namespace: string;
@@ -54,6 +56,10 @@ export function parseActiveGauge(body: string): number | null {
   return parseGauge(body, RELAY_ACTIVE_GAUGE);
 }
 
+export function parseConnectedGauge(body: string): number | null {
+  return parseGauge(body, RELAY_CONNECTED_GAUGE);
+}
+
 /** One scrape of a metrics listener. Null means "not available yet". */
 async function readRelayGauge(baseUrl: string, name: string): Promise<number | null> {
   try {
@@ -71,6 +77,10 @@ export async function readRelayPending(baseUrl: string): Promise<number | null> 
 
 export async function readRelayActive(baseUrl: string): Promise<number | null> {
   return readRelayGauge(baseUrl, RELAY_ACTIVE_GAUGE);
+}
+
+export async function readRelayConnected(baseUrl: string): Promise<number | null> {
+  return readRelayGauge(baseUrl, RELAY_CONNECTED_GAUGE);
 }
 
 /**
@@ -109,4 +119,17 @@ export function relayPending(opts: RelayGaugeOptions): Promise<number> {
 
 export function relayActive(opts: RelayGaugeOptions): Promise<number> {
   return relayGauge(RELAY_ACTIVE_GAUGE, opts);
+}
+
+/**
+ * Registrations that currently have a live guest socket, optionally polled
+ * until the value reaches `until`.
+ *
+ * `READY && !busy` is not enough after a relay restart: the session row can be
+ * READY while the registry has no registration, and a new operation then fails
+ * with `guest_not_available`. This is the signal the fault harness waits on
+ * before it treats a new operation as the post-reconnect proof.
+ */
+export function relayConnected(opts: RelayGaugeOptions): Promise<number> {
+  return relayGauge(RELAY_CONNECTED_GAUGE, opts);
 }

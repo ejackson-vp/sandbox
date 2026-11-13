@@ -17,7 +17,7 @@ import { guestTokenFor } from "../tokens.js";
 export type Endpoint = { host: string; port: number };
 export type EndpointPair = { relay: Endpoint | null; proxy: Endpoint | null };
 
-/** What address resolution needs: placement config plus the Service lookup. */
+/** What address resolution needs: placement config plus the Service lookups. */
 interface EndpointRuntime {
   readonly cfg: DataPlanePlacement & {
     relayServiceName: string;
@@ -26,21 +26,31 @@ interface EndpointRuntime {
     proxyHeadlessService: string;
   };
   serviceAddress(name: string, shard?: number, podPrefix?: string): Promise<Endpoint | null>;
+  stableServiceAddress(name: string, shard?: number, podPrefix?: string): Promise<Endpoint | null>;
 }
 
 export class DataPlaneEndpoints {
   constructor(private readonly ctx: EndpointRuntime) {}
 
   /**
-   * Relay endpoint for this session.
+   * Relay endpoint a guest dials for this session.
    *
-   * With one replica this is the existing ClusterIP/endpoint lookup, unchanged.
-   * Above one it is the ready endpoint Pod IP for the session's shard. A
-   * hostname would be dialled by a guest that runs with `dnsPolicy: None` and
-   * no DNS egress, so it can never resolve one.
+   * Always a ClusterIP, never an endpoint Pod IP: the guest URL is baked into
+   * the Pod at create, and a Pod IP dies with the relay Pod. A guest runs with
+   * `dnsPolicy: None` and no DNS egress, so a Service name is not an option
+   * either. At one replica this is the `relay` ClusterIP; above one it is the
+   * session shard's per-shard ClusterIP Service (`relay-0`), which selects that
+   * StatefulSet Pod only.
    */
   async relayAddress(sessionId: string): Promise<Endpoint | null> {
-    return this.endpoint("relay", sessionId);
+    const shard = pinnedShard(this.ctx.cfg, "relay", sessionId);
+    return shard === null
+      ? this.ctx.stableServiceAddress(this.ctx.cfg.relayServiceName)
+      : this.ctx.stableServiceAddress(
+          this.ctx.cfg.relayServiceName,
+          shard,
+          this.ctx.cfg.relayServiceName,
+        );
   }
 
   /** Proxy endpoint for this session; same single/multi-replica split. */
@@ -49,11 +59,11 @@ export class DataPlaneEndpoints {
   }
 
   /**
-   * Resolve `service` for a session.
+   * Resolve the egress proxy for a session.
    *
-   * At one replica this is the shardless Service lookup, byte-identical to the
-   * pre-shard path. Above one it is the shard's ready endpoint and never the
-   * ClusterIP, which load-balances across replicas.
+   * The proxy is still addressed by endpoint Pod IP: a restart of the proxy
+   * breaks egress for the rest of the session (recorded as a residual in ADR
+   * 0012), but it does not kill the session or the relay link.
    */
   private endpoint(service: DataPlaneService, sessionId: string): Promise<Endpoint | null> {
     const name =
@@ -75,13 +85,18 @@ export class DataPlaneEndpoints {
    * Both data-plane endpoints for a session.
    *
    * Exposed for the resume path, which has to report an unavailable data plane
-   * as an error rather than terminate the session.
+   * as an error rather than terminate the session. The relay half is the
+   * stable guest address, but a ready endpoint is still required first: a
+   * sharded Service with no ready backend leaves this null and the resume fails
+   * as before, instead of booting a guest that can only retry.
    */
   async endpointsFor(sessionId: string): Promise<EndpointPair> {
-    return {
-      relay: await this.relayAddress(sessionId),
-      proxy: await this.proxyAddress(sessionId),
-    };
+    const [relayReady, relay, proxy] = await Promise.all([
+      this.endpoint("relay", sessionId),
+      this.relayAddress(sessionId),
+      this.proxyAddress(sessionId),
+    ]);
+    return { relay: relayReady ? relay : null, proxy };
   }
 
   /**
@@ -92,7 +107,10 @@ export class DataPlaneEndpoints {
    * timeout already terminates and refunds. Failing a paid session the moment a
    * replica rolls would make a normal restart look like a customer-visible
    * failure. Falling back to a hostname is not an option either: sandbox pods
-   * have no DNS, so a guest handed a name can never connect.
+   * have no DNS, so a guest handed a name can never connect. The relay address
+   * here is already the stable ClusterIP; a missing one (for example a sharded
+   * deployment without its per-shard Services) defers the create instead of
+   * booting a guest that cannot dial.
    */
   async podEndpoints(session: SessionRecord): Promise<{ relay: Endpoint; proxy: Endpoint } | null> {
     const { relay, proxy } = await this.endpointsFor(session.id);

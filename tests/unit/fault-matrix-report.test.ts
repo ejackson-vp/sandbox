@@ -105,6 +105,37 @@ describe("fault matrix report", () => {
     expect(fail).toContain("failure: convergence 71000ms exceeded budget 60000ms");
   });
 
+  it("renders the relay-kill survival report instead of fail-closed", () => {
+    const relayReport = {
+      target: "relay",
+      count: 5,
+      convergedMs: 18_400,
+      convergenceBudgetMs: 120_000,
+      pendingAtKill: 5,
+      terminal: 0,
+      survived: 5,
+      leasesUnchanged: true,
+      operationsUnresolved: 5,
+      operationsOutcomeUnknown: 5,
+      newExecSucceeded: 5,
+      podCount: 5,
+      reservations: { total: 5, held: 0, allocated: 5, suspended: 0, releasing: 0 },
+      execErrors: [{ error: "outcome_unknown", count: 5 }],
+    };
+    const rendered = renderSummary(summary({
+      case: "relay-kill",
+      target: "relay",
+      scenario: "provisioning",
+      sessions: 5,
+      budgetMs: 120_000,
+      convergedMs: 18_400,
+      report: relayReport,
+    }), null);
+    expect(rendered).toContain("survived 5/5, terminal 0");
+    expect(rendered).toContain("operations outcome-unknown 5/5");
+    expect(rendered).toContain("new execs 5/5");
+  });
+
   it("counts JUnit cases and names only the failing ones", () => {
     const dir = mkdtempSync(join(tmpdir(), "fault-matrix-"));
     writeFileSync(join(dir, "junit.xml"), `<?xml version="1.0" encoding="UTF-8"?>

@@ -15,4 +15,10 @@ export interface ReconcilerContext {
   readonly snapshotter: Snapshotter;
   now(): number;
   serviceAddress(name: string, shard?: number, podPrefix?: string): Promise<{ host: string; port: number } | null>;
+  /**
+   * ClusterIP-based address for a guest-facing URL. Required, not optional: a
+   * caller that could silently fall back to a Pod IP is the failure this seam
+   * exists to prevent.
+   */
+  stableServiceAddress(name: string, shard?: number, podPrefix?: string): Promise<{ host: string; port: number } | null>;
 }

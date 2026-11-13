@@ -31,6 +31,7 @@ import { RefundService } from "./refunds.js";
 import { HttpRefundExecutor, RefundWorker } from "./refund-worker.js";
 import { SettlementRecovery } from "./settlement-recovery.js";
 import { OperationFence } from "./operation-fence.js";
+import { RelayRecovery } from "./relay-recovery.js";
 import { runBounded } from "./bounded-queue.js";
 import { ServiceAddressResolver } from "./service-address.js";
 import { cadenceFor } from "./reconcile-cadence.js";
@@ -54,8 +55,16 @@ interface ReconcilerDeps {
     shard?: number,
     podPrefix?: string,
   ) => Promise<{ host: string; port: number } | null>;
+  /** Override for tests: resolves ClusterIP-based guest addresses. */
+  stableServiceAddress?: (
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ) => Promise<{ host: string; port: number } | null>;
   /** Restart-recovery fence; defaults to one bound to the store and relay. */
   fence?: OperationFence;
+  /** Injection point for tests; defaults to one bound to the fence and relay. */
+  relayRecovery?: RelayRecovery;
 }
 
 export class Reconciler {
@@ -82,6 +91,7 @@ export class Reconciler {
   private readonly lifecycle: Lifecycle;
   private readonly termination: Termination;
   private readonly fence: OperationFence;
+  private readonly relayRecovery: RelayRecovery;
   private readonly clock: ClockGuard;
   private readonly refundWorker: RefundWorker;
   private readonly settlementRecovery: SettlementRecovery;
@@ -118,12 +128,16 @@ export class Reconciler {
       // Bound, not wrapped: a wrapper with a shorter parameter list silently
       // drops arguments, which is how the shard pod prefix was lost.
       serviceAddress: this.serviceAddress.bind(this),
+      stableServiceAddress: this.stableServiceAddress.bind(this),
     };
     this.warm = new WarmPoolManager(this.ctx);
     this.provisioning = new Provisioning(this.ctx, this.warm);
     this.lifecycle = new Lifecycle(this.ctx, this.provisioning);
     this.termination = new Termination(this.ctx);
     this.fence = deps.fence ?? new OperationFence(deps.store, deps.relay);
+    this.relayRecovery =
+      deps.relayRecovery ??
+      new RelayRecovery(deps.cfg, deps.store, deps.relay, this.fence, () => this.now());
     // Both are inert unless configured: recovery needs a facilitator that
     // exposes a settlement lookup, and the worker needs an operator-owned
     // refund endpoint. With neither, real-mode refunds stay REFUND_PENDING.
@@ -406,6 +420,9 @@ export class Reconciler {
     if (this.housekeepingRunning) return;
     this.housekeepingRunning = true;
     try {
+      // Relay generation recovery first: it fences the operation a lost link was
+      // carrying before the fence below may decide anything about that gate.
+      await this.relayRecovery.reconcile();
       await this.termination.sweep();
       await this.fence.reconcile();
       await this.warm.reconcile();
@@ -479,6 +496,27 @@ export class Reconciler {
     return this.lifecycle.resume(id);
   }
 
+  /**
+   * ClusterIP-based address for a guest-facing URL.
+   *
+   * Cacheable, unlike the relay's endpoint Pod IP: a ClusterIP belongs to the
+   * Service, not to a Pod, so a relay replacement does not change it. The
+   * resolver's short TTL still picks up a Service being recreated.
+   */
+  private async stableServiceAddress(
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ): Promise<{ host: string; port: number } | null> {
+    return this.serviceAddresses.resolve(
+      `stable:${name}#${shard ?? ""}#${podPrefix ?? name}`,
+      () => this.deps.stableServiceAddress
+        ? this.deps.stableServiceAddress(name, shard, podPrefix)
+        : this.deps.provisioner.getStableServiceAddress(name, shard, podPrefix),
+      { cache: true },
+    );
+  }
+
   private async serviceAddress(
     name: string,
     shard?: number,
@@ -532,8 +570,28 @@ export class Reconciler {
     if (deadline === null) return;
     const now = this.ctx.now();
     if (now > deadline + this.ctx.cfg.leaseGraceMs) {
-      await this.ctx.store.requestTermination(session.id, "lease_expired");
-      log.warn("sandbox_lease_expired", { sessionId: session.id, state: session.state, overrunMs: now - deadline });
+      // The lease is over. If the session is inside a relay-loss window, the
+      // reason is the relay loss: the guest had no link to run anything on, and
+      // the refund policy compensates `relay_lost` but not an ordinary lease
+      // expiry. Relay recovery normally decides this a second before the lease
+      // (RELAY_LOSS_LEASE_MARGIN_MS); this is the backstop for a delayed scan.
+      const relayLost = this.relayRecovery.awaitingReconnect(session.id);
+      await this.ctx.store.requestTermination(
+        session.id,
+        relayLost ? "failure:relay_lost" : "lease_expired",
+        relayLost
+          ? {
+              code: "relay_lost",
+              message: "the lease ended while the guest was disconnected after a relay loss",
+            }
+          : undefined,
+      );
+      log.warn("sandbox_lease_expired", {
+        sessionId: session.id,
+        state: session.state,
+        overrunMs: now - deadline,
+        ...(relayLost ? { reason: "relay_lost" } : {}),
+      });
     }
   }
 

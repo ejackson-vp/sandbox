@@ -65,6 +65,13 @@ function harness(
   serviceAddress: (name: string, shard?: number, podPrefix?: string) => Promise<Endpoint | null> = vi.fn(
     async (_name: string, _shard?: number) => null,
   ),
+  // Guest-facing ClusterIP lookup. Defaults to the same fake so a test that
+  // only cares about one address still gets a coherent pair.
+  stableServiceAddress: (
+    name: string,
+    shard?: number,
+    podPrefix?: string,
+  ) => Promise<Endpoint | null> = serviceAddress,
 ) {
   const createPod = vi.fn(async (_spec: CreatedPod) => ({ podName: "sbx-pod" }));
   const requestTermination = vi.fn();
@@ -95,10 +102,11 @@ function harness(
       snapshotter: {} as never,
       now: () => Date.now(),
       serviceAddress,
+      stableServiceAddress,
     },
     { tryClaim: async () => false } as unknown as WarmPoolManager,
   );
-  return { provisioning, createPod, serviceAddress, requestTermination };
+  return { provisioning, createPod, serviceAddress, stableServiceAddress, requestTermination };
 }
 
 /**
@@ -119,41 +127,57 @@ function idsForTwoShards(): [string, string] {
 }
 
 describe("provisioning data-plane placement", () => {
-  it("keeps the ClusterIP endpoints byte-identical with one replica", async () => {
+  it("gives the guest the relay ClusterIP at one replica, never the endpoint Pod IP", async () => {
     const cfg = config();
     const serviceAddress = vi.fn(async (name: string) =>
       name === cfg.relayServiceName
-        ? { host: "10.0.0.1", port: cfg.relayPort }
+        ? { host: "10.1.0.6", port: cfg.relayPort }
         : { host: "10.0.0.9", port: cfg.proxyPort },
     );
-    const { provisioning, createPod } = harness(cfg, serviceAddress);
+    const stableServiceAddress = vi.fn(async (name: string) =>
+      name === cfg.relayServiceName
+        ? { host: "10.96.0.7", port: cfg.relayPort }
+        : { host: "10.96.0.8", port: cfg.proxyPort },
+    );
+    const { provisioning, createPod } = harness(cfg, serviceAddress, stableServiceAddress);
 
     await provisioning.createPod(
       session("sbx_single"),
-      { host: "10.0.0.1", port: cfg.relayPort },
+      { host: "10.96.0.7", port: cfg.relayPort },
       { host: "10.0.0.9", port: cfg.proxyPort },
     );
 
     const spec = createPod.mock.calls[0]![0];
-    expect(spec.relayUrl).toBe(`ws://10.0.0.1:${cfg.relayPort}/guest?session=sbx_single`);
-    expect(serviceAddress).toHaveBeenCalledWith(cfg.relayServiceName);
-    // createPod re-resolves only the relay (its pod IP changes on replacement);
-    // the proxy address comes from the caller unchanged.
+    // The Service ClusterIP survives a relay Pod replacement; the endpoint Pod
+    // IP does not, so it must not appear in a URL baked into the Pod.
+    expect(spec.relayUrl).toBe(`ws://10.96.0.7:${cfg.relayPort}/guest?session=sbx_single`);
+    expect(spec.relayUrl).not.toContain("10.1.0.6");
+    expect(stableServiceAddress).toHaveBeenCalledWith(cfg.relayServiceName);
+    // The proxy address comes from the caller unchanged.
     expect(spec.proxyUrl).toBe(`http://10.0.0.9:${cfg.proxyPort}`);
     // No shard claim is minted when there is nothing to shard.
     expect(spec.guestToken).not.toContain(".");
     expect(spec.proxyToken.startsWith("v1.")).toBe(true);
   });
 
-  it("hands the guest shard endpoint IPs, never a hostname, with two replicas", async () => {
+  it("hands the guest a per-shard ClusterIP, never a Pod IP or hostname, with two replicas", async () => {
     const cfg = config({ RELAY_REPLICAS: "2", PROXY_REPLICAS: "2" });
+    // Endpoint lookup: still used for the egress proxy, which is addressed by
+    // Pod IP for now.
     const serviceAddress = vi.fn(async (name: string, shard?: number) => {
       const ordinal = (shard ?? 0) + 1;
-      return name === cfg.relayHeadlessService
-        ? { host: `10.1.1.${ordinal}`, port: cfg.relayPort }
-        : { host: `10.1.2.${ordinal}`, port: cfg.proxyPort };
+      return name === cfg.proxyHeadlessService
+        ? { host: `10.1.2.${ordinal}`, port: cfg.proxyPort }
+        : { host: `10.1.1.${ordinal}`, port: cfg.relayPort };
     });
-    const { provisioning, createPod } = harness(cfg, serviceAddress);
+    // Stable lookup: one ClusterIP Service per shard (`relay-0`, `relay-1`).
+    const stableServiceAddress = vi.fn(async (name: string, shard?: number) => {
+      const ordinal = (shard ?? 0) + 1;
+      return name === cfg.relayServiceName
+        ? { host: `10.96.1.${ordinal}`, port: cfg.relayPort }
+        : { host: `10.96.2.${ordinal}`, port: cfg.proxyPort };
+    });
+    const { provisioning, createPod } = harness(cfg, serviceAddress, stableServiceAddress);
     const [zero, one] = idsForTwoShards();
 
     await provisioning.provision(session(zero));
@@ -166,11 +190,11 @@ describe("provisioning data-plane placement", () => {
     expect(firstShard).not.toBe(secondShard);
 
     expect(first.relayUrl).toBe(
-      `ws://10.1.1.${firstShard + 1}:${cfg.relayPort}/guest?session=${encodeURIComponent(zero)}`,
+      `ws://10.96.1.${firstShard + 1}:${cfg.relayPort}/guest?session=${encodeURIComponent(zero)}`,
     );
     expect(first.proxyUrl).toBe(`http://10.1.2.${firstShard + 1}:${cfg.proxyPort}`);
     expect(second.relayUrl).toBe(
-      `ws://10.1.1.${secondShard + 1}:${cfg.relayPort}/guest?session=${encodeURIComponent(one)}`,
+      `ws://10.96.1.${secondShard + 1}:${cfg.relayPort}/guest?session=${encodeURIComponent(one)}`,
     );
     expect(second.proxyUrl).toBe(`http://10.1.2.${secondShard + 1}:${cfg.proxyPort}`);
 
@@ -179,11 +203,13 @@ describe("provisioning data-plane placement", () => {
     expect(first.proxyUrl).not.toBe(second.proxyUrl);
 
     // A guest runs with `dnsPolicy: None` and no DNS egress: a headless Service
-    // name would be unresolvable, so neither URL may contain one.
+    // name would be unresolvable, so neither URL may contain one. The relay URL
+    // must also not carry the shard's Pod IP, which changes on replacement.
     expect(first.relayUrl).not.toContain("relay-headless");
+    expect(first.relayUrl).not.toContain("10.1.1.");
     expect(first.proxyUrl).not.toContain("egress-proxy-headless");
-    expect(serviceAddress).toHaveBeenCalledWith(
-      cfg.relayHeadlessService,
+    expect(stableServiceAddress).toHaveBeenCalledWith(
+      cfg.relayServiceName,
       firstShard,
       cfg.relayServiceName,
     );
@@ -194,16 +220,19 @@ describe("provisioning data-plane placement", () => {
     );
   });
 
-  it("defers, without creating a pod, when the session's shard has no ready endpoint", async () => {
+  it("defers, without creating a pod, when the session's shard has no stable Service", async () => {
     const cfg = config({ RELAY_REPLICAS: "2", PROXY_REPLICAS: "2" });
-    const { provisioning, createPod, requestTermination } = harness(cfg);
+    const missing = vi.fn(async (_name: string, shard?: number) =>
+      shard === undefined ? { host: "10.0.0.1", port: cfg.relayPort } : null,
+    );
+    const { provisioning, createPod, requestTermination } = harness(cfg, missing, missing);
 
     await provisioning.provision(session("sbx_no_shard_endpoint"));
 
-    // No pod is created: a hostname in the pod spec could never be dialled.
-    // The session is not terminated either: a rolling restart of that replica
-    // must not fail a paid session. The provisioning timeout refunds if the
-    // shard never comes back.
+    // No pod is created: a guest whose relay URL has no address (a sharded
+    // deployment without `relay-<n>` Services) could never connect. The session
+    // is not terminated either: a rolling restart of that replica must not fail
+    // a paid session. The provisioning timeout refunds if it never comes back.
     expect(createPod).not.toHaveBeenCalled();
     expect(requestTermination).not.toHaveBeenCalled();
   });

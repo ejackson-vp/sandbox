@@ -18,6 +18,7 @@
  * real webhook must implement. No test here talks to a real provider.
  */
 import { describe, expect, it, vi } from "vitest";
+import { asClaimToken } from "@x402s/shared/durable";
 import type { PaymentRecord, SessionRecord } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import type { RefundWorkerStore } from "../../controller/src/store/ports.js";
@@ -209,7 +210,7 @@ describe("refund claim", () => {
       leaseCutoffMs: Date.now() - 60_000,
       limit: 3,
       maxAttempts: 5,
-      claimToken: token,
+      claimToken: asClaimToken(token),
     });
     const [first, second] = await Promise.all([
       store.claimRefunds(request("a".repeat(32))),
@@ -240,7 +241,7 @@ describe("refund claim", () => {
       leaseCutoffMs: 0,
       limit: 10,
       maxAttempts: 2,
-      claimToken: "c".repeat(32),
+      claimToken: asClaimToken("c".repeat(32)),
     });
     expect(claimed).toHaveLength(0);
   });
@@ -254,7 +255,7 @@ describe("refund claim", () => {
       leaseCutoffMs: 0,
       limit: 1,
       maxAttempts: 5,
-      claimToken: "d".repeat(32),
+      claimToken: asClaimToken("d".repeat(32)),
     });
 
     // An operator recording a transaction here could race a live send, so the

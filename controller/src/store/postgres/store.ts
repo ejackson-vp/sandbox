@@ -31,6 +31,7 @@ import {
 } from "../models.js";
 import { boundedFailureReason } from "../failure-reasons.js";
 import type { BudgetDecision, BudgetLimits } from "../budget-decision.js";
+import type { ClaimToken } from "@x402s/shared/durable";
 import type { ReservationStore } from "../../capacity/reservation-store.js";
 import type { StoreBackend } from "../backend.js";
 import { migratePostgres } from "./schema.js";
@@ -238,13 +239,13 @@ export class PostgresStore implements StoreBackend {
     return this.ledgerRepo.claimRefunds(request);
   }
 
-  completeRefundClaim(paymentKey: string, claimToken: string, transaction: string): Promise<boolean> {
+  completeRefundClaim(paymentKey: string, claimToken: ClaimToken, transaction: string): Promise<boolean> {
     return this.ledgerRepo.completeRefundClaim(paymentKey, claimToken, transaction);
   }
 
   releaseRefundClaim(
     paymentKey: string,
-    claimToken: string,
+    claimToken: ClaimToken,
     error: string,
     nextAttemptAt: number,
   ): Promise<boolean> {
@@ -393,6 +394,16 @@ export class PostgresStore implements StoreBackend {
     return this.operations.clearFencedGate(sessionId, requestId, epoch);
   }
 
+  listRelaySessions(limit: number, after: string | null = null): Promise<SessionRecord[]> {
+    return this.operations.listRelaySessions(limit, after);
+  }
+
+  recoverSessionOperation(
+    sessionId: string,
+  ): Promise<{ requestId: string | null; epoch: number | null }> {
+    return this.operations.recoverSessionOperation(sessionId);
+  }
+
   claimOperation(sessionId: string, requestId: string, op: string, payloadHash: string | null = null) {
     return this.operations.claimOperation(sessionId, requestId, op, payloadHash);
   }
@@ -400,7 +411,7 @@ export class PostgresStore implements StoreBackend {
   finishOperation(
     sessionId: string,
     requestId: string,
-    outcome: "done" | "error" | "abandoned",
+    outcome: "done" | "error" | "abandoned" | "outcome_unknown",
     resultEnvelope?: string | null,
   ): Promise<void> {
     return this.operations.finishOperation(sessionId, requestId, outcome, resultEnvelope);

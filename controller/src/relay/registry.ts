@@ -9,7 +9,27 @@ export const MAX_FRAME_BYTES = 24 * 1024 * 1024;
 export const MAX_PENDING = 8;
 const MAX_CACHED_RESPONSES = 64;
 
-type WaiterValue = { envelope: string } | { error: string } | null;
+/**
+ * Why the relay could not produce an outcome for a request it accepted.
+ *
+ * `guest_disconnected` and `request_superseded` are link-loss classes: the
+ * frame may have been started, so the controller must treat the operation as
+ * `outcome_unknown`, never as a guest error. `guest_error` is the guest itself
+ * reporting a failed operation, and `session_destroyed` means the session is
+ * being torn down.
+ */
+export type RelayFailureCode =
+  | "guest_disconnected"
+  | "request_superseded"
+  | "session_destroyed"
+  | "guest_error";
+
+/** Link-loss codes: the outcome is unknown, not a failure. */
+export function isLinkLossFailure(code: RelayFailureCode): boolean {
+  return code === "guest_disconnected" || code === "request_superseded";
+}
+
+type WaiterValue = { envelope: string } | { error: RelayFailureCode; message: string } | null;
 
 interface Pending {
   at: number;
@@ -24,6 +44,7 @@ interface CachedResponse {
 }
 
 interface CachedError {
+  code: RelayFailureCode;
   message: string;
   at: number;
 }
@@ -105,7 +126,7 @@ type AttachResult = "ok" | "not_found" | "expired" | "bad_token" | "wrong_shard"
 
 type WaitResult =
   | { kind: "envelope"; envelope: string }
-  | { kind: "error"; message: string }
+  | { kind: "error"; code: RelayFailureCode; message: string }
   | { kind: "pending"; stillPending: boolean }
   | { kind: "not_registered" };
 
@@ -133,6 +154,19 @@ export class RelayRegistry {
     let total = 0;
     for (const entry of this.entries.values()) {
       if (entry.activeRequestId !== null) total += 1;
+    }
+    return total;
+  }
+
+  /**
+   * Registrations that currently have a live guest socket. Exposed as a gauge so
+   * a rollout can be observed converging (and the fault harness can wait for it
+   * instead of guessing from a new operation).
+   */
+  connectedTotal(): number {
+    let total = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.ws && entry.ws.readyState === 1) total += 1;
     }
     return total;
   }
@@ -246,7 +280,10 @@ export class RelayRegistry {
     for (const [id, pending] of entry.pending) {
       if (pending.epoch < requested) {
         entry.pending.delete(id);
-        pending.waiter?.({ error: "request superseded by controller recovery" });
+        pending.waiter?.({
+          error: "request_superseded",
+          message: "request superseded by controller recovery",
+        });
         withdrawn += 1;
       }
     }
@@ -285,7 +322,9 @@ export class RelayRegistry {
     const socket = entry.socket;
     entry.ws = null;
     entry.socket = null;
-    for (const pending of entry.pending.values()) pending.waiter?.({ error: "guest disconnected" });
+    for (const pending of entry.pending.values()) {
+      pending.waiter?.({ error: "guest_disconnected", message: "guest disconnected" });
+    }
     entry.pending.clear();
     const resets = this.metrics.counter(
       "sandbox_relay_connection_resets_total",
@@ -359,7 +398,9 @@ export class RelayRegistry {
     this.prune(entry);
 
     const cachedError = entry.errors.get(id);
-    if (cachedError) return { kind: "error", message: cachedError.message };
+    if (cachedError) {
+      return { kind: "error", code: cachedError.code, message: cachedError.message };
+    }
     const cached = entry.responses.get(id);
     if (cached) return { kind: "envelope", envelope: cached.envelope };
     if (!entry.pending.has(id)) return { kind: "pending", stillPending: false };
@@ -381,7 +422,9 @@ export class RelayRegistry {
     });
 
     if (value && "envelope" in value) return { kind: "envelope", envelope: value.envelope };
-    if (value && "error" in value) return { kind: "error", message: value.error };
+    if (value && "error" in value) {
+      return { kind: "error", code: value.error, message: value.message };
+    }
     return { kind: "pending", stillPending: entry.pending.has(id) };
   }
 
@@ -411,12 +454,24 @@ export class RelayRegistry {
     entry.ws = ws;
     entry.socket = socket ?? null;
     entry.connectedAt = Date.now();
+    // A new socket is a new guest process or a reconnected one. The execution
+    // status reported on the previous link no longer describes this one, so it
+    // is cleared: a recovery fence holds until the guest reports itself, rather
+    // than trusting a status that belonged to a dead socket.
+    entry.activeRequestId = null;
+    entry.execEpoch = null;
+    entry.statusAt = null;
     if (reconnecting) {
       this.metrics
         .counter("sandbox_relay_reconnects_total", "Guest reconnections to an existing registration")
         .inc();
     }
     return true;
+  }
+
+  /** Whether a registration already exists (used to log a re-registration). */
+  has(sessionId: string): boolean {
+    return this.entries.has(sessionId);
   }
 
   hello(
@@ -456,11 +511,13 @@ export class RelayRegistry {
     if (id && (entry.responses.has(id) || entry.errors.has(id))) return "duplicate";
     entry.lastError = { code, message };
     if (!id) return "ok";
-    entry.errors.set(id, { message, at: Date.now() });
+    // A guest-reported operation error: the guest ran the operation and says it
+    // failed. That is a real outcome, not a link loss.
+    entry.errors.set(id, { code: "guest_error", message, at: Date.now() });
     this.prune(entry);
     const pending = entry.pending.get(id);
     entry.pending.delete(id);
-    pending?.waiter?.({ error: message });
+    pending?.waiter?.({ error: "guest_error", message });
     return "ok";
   }
 
@@ -469,7 +526,9 @@ export class RelayRegistry {
     if (!entry || entry.ws !== ws) return;
     entry.ws = null;
     entry.socket = null;
-    for (const pending of entry.pending.values()) pending.waiter?.({ error: "guest disconnected" });
+    for (const pending of entry.pending.values()) {
+      pending.waiter?.({ error: "guest_disconnected", message: "guest disconnected" });
+    }
     entry.pending.clear();
   }
 
@@ -488,7 +547,9 @@ export class RelayRegistry {
     } catch {
       /* ignore */
     }
-    for (const pending of entry.pending.values()) pending.waiter?.({ error: "session destroyed" });
+    for (const pending of entry.pending.values()) {
+      pending.waiter?.({ error: "session_destroyed", message: "session destroyed" });
+    }
     entry.pending.clear();
     this.entries.delete(sessionId);
     return true;

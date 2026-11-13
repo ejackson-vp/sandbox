@@ -92,6 +92,7 @@ export function registerRelayControlRoutes(
       res.status(409).json({ error: "relay_generation_changed", generation: opts.generation });
       return;
     }
+    const existed = registry.has(sessionId);
     const result = registry.register(sessionId, tokenHash, Number(ttlMs));
     if (result === "at_capacity") {
       res.status(503).json({ error: "relay_at_capacity" });
@@ -100,6 +101,18 @@ export function registerRelayControlRoutes(
     if (result === "already_connected") {
       res.status(409).json({ error: "session_already_connected", generation: opts.generation });
       return;
+    }
+    if (existed) {
+      // A READY/ACTIVE session re-registered on a new relay generation (the
+      // controller detected the change after a restart). The token hash is the
+      // one minted at create time; the entry keeps any epoch floor it had.
+      metrics
+        .counter(
+          "sandbox_relay_reregistrations_total",
+          "Guest registrations the relay accepted for a session it already knew",
+        )
+        .inc();
+      log.info("relay_session_reregistered", { sessionId, generation: opts.generation });
     }
     res.status(201).json({ ok: true, generation: opts.generation });
   });
@@ -247,7 +260,10 @@ export function registerRelayControlRoutes(
       return;
     }
     if (result.kind === "error") {
-      res.status(409).json({ error: "guest_error", message: result.message });
+      // Structured code, so the controller can tell a link loss (outcome
+      // unknown) from a guest-reported operation error (a real failure). A
+      // generic 409 forced it to guess from the message.
+      res.status(409).json({ error: result.code, message: result.message });
       return;
     }
     res.status(202).json({ pending: result.stillPending });

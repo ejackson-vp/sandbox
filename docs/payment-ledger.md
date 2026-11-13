@@ -9,6 +9,11 @@ idempotency key, not exactly-once. No partial refunds or customer credits yet.
 **None of the real-money path has been executed against a real facilitator or a
 real chain**: see [Limits](#limits).
 
+The claim, key, lease, retry and outcome rules are the shared durable-call
+contract in [ADR 0011](adr/0011-durable-external-calls.md) and
+`shared/src/durable/`. This document is the ledger's application of it: the SQL,
+the states, the policy and the operator surface.
+
 ## States
 
 ```text
@@ -35,21 +40,22 @@ never a session without a ledger row, or a ledger row without its entitlement.
 | `settlement_nonce` | EIP-3009 authorisation nonce, so a refund can be keyed by it |
 | `refund_attempts`, `refund_last_error`, `refund_next_attempt_at` | refund worker retry state |
 | `refund_claim_token`, `refund_claimed_at` | owner and lease of the current `REFUND_SENDING` claim |
-| `refund_idempotency_key` | stable provider key, `refund:<payment_key>` (schema v18) |
+| `refund_idempotency_key` | stable provider key from `refundKey()`, `refund:<payment_key>` (schema v18) |
 
 ## Claim fencing and idempotent completion
 
-`payment_intents` carries a `claim_token` and `claim_expires_at`. The token is
-the ownership fence for the outbox:
+`payment_intents` carries a `claim_token` and `claim_expires_at`, the grant
+path's encoding of the same lease as the ledger's `refund_claim_token` and
+`refund_claimed_at` ([ADR 0011](adr/0011-durable-external-calls.md)):
 
 - The first claim inserts the intent as `claimed` and returns a fresh token.
 - A live claim makes a second claim `in_progress`.
 - A claim past its recorded lease, or older than the caller's `staleMs` (the
   crash path), is reclaimed with a **new** token. The previous owner is fenced
   out.
-- `complete` must present the current token. The check happens inside the same
-  `BEGIN IMMEDIATE` transaction that writes the payment, ledger and session
-  rows, so a stalled owner that was reclaimed cannot settle.
+- `complete` must present the current token. The check happens inside the
+  settlement transaction that writes the payment, ledger and session rows, so a
+  stalled owner that was reclaimed cannot settle.
 - Completion is idempotent: if the intent is already `settled`, the caller gets
   the winning `sessionId` and a successful response instead of an error. No
   second payment, ledger row or session is written. Settlement clears the claim
@@ -58,6 +64,12 @@ the ownership fence for the outbox:
 The controller treats a mismatch as `409 stale_claim`. The API turns an
 idempotent completion into the normal `200` session response for the same
 capability.
+
+The settle call itself is classified with the shared outcome algebra. A thrown
+facilitator call, or a `settlement_pending` answer, is `unknown`: with a
+settlement lookup configured the intent stays `claimed` so recovery can find it,
+rather than being failed on an outcome that may have moved money. A plain
+refusal still fails the intent and releases the capacity hold.
 
 ## Settlement recovery (settle-then-crash)
 
@@ -150,6 +162,18 @@ stopping.
 | `REFUND_RETRY_BASE_MS` | `60000` | first retry delay, doubled per attempt (capped at 1 h) |
 | `REFUND_CLAIM_LEASE_MS` | `60000` | how long one pass owns a claim; must exceed the webhook timeout |
 
+The worker is one consumer of `shared/src/durable/`; the grant path is the other.
+Nothing below redefines the protocol, it applies it:
+
+| Piece | Refund worker | Grant path |
+|---|---|---|
+| key | `refundKey()` as `Idempotency-Key` and in the body | `settlementKey()` for log naming; the facilitator dedupes by nonce |
+| lease | `refund_claimed_at` plus the worker lease, compared against `leaseCutoffMs` | absolute `claim_expires_at`, checked with `deadlinePassed` |
+| fence | `refund_claim_token` in the completion and release `UPDATE` | `claim_token` in the settle `UPDATE` |
+| retry | 10 attempts, 60 s base, 1 h ceiling, 60 s lease over a 10 s call | `staleMs` reclaim only |
+| outcome | webhook status and thrown error | facilitator response and thrown call |
+| `runClaimed` | the per-row loop | not used; the settlement transaction stays visible in the adapter |
+
 ### Claim before sending
 
 A pass never sends a row it does not own. It claims up to `limit` due rows in one
@@ -170,14 +194,16 @@ UPDATE payment_ledger l
    SET status = 'REFUND_SENDING', refund_claim_token = $token,
        refund_claimed_at = $now,
        refund_idempotency_key = COALESCE(l.refund_idempotency_key,
-                                         'refund:' || l.payment_key),
+                                         $key_prefix || l.payment_key),
        updated_at = $now
   FROM due WHERE l.payment_key = due.payment_key
 RETURNING l.*, due.status AS previous_status;
 ```
 
-`FOR UPDATE SKIP LOCKED` makes two workers disjoint: the loser skips locked rows
-instead of waiting, so exactly one pass owns a row. `previous_status` tells the
+The cutoff, the attempt limit and the key prefix all come from the worker
+(`leaseCutoffMs`, the retry policy, `keyPrefix`): the statement compares
+timestamps and never decides lease policy. `FOR UPDATE SKIP LOCKED` makes two
+workers disjoint, so exactly one pass owns a row. `previous_status` tells the
 worker whether it took the row from `REFUND_PENDING` or reclaimed an expired
 `REFUND_SENDING` lease.
 
@@ -212,17 +238,13 @@ and `Idempotency-Key: refund:<paymentKey>`, expecting
 `200 {"transaction":"<id>"}`. The endpoint holds the signing authority; this
 process does not, so a compromised controller cannot move funds by itself.
 
-**The provider must key on `Idempotency-Key`**: the same key returns the original
-transaction and moves no funds again. That property, plus the durable claim, is
-the whole guarantee. It is effectively-once:
-
-- a crash after the provider paid but before `REFUNDED` is written leaves the row
-  `REFUND_SENDING`; the reclaim resends the same key and the provider returns the
-  original transaction;
-- a timeout is treated as unknown, not as a failure, because the provider may
-  have paid before the answer was lost;
-- a stalled pass that was reclaimed cannot record its transaction: completion is
-  conditional on the claim token.
+**The provider must key on `Idempotency-Key`**, which is the provider half of the
+guarantee in
+[ADR 0011](adr/0011-durable-external-calls.md#what-is-not-guaranteed). The same
+key returns the original transaction and moves no funds again. On this side the
+guarantee is the durable claim, the fence and the classifier: an ambiguous answer
+is `unknown` and retried with the same key, and a reclaimed owner records
+nothing.
 
 What it does not survive: a provider that ignores the key (two transfers), or a
 row whose key is changed between attempts (do not do that). Exact-once across an
@@ -280,12 +302,14 @@ a worker owns that claim and may be mid-send.
   public facilitator does not, so testnet still answers `409
   reconciliation_pending` and the money is only visible to a human who reconciles
   the on-chain transfer.
-- An ambiguous refund outcome (timeout, 5xx, no transaction id) does not count an
-  attempt: the row stays `REFUND_SENDING` and is retried each time its lease
-  expires, with the same key, indefinitely. `REFUND_MAX_ATTEMPTS` bounds definite
-  refusals only. That is deliberate, because giving up on a payment that may have
-  moved is worse than a visible `sandbox_refunds_sending` gauge that stays above
-  zero; an operator still has to reconcile that row.
+- An ambiguous refund outcome (timeout, 5xx, no transaction id) is `unknown`, not
+  a failed attempt: the row stays `REFUND_SENDING` and is retried each time its
+  lease expires, with the same key, indefinitely. `REFUND_MAX_ATTEMPTS` bounds
+  definite refusals only. That is the shared rule, not a refund exception; see
+  [ADR 0011](adr/0011-durable-external-calls.md#what-is-not-guaranteed). Giving up
+  on a payment that may have moved is worse than a visible
+  `sandbox_refunds_sending` gauge that stays above zero; an operator still has to
+  reconcile that row.
 - The claim lease bounds duplicate sends only against a *slow* pass. A pass whose
   provider call outlives `REFUND_CLAIM_LEASE_MS` is safe only because the resend
   reuses the key, not because the lease prevented it.

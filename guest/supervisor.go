@@ -28,12 +28,24 @@ type supervisor struct {
 	lease       time.Time
 	maxFile     int64
 
+	// Relay identity for reconnect. The supervisor keeps the URL (with the
+	// guest token) and the evidence it attested at boot, so a reconnected guest
+	// presents the same session, token and ephemeral key. Re-keying would make
+	// every envelope the client already sealed undecryptable.
+	relayURL string
+	evidence map[string]any
+
 	mu       sync.Mutex
 	inflight map[string]context.CancelFunc
 	slots    chan struct{}
+	// handlers tracks in-flight operation goroutines. A link loss waits on it
+	// before reconnecting: the aborted command must be gone (its process group
+	// killed) before the guest can honestly report an idle slot.
+	handlers sync.WaitGroup
 
 	// Execution-epoch high-water mark and the request holding the single slot.
-	// Guarded by mu. The controller reads both through the relay.
+	// Guarded by mu. The controller reads both through the relay. Both survive a
+	// relay reconnect: the fence is per session, not per socket.
 	epoch  int64
 	active string
 
@@ -46,19 +58,87 @@ type supervisor struct {
 	transfers  *transferManager
 }
 
+// errLeaseEnded is the reconnect loop's stop condition: the session has no time
+// left, so there is nothing to reconnect for.
+var errLeaseEnded = errors.New("lease ended before the relay link returned")
+
+// serve runs one relay link at a time. A lost link (not lease expiry, not an
+// explicit shutdown) aborts the operation it carried and reconnects with
+// bounded backoff, keeping the workspace and the customer's long-running
+// services. It returns nil for a clean end: lease expiry or shutdown.
 func (s *supervisor) serve(ctx context.Context) error {
+	defer func() { s.conn.Close() }()
+	for {
+		err := s.serveLink(ctx)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			// SIGTERM/SIGINT: a clean stop, not a failed session.
+			logEvent("guest_shutdown", map[string]any{"sessionId": s.sessionID})
+			return nil
+		}
+		if !s.lease.After(time.Now()) {
+			logEvent("guest_lease_ended", map[string]any{"sessionId": s.sessionID})
+			s.shutdownAll()
+			return nil
+		}
+
+		// The link that carried an operation is gone: cancel and kill it, and
+		// never answer it. The controller has already been told (or will be)
+		// that its outcome is unknown; a reply would be a fabricated result.
+		logEvent("guest_relay_lost", map[string]any{
+			"sessionId": s.sessionID,
+			"error":     err.Error(),
+		})
+		s.abortInflight()
+		s.conn.Close()
+
+		client, dialErr := s.reconnect(ctx)
+		if dialErr != nil {
+			if errors.Is(dialErr, errLeaseEnded) || ctx.Err() != nil {
+				logEvent("guest_lease_ended", map[string]any{"sessionId": s.sessionID})
+				s.shutdownAll()
+				return nil
+			}
+			return dialErr
+		}
+		s.conn = client
+		if helloErr := s.conn.SendHello(ctx, s.evidence); helloErr != nil {
+			logEvent("guest_hello_failed", map[string]any{
+				"sessionId": s.sessionID,
+				"error":     helloErr.Error(),
+			})
+			continue
+		}
+		// Idle is published before the first frame of the new link so a
+		// recovery fence can clear without waiting for an operation. The epoch
+		// is the surviving high-water mark; a frame below it is still rejected.
+		s.publishStatus(ctx, s.conn)
+		logEvent("guest_relay_reconnected", map[string]any{"sessionId": s.sessionID})
+	}
+}
+
+// serveLink reads frames until the link fails, the lease ends or the controller
+// asks the guest to stop. In-flight operations are bound to this link's context,
+// so a read error cancels them before the caller reconnects.
+func (s *supervisor) serveLink(ctx context.Context) error {
+	linkCtx, cancelLink := context.WithCancel(ctx)
+	defer cancelLink()
+
 	// The controller must be able to tell "idle" apart from "has not reported
 	// status yet", so publish once before the first frame.
-	s.publishStatus(ctx)
+	s.publishStatus(linkCtx, s.conn)
 	for {
-		readCtx, cancel := context.WithDeadline(ctx, s.lease)
+		readCtx, cancel := context.WithDeadline(linkCtx, s.lease)
 		frame, err := s.conn.Read(readCtx)
 		expired := readCtx.Err() != nil
 		cancel()
 		if err != nil {
-			s.shutdownAll()
-			if expired || errors.Is(ctx.Err(), context.Canceled) {
-				logEvent("guest_lease_ended", map[string]any{"sessionId": s.sessionID})
+			if expired || ctx.Err() != nil {
+				// The lease is the only reason this loop stops without a link:
+				// the supervisor kills every descendant on the way out.
+				s.shutdownAll()
 				return nil
 			}
 			return fmt.Errorf("relay read: %w", err)
@@ -68,7 +148,11 @@ func (s *supervisor) serve(ctx context.Context) error {
 			if frame.ID == "" || frame.Envelope == "" {
 				continue
 			}
-			go s.handleRequest(ctx, frame)
+			s.handlers.Add(1)
+			go func(conn *relay.Client, frame *relay.Frame) {
+				defer s.handlers.Done()
+				s.handleRequest(linkCtx, conn, frame)
+			}(s.conn, frame)
 		case "cancel":
 			s.cancel(frame.ID)
 		case "shutdown":
@@ -78,6 +162,75 @@ func (s *supervisor) serve(ctx context.Context) error {
 		default:
 			logEvent("guest_unknown_frame", map[string]any{"type": frame.Type})
 		}
+	}
+}
+
+// reconnect re-dials until the lease ends. Backoff is bounded so a relay that
+// comes back is picked up in seconds, and a 401 (a guest token the relay will
+// never accept) ends the session instead of retrying.
+func (s *supervisor) reconnect(ctx context.Context) (*relay.Client, error) {
+	backoff := 250 * time.Millisecond
+	for {
+		if !s.lease.After(time.Now()) {
+			return nil, errLeaseEnded
+		}
+		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		client, err := relay.DialOnce(dialCtx, s.relayURL)
+		cancel()
+		if err == nil {
+			return client, nil
+		}
+		var statusErr *relay.StatusError
+		if errors.As(err, &statusErr) && statusErr.Permanent() {
+			logEvent("guest_relay_rejected", map[string]any{
+				"sessionId": s.sessionID,
+				"status":    statusErr.Status,
+			})
+			return nil, err
+		}
+		wait := backoff
+		if remaining := time.Until(s.lease); remaining < wait {
+			wait = remaining
+		}
+		if wait < 0 {
+			wait = 0
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if backoff < 4*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+// abortInflight cancels every relay-bound operation and waits for their
+// goroutines to finish, so the process group is gone and the single slot is
+// free before the guest reports status on a new link. Customer services, open
+// streams and the workspace are deliberately untouched.
+func (s *supervisor) abortInflight() {
+	s.mu.Lock()
+	fns := make([]context.CancelFunc, 0, len(s.inflight))
+	for _, fn := range s.inflight {
+		fns = append(fns, fn)
+	}
+	s.mu.Unlock()
+	for _, fn := range fns {
+		fn()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.handlers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		// A command that outlived the cancel still holds the slot. Report it
+		// honestly (publishStatus reads `active`) rather than claiming idle.
+		logEvent("guest_inflight_drain_timeout", map[string]any{"sessionId": s.sessionID})
 	}
 }
 
@@ -112,12 +265,14 @@ func (s *supervisor) admitEpoch(epoch int64) bool {
 // publishStatus reports the execution slot to the relay. Failure is logged but
 // never fails the operation: the controller then keeps its recovery fence
 // closed, which is the safe direction.
-func (s *supervisor) publishStatus(ctx context.Context) {
+func (s *supervisor) publishStatus(ctx context.Context, conn *relay.Client) {
 	s.mu.Lock()
 	active, epoch := s.active, s.epoch
 	s.mu.Unlock()
-	if err := s.conn.SendStatus(ctx, active, epoch); err != nil {
-		logEvent("guest_status_failed", map[string]any{"error": err.Error()})
+	if err := conn.SendStatus(ctx, active, epoch); err != nil {
+		if ctx.Err() == nil {
+			logEvent("guest_status_failed", map[string]any{"error": err.Error()})
+		}
 	}
 }
 
@@ -148,7 +303,10 @@ func (s *supervisor) shutdownAll() {
 }
 
 // handleRequest decrypts, validates, dispatches and answers one operation.
-func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
+// `conn` is the link the frame arrived on: a response must never travel over a
+// later link, where it would be indistinguishable from the outcome of an
+// operation the controller has already given up on.
+func (s *supervisor) handleRequest(ctx context.Context, conn *relay.Client, frame *relay.Frame) {
 	// One operation at a time per session. The controller also enforces this;
 	// the guest does so again so a buggy/compromised client cannot race.
 	select {
@@ -156,7 +314,7 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 	case <-ctx.Done():
 		return
 	case <-time.After(10 * time.Second):
-		s.replyPlain(ctx, frame.ID, protocol.ErrorResult(&protocol.Request{
+		s.replyPlain(ctx, conn, frame.ID, protocol.ErrorResult(&protocol.Request{
 			V: 2, SessionID: s.sessionID, ClientNonce: s.clientNonce, RequestID: frame.ID, Op: "exec",
 		}, "busy", "another operation is still running"))
 		return
@@ -167,7 +325,7 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 	// rejected: it must never start after recovery.
 	if !s.admitEpoch(frame.Epoch) {
 		<-s.slots
-		s.replyPlain(ctx, frame.ID, protocol.ErrorResult(&protocol.Request{
+		s.replyPlain(ctx, conn, frame.ID, protocol.ErrorResult(&protocol.Request{
 			V: 2, SessionID: s.sessionID, ClientNonce: s.clientNonce, RequestID: frame.ID, Op: "exec",
 		}, "stale_epoch", "the request belongs to a previous controller generation"))
 		return
@@ -178,7 +336,7 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 	s.inflight[frame.ID] = cancel
 	s.active = frame.ID
 	s.mu.Unlock()
-	s.publishStatus(ctx)
+	s.publishStatus(ctx, conn)
 	defer func() {
 		cancel()
 		s.mu.Lock()
@@ -188,14 +346,17 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 		}
 		s.mu.Unlock()
 		// Publish idle before releasing the slot so the next operation's start
-		// status can never overtake this one.
-		s.publishStatus(ctx)
+		// status can never overtake this one. On a dead link this is skipped:
+		// the reconnect publishes the state of the new link instead.
+		if ctx.Err() == nil {
+			s.publishStatus(ctx, conn)
+		}
 		<-s.slots
 	}()
 
 	req, err := s.decrypt(frame)
 	if err != nil {
-		s.replyPlain(ctx, frame.ID, protocol.ErrorResult(&protocol.Request{
+		s.replyPlain(ctx, conn, frame.ID, protocol.ErrorResult(&protocol.Request{
 			V: 2, SessionID: s.sessionID, ClientNonce: s.clientNonce, RequestID: frame.ID, Op: "exec",
 		}, "invalid_request", err.Error()))
 		return
@@ -203,7 +364,7 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 
 	// Never let an operation outlive the lease.
 	if !s.lease.After(time.Now()) {
-		s.reply(ctx, req, protocol.ErrorResult(req, "lease_expired", "the session lease has ended"))
+		s.reply(ctx, conn, req, protocol.ErrorResult(req, "lease_expired", "the session lease has ended"))
 		return
 	}
 
@@ -256,7 +417,7 @@ func (s *supervisor) handleRequest(ctx context.Context, frame *relay.Frame) {
 	default:
 		result = protocol.ErrorResult(req, "unsupported_operation", "unknown operation")
 	}
-	s.reply(ctx, req, result)
+	s.reply(ctx, conn, req, result)
 }
 
 func (s *supervisor) decrypt(frame *relay.Frame) (*protocol.Request, error) {
@@ -378,10 +539,10 @@ func fileError(req *protocol.Request, err error) *protocol.Result {
 	return protocol.ErrorResult(req, "io_error", "filesystem operation failed")
 }
 
-func (s *supervisor) reply(ctx context.Context, req *protocol.Request, result *protocol.Result) {
+func (s *supervisor) reply(ctx context.Context, conn *relay.Client, req *protocol.Request, result *protocol.Result) {
 	plain, err := json.Marshal(result)
 	if err != nil {
-		s.replyPlain(ctx, req.RequestID, protocol.ErrorResult(req, "encoding_failed", "could not encode result"))
+		s.replyPlain(ctx, conn, req.RequestID, protocol.ErrorResult(req, "encoding_failed", "could not encode result"))
 		return
 	}
 	sealed, err := envelope.Seal(s.clientKey, plain)
@@ -389,11 +550,16 @@ func (s *supervisor) reply(ctx context.Context, req *protocol.Request, result *p
 		plain[i] = 0
 	}
 	if err != nil {
-		s.replyPlain(ctx, req.RequestID, protocol.ErrorResult(req, "encryption_failed", "could not encrypt result"))
+		s.replyPlain(ctx, conn, req.RequestID, protocol.ErrorResult(req, "encryption_failed", "could not encrypt result"))
 		return
 	}
-	if err := s.conn.SendResponse(ctx, req.RequestID, sealed); err != nil {
-		logEvent("guest_reply_failed", map[string]any{"requestId": req.RequestID})
+	if err := conn.SendResponse(ctx, req.RequestID, sealed); err != nil {
+		// A reply on a link the controller has already given up on is not a
+		// result: the operation's outcome stays unknown on the controller side.
+		// A cancelled link is expected here, so it is not logged as a failure.
+		if ctx.Err() == nil {
+			logEvent("guest_reply_failed", map[string]any{"requestId": req.RequestID})
+		}
 		return
 	}
 	fields := map[string]any{"requestId": req.RequestID, "op": req.Op, "ok": result.OK}
@@ -413,7 +579,7 @@ func (s *supervisor) reply(ctx context.Context, req *protocol.Request, result *p
 
 // replyPlain reports an error the client can decrypt (used when the request
 // itself could not be parsed).
-func (s *supervisor) replyPlain(ctx context.Context, id string, result *protocol.Result) {
+func (s *supervisor) replyPlain(ctx context.Context, conn *relay.Client, id string, result *protocol.Result) {
 	plain, err := json.Marshal(result)
 	if err != nil {
 		return
@@ -422,7 +588,7 @@ func (s *supervisor) replyPlain(ctx context.Context, id string, result *protocol
 	if err != nil {
 		return
 	}
-	_ = s.conn.SendResponse(ctx, id, sealed)
+	_ = conn.SendResponse(ctx, id, sealed)
 }
 
 // bootstrap writes credentials to a mode-0400 file for the main container.

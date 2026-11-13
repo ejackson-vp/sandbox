@@ -1,9 +1,16 @@
 package relay
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/coder/websocket"
 
 	"github.com/x402s/sandbox/guest/internal/protocol"
 )
@@ -106,4 +113,53 @@ func TestHelloFrameMarshalsMetadata(t *testing.T) {
 	if decoded.Evidence["v"] == nil {
 		t.Fatal("evidence lost in serialized hello")
 	}
+}
+
+// A refused handshake must be classifiable: 401 means the guest token is not
+// (and will never be) accepted; the rest are transient and the supervisor keeps
+// reconnecting until the lease ends.
+func TestDialOnceClassifiesHandshakeRefusals(t *testing.T) {
+	cases := map[int]bool{
+		401: true,
+		404: false, // not re-registered yet
+		409: false, // a stale socket the relay still believes in
+		421: false, // landed on the wrong shard
+	}
+	for status, permanent := range cases {
+		status := status
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+		url := "ws" + strings.TrimPrefix(server.URL, "http") + "/guest?session=sbx_test&token=t"
+		_, err := DialOnce(context.Background(), url)
+		server.Close()
+		var statusErr *StatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("status %d: err = %v, want *StatusError", status, err)
+		}
+		if statusErr.Status != status {
+			t.Fatalf("status %d reported as %d", status, statusErr.Status)
+		}
+		if statusErr.Permanent() != permanent {
+			t.Fatalf("status %d permanent = %v, want %v", status, statusErr.Permanent(), permanent)
+		}
+	}
+}
+
+func TestDialOnceAcceptsAnUpgradedGuestConnection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		_ = conn.Close(websocket.StatusNormalClosure, "done")
+	}))
+	defer server.Close()
+
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/guest?session=sbx_test&token=t"
+	client, err := DialOnce(context.Background(), url)
+	if err != nil {
+		t.Fatalf("DialOnce: %v", err)
+	}
+	client.Close()
 }

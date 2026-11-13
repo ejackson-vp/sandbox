@@ -30,14 +30,13 @@ The relay is the execution-epoch authority for a session.
   guest has not itself reported an epoch at or above the floor and has no
   command running, the relay resets the guest connection with a TCP reset, so
   bytes the guest has not read are discarded rather than delivered after a
-  close frame. The supervisor exits on the read error, which is the existing
-  "a command cannot survive its relay link" contract, and the fence clears.
+  close frame. The link loss kills the command it was carrying (the supervisor
+  aborts and drains it, then reconnects; see ADR 0012), and the fence clears.
 - The reset needs the TCP socket captured by the upgrade handler. `attach`
   accepts a nullable socket, and when it is missing the relay falls back to
   `ws.terminate()`, which is a close ordered after the queued frame. The link
-  still ends and the session still fails closed, but in that branch the
-  guarantee is only the observed-frame residual below: a frame the guest has
-  not read can still be delivered. The branch is recorded as
+  still ends, but in that branch the guarantee is only the observed-frame
+  residual below: a frame the guest has not read can still be delivered. The branch is recorded as
   `sandbox_relay_connection_resets_total{mode="tcp_reset"|"terminate"}` and a
   `terminate` also logs `relay_reset_fell_back_to_terminate`.
 
@@ -51,38 +50,35 @@ started by an earlier controller generation.
 - A frame from a superseded generation cannot start, including one already
   forwarded. The fence keeps its other properties: no overlap, and release only
   on idle or disconnect.
-- **A withdrawn frame ends the guest, and therefore the session.** The reset is
-  a real relay-link loss: the supervisor exits on the read error, and sandbox
-  Pods use `restartPolicy: Never`, so the Pod becomes terminal. The fence clears
-  on the disconnected branch (the old command cannot survive the link), the
-  reconciler's Pod health probe observes the terminal Pod, and the session
-  transitions to `FAILED` with reason `failure:guest_exited`
-  (`failureCode: guest_exited`). This is asserted end to end by
-  `tests/integration/stale-frame-reset-outcome.test.ts`.
-- **No refund for that session.** It had already reached `READY`, so the
-  refund policy (`RefundOnlyWhenNoService`) keeps the settled payment. The
-  customer loses the remaining lease time. That is the cost of closing the
-  window with this contract; it only applies when the previous controller
-  generation had forwarded a frame the guest had not read, which is already the
-  `outcome_unknown` path for that operation.
+- **A withdrawn frame ends the link, not the session.** The reset is a real
+  relay-link loss: the supervisor aborts the command the link was carrying and
+  reconnects to the same registration (ADR 0012). The session keeps its lease,
+  its Pod and its workspace; the withdrawn frame is gone with the socket. The
+  fence may clear on the disconnected branch, because the link loss killed the
+  command; the guest then reconnects and reports its slot idle. This is asserted
+  end to end by `tests/integration/stale-frame-reset-outcome.test.ts`.
+- **The session is not refunded and does not need to be.** It keeps running:
+  the lease is unchanged, the interrupted request stays `outcome_unknown`, and a
+  new operation runs under the bumped epoch. Only a guest that cannot reconnect
+  inside the relay-loss grace ends with `failure:relay_lost` (ADR 0012).
 - The controller logs `operation_fence_guest_reset` with the session, request,
-  epoch and number of withdrawn frames, so an operator can connect
-  `failure:guest_exited` to a recovery reset. The relay logs
-  `relay_epoch_raised` with `reset` and the number withdrawn; the counter above
-  says which mechanism ended the link.
-- A relay restart loses the in-memory floor. Recovery republishes it on the next
-  fence tick; a non-fenced session needs no floor because there is no
-  superseded frame to withdraw.
+  epoch and number of withdrawn frames, so an operator can connect a guest
+  reconnect to a recovery reset. The relay logs `relay_epoch_raised` with `reset`
+  and the number withdrawn; the counter above says which mechanism ended the
+  link.
+- A relay restart loses the in-memory floor. Relay recovery re-registers the
+  session and the fence republishes the epoch on the next tick; a non-fenced
+  session needs no floor because there is no superseded frame to withdraw.
 
 ## Follow-up
 
-Guest-side reconnect would let the session continue instead of failing: keep the
-relay URL/token in the supervisor, abandon and drain in-flight commands on link
-loss (so "a command cannot survive the link" still holds), then re-dial and
-re-hello with the same session identity. That is a larger protocol change than
-the stale-frame window justifies now, and it must preserve the fence's
-disconnect-release argument. Until then, the explicit `guest_exited` failure is
-the honest outcome.
+Guest-side reconnect was implemented after this record: the supervisor keeps the
+relay URL/token, abandons and drains the operation the link was carrying, then
+re-dials and re-hellos with the same session identity, key and token. See
+[ADR 0012](0012-guest-reconnects-after-relay-loss.md). "A command cannot survive
+the link" still holds, because the link loss kills it; a disconnected guest is no
+longer proof that the command is gone, so `OperationFence` holds a relay-recovery
+fence until the reconnected guest reports idle.
 
 ## Residual
 
@@ -99,21 +95,22 @@ marker file is absent, so a failure has one of two readings from the logs: the
 guest read the frame before the reset on a loaded runner (this residual), or the
 reset never ran. A non-zero `terminate` count on a real relay is worth a bug.
 
-The terminated-session outcome depends on the sandbox Pod's
-`restartPolicy: Never` (set by `controller/src/k8s-pod.ts`). If a deployment
-restarted the container, the guest's bootstrap credential file is already gone
+The Pod-health outcome still depends on the sandbox Pod's `restartPolicy:
+Never` (set by `controller/src/k8s-pod.ts`). If a deployment restarted the
+container, the guest's bootstrap credential file is already gone
 (`guest/config.go` deletes it after first use), so the container would
 CrashLoop with the Pod still `Running` and the Pod-health probe would not fire;
 the session would only end at the lease deadline or `activeDeadlineSeconds`.
-Any change to the restart policy must land together with the reconnect
-follow-up above, or with the bootstrap file re-created per start.
+A container restart is not a relay reconnect: it starts a new supervisor with no
+key pair and no token, so keeping `restartPolicy: Never` is still required.
 
 There is also a bounded transient between the fence clearing on the
-disconnected branch and the Pod probe reporting terminal (one probe interval
-plus one strike, ~2-5s). During it the session is `READY` with no connected
-guest: a new operation is accepted by the gate but its delivery fails with
-`guest_not_available`, so it is abandoned and cannot overlap anything. The
-session then reaches `FAILED`.
+disconnected branch and the guest reconnecting (or the relay-loss grace
+ending). During it the session is `READY` with no connected guest: a new
+operation is accepted by the gate but its delivery fails with
+`guest_not_available`, so it is abandoned and cannot overlap anything. If the
+guest comes back the session continues; if it does not, relay recovery ends it
+with `failure:relay_lost`.
 
 ## Alternatives considered
 

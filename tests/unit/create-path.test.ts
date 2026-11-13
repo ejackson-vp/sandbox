@@ -292,6 +292,8 @@ async function harness(
     serviceAddress:
       opts.serviceAddress ??
       (async () => ({ host: "10.0.0.1", port: 8443 })),
+    // The guest-facing relay address; a ClusterIP in a real deployment.
+    stableServiceAddress: async () => ({ host: "10.96.0.1", port: 8443 }),
   } as unknown as ReconcilerContext;
 
   const warm = new WarmPoolManager(ctx);

@@ -83,6 +83,7 @@ controller→kubelet, facilitator→chain.
 | 10 | Steal a capability and execute in the session | capability → plaintext | mitigated by sealed envelopes; execution still possible (bearer) |
 | 11 | Escape the guest to the host | guest → node | **unverified** (Kata not tested) |
 | 12 | Reach another tenant's pod or PVC | session A → B | **unverified** (Cilium not tested) |
+| 13 | Present a stolen guest token on a reconnect | token → session | unchanged by reconnect: the token is the guest credential. The relay refuses a second socket while one is attached (409), and accepts a reconnect after the link drops until the lease ends. The controller does not re-verify attestation on reconnect, but the evidence and key are the same document the create verified. |
 
 ## Appendix — replay taxonomy and commitment verification
 

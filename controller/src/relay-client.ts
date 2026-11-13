@@ -40,7 +40,13 @@ interface RelayClientOptions {
 type RelayResponse =
   | { kind: "envelope"; envelope: string }
   | { kind: "pending" }
-  | { kind: "guest_error"; message: string };
+  /**
+   * `code` is the relay's failure class: `guest_disconnected` and
+   * `request_superseded` are link losses whose outcome is unknown,
+   * `guest_error` is the guest reporting a failed operation, and
+   * `session_destroyed` means the session is being torn down.
+   */
+  | { kind: "guest_error"; code: string; message: string };
 
 interface RelayHealth {
   ok: boolean;
@@ -272,13 +278,17 @@ export class RelayClient {
     for (;;) {
       attempt += 1;
       try {
-        const before = await this.probeHealth();
+        // Probe the replica that owns this session, not the Service: with more
+        // than one shard the generation precondition compares processes, so a
+        // Service probe could observe a different replica's generation and
+        // retry forever. At one replica both are the same URL.
+        const before = await this.probeHealth(sessionId);
         try {
           const registered = await this.register(sessionId, tokenHash, ttlMs, before.generation);
           if (registered.generation && registered.generation !== before.generation) {
             throw new RelayUnavailableError(409, "relay_generation_changed");
           }
-          const after = await this.probeHealth();
+          const after = await this.probeHealth(sessionId);
           if (after.generation !== before.generation) {
             throw new RelayUnavailableError(409, "relay_generation_changed");
           }
@@ -386,7 +396,13 @@ export class RelayClient {
       return { kind: "envelope", envelope: body.envelope };
     }
     if (res.status === 202) return { kind: "pending" };
-    if (res.status === 409) return { kind: "guest_error", message: body.message ?? body.error ?? "guest error" };
+    if (res.status === 409) {
+      return {
+        kind: "guest_error",
+        code: typeof body.error === "string" ? body.error : "guest_error",
+        message: body.message ?? body.error ?? "guest error",
+      };
+    }
     throw new RelayUnavailableError(res.status, body.error ?? `relay ${res.status}`);
   }
 

@@ -162,14 +162,15 @@ export class WarmPool {
     // replacement. The claim must point at the endpoint that accepted it;
     // above one replica that is the session's shard, recomputed from the
     // session id rather than inherited from the warm pod's own shard. It has to
-    // be the shard's ready pod IP: the claimed guest still has no DNS. The
-    // caller's addresses are this session's shard already, so they are the
-    // fallback when a re-read races a pod restart.
+    // be the shard's ClusterIP, not a ready Pod IP: the claimed guest bakes this
+    // URL in and a replacement relay Pod has a new IP. The caller's addresses
+    // are this session's shard already, so they are the fallback when a re-read
+    // races a Service update.
     const relayShard = pinnedShard(cfg, "relay", session.id);
     const proxyShard = pinnedShard(cfg, "proxy", session.id);
     const relay = relayShard === null
-      ? (await this.ctx.serviceAddress(cfg.relayServiceName)) ?? relayAddr
-      : (await this.ctx.serviceAddress(cfg.relayHeadlessService, relayShard, cfg.relayServiceName)) ?? relayAddr;
+      ? (await this.ctx.stableServiceAddress(cfg.relayServiceName)) ?? relayAddr
+      : (await this.ctx.stableServiceAddress(cfg.relayServiceName, relayShard, cfg.relayServiceName)) ?? relayAddr;
     const proxy = proxyShard === null
       ? proxyAddr
       : (await this.ctx.serviceAddress(cfg.proxyHeadlessService, proxyShard, cfg.proxyServiceName)) ?? proxyAddr;
@@ -444,15 +445,16 @@ export class WarmPool {
     // The pooled id owns its own shard, independent of whichever session later
     // claims this pod. The claim message rewrites both endpoints for the real
     // session, so the guest follows the session's shard when it reconnects.
-    // Above one replica the pooled guest needs its shard's ready pod IP: it
-    // runs with no DNS and cannot resolve the headless Service name. A shard
-    // with no ready endpoint leaves the slot for the next pass rather than
-    // booting a guest that dials another shard's pod.
+    // Above one replica the pooled guest needs its shard's ClusterIP: it runs
+    // with no DNS and cannot resolve the headless Service name, and a Pod IP
+    // would not survive the replacement the warm pod may outlive. A shard with
+    // no Service leaves the slot for the next pass rather than booting a guest
+    // that dials another shard.
     const relayShard = pinnedShard(cfg, "relay", poolId);
     const proxyShard = pinnedShard(cfg, "proxy", poolId);
     const relay = relayShard === null
       ? relayAddr
-      : await this.ctx.serviceAddress(cfg.relayHeadlessService, relayShard, cfg.relayServiceName);
+      : await this.ctx.stableServiceAddress(cfg.relayServiceName, relayShard, cfg.relayServiceName);
     const proxy = proxyShard === null
       ? proxyAddr
       : await this.ctx.serviceAddress(cfg.proxyHeadlessService, proxyShard, cfg.proxyServiceName);

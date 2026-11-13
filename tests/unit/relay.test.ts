@@ -252,6 +252,121 @@ describe("relay execution-epoch floor", () => {
     expect((await state(sessionId) as { epochFloor?: number }).epochFloor).toBe(3);
   });
 
+  it("accepts a reconnect on the same registration and still refuses a stale frame", async () => {
+    const sessionId = "sbx_relay_reconnect";
+    await register(sessionId);
+    const first = await connect(sessionId);
+    first.send(JSON.stringify({ type: "status", activeRequestId: "req-old", epoch: 1 }));
+    const deadline = Date.now() + 5_000;
+    while (!(await state(sessionId) as { statusAt?: number }).statusAt) {
+      if (Date.now() > deadline) throw new Error("guest status was not recorded");
+      await sleep(25);
+    }
+
+    // The relay process dies with the guest's socket: the registry is gone.
+    first.terminate();
+    await sleep(50);
+    expect((await state(sessionId) as { connected: boolean }).connected).toBe(false);
+
+    // Recovery publishes the bumped epoch before the session is re-registered.
+    expect((await raiseEpoch(sessionId, 2)).status).toBe(200);
+    expect((await request(sessionId, "request-below-floor", "envelope", 1)).status).toBe(409);
+
+    // The replacement relay registers the same session with the same token hash
+    // and accepts the reconnect.
+    const replacement = createRelay({ adminToken: ADMIN, responseTtlMs: 30_000 });
+    await new Promise<void>((resolve) => replacement.server.listen(port + 1, "127.0.0.1", resolve));
+    const replacementBase = `http://127.0.0.1:${port + 1}`;
+    try {
+      const registered = await fetch(`${replacementBase}/internal/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-internal-token": ADMIN },
+        body: JSON.stringify({ sessionId, tokenHash: sha256Hex(TOKEN), ttlMs: 60_000 }),
+      });
+      expect(registered.status).toBe(201);
+
+      const second = new WebSocket(
+        `ws://127.0.0.1:${port + 1}/guest?session=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(TOKEN)}`,
+      );
+      await new Promise<void>((resolve, reject) => {
+        second.once("open", resolve);
+        second.once("error", reject);
+      });
+      try {
+        second.send(
+          JSON.stringify({
+            type: "hello",
+            evidence: { sessionId, evidenceType: "dev-simulated", insecureDevOnly: true },
+          }),
+        );
+        const afterHello = Date.now() + 5_000;
+        while (!(await (async () => {
+          const res = await fetch(`${replacementBase}/internal/${sessionId}/state`, {
+            headers: { "x-internal-token": ADMIN },
+          });
+          return res.json() as Promise<{ attestation?: unknown }>;
+        })()).attestation) {
+          if (Date.now() > afterHello) throw new Error("replacement relay did not record hello");
+          await sleep(25);
+        }
+
+        // The new link starts with no execution status: the previous link's
+        // report cannot release a recovery fence.
+        const beforeStatus = (await (await fetch(`${replacementBase}/internal/${sessionId}/state`, {
+          headers: { "x-internal-token": ADMIN },
+        })).json()) as { statusAt?: number; connected: boolean };
+        expect(beforeStatus.connected).toBe(true);
+        expect(beforeStatus.statusAt).toBeUndefined();
+
+        // The reconnected guest reports its surviving high-water mark and an
+        // idle slot. That is what lets the controller's fence clear.
+        second.send(JSON.stringify({ type: "status", activeRequestId: "", epoch: 1 }));
+        const idle = Date.now() + 5_000;
+        for (;;) {
+          const res = (await (await fetch(`${replacementBase}/internal/${sessionId}/state`, {
+            headers: { "x-internal-token": ADMIN },
+          })).json()) as { statusAt?: number; activeRequestId?: string };
+          if (res.activeRequestId === "" && res.statusAt !== undefined) break;
+          if (Date.now() > idle) throw new Error("replacement relay did not record the idle status");
+          await sleep(25);
+        }
+
+        // The epoch floor is per session, not per relay process: the controller
+        // republishes it, and the relay then refuses a superseded frame.
+        const raised = await fetch(`${replacementBase}/internal/${sessionId}/epoch`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-internal-token": ADMIN },
+          body: JSON.stringify({ epoch: 2 }),
+        });
+        expect(raised.status).toBe(200);
+        const stale = await fetch(`${replacementBase}/internal/${sessionId}/request`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-internal-token": ADMIN },
+          body: JSON.stringify({ id: "request-after-reconnect", envelope: "envelope", deadlineMs: Date.now() + 5_000, epoch: 1 }),
+        });
+        expect(stale.status).toBe(409);
+        expect(await stale.json()).toMatchObject({ error: "stale_epoch" });
+
+        const frame = nextMessage(second);
+        const current = await fetch(`${replacementBase}/internal/${sessionId}/request`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-internal-token": ADMIN },
+          body: JSON.stringify({ id: "request-current-epoch", envelope: "envelope", deadlineMs: Date.now() + 5_000, epoch: 2 }),
+        });
+        expect(current.status).toBe(202);
+        expect(await frame).toMatchObject({
+          type: "request",
+          id: "request-current-epoch",
+          epoch: 2,
+        });
+      } finally {
+        second.terminate();
+      }
+    } finally {
+      await replacement.close();
+    }
+  });
+
   it("reports an unknown session and rejects an invalid epoch", async () => {
     expect((await raiseEpoch("sbx_relay_epoch_absent", 2)).status).toBe(404);
     const sessionId = "sbx_relay_epoch_validation";

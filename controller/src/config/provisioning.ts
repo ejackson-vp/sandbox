@@ -13,6 +13,7 @@ type ProvisioningSettings = Pick<
   | "workspaceDir"
   | "provisioningTimeoutMs"
   | "relayRegistrationTimeoutMs"
+  | "relayLossGraceMs"
   | "leaseGraceMs"
   | "reconcileIntervalMs"
   | "reconcileConcurrency"
@@ -34,6 +35,7 @@ export function parseProvisioning(env: NodeJS.ProcessEnv): ProvisioningSettings 
     workspaceDir: env.WORKSPACE_DIR ?? "/workspace",
     provisioningTimeoutMs: int(env.PROVISIONING_TIMEOUT_MS, 90_000, 10_000, 600_000),
     relayRegistrationTimeoutMs: int(env.RELAY_REGISTRATION_TIMEOUT_MS, 5_000, 500, 60_000),
+    relayLossGraceMs: int(env.RELAY_LOSS_GRACE_MS, 90_000, 1_000, 600_000),
     leaseGraceMs: int(env.LEASE_GRACE_MS, 2_000, 0, 60_000),
     reconcileIntervalMs: int(env.RECONCILE_INTERVAL_MS, 250, 50, 10_000),
     reconcileConcurrency: int(env.RECONCILE_CONCURRENCY, 8, 1, 256),

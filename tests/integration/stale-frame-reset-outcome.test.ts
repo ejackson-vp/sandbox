@@ -1,19 +1,20 @@
 /**
- * Lifecycle outcome of a withdrawn stale frame (#88).
+ * Lifecycle outcome of a withdrawn stale frame (#88), with guest reconnect.
  *
  * The relay closes the stale-frame window by resetting a guest that has not
- * observed the newest recovery epoch. A reset ends the guest supervisor exactly
- * like any other relay-link loss, so the session must not be left `READY` with
- * no guest. This test drives the real reconciler (LocalProvisioner + Capacity +
- * OperationFence + Termination) and asserts the documented outcome:
+ * observed the newest recovery epoch. A reset is an ordinary relay-link loss:
+ * the supervisor aborts the command it was carrying, discards the unread frame
+ * with the connection, reports the operation `outcome_unknown` and reconnects to
+ * the same registration. The session keeps its lease and its workspace.
  *
  *   READY -> fence withdraws the frame and resets the link (no guest)
- *         -> guest process exits (restartPolicy: Never)
- *         -> reconciler observes the terminal Pod, fails the session
- *         -> FAILED, reason `failure:guest_exited`
+ *         -> the guest never reads the withdrawn frame (no marker file)
+ *         -> the supervisor reconnects, re-hellos and reports idle
+ *         -> READY, same lease, a new operation runs under the new epoch
  *
- * The payment is not refunded because the session had already reached READY
- * (RefundOnlyWhenNoService). See docs/adr/0008-relay-enforces-execution-epoch.md.
+ * The stale frame is still never executed: the reset happened before the guest
+ * could read it, and the relay's floor refuses it afterwards. See
+ * docs/adr/0008-relay-enforces-execution-epoch.md.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -24,6 +25,7 @@ import {
   fromBase64,
   generateBoxKeyPair,
   generateNonce,
+  openSealedJson,
   sealJsonTo,
   toBase64,
 } from "@x402s/shared/crypto";
@@ -261,7 +263,7 @@ afterEach(async () => {
 });
 
 describe("a withdrawn stale frame does not strand a READY session", () => {
-  it("resets the guest, then the reconciler fails the session with guest_exited", async () => {
+  it("resets the link, the guest reconnects, and the session keeps its lease", async () => {
     const run = await scenario();
     active.push(run);
 
@@ -321,33 +323,57 @@ describe("a withdrawn stale frame does not strand a READY session", () => {
     expect(resetCounts(run.relayMetrics)).toEqual({ tcp_reset: 1 });
     expect((await run.store.getSession(run.sessionId))?.state).toBe("READY");
 
-    // Resume the process so it observes the reset and exits, exactly as an
-    // unstoppable production guest would.
+    // Resume the process: it observes the reset instead of being able to keep
+    // the dead link. The supervisor kills the operation it was carrying and
+    // reconnects; it must not exit and the Pod must stay Running.
     expect(run.provisioner.signalPod(podName, "SIGCONT")).toBe(true);
-    const pod = await waitFor(
-      () => run.provisioner.getPod(podName),
-      (value) => value === null || value.phase === "Succeeded" || value.phase === "Failed",
-      "guest process exit",
+    const reconnected = await waitFor(
+      () => run.relayClient.state(run.sessionId),
+      (value) => value.connected && value.statusAt !== undefined,
+      "guest reconnected",
     );
-    expect(pod === null || pod.phase === "Succeeded" || pod.phase === "Failed").toBe(true);
+    expect(reconnected.epochFloor).toBe(2);
+    const pod = await run.provisioner.getPod(podName);
+    expect(pod?.phase).toBe("Running");
 
-    // The guest never read the withdrawn frame.
+    // The guest never read the withdrawn frame, before or after the reconnect.
+    await sleep(250);
     expect(existsSync(run.markerPath)).toBe(false);
 
-    // The reconciler must not leave a READY session with no guest: it observes
-    // the terminal Pod (restartPolicy: Never) and fails the session with the
-    // documented reason.
-    const terminal = await waitFor(
-      () => run.store.getSession(run.sessionId),
-      (session) => session?.state === "FAILED" || session?.state === "EXPIRED" || session?.state === "DESTROYED",
-      "session terminal",
-      30_000,
+    // The session survives with the same lease; the interrupted request keeps a
+    // defined outcome and was never executed.
+    const session = (await run.store.getSession(run.sessionId))!;
+    expect(session.state).toBe("READY");
+    expect(session.activeRequestId).toBeNull();
+    expect(session.execEpoch).toBe(2);
+    expect(session.leaseExpiresAt).toBe(ready!.leaseExpiresAt);
+    expect(await run.store.getExecRequest(run.sessionId, oldRequestId)).toMatchObject({
+      state: "outcome_unknown",
+    });
+
+    // A new operation runs under the recovery epoch.
+    const newRequestId = "stale-reset-new-request";
+    const claimNew = await run.store.claimOperation(run.sessionId, newRequestId, "exec");
+    expect(claimNew).toMatchObject({ ok: true, epoch: 2 });
+    const newEnvelope = await sealJsonTo(fromBase64(ready!.guestPublicKey!), {
+      v: 2,
+      sessionId: run.sessionId,
+      clientNonce: ready!.clientNonce,
+      requestId: newRequestId,
+      op: "exec",
+      command: ["echo", "after-reset"],
+      timeoutMs: 10_000,
+    });
+    await run.relayClient.request(run.sessionId, newRequestId, newEnvelope, Date.now() + 60_000, 2);
+    const response = await run.relayClient.response(run.sessionId, newRequestId, 20_000);
+    expect(response.kind).toBe("envelope");
+    const result = await openSealedJson<{ ok: boolean; stdout: string }>(
+      (response as { envelope: string }).envelope,
+      run.clientKeys.publicKey,
+      run.clientKeys.privateKey,
     );
-    expect(terminal!.state).toBe("FAILED");
-    expect(terminal!.terminationReason).toBe("failure:guest_exited");
-    expect(terminal!.failureCode).toBe("guest_exited");
-    expect(terminal!.activeRequestId).toBeNull();
-    expect(terminal!.podName).toBeNull();
+    expect(result.ok).toBe(true);
+    expect(result.stdout.trim()).toBe("after-reset");
 
     // The session reached READY, so it delivered service and is not refunded;
     // the ledger stays settled (RefundOnlyWhenNoService).

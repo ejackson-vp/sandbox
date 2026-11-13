@@ -38,10 +38,11 @@ describe("reconciler data-plane resolver wiring", () => {
     const store = await freshStore();
     try {
       const getServiceAddress = vi.fn(async () => ({ host: "10.1.0.9", port: 8443 }));
+      const getStableServiceAddress = vi.fn(async () => ({ host: "10.96.1.9", port: 8443 }));
       const reconciler = new Reconciler({
         cfg: config({ RELAY_REPLICAS: "2", PROXY_REPLICAS: "2" }),
         store,
-        provisioner: { getServiceAddress } as unknown as Provisioner,
+        provisioner: { getServiceAddress, getStableServiceAddress } as unknown as Provisioner,
         relay: { isReady: async () => true } as unknown as RelayClient,
         now: () => Date.now(),
       });
@@ -53,13 +54,18 @@ describe("reconciler data-plane resolver wiring", () => {
 
       await provisioning.endpointsFor("sbx_prefix_probe");
 
-      // The headless Service is queried, but the endpoint hostname comes from
-      // the workload, so the prefix must survive the context wrapper.
+      // Readiness and address are two lookups on purpose: the headless
+      // EndpointSlice proves the shard has a ready backend, and the stable
+      // ClusterIP is what the guest dials. Both need the workload prefix, since
+      // the shard numbers the Service (`relay-<n>`).
       expect(getServiceAddress).toHaveBeenCalledWith(
         "relay-headless",
         expect.any(Number),
         "relay",
       );
+      expect(getStableServiceAddress).toHaveBeenCalledWith("relay", expect.any(Number), "relay");
+      // The proxy is still resolved as an endpoint, whose hostname comes from
+      // the workload, so the prefix must survive there too.
       expect(getServiceAddress).toHaveBeenCalledWith(
         "egress-proxy-headless",
         expect.any(Number),
@@ -74,10 +80,11 @@ describe("reconciler data-plane resolver wiring", () => {
     const store = await freshStore();
     try {
       const getServiceAddress = vi.fn(async () => ({ host: "10.1.0.9", port: 8443 }));
+      const getStableServiceAddress = vi.fn(async () => ({ host: "10.96.1.9", port: 8443 }));
       const reconciler = new Reconciler({
         cfg: config(),
         store,
-        provisioner: { getServiceAddress } as unknown as Provisioner,
+        provisioner: { getServiceAddress, getStableServiceAddress } as unknown as Provisioner,
         relay: { isReady: async () => true } as unknown as RelayClient,
         now: () => Date.now(),
       });
@@ -89,6 +96,10 @@ describe("reconciler data-plane resolver wiring", () => {
 
       await provisioning.endpointsFor("sbx_prefix_probe");
 
+      // At one replica the guest URL is the shardless `relay` ClusterIP; the
+      // endpoint lookup still runs as the readiness gate, and the proxy keeps
+      // the endpoint lookup.
+      expect(getStableServiceAddress).toHaveBeenCalledWith("relay", undefined, undefined);
       expect(getServiceAddress).toHaveBeenCalledWith("relay", undefined, undefined);
       expect(getServiceAddress).toHaveBeenCalledWith("egress-proxy", undefined, undefined);
     } finally {

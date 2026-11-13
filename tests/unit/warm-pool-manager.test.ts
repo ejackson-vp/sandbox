@@ -7,6 +7,28 @@ const SMALL_LIMITS = {
   diskMiB: 256,
 } as const;
 
+describe("warm claim endpoint", () => {
+  it("uses the relay ClusterIP, not the caller's endpoint Pod IP", async () => {
+    const h = harness({ env: { WARM_POOL_SIZE: "1" } });
+    h.pods.push(warmPod("base", h.manager.poolFor("base")!.identity(), digestBase));
+    expect(await h.claim()).toBe(true);
+    expect(h.claims).toHaveLength(1);
+    expect(h.claims[0]!.claim.relayUrl).toBe(
+      `ws://relay:8443/guest?session=${encodeURIComponent(h.session().id)}`,
+    );
+    expect(h.claims[0]!.claim.relayUrl).not.toContain("relay-pod");
+  });
+
+  it("uses the session shard's ClusterIP with more than one replica", async () => {
+    const h = harness({ env: { WARM_POOL_SIZE: "1", RELAY_REPLICAS: "2" } });
+    h.pods.push(warmPod("base", h.manager.poolFor("base")!.identity(), digestBase));
+    expect(await h.claim()).toBe(true);
+    const url = h.claims[0]!.claim.relayUrl;
+    expect(url).toMatch(/^ws:\/\/relay-[01]:8443\/guest\?session=/);
+    expect(url).not.toContain("relay-pod");
+  });
+});
+
 describe("warm pool manager budgeting", () => {
   it("gives base its minimum and starts other profiles at zero", () => {
     const h = harness({ env: { WARM_POOL_SIZE: "5", WARM_POOL_BASE_MIN: "2" } });

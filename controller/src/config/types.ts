@@ -93,6 +93,14 @@ export interface ControllerConfig {
    * on the next tick).
    */
   relayRegistrationTimeoutMs: number;
+  /**
+   * How long a READY/ACTIVE session may be without a live guest link after its
+   * relay generation changed (or its registration disappeared) before the
+   * controller ends it with `failure:relay_lost`. The guest reconnects inside
+   * this window; longer than a relay rollout (observed 7-27s), shorter than the
+   * shortest lease worth saving.
+   */
+  relayLossGraceMs: number;
   leaseGraceMs: number;
   reconcileIntervalMs: number;
   /** Max sessions reconciled in parallel per phase; 1 restores sequential passes. */

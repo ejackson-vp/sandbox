@@ -84,7 +84,10 @@ const SHARED_LAYERS = [
         "money.ts",
       ].includes(rel) ||
       rel.startsWith("protocol/") ||
-      rel.startsWith("domain/"),
+      rel.startsWith("domain/") ||
+      // The durable-call protocol (ADR 0011): pure predicates and value
+      // objects shared by the API and the controller. No SQL, no I/O.
+      rel.startsWith("durable/"),
   },
   {
     name: "crypto",

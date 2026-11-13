@@ -37,6 +37,7 @@ jobs:
       - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           languages: ${{ matrix.language }}
+          config-file: ./.github/codeql/codeql-config.yml
 
       # CodeQL Go needs a real build. The module root is guest/, not the repo
       # root, so autobuild does not reliably find it.
