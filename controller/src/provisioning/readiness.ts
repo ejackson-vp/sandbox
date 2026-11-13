@@ -1,0 +1,289 @@
+/**
+ * The readiness handshake: PROVISIONING/RESUMING -> READY.
+ *
+ * Extracted from the provisioning use case because it is a different half of
+ * the lifecycle. The create half admits a paid session and starts a pod; this
+ * half watches the relay for the guest hello, decides whether the attestation
+ * and protocol version are acceptable, and performs the `guest_ready` write
+ * that starts the lease. Both run through the transition table, never by hand.
+ *
+ * Timeouts live here too: a warm claim that never attaches and a pod that never
+ * becomes ready are both readiness failures, and both are decided before the
+ * lease exists so the termination is refundable.
+ */
+import { verifyAttestation } from "@x402s/shared/crypto";
+import {
+  leaseDeadline,
+  MIN_SUPPORTED_GUEST_PROTOCOL_VERSION,
+  supportsGuestProtocolVersion,
+  transition,
+  type AttestationEnvelope,
+  type RelaySessionState,
+  type RelayStateSnapshot,
+} from "@x402s/shared/protocol";
+import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
+import type { SessionRecord } from "../store/models.js";
+import { snapshotOf } from "../session-snapshot.js";
+import { effectContext, executeEffects, isOk } from "../effects.js";
+import type { ProvisioningContext } from "./context.js";
+import type { PodCreation } from "./pod-creation.js";
+import type { PodStatus } from "./pod-status.js";
+
+export class Readiness {
+  constructor(
+    private readonly ctx: ProvisioningContext,
+    private readonly pods: PodCreation,
+    private readonly podStatus: PodStatus,
+  ) {}
+
+  async awaitReady(session: SessionRecord): Promise<void> {
+    const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
+    if (
+      timings.warmPoolHit === 1 &&
+      typeof timings.warmClaimAt === "number" &&
+      this.ctx.now() - timings.warmClaimAt > this.ctx.cfg.warmClaimTimeoutMs
+    ) {
+      await this.ctx.store.requestTermination(session.id, "failure:warm_claim_timeout", {
+        code: "warm_claim_timeout",
+        message: "the warm sandbox did not attach to the session in time",
+      });
+      log.warn("sandbox_warm_claim_timeout", {
+        sessionId: session.id,
+        warmClaimAt: timings.warmClaimAt,
+      });
+      return;
+    }
+
+    const startedAt =
+      session.state === "RESUMING" ? session.updatedAt : (session.paidAt ?? session.createdAt);
+    const age = this.ctx.now() - startedAt;
+    if (age > this.ctx.cfg.provisioningTimeoutMs) {
+      await this.ctx.store.requestTermination(session.id, "failure:provisioning_timeout", {
+        code: "provisioning_timeout",
+        message: "sandbox did not become ready in time",
+      });
+      log.warn("sandbox_provisioning_timeout", { sessionId: session.id, ageMs: age });
+      return;
+    }
+
+    if (session.relayTokenHash) {
+      try {
+        // One snapshot carries both the session state and the generation of the
+        // relay process that produced it, so the two cannot disagree. Separate
+        // probes before and after the read could: both could hit a relay that is
+        // already being replaced, and they cost two extra control round trips on
+        // every readiness pass.
+        let expectedGeneration = this.pods.generationFor(session.id) ?? null;
+        let state = await this.relaySnapshot(session.id, expectedGeneration);
+        const relayChanged = Boolean(
+          expectedGeneration && state.generation !== expectedGeneration,
+        );
+        // A relay replacement can land after the pod was created but before
+        // the guest dials. The guest holds the old endpoint IP, so it can never
+        // reach the replacement. Recreate the pod against the current endpoint
+        // instead of waiting out the provisioning timeout. Warm pods are
+        // already running and are handled by their own reconnection path.
+        if (
+          session.podName &&
+          timings.warmPoolHit !== 1 &&
+          (!state.registered || (relayChanged && !state.connected))
+        ) {
+          if (await this.pods.recreatePod(session)) return;
+        }
+        if (!state.registered) {
+          // The replacement relay does not know this session yet. Re-register
+          // inside this pass (bounded, so one slow relay cannot stall the
+          // reconcile loop) rather than waiting for the next tick or for the
+          // guest's dial window to run out.
+          const registered = await this.ctx.relay
+            .registerCurrent(
+              session.id,
+              session.relayTokenHash,
+              this.ctx.cfg.provisioningTimeoutMs + session.durationSeconds * 1000 + 300_000,
+              { deadlineMs: this.ctx.cfg.relayRegistrationTimeoutMs },
+            )
+            .catch((err: Error) => {
+              log.warn("relay_reregister_failed", { sessionId: session.id, error: err.message });
+              return null;
+            });
+          if (registered?.generation) {
+            expectedGeneration = registered.generation;
+            this.pods.recordGeneration(session.id, registered.generation);
+          }
+          state = await this.relaySnapshot(session.id, expectedGeneration);
+        }
+        if (state.connected && state.attestation) {
+          if (!expectedGeneration) {
+            // A controller restart clears the in-memory map. The process that
+            // opened this connection started after the restart, so the snapshot
+            // cannot come from a socket pinned to a relay from before it.
+            expectedGeneration = state.generation;
+            this.pods.recordGeneration(session.id, state.generation);
+          }
+          if (state.generation !== expectedGeneration) {
+            log.warn("sandbox_relay_generation_changed", {
+              sessionId: session.id,
+              expected: expectedGeneration,
+              observed: state.generation,
+            });
+            return;
+          }
+          // Reject an unsupported guest while the session is still pre-READY,
+          // where termination is refundable. A versionless hello is accepted.
+          if (await this.rejectUnsupportedGuest(session, state, state.attestation)) return;
+          const readyAt = this.ctx.now();
+          const requestedLease = readyAt + session.durationSeconds * 1000;
+          const leaseExpiresAt = leaseDeadline(
+            session.createdAt,
+            readyAt,
+            session.durationSeconds,
+            session.maxLifetimeSeconds,
+          );
+          if (leaseExpiresAt !== requestedLease) {
+            // The purchased duration would run past the wall-clock lifetime, so
+            // the deadline is clamped to the bound the lifetime sweep enforces.
+            // A wall-clock step is the usual reason; the clock guard logs the
+            // step itself, this line ties it to a session.
+            log.warn("sandbox_lease_clamped", {
+              sessionId: session.id,
+              requestedLeaseExpiresAt: new Date(requestedLease).toISOString(),
+              leaseExpiresAt: new Date(leaseExpiresAt).toISOString(),
+              maxLifetimeSeconds: session.maxLifetimeSeconds,
+            });
+          }
+          // PROVISIONING/RESUMING + guest_ready is the table's decision; its
+          // single effect is the guarded write, so a lost race skips the
+          // bookkeeping below exactly as a refused setReady did before.
+          const decision = transition(snapshotOf(session), { type: "guest_ready" });
+          const persisted =
+            decision.ok &&
+            isOk(
+              await executeEffects(
+                decision.value.effects,
+                effectContext(this.ctx, session, {
+                  ready: {
+                    readyAt,
+                    leaseExpiresAt,
+                    attestationJson: JSON.stringify(state.attestation),
+                    guestPublicKey: state.attestation.guestPublicKey,
+                  },
+                }),
+              ),
+            );
+          if (persisted) {
+            const warm = timings.warmPoolHit === 1;
+            const podInfo = warm || !session.podName
+              ? null
+              : await this.ctx.provisioner.getPod(session.podName).catch(() => null);
+            await this.ctx.store.mergeTimings(session.id, {
+              ...(warm
+                ? {}
+                : {
+                    podCreatedAt: podInfo?.createdAt,
+                    podScheduledAt: podInfo?.scheduledAt,
+                    containerStartedAt: podInfo?.startedAt,
+                  }),
+              guestHelloAt: state.helloAt ?? readyAt,
+              readyAt,
+              leaseExpiresAt,
+            });
+            metrics
+              .histogram("sandbox_ready_duration_seconds", "Entitlement to READY", LATENCY_BUCKETS)
+              .observe((readyAt - startedAt) / 1000);
+            this.pods.forgetGeneration(session.id);
+            log.info("sandbox_ready", {
+              sessionId: session.id,
+              evidenceType: state.attestation.evidenceType,
+              insecureDevOnly: state.attestation.insecureDevOnly,
+              leaseExpiresAt: new Date(leaseExpiresAt).toISOString(),
+            });
+          }
+        }
+      } catch (err) {
+        log.warn("relay_state_check_failed", { sessionId: session.id, error: (err as Error).message });
+      }
+    }
+
+    await this.podStatus.reconcile(session);
+  }
+
+  /**
+   * Read a relay snapshot, reusing the pooled connection.
+   *
+   * A pooled socket can stay pinned to a relay pod that is being replaced. When
+   * the snapshot comes from a generation this session did not register on, it
+   * cannot be used for decisions, so ask once more on a fresh connection
+   * instead of recreating a pod or waiting out a tick.
+   */
+  private async relaySnapshot(
+    sessionId: string,
+    expectedGeneration: string | null,
+  ): Promise<RelayStateSnapshot> {
+    const state = await this.ctx.relay.state(sessionId, { reuse: true });
+    if (expectedGeneration && state.generation !== expectedGeneration) {
+      return this.ctx.relay.state(sessionId);
+    }
+    return state;
+  }
+
+  /**
+   * Refuse a guest before the lease starts (READY), so the termination is
+   * refundable, in two independent cases.
+   *
+   *  - The hello's frame protocol is below the floor this build can serve. An
+   *    absent version resolves to the floor and is accepted: a warm pool still
+   *    holds pods from the previous image during a controller rollout.
+   *  - The operator configured a measurement allowlist. This reuses the shared
+   *    verifier the SDK already runs; the controller is the server-side pin.
+   *    With no allowlist this method does no verification at all, preserving
+   *    the previous behaviour (accept, and the verifier's "not pinned" warning
+   *    remains a client-side concern).
+   */
+  private async rejectUnsupportedGuest(
+    session: SessionRecord,
+    state: RelaySessionState,
+    evidence: AttestationEnvelope,
+  ): Promise<boolean> {
+    if (!supportsGuestProtocolVersion(state.protocolVersion)) {
+      await this.ctx.store.requestTermination(session.id, "failure:guest_protocol_unsupported", {
+        code: "guest_protocol_unsupported",
+        message: `guest protocol ${state.protocolVersion} is below the supported minimum ${MIN_SUPPORTED_GUEST_PROTOCOL_VERSION}`,
+      });
+      log.warn("sandbox_guest_protocol_unsupported", {
+        sessionId: session.id,
+        protocolVersion: state.protocolVersion ?? null,
+        minSupported: MIN_SUPPORTED_GUEST_PROTOCOL_VERSION,
+      });
+      return true;
+    }
+
+    const allowlist = this.ctx.cfg.guestMeasurementAllowlist;
+    if (allowlist.length === 0) return false;
+
+    const verdict = verifyAttestation(evidence, {
+      mode: this.ctx.cfg.executionMode,
+      expectedSessionId: session.id,
+      expectedClientNonce: session.clientNonce,
+      expectedClientPublicKey: session.clientPublicKey,
+      allowedMeasurements: allowlist,
+      allowInsecureDev: this.ctx.cfg.allowInsecureDev,
+      now: this.ctx.now(),
+    });
+    if (verdict.ok) {
+      log.info("sandbox_guest_measurement_pinned", {
+        sessionId: session.id,
+        guestMeasurement: verdict.guestMeasurement,
+      });
+      return false;
+    }
+
+    const reason =
+      verdict.code === "measurement_not_allowed" ? "guest_measurement_not_allowed" : "guest_attestation_rejected";
+    await this.ctx.store.requestTermination(session.id, `failure:${reason}`, {
+      code: reason,
+      message: verdict.message,
+    });
+    log.warn("sandbox_guest_attestation_rejected", { sessionId: session.id, verdict: verdict.code });
+    return true;
+  }
+}
