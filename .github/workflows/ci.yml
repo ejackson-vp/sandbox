@@ -192,6 +192,31 @@ jobs:
           name: coverage-fuzz-report
           path: coverage-fuzz/
           retention-days: 14
+      # What those six runs actually reach. `fuzz-go.sh` proves a target does not
+      # crash on arbitrary input; it cannot show whether the corpus ever entered
+      # the parser, and a target whose corpus never gets past its first length
+      # check passes exactly like one that walks every error path. The script
+      # replays the seed corpus and the corpus 10 s of fuzzing grows, with real
+      # coverage counters, and prints a number per target.
+      #
+      # After the TypeScript step on purpose: `fuzz` is not one of the required
+      # checks (unit, integration (local guest), markdownlint, internal links), so
+      # a red step here does not block a merge, and running it last means a
+      # failure cannot skip the `coverage-fuzz-report` artifact the badge job
+      # downloads.
+      #
+      # 10 s per target is ~90 s of wall clock for six targets, alongside the
+      # 20 s crash budgets above. Fuzzing happens in a copy of guest/, so a
+      # crasher or a new corpus entry cannot reach the worktree; crashers are
+      # kept in coverage-go-fuzz/crashers/ and uploaded.
+      - name: go fuzz coverage
+        run: ./scripts/go-fuzz-coverage.sh --budget 10s
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: coverage-go-fuzz-report
+          path: coverage-go-fuzz/
+          retention-days: 14
 
   integration:
     name: integration (local guest)
@@ -238,6 +263,29 @@ jobs:
       - name: gofmt
         working-directory: guest
         run: test -z "$(gofmt -l .)"
+      # The guest's coverage number. `go test ./...` above was green and nothing
+      # said which statements it reached, although the guest is where the
+      # security-critical parsing lives (envelope open, path resolution,
+      # transfer framing, chunk decode). The script merges one -coverpkg=./...
+      # profile per package, because coverage is a union the same way
+      # scripts/coverage-merge.mjs treats the TypeScript suites, and fails under
+      # a floor set a few points below the measured total (29.0% on 2026-11-13,
+      # floor 26%).
+      #
+      # continue-on-error on purpose: this job is a required check, so a floor
+      # miss would block every merge, and a brand new gate should not do that
+      # before it has held for a few runs. The step still goes red and the
+      # report still uploads, so a miss is visible without blocking. Drop
+      # continue-on-error once the floor has survived a week of main pushes.
+      - name: go coverage
+        continue-on-error: true
+        run: ./scripts/go-coverage.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: coverage-go-report
+          path: coverage-go/
+          retention-days: 14
       # The only run of this suite per push. It SIGSTOPs a real guest process
       # and uses real sockets, so a second concurrent run doubles the runner
       # load and flakes (#145, #128). Coverage must not re-run it.

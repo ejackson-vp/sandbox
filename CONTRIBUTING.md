@@ -33,11 +33,22 @@ tests in ~4 s instead of ~24 s, verified three times under
 `--sequence.shuffle`.
 
 Coverage covers the shipped TypeScript (`shared`, `sdk`, `api`, `controller`,
-`cli`), not tests or the Go guest. Three suites are measured and merged, because
-coverage is a union: **unit and property**, **integration**, and the TypeScript
-**fuzz** targets. Integration used to be excluded, which scored the client and
-wiring code at zero even though end-to-end tests exercise it, so `sdk` and `api`
-read in the forties while `shared` and `cli` read near ninety.
+`cli`), not tests. Three suites are measured and merged, because coverage is a
+union: **unit and property**, **integration**, and the TypeScript **fuzz**
+targets. Integration used to be excluded, which scored the client and wiring
+code at zero even though end-to-end tests exercise it, so `sdk` and `api` read in
+the forties while `shared` and `cli` read near ninety.
+
+The Go guest is measured separately, because it is a different toolchain and a
+different floor. `scripts/go-coverage.sh` merges one `-coverpkg=./...` profile
+per package and gates the total (29.0% on 2026-11-13, floor 26%);
+`scripts/go-fuzz-coverage.sh` replays each fuzz target's seed corpus and the
+corpus a short fuzz run grows, so "we fuzz it" carries a number per target
+instead of meaning "it did not crash". CI uploads both profiles. Neither is a
+required check yet: `go coverage` runs with `continue-on-error` inside
+`integration (local guest)`, and `go fuzz coverage` lives in the `fuzz` job,
+which is not required, so a regression is visible without blocking a merge until
+they have held for a few weeks.
 
 `scripts/coverage-merge.mjs` takes the maximum hit count per line, function and
 branch across every report. It is the only place a total the whole set reaches
