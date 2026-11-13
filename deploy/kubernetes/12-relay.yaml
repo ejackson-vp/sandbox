@@ -123,16 +123,16 @@ spec:
   serviceName: relay-headless
   # Rolling updates replace one ordinal at a time and each ordinal has exactly
   # one pod, so two registries for the same shard never coexist and the two
-  # shards are never both down. The maxSurge: 0 below keeps that true.
+  # shards are never both down.
   podManagementPolicy: OrderedReady
+  # No `rollingUpdate.maxSurge` here, deliberately and not by omission. A
+  # StatefulSet already terminates an ordinal before recreating it, so the
+  # property this needs is the default. `maxSurge` only exists to *allow* a
+  # surge, it needs Kubernetes 1.34 or newer, and an older API server rejects
+  # the field outright under strict decoding, which is how `make up` broke on
+  # the kind image.
   updateStrategy:
     type: RollingUpdate
-    rollingUpdate:
-      # Explicit, not the StatefulSet default: a surge would start the
-      # replacement pod before the old one terminates, so two pods would hold a
-      # registry for the same ordinal. StatefulSets update highest ordinal
-      # first, so a rollout touches shard 1 and then shard 0, never both at once.
-      maxSurge: 0
   # A terminating relay drops every registry entry anyway; a shorter grace
   # period shrinks the window in which a stale keep-alive connection can still
   # be answered by the old pod while the replacement is starting. The
