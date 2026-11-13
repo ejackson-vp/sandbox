@@ -95,7 +95,9 @@ gauge.
 It deliberately does **not** create an entitlement: the spec, the client key and
 the capability are gone by then, and inventing them would be worse than
 refunding. It also leaves an *unsettled* intent alone, because the API still owns
-the retry path and failing the intent here would race a slow settlement.
+the retry path and failing the intent here would race a slow settlement. While
+that ledger row is `SETTLED` the fail endpoint refuses the intent too, so the
+resolution is the refund policy below, not an outbox edit.
 
 Recovery needs a facilitator that exposes `GET /settlements/:paymentKey`
 (`FACILITATOR_URL`, the mock facilitator does). Without one it is a no-op, and
@@ -284,7 +286,7 @@ What it checks:
 | Metric sample | Meaning |
 |---|---|
 | `sandbox_ledger_divergence{reason="settled_without_ledger"}` | The intent is `settled`, the ledger has no row with that payment key. Money moved and the books did not keep it. |
-| `sandbox_ledger_divergence{reason="intent_failed_ledger_settled"}` | The intent is `failed`, the ledger row is `SETTLED`. The outbox says refused, the books say delivered. The duplicate-charge path records `REFUNDED` or `REFUND_PENDING`, so it is not a false positive. |
+| `sandbox_ledger_divergence{reason="intent_failed_ledger_settled"}` | The intent is `failed`, the ledger row is `SETTLED`. The outbox says refused, the books say delivered. The fail endpoint refuses this pair in the same statement as the status change, so no request writes it. A sample means a row was written outside the request path: a manual edit, a one-sided restore, or settlement recovery that crashed between writing its row and applying the refund policy. |
 | `sandbox_ledger_divergence{reason="duplicate_refund_claim"}` | Two ledger rows in `REFUND_SENDING` share one settlement nonce, so one signed authorisation is being refunded twice. `payment_key` cannot repeat, the nonce is the identity that can. |
 | `sandbox_sessions_stale{phase}` | A non-terminal session is past its deadline by more than the grace period. The deadline is `lease_expires_at` at READY, otherwise `created_at + max_lifetime_seconds` (protocol maximum when null). |
 | `sandbox_ledger_audit_age_seconds` | Seconds since the last successful sample, recomputed from the clock on every scrape. It rises while samples fail or the timer is stopped, including after a good reading, so a stale sampler cannot look fresh. Absent until the first success. |
@@ -329,7 +331,10 @@ Alert on:
 # money moved with no ledger row (SandboxLedgerDivergence, critical)
 sandbox_ledger_divergence{reason="settled_without_ledger"} > 0
 
-# these two are always a bug, not a slow path (also SandboxLedgerDivergence)
+# these two are always a bug, not a slow path (also SandboxLedgerDivergence):
+# no request writes the first pair, so a row was changed outside it (edit,
+# one-sided restore, or a recovery crash); the second is one authorisation
+# being refunded twice
 sandbox_ledger_divergence{reason="intent_failed_ledger_settled"} > 0
 sandbox_ledger_divergence{reason="duplicate_refund_claim"} > 0
 
@@ -384,7 +389,23 @@ curl -X POST -H "x-internal-token: $ADMIN" -H "content-type: application/json" \
 # knows; both forms of the refund endpoint accept either identifier
 curl -H "x-internal-token: $ADMIN" \
   http://controller:3001/internal/payments/by-nonce/<0x…>
+
+# fail an intent whose settlement was refused, so a client retry does not
+# re-attempt the same payment key
+curl -X POST -H "x-internal-token: $ADMIN" -H "content-type: application/json" \
+  -d '{"reason":"settlement_failed"}' \
+  http://controller:3001/internal/payment-intents/<paymentKey>/fail
 ```
+
+The fail endpoint answers `409` with `{"error":"ledger_settled","ledgerStatus":"SETTLED"}`
+when a `SETTLED` ledger row exists for that payment key, and changes nothing. The
+ledger guard is part of the same `UPDATE` as the status change, so a settlement
+committing at the same moment cannot be turned into a failed intent. That is
+deliberate: `intent_failed_ledger_settled` is the alert that the books disagree,
+and an operator action must not be able to raise it. The recovery for a payment
+whose money moved is the refund endpoint above, not a retried fail, and there is
+no force flag: if you believe you need one, the ledger row is wrong, not the
+guard.
 
 The manual endpoint refuses to refund a `SETTLED` ledger whose session reached
 READY unless it is already `REFUND_PENDING`, and refuses a `REFUND_SENDING` row:

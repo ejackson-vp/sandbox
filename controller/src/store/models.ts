@@ -274,6 +274,24 @@ export class PaymentClaimLostError extends Error {
 }
 
 /**
+ * A fail request for a payment whose ledger row is already `SETTLED`.
+ *
+ * The intent may not become `failed` while the books say the customer was
+ * served: that pair is the `intent_failed_ledger_settled` divergence, and it has
+ * to stay reachable only by editing rows outside the service. The operator
+ * reverses the settlement (refund) instead of retrying the fail.
+ */
+export class LedgerSettledError extends Error {
+  constructor(paymentKey: string) {
+    super(
+      `payment ${paymentKey.slice(0, 12)}… has a SETTLED ledger row; ` +
+        `reverse the settlement instead of failing the intent`,
+    );
+    this.name = "LedgerSettledError";
+  }
+}
+
+/**
  * True when two stored payload hashes disagree. A NULL on either side means the
  * check cannot be made (pre-v16 row, or a caller that supplied no hash) and the
  * duplicate is accepted, which is the documented upgrade behaviour.

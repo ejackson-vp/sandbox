@@ -21,7 +21,10 @@
  *  - `intent_failed_ledger_settled`: the intent says the payment was refused,
  *    the ledger says the customer received service. The duplicate-charge path
  *    is not a false positive: it records `REFUNDED` or `REFUND_PENDING`, never
- *    `SETTLED`.
+ *    `SETTLED`. `failIntent` refuses that pair in the same statement as the
+ *    status change, so no request writes it; a sample means a row was changed
+ *    outside the request path (an edit, a one-sided restore, or recovery that
+ *    crashed before applying the refund policy).
  *  - `duplicate_refund_claim`: two ledger rows in `REFUND_SENDING` share one
  *    settlement nonce, so one signed authorisation is being refunded twice.
  *    `payment_key` cannot repeat (it is the primary key) and a nonce is what a
