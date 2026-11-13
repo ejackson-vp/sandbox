@@ -105,7 +105,7 @@ export interface Tx extends Querier {
 
 export class PgConnection implements Querier {
   readonly pool: Pool;
-  /** Dedicated to the scrape-time audit; see `queryReadOnly`. */
+  /** Dedicated to the ledger audit sampler; see `queryReadOnly`. */
   private auditPool: Pool | null = null;
   /** Dedicated connection that holds the session advisory lock. */
   private lockClient: PoolClient | null = null;
@@ -284,7 +284,7 @@ export class PgConnection implements Querier {
       application_name: "sandbox-ledger-audit",
     });
     // An idle audit connection dying must not take the process down; the next
-    // scrape opens another one.
+    // sample opens another one.
     this.auditPool.on("error", () => {});
     return this.auditPool;
   }

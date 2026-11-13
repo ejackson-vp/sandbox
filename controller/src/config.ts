@@ -16,6 +16,7 @@ import { mintProxyToken } from "./tokens.js";
 import { shardClaim } from "./data-plane-shard.js";
 import { parseSettlement } from "./settlement-config.js";
 import { parseGuestMeasurementAllowlist } from "./config/attestation.js";
+import { parseLedgerAudit } from "./config/audit.js";
 import { parseCapacity } from "./config/capacity.js";
 import { parseEgress } from "./config/egress.js";
 import {
@@ -83,6 +84,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     ...parsePaymentLimits(env),
     ...parseSettlement(env),
     ...parseCapacity(env),
+    ...parseLedgerAudit(env),
     ...parseGuestMeasurementAllowlist(env),
     ...parseDataPlanePlacement(env, role),
   };

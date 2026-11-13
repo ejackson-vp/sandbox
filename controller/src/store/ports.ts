@@ -176,7 +176,7 @@ export interface RefundWorkerStore {
 }
 
 /**
- * The ledger audit: one read-only snapshot per metrics scrape.
+ * The ledger audit: one read-only snapshot per sampling pass.
  *
  * Deliberately its own port rather than a method on a money port: nothing that
  * moves money may depend on the audit, and the audit may not write. A standby

@@ -23,14 +23,15 @@ import {
   type LiveRefundClaim,
   type SessionLifetimeSnapshot,
 } from "../../controller/src/ledger-audit.js";
-import { createLedgerAuditCollector } from "../../controller/src/ledger-audit-collector.js";
+import { createLedgerAuditSampler } from "../../controller/src/ledger-audit-sampler.js";
 import { PgConnection } from "../../controller/src/store/postgres/pg.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { limitsFor, paymentFixture, sessionFixture } from "../helpers/store-fixtures.js";
 import { ensureTestDatabase, freshStore, sqlExec, testDatabaseUrl } from "../helpers/test-store.js";
 
 const NOW = 1_700_000_000_000;
-const LIMITS: LedgerAuditLimits = { sessionGraceMs: 60_000, maxRows: 100 };
+const LIMITS: LedgerAuditLimits = { sessionGraceMs: 60_000 };
+const INTERVAL_MS = 300_000;
 
 function audit(partial: {
   intents?: readonly IntentLedgerSnapshot[];
@@ -240,14 +241,15 @@ describe("ledger audit", () => {
 
   it("publishes zero-filled gauges for every reason and phase", async () => {
     const registry = new MetricsRegistry({ cacheMs: 0 });
-    const collector = createLedgerAuditCollector({
+    const sampler = createLedgerAuditSampler({
       store: {
         readLedgerAudit: async () => ({ intents: [], liveRefunds: [], sessions: [] }),
       },
       registry,
       now: () => NOW,
+      intervalMs: INTERVAL_MS,
     });
-    await collector.collect();
+    await sampler.sample();
     const text = registry.render();
     for (const reason of LEDGER_DIVERGENCE_REASONS) {
       expect(text).toContain(`sandbox_ledger_divergence{reason="${reason}"} 0`);
@@ -256,11 +258,13 @@ describe("ledger audit", () => {
       expect(text).toContain(`sandbox_sessions_stale{phase="${phase}"} 0`);
     }
     expect(text).toContain("sandbox_ledger_audit_failures_total 0");
+    // A successful sample means the readings are current.
+    expect(text).toContain("sandbox_ledger_audit_age_seconds 0");
   });
 
   it("counts a failed read and does not pretend the books balanced", async () => {
     const registry = new MetricsRegistry({ cacheMs: 0 });
-    const collector = createLedgerAuditCollector({
+    const sampler = createLedgerAuditSampler({
       store: {
         readLedgerAudit: async () => {
           throw new Error("database is down");
@@ -268,24 +272,27 @@ describe("ledger audit", () => {
       },
       registry,
       now: () => NOW,
+      intervalMs: INTERVAL_MS,
     });
-    await collector.collect();
+    await sampler.sample();
+    sampler.collect();
     const text = registry.render();
     expect(text).toContain("sandbox_ledger_audit_failures_total 1");
     // No successful read has registered the families, so a failed audit exports
     // no zero at all. The counter is the only signal.
     expect(text).not.toContain("sandbox_ledger_divergence");
     expect(text).not.toContain("sandbox_sessions_stale");
+    expect(text).not.toContain("sandbox_ledger_audit_age_seconds");
   });
 
-  it("runs one audit at a time so a slow scrape cannot stack", async () => {
+  it("runs one sample at a time so a slow store cannot stack work", async () => {
     const registry = new MetricsRegistry({ cacheMs: 0 });
     let reads = 0;
     let release: (() => void) | undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const collector = createLedgerAuditCollector({
+    const sampler = createLedgerAuditSampler({
       store: {
         readLedgerAudit: async () => {
           reads += 1;
@@ -295,23 +302,23 @@ describe("ledger audit", () => {
       },
       registry,
       now: () => NOW,
+      intervalMs: INTERVAL_MS,
     });
 
-    const first = collector.collect();
-    // The second scrape arrives while the first is still waiting on the store.
-    await collector.collect();
+    const first = sampler.sample();
+    // A second tick arrives while the first is still waiting on the store.
+    await sampler.sample();
     expect(reads).toBe(1);
     release?.();
     await first;
     expect(reads).toBe(1);
 
-    // The next scrape after the first finished does read again.
-    await collector.collect();
+    // The next tick after the first finished does read again.
+    await sampler.sample();
     expect(reads).toBe(2);
   });
 
   it("defaults are bounded", () => {
-    expect(DEFAULT_LEDGER_AUDIT_LIMITS.maxRows).toBeGreaterThan(0);
     expect(DEFAULT_LEDGER_AUDIT_LIMITS.sessionGraceMs).toBeGreaterThan(0);
   });
 });
@@ -344,7 +351,7 @@ describe.skipIf(!process.env.DATABASE_URL?.trim())("ledger audit over postgres",
   it("pins every divergence reason and both stale deadlines through the gauges", async () => {
     const store = await freshStore();
     const now = Date.now();
-    const limits: LedgerAuditLimits = { sessionGraceMs: 60_000, maxRows: 500 };
+    const limits: LedgerAuditLimits = { sessionGraceMs: 60_000 };
 
     // 1. settled_without_ledger: the money moved, the ledger row did not.
     const missingLedgerKey = "a".repeat(64);
@@ -409,8 +416,14 @@ describe.skipIf(!process.env.DATABASE_URL?.trim())("ledger audit over postgres",
     );
 
     const registry = new MetricsRegistry({ cacheMs: 0 });
-    const collector = createLedgerAuditCollector({ store, limits, registry, now: () => now });
-    await collector.collect();
+    const sampler = createLedgerAuditSampler({
+      store,
+      limits,
+      registry,
+      now: () => now,
+      intervalMs: INTERVAL_MS,
+    });
+    await sampler.sample();
 
     const text = registry.render();
     expect(text).toContain('sandbox_ledger_divergence{reason="settled_without_ledger"} 1');
@@ -443,13 +456,12 @@ describe.skipIf(!process.env.DATABASE_URL?.trim())("ledger audit over postgres",
     ]);
   });
 
-  it("reports a duplicate even when the row cap is smaller than the group", async () => {
+  it("reports every member of a duplicate nonce group", async () => {
     const store = await freshStore();
     const now = Date.now();
-    // Three live claims on one nonce with maxRows = 1. A capped read of
-    // REFUND_SENDING rows would return one member, and the JS grouping would see
-    // a group of one and read 0. The grouped query is unbounded and reports all
-    // three.
+    // Three live claims on one nonce. The grouping happens in SQL before any
+    // row leaves the database, so all three members are visible: a read that
+    // returned only one would report a group of one and read 0.
     const keys = ["1".repeat(64), "2".repeat(64), "3".repeat(64)];
     for (const key of keys) {
       await sqlExec(
@@ -462,10 +474,16 @@ describe.skipIf(!process.env.DATABASE_URL?.trim())("ledger audit over postgres",
       );
     }
 
-    const limits: LedgerAuditLimits = { sessionGraceMs: 60_000, maxRows: 1 };
+    const limits: LedgerAuditLimits = { sessionGraceMs: 60_000 };
     const registry = new MetricsRegistry({ cacheMs: 0 });
-    const collector = createLedgerAuditCollector({ store, limits, registry, now: () => now });
-    await collector.collect();
+    const sampler = createLedgerAuditSampler({
+      store,
+      limits,
+      registry,
+      now: () => now,
+      intervalMs: INTERVAL_MS,
+    });
+    await sampler.sample();
     expect(registry.render()).toContain(
       'sandbox_ledger_divergence{reason="duplicate_refund_claim"} 3',
     );

@@ -268,15 +268,16 @@ was delivered for an intent that failed, was invisible until a human reconciled
 a spreadsheet.
 
 `controller/src/ledger-audit.ts` is that comparison. It is a pure function over a
-snapshot, and `controller/src/ledger-audit-collector.ts` publishes it from the
-existing metrics scrape. There is no timer, no transaction, no writer lock and
-no write. The two `SELECT`s run one at a time on a dedicated connection opened
-with `default_transaction_read_only=on` and a 2 s statement timeout, and the
-collector single-flights, so a slow database costs one audit connection and
-cannot starve the writer pool or stack scrape handlers. A standby replica runs
-the audit too, because reading is what it is for. The three families are
-registered by the controller only, so a relay or proxy pod exports no
-uncollected zero.
+snapshot. `controller/src/ledger-audit-sampler.ts` runs it on a timer
+(`LEDGER_AUDIT_INTERVAL_MS`, default `300000`, accepted range is one second to
+one hour), and the metrics scrape only renders the last sampled values and their
+age. There is no transaction, no writer lock and no write. The two `SELECT`s run
+one at a time on a dedicated connection opened with
+`default_transaction_read_only=on` and a 2 s statement timeout, and the sampler
+single-flights, so a slow database costs one audit connection and one sample
+rather than a queue. A standby replica samples too, because reading is what it
+is for. The families are registered by the first successful sample in the
+controller role only, so a relay or proxy pod exports no uncollected zero.
 
 What it checks:
 
@@ -286,19 +287,26 @@ What it checks:
 | `sandbox_ledger_divergence{reason="intent_failed_ledger_settled"}` | The intent is `failed`, the ledger row is `SETTLED`. The outbox says refused, the books say delivered. The duplicate-charge path records `REFUNDED` or `REFUND_PENDING`, so it is not a false positive. |
 | `sandbox_ledger_divergence{reason="duplicate_refund_claim"}` | Two ledger rows in `REFUND_SENDING` share one settlement nonce, so one signed authorisation is being refunded twice. `payment_key` cannot repeat, the nonce is the identity that can. |
 | `sandbox_sessions_stale{phase}` | A non-terminal session is past its deadline by more than the grace period. The deadline is `lease_expires_at` at READY, otherwise `created_at + max_lifetime_seconds` (protocol maximum when null). |
-| `sandbox_ledger_audit_failures_total` | A scrape could not read the snapshot. Until a read succeeds the gauge families are absent, and after one succeeds a failure leaves the last good values in place, so a read failure never looks like a balanced ledger. |
+| `sandbox_ledger_audit_age_seconds` | Seconds since the last successful sample, recomputed from the clock on every scrape. It rises while samples fail or the timer is stopped, including after a good reading, so a stale sampler cannot look fresh. Absent until the first success. |
+| `sandbox_ledger_audit_failures_total` | A sample could not read the snapshot. Until a sample succeeds the gauge families are absent, and after one succeeds a failure leaves the last good values in place, so a read failure never looks like a balanced ledger. |
 
-The duplicate check is grouped in SQL over every `REFUND_SENDING` row, so a
-backlog cannot hide a pair: the worse the stuck claims, the larger the group it
-reports. Stale sessions are read unbounded as well, because they are bounded by
-admission capacity rather than by history, and their phase counts are exact. The
-intent divergences are capped at 500 rows, so those counts are a floor at the
-cap, never a clean zero. The stale check adds 60 seconds of slack, which keeps
-the reconciler's own decision latency out of the signal.
+Both reads are unbounded. The duplicate check is grouped in SQL over every
+`REFUND_SENDING` row, so a backlog cannot hide a pair: the worse the stuck
+claims, the larger the group it reports. Stale sessions are read unbounded as
+well, because they are bounded by admission capacity rather than by history, and
+their phase counts are exact. Intent divergences used to be capped at 500 rows.
+That cap bounded the rows returned, not the scan, so it only made a large
+incident look smaller than it was; it is gone now that the read is off the
+scrape path. In a healthy ledger the predicate matches nothing, and when it does
+match a lot the exact count is the number an operator needs. The stale check adds
+60 seconds of slack, which keeps the reconciler's own decision latency out of the
+signal.
 
-The scrape-time read costs about 25 ms at 100k payment intents and about 1.3 s
-at 10M. Past roughly a million intents it needs to move from a 15 s scrape to a
-periodic job.
+The pass is a full scan of `payment_intents`, so its cost grows with the ledger:
+about 25 ms at 100k intents and 1.3 s at 10M. At the five-minute default that is
+1.3 s per sample instead of 1.3 s per 15 s scrape on every replica. Raise
+`LEDGER_AUDIT_INTERVAL_MS` as the table grows; the age alert below is how you
+notice the interval no longer fits.
 
 It deliberately does not check:
 
@@ -328,9 +336,15 @@ sandbox_ledger_divergence{reason="duplicate_refund_claim"} > 0
 # cleanup that is not finishing, by phase
 sandbox_sessions_stale{phase="TERMINATING"} > 0
 
-# the audit itself stopped running
+# no successful sample for two default intervals (2 x 300 s)
+sandbox_ledger_audit_age_seconds > 600
+
+# the audit itself is failing
 increase(sandbox_ledger_audit_failures_total[15m]) > 0
 ```
+
+If `LEDGER_AUDIT_INTERVAL_MS` is raised, raise the age threshold with it: the
+rule is two intervals, not 600 seconds.
 
 A flagged key is looked up with
 `GET /internal/payments/<paymentKey>`; the metric never carries a payment key or

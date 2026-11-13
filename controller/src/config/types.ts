@@ -105,6 +105,12 @@ export interface ControllerConfig {
   relayLossGraceMs: number;
   leaseGraceMs: number;
   reconcileIntervalMs: number;
+  /**
+   * How often the ledger audit samples the store. Deliberately off the scrape
+   * path: the read scans `payment_intents`, so its cost belongs on a schedule
+   * an operator sizes, not on whatever interval Prometheus asks for.
+   */
+  ledgerAuditIntervalMs: number;
   /** Max sessions reconciled in parallel per phase; 1 restores sequential passes. */
   reconcileConcurrency: number;
   /**
