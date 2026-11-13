@@ -11,6 +11,7 @@ import type { RelayTlsOptions } from "../relay.js";
 import type { RelayClientTlsOptions } from "../relay-client.js";
 import type { RuntimeProfileCatalog } from "../runtime-profiles.js";
 import type { PlatformLimits, TierTable } from "@x402s/shared/payment";
+import type { PaymentMode } from "@x402s/shared/protocol";
 
 export interface ControllerConfig {
   role: Role;
@@ -210,7 +211,7 @@ export interface ControllerConfig {
   /** Concurrent non-terminal sessions cluster-wide; 0 disables the check. */
   globalConcurrentSessions: number;
   /** Payment mode stamped on ledger rows written by settlement recovery. */
-  paymentMode: "mock" | "testnet";
+  paymentMode: PaymentMode;
   /** Facilitator base URL for settlement lookup; empty disables recovery's lookup. */
   facilitatorUrl: string;
   /**

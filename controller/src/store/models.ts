@@ -4,7 +4,7 @@
  */
 import type { ClaimToken } from "@x402s/shared/durable";
 import { DEFAULT_RUNTIME, type RuntimeName } from "@x402s/shared/runtimes";
-import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared/protocol";
+import type { PaymentMode, SessionLimits, SessionState, SessionTier } from "@x402s/shared/protocol";
 
 export type { SessionState };
 
@@ -30,7 +30,7 @@ export interface PaymentRecord {
   payTo: string;
   payer?: string;
   transaction?: string;
-  mode: "mock" | "testnet";
+  mode: PaymentMode;
   /** EIP-3009 authorisation nonce, when the payload carried one. */
   settlementNonce?: string | null;
 }
@@ -181,7 +181,7 @@ export interface PaymentLedgerRecord {
   amount: string;
   asset: string;
   network: string;
-  mode: "mock" | "testnet";
+  mode: PaymentMode;
   status: LedgerStatus;
   reason: string | null;
   refundTransaction: string | null;
@@ -217,7 +217,7 @@ export interface UnclaimedLedgerEntry {
   amount: string;
   asset: string;
   network: string;
-  mode: "mock" | "testnet";
+  mode: PaymentMode;
   status: LedgerStatus;
   reason: string;
   /** Set when the row is written already refunded (a mock refund). */
@@ -500,7 +500,7 @@ export function mapLedger(r: Record<string, unknown>): PaymentLedgerRecord {
     amount: r.amount as string,
     asset: r.asset as string,
     network: r.network as string,
-    mode: r.mode as "mock" | "testnet",
+    mode: r.mode as PaymentMode,
     status: r.status as LedgerStatus,
     reason: (r.reason as string | null) ?? null,
     refundTransaction: (r.refund_tx as string | null) ?? null,

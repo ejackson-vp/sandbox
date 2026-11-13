@@ -100,7 +100,10 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     if (config.paymentMode === "mock") {
       resourceServer.register(MOCK_NETWORK, new MockExactServerScheme());
     } else {
-      resourceServer.register("eip155:84532", new ExactEvmScheme());
+      // Testnet and mainnet register the same scheme against the configured
+      // network, so enabling mainnet is a configuration change, not a code
+      // change: Base Sepolia today, Base mainnet when PAYMENT_MODE=mainnet.
+      resourceServer.register(config.network as Network, new ExactEvmScheme());
     }
   }
   await retry(

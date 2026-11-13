@@ -9,7 +9,7 @@ import type {
   SessionTier,
 } from "./lifecycle.js";
 import type { AttestationEnvelope } from "./attestation.js";
-import type { PaymentSummary, SessionTimings } from "./session.js";
+import type { PaymentMode, PaymentSummary, SessionTimings } from "./session.js";
 
 /** Controller -> API session view. One definition; both sides import it. */
 export interface ControllerSessionView {
@@ -65,7 +65,7 @@ export interface EntitlementRequest {
     payTo: string;
     payer?: string;
     transaction?: string;
-    mode: "mock" | "testnet";
+    mode: PaymentMode;
     /** EIP-3009 authorisation nonce, so a refund can be keyed by it (#31). */
     settlementNonce?: string | null;
   };

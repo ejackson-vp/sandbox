@@ -12,6 +12,7 @@
  * instead of creating a second one.
  */
 import { randomBytes } from "node:crypto";
+import type { PaymentMode } from "@x402s/shared/protocol";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import {
   asClaimToken,
@@ -157,7 +158,7 @@ export class PgPaymentRepository {
       payTo: row.pay_to as string,
       payer: (row.payer as string | undefined) ?? undefined,
       transaction: (row.tx as string | undefined) ?? undefined,
-      mode: row.mode as "mock" | "testnet",
+      mode: row.mode as PaymentMode,
     };
   }
 

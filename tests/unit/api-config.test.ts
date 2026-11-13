@@ -61,6 +61,69 @@ describe("api config guards", () => {
   });
 });
 
+describe("mainnet mode", () => {
+  // The complete configuration: every mainnet assertion satisfied. Each test
+  // below removes or breaks exactly one of them.
+  const mainnet = {
+    ...base,
+    PAYMENT_MODE: "mainnet",
+    NETWORK: "eip155:8453",
+    PAY_TO: "0x1111111111111111111111111111111111111111",
+    FACILITATOR_URL: "https://facilitator.example.test",
+    PAYMENT_RPC_URL: "https://mainnet.base.org",
+  };
+
+  it("starts with a complete explicit configuration", () => {
+    const cfg = loadConfig(mainnet);
+    expect(cfg.paymentMode).toBe("mainnet");
+    expect(cfg.network).toBe("eip155:8453");
+    expect(cfg.facilitatorUrl).toBe("https://facilitator.example.test");
+    expect(cfg.paymentUsdcAddress).toBe("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
+  });
+
+  it("rejects an unknown payment mode", () => {
+    expect(() => loadConfig({ ...base, PAYMENT_MODE: "live" })).toThrow(/PAYMENT_MODE/);
+  });
+
+  it("refuses a mainnet network unless the mode is mainnet", () => {
+    expect(() => loadConfig({ ...mainnet, PAYMENT_MODE: "testnet" })).toThrow(/mainnet/);
+  });
+
+  it("requires NETWORK explicitly", () => {
+    const { NETWORK, ...rest } = mainnet;
+    expect(() => loadConfig(rest)).toThrow(/NETWORK/);
+  });
+
+  it("refuses a network outside the mainnet allowlist", () => {
+    expect(() =>
+      loadConfig({ ...mainnet, NETWORK: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }),
+    ).toThrow(/allowlist/);
+    expect(() => loadConfig({ ...mainnet, NETWORK: "eip155:84532" })).toThrow(/allowlist/);
+  });
+
+  it("refuses the mock PAY_TO", () => {
+    expect(() =>
+      loadConfig({ ...mainnet, PAY_TO: "0x0000000000000000000000000000000000000402" }),
+    ).toThrow(/real receiving address/);
+  });
+
+  it("requires a valid PAY_TO", () => {
+    const { PAY_TO, ...rest } = mainnet;
+    expect(() => loadConfig(rest)).toThrow(/PAY_TO/);
+    expect(() => loadConfig({ ...mainnet, PAY_TO: "0xnot-an-address" })).toThrow(/PAY_TO/);
+  });
+
+  it("requires FACILITATOR_URL explicitly", () => {
+    const { FACILITATOR_URL, ...rest } = mainnet;
+    expect(() => loadConfig(rest)).toThrow(/FACILITATOR_URL/);
+  });
+
+  it("refuses to start without an on-chain verifier", () => {
+    const { PAYMENT_RPC_URL, ...rest } = mainnet;
+    expect(() => loadConfig(rest)).toThrow(/PAYMENT_RPC_URL/);
+  });
+});
+
 describe("chain verification configuration", () => {
   const testnet = {
     ...base,

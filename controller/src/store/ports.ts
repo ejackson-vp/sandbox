@@ -13,6 +13,7 @@ import type {
   SessionState,
   StoreHealth,
 } from "./models.js";
+import type { PaymentMode } from "@x402s/shared/protocol";
 import type { ReservationStore } from "../capacity/reservation-store.js";
 import type { ClaimToken } from "@x402s/shared/durable";
 import type { BudgetDecision, BudgetLimits } from "./budget-decision.js";
@@ -197,7 +198,7 @@ export interface SettlementRecoveryStore {
     amount: string;
     asset: string;
     network: string;
-    mode: "mock" | "testnet";
+    mode: PaymentMode;
     status: LedgerStatus;
     reason: string;
     refundTransaction?: string | null;

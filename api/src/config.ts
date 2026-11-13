@@ -1,8 +1,17 @@
 /**
  * API server configuration with fail-closed validation.
  *
- * There is no path to mainnet: a mainnet network id is rejected at startup even
- * if every other flag is set. Testnet is opt-in and documented.
+ * Three payment modes, in increasing order of consequence:
+ *
+ *  - `mock` is the local default. It needs `ALLOW_INSECURE_DEV=true` because
+ *    the mock facilitator has no economic security, and it ignores chain
+ *    settings entirely.
+ *  - `testnet` settles a documented testnet network (Base Sepolia by default).
+ *  - `mainnet` moves real money and has no default at all: it must be requested
+ *    explicitly, `NETWORK` must be in `MAINNET_ALLOWED_NETWORKS`, `PAY_TO` must
+ *    be a real address, `FACILITATOR_URL` must be set, and an on-chain verifier
+ *    (`PAYMENT_RPC_URL`) must be configured. Every check fails closed, so no
+ *    single flag can silently turn on real payments.
  */
 import { envBool as bool, envInt as int, envTlsFiles } from "@x402s/shared/env";
 import {
@@ -17,13 +26,20 @@ import {
   type PlatformLimits,
   type TierTable,
 } from "@x402s/shared/payment";
+import type { PaymentMode } from "@x402s/shared/protocol";
 import { DEFAULT_METRICS_PORT } from "@x402s/shared/runtime";
 import { usdcAddressFor } from "./payments/settlement-verifier.js";
 
-type PaymentMode = "mock" | "testnet";
-
+/**
+ * Networks this build can settle on mainnet. One entry, because `server.ts`
+ * registers exactly one EVM scheme: Solana is in the detection set below so it
+ * is refused with a useful message rather than registered as an EVM network.
+ */
+const MAINNET_ALLOWED_NETWORKS = new Set(["eip155:8453"]);
+/** Any mainnet id, including one this build has no scheme for. */
 const MAINNET_NETWORKS = new Set(["eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"]);
 const TESTNET_NETWORKS = new Set(["eip155:84532", "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"]);
+const MOCK_PAY_TO = "0x0000000000000000000000000000000000000402";
 
 export interface ApiConfig {
   port: number;
@@ -75,16 +91,39 @@ export interface ApiConfig {
   platformLimits: PlatformLimits;
 }
 
-function parsePayment(env: NodeJS.ProcessEnv): Pick<ApiConfig, "paymentMode" | "network" | "payTo" | "facilitatorUrl"> {
+/**
+ * Payment mode, network, recipient and facilitator.
+ *
+ * Mainnet is opt-in in the strictest sense: the mode must be named, the network
+ * must be supplied (there is no mainnet default), and the assertions below must
+ * all hold. Nothing here defaults towards moving real money.
+ */
+function parsePayment(
+  env: NodeJS.ProcessEnv,
+): Pick<ApiConfig, "paymentMode" | "network" | "payTo" | "facilitatorUrl"> {
   const paymentMode = (env.PAYMENT_MODE ?? "mock") as PaymentMode;
-  if (paymentMode !== "mock" && paymentMode !== "testnet") {
-    throw new Error(`PAYMENT_MODE must be "mock" or "testnet", got ${paymentMode}`);
+  if (paymentMode !== "mock" && paymentMode !== "testnet" && paymentMode !== "mainnet") {
+    throw new Error(`PAYMENT_MODE must be "mock", "testnet" or "mainnet", got ${paymentMode}`);
   }
 
-  const requestedNetwork = env.NETWORK ?? (paymentMode === "mock" ? MOCK_NETWORK : "eip155:84532");
-  if (MAINNET_NETWORKS.has(requestedNetwork)) {
+  if (paymentMode === "mainnet" && !env.NETWORK) {
     throw new Error(
-      "refusing to start: mainnet payments are not enabled in this build (no silent mainnet activation)",
+      "PAYMENT_MODE=mainnet requires NETWORK to be set explicitly (there is no mainnet default)",
+    );
+  }
+  const requestedNetwork =
+    env.NETWORK ?? (paymentMode === "mock" ? MOCK_NETWORK : "eip155:84532");
+
+  if (paymentMode !== "mainnet" && MAINNET_NETWORKS.has(requestedNetwork)) {
+    throw new Error(
+      `refusing to start: ${requestedNetwork} is a mainnet network; real money requires PAYMENT_MODE=mainnet (no silent mainnet activation)`,
+    );
+  }
+  if (paymentMode === "mainnet" && !MAINNET_ALLOWED_NETWORKS.has(requestedNetwork)) {
+    // This includes the Solana mainnet id: the build registers no Solana scheme,
+    // so accepting it here would start a process that cannot settle anything.
+    throw new Error(
+      `PAYMENT_MODE=mainnet requires NETWORK in the mainnet allowlist (${[...MAINNET_ALLOWED_NETWORKS].join(", ")}), got ${requestedNetwork}`,
     );
   }
   if (paymentMode === "testnet" && !TESTNET_NETWORKS.has(requestedNetwork)) {
@@ -99,17 +138,21 @@ function parsePayment(env: NodeJS.ProcessEnv): Pick<ApiConfig, "paymentMode" | "
     throw new Error("mock payments require ALLOW_INSECURE_DEV=true (mock payments have no economic security)");
   }
 
+  if (paymentMode === "mainnet" && !env.FACILITATOR_URL) {
+    throw new Error(
+      "PAYMENT_MODE=mainnet requires FACILITATOR_URL to be set explicitly (no default facilitator for real money)",
+    );
+  }
   const facilitatorUrl =
     env.FACILITATOR_URL ??
     (paymentMode === "mock" ? "http://127.0.0.1:3002" : "https://x402.org/facilitator");
 
-  const payTo =
-    env.PAY_TO ?? (paymentMode === "mock" ? "0x0000000000000000000000000000000000000402" : "");
+  const payTo = env.PAY_TO ?? (paymentMode === "mock" ? MOCK_PAY_TO : "");
   if (!/^0x[0-9a-fA-F]{40}$/.test(payTo)) {
     throw new Error("PAY_TO must be a 20-byte EVM address");
   }
-  if (paymentMode === "testnet" && payTo === "0x0000000000000000000000000000000000000402") {
-    throw new Error("PAY_TO must be a real receiving address in testnet mode");
+  if (paymentMode !== "mock" && payTo === MOCK_PAY_TO) {
+    throw new Error(`PAY_TO must be a real receiving address in ${paymentMode} mode`);
   }
   return { paymentMode, network: requestedNetwork, payTo, facilitatorUrl };
 }
@@ -237,6 +280,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const payment = parsePayment(env);
 
   const chainVerification = parseChainVerification(env, payment.paymentMode, payment.network);
+
+  // Real money is never granted on a facilitator's word alone: mainnet must be
+  // able to confirm the EIP-3009 nonce on chain before it grants, and before it
+  // can recover a settle-then-crash.
+  if (payment.paymentMode === "mainnet" && !chainVerification.paymentRpcUrl) {
+    throw new Error(
+      "PAYMENT_MODE=mainnet requires PAYMENT_RPC_URL: settlement must be verified on chain",
+    );
+  }
 
   const credentials = parseCredentials(env);
 
