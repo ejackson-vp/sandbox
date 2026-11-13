@@ -268,10 +268,15 @@ was delivered for an intent that failed, was invisible until a human reconciled
 a spreadsheet.
 
 `controller/src/ledger-audit.ts` is that comparison. It is a pure function over a
-bounded snapshot, and `controller/src/ledger-audit-collector.ts` publishes it
-from the existing metrics scrape. There is no timer, no transaction, no writer
-lock and no write: two `SELECT`s run in autocommit, and a standby replica runs
-them too, because reading is what it is for.
+snapshot, and `controller/src/ledger-audit-collector.ts` publishes it from the
+existing metrics scrape. There is no timer, no transaction, no writer lock and
+no write. The two `SELECT`s run one at a time on a dedicated connection opened
+with `default_transaction_read_only=on` and a 2 s statement timeout, and the
+collector single-flights, so a slow database costs one audit connection and
+cannot starve the writer pool or stack scrape handlers. A standby replica runs
+the audit too, because reading is what it is for. The three families are
+registered by the controller only, so a relay or proxy pod exports no
+uncollected zero.
 
 What it checks:
 
@@ -281,11 +286,19 @@ What it checks:
 | `sandbox_ledger_divergence{reason="intent_failed_ledger_settled"}` | The intent is `failed`, the ledger row is `SETTLED`. The outbox says refused, the books say delivered. The duplicate-charge path records `REFUNDED` or `REFUND_PENDING`, so it is not a false positive. |
 | `sandbox_ledger_divergence{reason="duplicate_refund_claim"}` | Two ledger rows in `REFUND_SENDING` share one settlement nonce, so one signed authorisation is being refunded twice. `payment_key` cannot repeat, the nonce is the identity that can. |
 | `sandbox_sessions_stale{phase}` | A non-terminal session is past its deadline by more than the grace period. The deadline is `lease_expires_at` at READY, otherwise `created_at + max_lifetime_seconds` (protocol maximum when null). |
-| `sandbox_ledger_audit_failures_total` | A scrape could not read the snapshot. The gauges keep their last good values instead of showing zero. |
+| `sandbox_ledger_audit_failures_total` | A scrape could not read the snapshot. Until a read succeeds the gauge families are absent, and after one succeeds a failure leaves the last good values in place, so a read failure never looks like a balanced ledger. |
 
-The snapshot is capped at 500 rows per source, so a count at the cap is a floor,
-not a total. The stale check adds 60 seconds of slack, which keeps the
-reconciler's own decision latency out of the signal.
+The duplicate check is grouped in SQL over every `REFUND_SENDING` row, so a
+backlog cannot hide a pair: the worse the stuck claims, the larger the group it
+reports. Stale sessions are read unbounded as well, because they are bounded by
+admission capacity rather than by history, and their phase counts are exact. The
+intent divergences are capped at 500 rows, so those counts are a floor at the
+cap, never a clean zero. The stale check adds 60 seconds of slack, which keeps
+the reconciler's own decision latency out of the signal.
+
+The scrape-time read costs about 25 ms at 100k payment intents and about 1.3 s
+at 10M. Past roughly a million intents it needs to move from a 15 s scrape to a
+periodic job.
 
 It deliberately does not check:
 

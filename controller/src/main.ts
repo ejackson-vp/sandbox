@@ -50,15 +50,6 @@ async function main(): Promise<void> {
   metrics.counter("sandbox_sessions_created_total", "Entitlements created");
   metrics.counter("sandbox_sessions_failed_total", "Sessions that ended in FAILED or EXPIRED");
   metrics.counter("sandbox_refunds_total", "Payment refund outcomes");
-  metrics.gauge(
-    "sandbox_ledger_divergence",
-    "Payment intent and ledger pairs whose books disagree, by reason",
-  );
-  metrics.gauge("sandbox_sessions_stale", "Non-terminal sessions past their deadline, by phase");
-  metrics.counter(
-    "sandbox_ledger_audit_failures_total",
-    "Ledger audit scrapes that could not read the store",
-  );
   metrics.counter("sandbox_budget_rejections_total", "Create-budget rejections by scope");
   metrics.counter("sandbox_provision_failures_total", "Sessions failed during provisioning by reason");
   metrics.gauge("sandbox_sessions_active", "Sessions in READY or ACTIVE");
@@ -141,8 +132,9 @@ async function main(): Promise<void> {
     : new SoloLeadership(cfg.leaderIdentity);
   const store: StoreBackend = await openStore(cfg, { writer: leadership.isLeader() });
   // Scrape-time, not a timer: the audit costs one read per scrape, and a
-  // standby may run it because it only reads. A failed read increments its own
-  // counter and leaves the gauges at their last good values.
+  // standby may run it because it only reads. The collector registers its three
+  // families itself, so only the controller exports them; a relay or proxy pod
+  // never shows an uncollected zero that could sum into a clean answer.
   const ledgerAudit = createLedgerAuditCollector({ store });
   collectors.push(() => ledgerAudit.collect());
   log.info("leadership_mode", {

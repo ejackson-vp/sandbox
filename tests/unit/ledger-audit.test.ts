@@ -24,9 +24,10 @@ import {
   type SessionLifetimeSnapshot,
 } from "../../controller/src/ledger-audit.js";
 import { createLedgerAuditCollector } from "../../controller/src/ledger-audit-collector.js";
+import { PgConnection } from "../../controller/src/store/postgres/pg.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { limitsFor, paymentFixture, sessionFixture } from "../helpers/store-fixtures.js";
-import { freshStore, sqlExec } from "../helpers/test-store.js";
+import { ensureTestDatabase, freshStore, sqlExec, testDatabaseUrl } from "../helpers/test-store.js";
 
 const NOW = 1_700_000_000_000;
 const LIMITS: LedgerAuditLimits = { sessionGraceMs: 60_000, maxRows: 100 };
@@ -271,8 +272,42 @@ describe("ledger audit", () => {
     await collector.collect();
     const text = registry.render();
     expect(text).toContain("sandbox_ledger_audit_failures_total 1");
-    // The family is registered but has no sample: not a zero on every reason.
-    expect(text).toContain("sandbox_ledger_divergence 0");
+    // No successful read has registered the families, so a failed audit exports
+    // no zero at all. The counter is the only signal.
+    expect(text).not.toContain("sandbox_ledger_divergence");
+    expect(text).not.toContain("sandbox_sessions_stale");
+  });
+
+  it("runs one audit at a time so a slow scrape cannot stack", async () => {
+    const registry = new MetricsRegistry({ cacheMs: 0 });
+    let reads = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const collector = createLedgerAuditCollector({
+      store: {
+        readLedgerAudit: async () => {
+          reads += 1;
+          await gate;
+          return { intents: [], liveRefunds: [], sessions: [] };
+        },
+      },
+      registry,
+      now: () => NOW,
+    });
+
+    const first = collector.collect();
+    // The second scrape arrives while the first is still waiting on the store.
+    await collector.collect();
+    expect(reads).toBe(1);
+    release?.();
+    await first;
+    expect(reads).toBe(1);
+
+    // The next scrape after the first finished does read again.
+    await collector.collect();
+    expect(reads).toBe(2);
   });
 
   it("defaults are bounded", () => {
@@ -306,26 +341,72 @@ async function seedEntitlement(
 }
 
 describe.skipIf(!process.env.DATABASE_URL?.trim())("ledger audit over postgres", () => {
-  it("seeds one divergence and one stale session and publishes them as gauges", async () => {
+  it("pins every divergence reason and both stale deadlines through the gauges", async () => {
     const store = await freshStore();
     const now = Date.now();
     const limits: LedgerAuditLimits = { sessionGraceMs: 60_000, maxRows: 500 };
 
-    // The money moved, the ledger row did not survive: the shape a human would
-    // otherwise have to find in a spreadsheet.
+    // 1. settled_without_ledger: the money moved, the ledger row did not.
     const missingLedgerKey = "a".repeat(64);
     await seedEntitlement(store, "sbx_audit_missing_ledger", missingLedgerKey);
     await sqlExec("DELETE FROM payment_ledger WHERE payment_key = $1", [missingLedgerKey]);
 
-    // A READY session whose lease ended three minutes ago.
-    await seedEntitlement(store, "sbx_audit_stale", "b".repeat(64));
-    if (!(await store.setProvisioning("sbx_audit_stale", "pod-audit"))) {
+    // 2. intent_failed_ledger_settled: the outbox says refused, the books say
+    // the customer got service. Raw rows, because no store method writes this.
+    const failedIntentKey = "d".repeat(64);
+    await sqlExec(
+      `INSERT INTO payment_intents
+         (payment_key, status, session_id, spec_hash, reason, created_at, updated_at)
+       VALUES ($1, 'failed', NULL, $2, 'settlement_refused', $3, $3)`,
+      [failedIntentKey, "a".repeat(64), now],
+    );
+    await sqlExec(
+      `INSERT INTO payment_ledger
+         (payment_key, session_id, payer, amount, asset, network, mode, status, reason,
+          created_at, updated_at)
+       VALUES ($1, $2, NULL, '50000', 'mock:usdc', 'eip155:84532', 'mock', 'SETTLED', NULL, $3, $3)`,
+      [failedIntentKey, `unsettled:${failedIntentKey}`, now],
+    );
+
+    // 3. duplicate_refund_claim: two live claims share one settlement nonce.
+    // Each has its own payment key, so only a nonce grouping can see the pair.
+    const duplicateKeys = ["e".repeat(64), "f".repeat(64)];
+    for (const key of duplicateKeys) {
+      await sqlExec(
+        `INSERT INTO payment_ledger
+           (payment_key, session_id, payer, amount, asset, network, mode, status, reason,
+            settlement_nonce, created_at, updated_at)
+         VALUES ($1, $2, NULL, '50000', 'mock:usdc', 'eip155:84532', 'mock', 'REFUND_SENDING',
+                 'real_mode_refund', $3, $4, $4)`,
+        [key, `unsettled:${key}`, "0xshared-nonce", now],
+      );
+    }
+
+    // 4. A READY session past its lease.
+    await seedEntitlement(store, "sbx_audit_stale_ready", "b".repeat(64));
+    if (!(await store.setProvisioning("sbx_audit_stale_ready", "pod-audit"))) {
       throw new Error("setProvisioning refused");
     }
-    await store.setRelayToken("sbx_audit_stale", "relay-audit");
-    if (!(await store.setReady("sbx_audit_stale", now - 240_000, now - 180_000, "{}", "guest"))) {
+    await store.setRelayToken("sbx_audit_stale_ready", "relay-audit");
+    if (
+      !(await store.setReady(
+        "sbx_audit_stale_ready",
+        now - 240_000,
+        now - 180_000,
+        "{}",
+        "guest",
+      ))
+    ) {
       throw new Error("setReady refused");
     }
+
+    // 5. A PAID session that never reached READY, past its wall-clock lifetime.
+    // This shape pins the COALESCE fallback: it has no lease to compare.
+    await seedEntitlement(store, "sbx_audit_stale_paid", "c".repeat(64));
+    await sqlExec(
+      "UPDATE sessions SET created_at = $1, max_lifetime_seconds = 60 WHERE id = $2",
+      [now - 180_000, "sbx_audit_stale_paid"],
+    );
 
     const registry = new MetricsRegistry({ cacheMs: 0 });
     const collector = createLedgerAuditCollector({ store, limits, registry, now: () => now });
@@ -333,20 +414,88 @@ describe.skipIf(!process.env.DATABASE_URL?.trim())("ledger audit over postgres",
 
     const text = registry.render();
     expect(text).toContain('sandbox_ledger_divergence{reason="settled_without_ledger"} 1');
-    expect(text).toContain('sandbox_ledger_divergence{reason="intent_failed_ledger_settled"} 0');
-    expect(text).toContain('sandbox_ledger_divergence{reason="duplicate_refund_claim"} 0');
+    expect(text).toContain('sandbox_ledger_divergence{reason="intent_failed_ledger_settled"} 1');
+    expect(text).toContain('sandbox_ledger_divergence{reason="duplicate_refund_claim"} 2');
     expect(text).toContain('sandbox_sessions_stale{phase="READY"} 1');
-    expect(text).toContain('sandbox_sessions_stale{phase="PAID"} 0');
+    expect(text).toContain('sandbox_sessions_stale{phase="PAID"} 1');
     expect(text).toContain('sandbox_sessions_stale{phase="TERMINATING"} 0');
     expect(text).toContain("sandbox_ledger_audit_failures_total 0");
 
-    // And the pure half names the key, which is what an operator drills into.
+    // And the pure half names the keys, which is what an operator drills into.
     const snapshot = await store.readLedgerAudit(now, limits);
     const result = auditLedger(snapshot, limits, now);
     expect(result.divergences).toContainEqual({
       paymentKey: missingLedgerKey,
       reason: "settled_without_ledger",
     });
-    expect(result.staleSessions.map((session) => session.sessionId)).toContain("sbx_audit_stale");
+    expect(result.divergences).toContainEqual({
+      paymentKey: failedIntentKey,
+      reason: "intent_failed_ledger_settled",
+    });
+    expect(result.divergences).toEqual(
+      expect.arrayContaining(
+        duplicateKeys.map((paymentKey) => ({ paymentKey, reason: "duplicate_refund_claim" })),
+      ),
+    );
+    expect(result.staleSessions.map((session) => session.sessionId).sort()).toEqual([
+      "sbx_audit_stale_paid",
+      "sbx_audit_stale_ready",
+    ]);
+  });
+
+  it("reports a duplicate even when the row cap is smaller than the group", async () => {
+    const store = await freshStore();
+    const now = Date.now();
+    // Three live claims on one nonce with maxRows = 1. A capped read of
+    // REFUND_SENDING rows would return one member, and the JS grouping would see
+    // a group of one and read 0. The grouped query is unbounded and reports all
+    // three.
+    const keys = ["1".repeat(64), "2".repeat(64), "3".repeat(64)];
+    for (const key of keys) {
+      await sqlExec(
+        `INSERT INTO payment_ledger
+           (payment_key, session_id, payer, amount, asset, network, mode, status, reason,
+            settlement_nonce, created_at, updated_at)
+         VALUES ($1, $2, NULL, '50000', 'mock:usdc', 'eip155:84532', 'mock', 'REFUND_SENDING',
+                 'real_mode_refund', $3, $4, $4)`,
+        [key, `unsettled:${key}`, "0xstraddling-nonce", now],
+      );
+    }
+
+    const limits: LedgerAuditLimits = { sessionGraceMs: 60_000, maxRows: 1 };
+    const registry = new MetricsRegistry({ cacheMs: 0 });
+    const collector = createLedgerAuditCollector({ store, limits, registry, now: () => now });
+    await collector.collect();
+    expect(registry.render()).toContain(
+      'sandbox_ledger_divergence{reason="duplicate_refund_claim"} 3',
+    );
+  });
+
+  it("opens the audit connection read-only", async () => {
+    await ensureTestDatabase();
+    const conn = new PgConnection(testDatabaseUrl());
+    try {
+      await expect(conn.queryReadOnly("CREATE TABLE audit_read_only_probe (id int)")).rejects.toThrow(
+        /read-only transaction/,
+      );
+    } finally {
+      await conn.close();
+    }
+  });
+
+  it("times out a slow audit statement and keeps the connection usable", async () => {
+    await ensureTestDatabase();
+    const conn = new PgConnection(testDatabaseUrl());
+    try {
+      const started = Date.now();
+      await expect(conn.queryReadOnly("SELECT pg_sleep(5)")).rejects.toThrow();
+      // The statement timeout is 2 s, and the scrape budget is 10 s.
+      expect(Date.now() - started).toBeLessThan(4_000);
+      // The timed-out client was destroyed, not returned mid-query.
+      const after = await conn.queryReadOnly<{ ok: number }>("SELECT 1 AS ok");
+      expect(after.rows[0]).toEqual({ ok: 1 });
+    } finally {
+      await conn.close();
+    }
   });
 });

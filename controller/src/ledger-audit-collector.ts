@@ -6,9 +6,18 @@
  * read per scrape and the age of a finding is the scrape interval, not a
  * separate schedule somebody has to keep in sync with the alert.
  *
- * A failed read is not a clean audit: the counter tells an operator the check
- * did not run, and the gauges are left at their last good values rather than
- * being reset to zero, which would look like the books had just balanced.
+ * Three properties matter when the database is slow rather than down:
+ *
+ *  - one collect at a time. A stacked scrape returns immediately and reads the
+ *    value the in-flight one is about to publish, so scrape handlers cannot
+ *    queue behind each other;
+ *  - the read runs on the audit's own connection with its own timeout
+ *    (`PgConnection.queryReadOnly`), so it cannot starve the writer pool;
+ *  - the gauge families are only registered by a successful read. Before the
+ *    first success, or while reads fail, they are absent rather than zero, and
+ *    `sandbox_ledger_audit_failures_total` is the signal. After a success a
+ *    later failure leaves the last good values alone, because resetting them to
+ *    zero would look like the books had just balanced.
  */
 import {
   auditLedger,
@@ -42,35 +51,47 @@ export function createLedgerAuditCollector(
   const now = options.now ?? (() => Date.now());
   const registry = options.registry ?? metrics;
 
-  const divergence = registry.gauge(
-    "sandbox_ledger_divergence",
-    "Payment intent and ledger pairs whose books disagree, by reason",
-  );
-  const stale = registry.gauge(
-    "sandbox_sessions_stale",
-    "Non-terminal sessions past their deadline, by phase",
-  );
   const failures = registry.counter(
     "sandbox_ledger_audit_failures_total",
     "Ledger audit scrapes that could not read the store",
   );
+  let running = false;
 
   return {
     async collect(): Promise<void> {
-      const at = now();
-      let snapshot: LedgerAuditSnapshot;
+      if (running) return;
+      running = true;
       try {
-        snapshot = await options.store.readLedgerAudit(at, limits);
-      } catch {
-        failures.inc();
-        return;
-      }
-      const result = auditLedger(snapshot, limits, at);
-      for (const reason of LEDGER_DIVERGENCE_REASONS) {
-        divergence.set({ reason }, result.divergenceCounts[reason]);
-      }
-      for (const phase of AUDIT_SESSION_PHASES) {
-        stale.set({ phase }, result.staleCounts[phase]);
+        const at = now();
+        let snapshot: LedgerAuditSnapshot;
+        try {
+          snapshot = await options.store.readLedgerAudit(at, limits);
+        } catch {
+          failures.inc();
+          return;
+        }
+        const result = auditLedger(snapshot, limits, at);
+        // Registering here, not at construction, keeps a failed first read from
+        // exporting an unlabeled zero that a `sum()` would read as balance. It
+        // also keeps the families off relay and proxy pods, which never run the
+        // audit: `createLedgerAuditCollector` is only called in the controller
+        // role.
+        const divergence = registry.gauge(
+          "sandbox_ledger_divergence",
+          "Payment intent and ledger pairs whose books disagree, by reason",
+        );
+        const stale = registry.gauge(
+          "sandbox_sessions_stale",
+          "Non-terminal sessions past their deadline, by phase",
+        );
+        for (const reason of LEDGER_DIVERGENCE_REASONS) {
+          divergence.set({ reason }, result.divergenceCounts[reason]);
+        }
+        for (const phase of AUDIT_SESSION_PHASES) {
+          stale.set({ phase }, result.staleCounts[phase]);
+        }
+      } finally {
+        running = false;
       }
     },
   };

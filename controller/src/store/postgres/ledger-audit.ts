@@ -1,19 +1,22 @@
 /**
  * The ledger audit's read-only snapshot, for Postgres.
  *
- * Two statements, no transaction, no lock, no write. `read()` is called from
- * the metrics scrape path, so it must never wait behind a hot table: plain
- * `SELECT`s in autocommit mode take no row locks and a statement timeout is the
- * only thing an operator needs to add on the server.
+ * Two statements, no transaction, no lock, no write, and both run on the
+ * dedicated read-only pool in `pg.ts` with a timeout sized under the metrics
+ * scrape timeout. The audit is called from `/metrics`, so it must be unable to
+ * hold a writer-pool connection while the database is slow.
  *
- * The predicates here are a superset of the pure module's rules, not a second
- * copy of the decision. They exist so the read returns the rows that can
- * diverge instead of every payment ever made; `auditLedger` still decides, and
- * the table test is what pins the rules. A new reason in the pure module needs a
- * clause here too, which the Postgres test catches by seeding that shape.
+ * The payment query is one round trip (two CTEs): the intent divergences, capped
+ * because an operator reads the keys, and the duplicate claims, which are
+ * grouped before they leave SQL so a member outside any cap cannot hide a
+ * duplicate. The session query is the second round trip. Both are issued on the
+ * same connection, one after the other.
  *
- * The payment query is one round trip (two CTEs), the session query is the
- * second, and they are issued together.
+ * The intent predicate is a superset of the pure module's rules, not a second
+ * copy of the decision. It exists so the read returns the rows that can diverge
+ * instead of every payment ever made; `auditLedger` still decides. A new reason
+ * in the pure module needs a clause here too, which the Postgres test catches by
+ * seeding that shape.
  */
 import { MAX_SESSION_LIFETIME_SECONDS, type SessionState } from "@x402s/shared/protocol";
 import type {
@@ -46,6 +49,13 @@ interface SessionAuditRow {
  * `settled` with no ledger row, and `failed` with a `SETTLED` ledger row. Both
  * are reads of `payment_intents` joined to `payment_ledger` on the primary key,
  * so the join itself is a primary-key lookup and the scan is the table.
+ *
+ * The claiming half is deliberately unbounded and grouped in SQL. A capped read
+ * of `REFUND_SENDING` rows could return one member of a nonce pair and hide the
+ * duplicate in JS, which is the exact incident the check exists for: ADR 0011
+ * keeps ambiguous rows in `REFUND_SENDING` indefinitely, so the worse the
+ * backlog, the blinder a capped check becomes. `HAVING count(*) > 1` returns only
+ * real duplicates, so its output is small without a limit.
  */
 const PAYMENT_AUDIT_SQL = `
   WITH divergent AS (
@@ -60,26 +70,38 @@ const PAYMENT_AUDIT_SQL = `
      ORDER BY i.updated_at DESC
      LIMIT $1
   ),
-  claiming AS (
+  live AS (
     SELECT payment_key, settlement_nonce
       FROM payment_ledger
-     WHERE status = 'REFUND_SENDING'
-     ORDER BY updated_at DESC
-     LIMIT $1
+     WHERE status = 'REFUND_SENDING' AND settlement_nonce IS NOT NULL
+  ),
+  duplicated AS (
+    SELECT settlement_nonce
+      FROM live
+     GROUP BY settlement_nonce
+    HAVING count(*) > 1
   )
   SELECT 'intent' AS kind, payment_key, intent_status, ledger_status, settlement_nonce
     FROM divergent
   UNION ALL
-  SELECT 'claim' AS kind, payment_key, NULL AS intent_status, 'REFUND_SENDING' AS ledger_status,
-         settlement_nonce
-    FROM claiming
+  SELECT 'claim' AS kind, l.payment_key, NULL AS intent_status, 'REFUND_SENDING' AS ledger_status,
+         l.settlement_nonce
+    FROM live l
+    JOIN duplicated d USING (settlement_nonce)
+  ORDER BY kind, payment_key
 `;
 
 /**
  * A session is stale when its effective deadline is past `now` minus the grace.
  * The `COALESCE` mirrors `sessionDeadline()`: the lease when it exists,
- * otherwise the wall-clock cap. `$3` is the protocol maximum, so a null
+ * otherwise the wall-clock cap. `$2` is the protocol maximum, so a null
  * `max_lifetime_seconds` behaves exactly as the pure module does.
+ *
+ * Deliberately unbounded. The rows are stale live sessions, bounded by admission
+ * capacity rather than by history, and a cap here could hide a whole phase: 500
+ * stale TERMINATING rows would mask a thousand stale PAID rows and report a
+ * clean zero for the phase that matters. The counts are the metric, so they are
+ * exact.
  */
 const STALE_SESSION_SQL = `
   SELECT id, state, created_at, lease_expires_at, max_lifetime_seconds
@@ -87,23 +109,22 @@ const STALE_SESSION_SQL = `
    WHERE state IN (${NON_TERMINAL_STATE_SQL})
      AND COALESCE(
            lease_expires_at,
-           created_at + COALESCE(max_lifetime_seconds, $3) * 1000
+           created_at + COALESCE(max_lifetime_seconds, $2) * 1000
          ) < $1
-   ORDER BY updated_at ASC
-   LIMIT $2
 `;
 
 export class PgLedgerAuditRepository {
   constructor(private readonly conn: PgConnection) {}
 
   async read(now: number, limits: LedgerAuditLimits): Promise<LedgerAuditSnapshot> {
-    const [payments, sessions] = await Promise.all([
-      this.conn.query<PaymentAuditRow>(PAYMENT_AUDIT_SQL, [limits.maxRows]),
-      this.conn.query<SessionAuditRow>(STALE_SESSION_SQL, [
-        now - limits.sessionGraceMs,
-        limits.maxRows,
-        MAX_SESSION_LIFETIME_SECONDS,
-      ]),
+    // One connection, one statement at a time, so a slow read holds at most one
+    // audit connection and never a writer-pool one.
+    const payments = await this.conn.queryReadOnly<PaymentAuditRow>(PAYMENT_AUDIT_SQL, [
+      limits.maxRows,
+    ]);
+    const sessions = await this.conn.queryReadOnly<SessionAuditRow>(STALE_SESSION_SQL, [
+      now - limits.sessionGraceMs,
+      MAX_SESSION_LIFETIME_SECONDS,
     ]);
 
     const intents: IntentLedgerSnapshot[] = [];
