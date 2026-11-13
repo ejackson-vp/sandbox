@@ -10,16 +10,20 @@
  *     rebinding window),
  *   - denies loopback/private/link-local/metadata/ULA/multicast/reserved ranges,
  *     cluster CIDRs, and IPv4-mapped IPv6 forms of all of the above,
- *   - refuses single-label hostnames and non-public ports.
+ *   - refuses single-label hostnames and non-public ports,
+ *   - bounds concurrent tunnels per session and process-wide, and bounds bytes
+ *     per session and per global window (`egress-budget.ts`).
  *
- * It keeps no payload state and logs only host + denial reason.
+ * It keeps no payload state and logs only host, denial reason and a byte-limit
+ * scope.
  */
 import http from "node:http";
 import net from "node:net";
 import dns from "node:dns/promises";
 import type { Duplex } from "node:stream";
 import { classifyAddress, type AddressClass } from "@x402s/shared/ip";
-import { log, metrics } from "@x402s/shared/runtime";
+import { log, metrics, type MetricsRegistry } from "@x402s/shared/runtime";
+import { createEgressBudget, type EgressLimitScope } from "./egress-budget.js";
 import { verifyProxyToken } from "./tokens.js";
 
 interface EgressProxyOptions {
@@ -47,18 +51,32 @@ interface EgressProxyOptions {
    * sessions exhaust the proxy's file descriptors at once.
    */
   maxGlobalConnections?: number;
+  /**
+   * Bytes one session may move through its tunnels in this process. The
+   * connection budgets bound concurrency, not volume: one session can still
+   * push gigabytes through the operator's uplink. 0 disables the bound.
+   */
+  maxBytesPerSession?: number;
+  /** Bytes all sessions may move inside one global window. 0 disables it. */
+  maxBytesGlobal?: number;
+  /** Length of the global byte window, in milliseconds. */
+  bytesWindowMs?: number;
   connectTimeoutMs?: number;
   idleTimeoutMs?: number;
   /** Test seam: DNS resolver. Defaults to the system resolver. */
   resolve?: (host: string) => Promise<string[]>;
   /** Test seam: dial the validated IP literal. Defaults to net.connect. */
   dial?: (opts: { host: string; port: number; family: number }) => net.Socket;
+  /** Test seam: the clock the byte window rolls on. Defaults to Date.now. */
+  now?: () => number;
+  /** Test seam: metric registry. Defaults to the process registry. */
+  registry?: MetricsRegistry;
 }
 
 export interface EgressProxy {
   server: http.Server;
   close(): Promise<void>;
-  stats(): { active: number; denied: number; allowed: number };
+  stats(): { active: number; denied: number; allowed: number; bytes: number };
 }
 
 interface ParsedAuthority {
@@ -125,6 +143,25 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
       (await dns.lookup(host, { all: true, verbatim: true })).map((r) => r.address));
   const dial = opts.dial ?? ((o: { host: string; port: number; family: number }) => net.connect(o));
 
+  const registry = opts.registry ?? metrics;
+  // Eager registration: a scrape before the first tunnel should read 0 rather
+  // than a missing family, which `increase()` in the alert cannot see.
+  const bytesCounter = registry.counter(
+    "sandbox_egress_bytes_total",
+    "Tunnelled payload bytes charged to the session and global byte budgets (the two series are equal by construction; never sum them)",
+  );
+  const limitCounter = registry.counter(
+    "sandbox_egress_limit_total",
+    "Tunnels destroyed by an egress byte budget, by scope",
+  );
+  const budget = createEgressBudget({
+    // Defaults match the loader, so a proxy built by a test needs no config.
+    maxBytesPerSession: opts.maxBytesPerSession ?? 1024 ** 3,
+    maxBytesGlobal: opts.maxBytesGlobal ?? 20 * 1024 ** 3,
+    windowMs: opts.bytesWindowMs ?? 3_600_000,
+    ...(opts.now ? { now: opts.now } : {}),
+  });
+
   const activeBySession = new Map<string, number>();
   let active = 0;
   let denied = 0;
@@ -161,7 +198,14 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && (req.url === "/healthz" || req.url === "/stats")) {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, ...(req.url === "/stats" ? { active, denied, allowed } : {}) }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          ...(req.url === "/stats"
+            ? { active, denied, allowed, bytes: budget.totals().bytes }
+            : {}),
+        }),
+      );
       return;
     }
     // Plain HTTP proxying is deliberately unsupported: only HTTPS tunnels.
@@ -212,7 +256,7 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
     // regardless of what this check says; rejecting makes the misrouting
     // visible instead of silently over-serving it.
     if (opts.shardIndex !== undefined && (opts.replicas ?? 1) > 1 && verified.shard !== opts.shardIndex) {
-      metrics
+      registry
         .counter("sandbox_egress_cross_shard_total", "CONNECTs refused for landing on the wrong shard")
         .inc({ service: "proxy", reason: verified.shard === undefined ? "missing_shard" : "wrong_shard" });
       log.warn("egress_cross_shard_rejected", {
@@ -385,12 +429,10 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
         return;
       }
       clientSocket.write("HTTP/1.1 200 Connection Established\r\nProxy-Agent: x402-egress-proxy\r\n\r\n");
-      if (head.length > 0) upstream.write(head);
-      for (const chunk of early) upstream.write(chunk);
-      upstream.pipe(clientSocket);
-      clientSocket.pipe(upstream);
-      log.info("egress_allowed", { host, port: authority.port, sessionPrefix: verified.sessionId.slice(0, 12) });
 
+      // Handlers before the first accounted write. A byte refusal destroys both
+      // sockets below, and an unhandled 'error' on a destroyed socket would
+      // take the process down.
       upstream.setTimeout(idleTimeoutMs, () => upstream.destroy());
       upstream.on("error", () => clientSocket.destroy());
       upstream.on("close", () => {
@@ -399,12 +441,73 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
       });
       clientSocket.on("error", () => upstream.destroy());
       clientSocket.on("close", () => upstream.destroy());
+
+      let closed = false;
+      /**
+       * Tear the tunnel down for a byte budget. The lease goes back through the
+       * same idempotent release every other path uses, so the slot is returned
+       * exactly once whether this or a socket close gets there first.
+       */
+      const closeForBytes = (scope: EgressLimitScope): void => {
+        if (closed) return;
+        closed = true;
+        limitCounter.inc({ scope });
+        // Scope only: no session id, no host, no payload. The runbook reaches
+        // the session from the connection it opened, not from this line.
+        log.warn("egress_bytes_limit", { scope });
+        lease.release();
+        upstream.destroy();
+        clientSocket.destroy();
+      };
+
+      /**
+       * Charge one chunk before it is written. A chunk that would cross a bound
+       * is refused whole: the peer must never receive a partial write it would
+       * read as a complete record.
+       */
+      const forward = (chunk: Buffer): boolean => {
+        const scope = budget.charge(verified.sessionId, chunk.length);
+        if (scope !== null) {
+          closeForBytes(scope);
+          return false;
+        }
+        bytesCounter.inc({ scope: "session" }, chunk.length);
+        bytesCounter.inc({ scope: "global" }, chunk.length);
+        return true;
+      };
+
+      // Bytes that arrived before the tunnel existed: the CONNECT's `head` and
+      // anything buffered while DNS resolved. Charged here and only here; the
+      // pump below sees nothing that was already buffered, so counting in both
+      // places would double every reconnect's first write.
+      for (const chunk of [head, ...early]) {
+        if (chunk.length === 0) continue;
+        if (!forward(chunk)) return;
+        upstream.write(chunk);
+      }
+
+      // `pipe` cannot enforce a whole-chunk refusal, so each direction is
+      // pumped by hand: charge, then write the chunk the budget accepted, and
+      // reproduce pipe's backpressure contract with pause/resume.
+      const pump = (from: Duplex, to: Duplex): void => {
+        from.on("data", (chunk: Buffer) => {
+          if (closed) return;
+          if (!forward(chunk)) return;
+          if (!to.write(chunk)) from.pause();
+        });
+        to.on("drain", () => from.resume());
+        from.on("end", () => to.end());
+      };
+      pump(upstream, clientSocket);
+      pump(clientSocket, upstream);
+      clientSocket.resume();
+      log.info("egress_allowed", { host, port: authority.port, sessionPrefix: verified.sessionId.slice(0, 12) });
     });
   }
 
   return {
     server,
-    stats: () => ({ active, denied, allowed }),
+    stats: () => ({ active, denied, allowed, bytes: budget.totals().bytes }),
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
