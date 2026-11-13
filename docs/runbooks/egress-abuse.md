@@ -14,22 +14,33 @@ session, not about the cluster.
 | Destination must be entirely public | enforced | `EGRESS_DENIED_CIDRS`, `classifyAddress` |
 | Per-session concurrent tunnels | 16 | `EGRESS_MAX_CONNECTIONS_PER_SESSION` |
 | Global concurrent tunnels | 512 | `EGRESS_MAX_GLOBAL_CONNECTIONS` |
+| Per-session bytes, both directions | 1 GiB | `EGRESS_MAX_BYTES_PER_SESSION` |
+| Global bytes per window | 20 GiB / 1 h | `EGRESS_MAX_BYTES_GLOBAL_WINDOW`, `EGRESS_BYTES_WINDOW_MS` |
 | Per-session HMAC token | enforced | `PROXY_TOKEN_SECRET` |
 | Hostname allowlist | **off** | `EGRESS_ALLOWED_HOST_SUFFIXES` |
+
+A byte bound is hard, not a throttle: a chunk that would cross either one
+destroys the tunnel, and the session sees the socket close mid-stream. `0`
+disables either bound.
 
 The allowlist is the only control that limits *where* a session goes, and it
 ships disabled ([production-readiness.md](../production-readiness.md) §2).
 
 ## Detect
 
-There is no egress volume alert today. Detection is log-based, plus two
-aggregate counters.
+Volume is a metric now. The alert catches the process total; a single session
+that is under the global budget but obviously abusive is still a log question,
+because no metric carries a session id.
 
 | Signal | Where | Means |
 | --- | --- | --- |
-| `egress_allowed` lines per session per hour | proxy log | volume; the main abuse signal |
+| `sandbox_egress_limit_total{scope}` | proxy metrics | a tunnel was destroyed by a byte bound (`session` or `global`) |
+| `sandbox_egress_bytes_total{scope}` | proxy metrics | bytes moved, charged to each bound (select one scope, never sum) |
+| `SandboxEgressLimitRejections` alert | vmalert | any byte refusal in the last 15 minutes |
+| `SandboxEgressBytesNearCap` alert | vmalert | above 75% of the global hourly budget |
+| `egress_allowed` lines per session per hour | proxy log | which session, once the alert says there is one |
 | `egress_denied` lines | proxy log | a client trying something the proxy refuses |
-| `active` in `/stats` | proxy, in memory | current tunnels, all sessions |
+| `bytes` and `active` in `/stats` | proxy, in memory | current process totals, all sessions |
 | `sandbox_egress_cross_shard_total` | proxy metrics | session sent to the wrong proxy replica |
 
 The proxy is not one of the three scrape targets in
@@ -45,12 +56,13 @@ curl -s http://127.0.0.1:13128/stats
 Expected, all sessions together:
 
 ```json
-{"ok":true,"active":3,"denied":41,"allowed":9182}
+{"ok":true,"active":3,"denied":41,"allowed":9182,"bytes":7340032}
 ```
 
-`denied` and `allowed` are cumulative for the process, so they reset on restart.
-They are counts of tunnel attempts, not bytes: neither the proxy nor the metrics
-record byte volume.
+`denied` and `allowed` are counts of tunnel attempts and `bytes` is tunnelled
+payload in both directions, all cumulative for the process, so they reset on
+restart. `/stats` is the process total only: it carries no session id, which is
+why the alert leads to the log rather than to a tenant.
 
 Denials grouped by session, reason and destination:
 
@@ -129,6 +141,13 @@ you need, it is a new feature, not a runbook step.
   durable-ish control, and it is per-replica and in memory
   (`sandbox_rate_limited_total{scope="payer"}`). There is no blocklist. A
   repeat offender needs the allowlist or a payment-level decision.
+- **Byte refusal:** a byte refusal destroys the tunnel, not the session. The
+  guest keeps running and can open another tunnel, which is refused again if the
+  per-session total is exhausted; the session ends only at its lease or when you
+  kill it. If a legitimate session was cut off, `EGRESS_MAX_BYTES_PER_SESSION`
+  is the bound to raise (roll the proxy, not the controller), and the recorded
+  reason should say what the download was. Raising it for one session is not
+  possible: the bound is per process, keyed by the session id in memory.
 
 ## Verify
 
@@ -181,13 +200,19 @@ the case closes.
 
 ## Known gaps
 
-- No egress byte volume, and no per-session byte counter. `egress_allowed` line
-  counts are the only volume proxy.
+- The byte budgets are process-local, like the connection counters beside them.
+  A second proxy replica multiplies each budget by the replica count; the shard
+  claim in the token stops a session being served by the wrong replica, and it
+  does not pool the budgets.
+- The per-session total is per process lifetime and is never evicted, so a very
+  long-lived proxy holds one map entry per session it has served. A restart
+  resets both totals.
 - No per-session destination blocklist; the only per-session control is killing
   the session.
-- Denials from an unverifiable token have no session id, by construction.
-- `sandbox_egress_cross_shard_total` is the only egress metric; the rest of the
-  egress state lives in logs and `/stats`.
+- Denials from an unverifiable token have no session id, by construction, and
+  the byte-limit log line deliberately carries only the scope.
+- The proxy is not one of the three scrape targets, so the two egress alerts
+  need a target added before they evaluate (see Detect).
 
 ## Related
 

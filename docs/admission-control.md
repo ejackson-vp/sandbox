@@ -53,6 +53,37 @@ verified payer is recorded on the settled payment as before.
 The bench scripts raise both buckets for capacity runs and restore the
 ConfigMap defaults afterwards.
 
+## Concurrent request cap
+
+The token buckets bound the *rate* of creates. They say nothing about how many
+requests one client may hold open at once, which is the shape that exhausts a
+process: ten thousand slow reads spend no tokens. While the API was reachable
+only over the tailnet that was acceptable, one operator and one client, so the
+cap was deliberately absent ([production-readiness.md](production-readiness.md)
+§2). Behind a public tunnel it is required.
+
+| Env | Default | Meaning |
+|---|---:|---|
+| `MAX_CONNECTIONS_PER_CLIENT` | `64` | in-flight requests per `req.ip`; `0` disables the per-client check |
+| `MAX_CONNECTIONS_GLOBAL` | `2048` | in-flight requests across all clients; `0` is refused at startup |
+
+A request takes its slot synchronously when it is dispatched and returns it on
+`finish` or `close`, so a success, a handler error, a client abort and a
+response a timeout tore down all release it. Sockets are not counted:
+keep-alive means one socket can carry many requests, and a request already
+answered must not keep a slot. The key is `req.ip`, which follows
+`TRUST_PROXY_HOPS`, so behind the tunnel it is the real client rather than the
+tunnel pod.
+
+`/healthz` and `/readyz` are exempt and take no slot: a client at its cap must
+not be able to make a healthy pod look unready.
+
+A refusal is `429 { "error": "connection_limit" }`, counted as
+`sandbox_connection_limit_total{scope="client"|"global"}`. The per-client check
+runs first, so a client over its own cap is named as such rather than blamed on
+the shared pool. A refusal is not logged per request: shedding load is the
+point, and a log line each would move the flood to stderr.
+
 ## Durable per-payer and global budget
 
 The two token buckets live in the API process. A restart refills every bucket,

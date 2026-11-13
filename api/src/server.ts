@@ -32,6 +32,7 @@ import {
 } from "@x402s/shared/runtime";
 import type { ApiConfig } from "./config.js";
 import { RateLimiter } from "./admission.js";
+import { createConnectionLimiter } from "./connection-limit.js";
 import { ControllerClient } from "./controller-client.js";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
@@ -145,6 +146,15 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   // Counts every request by route template, method and status. Added before
   // the body parser so a malformed body is still attributed to its route.
   app.use(httpMetricsMiddleware(metrics));
+  // Concurrent-request cap, before the body parser so a refused request costs
+  // no parse. Probes are exempt inside the limiter: a saturated client must not
+  // be able to fail readiness.
+  app.use(
+    createConnectionLimiter({
+      maxPerClient: config.maxConnectionsPerClient,
+      maxGlobal: config.maxConnectionsGlobal,
+    }).middleware,
+  );
   app.use(express.json({ limit: config.maxBodyBytes }));
   app.use((req, res, next) => {
     const started = Date.now();

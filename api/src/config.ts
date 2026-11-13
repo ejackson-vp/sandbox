@@ -55,6 +55,18 @@ export interface ApiConfig {
    * 1 only when the API is reachable exclusively through one reverse proxy.
    */
   trustProxyHops: number;
+  /**
+   * In-flight requests one client (`req.ip`) may hold at once. 0 disables the
+   * per-client check. Tailnet-only, the cap was unnecessary; on a public
+   * listener one client can otherwise own every slot the process has.
+   */
+  maxConnectionsPerClient: number;
+  /**
+   * In-flight requests the process accepts at once, across all clients. A
+   * per-client cap alone still lets many clients fill the process, the same
+   * reason the egress proxy has a global connection budget.
+   */
+  maxConnectionsGlobal: number;
   intentStaleMs: number;
   createRateBurst: number;
   createRateRefill: number;
@@ -212,6 +224,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     httpHeadersTimeoutMs: int(env.HTTP_HEADERS_TIMEOUT_MS, 15_000, 1_000, 120_000),
     httpRequestTimeoutMs: int(env.HTTP_REQUEST_TIMEOUT_MS, 60_000, 5_000, 600_000),
     trustProxyHops: int(env.TRUST_PROXY_HOPS, 0, 0, 8),
+    // 0 disables the per-client check, which is the operator's off switch for
+    // the cap as a whole: the global budget stays in force so the process can
+    // still bound itself. 32 clients at the per-client default fit inside the
+    // global default, so one client cannot starve a neighbour before the
+    // global cap binds.
+    maxConnectionsPerClient: int(env.MAX_CONNECTIONS_PER_CLIENT, 64, 0, 100_000),
+    // Not 0: a global cap of zero refuses every request, which is never a
+    // deliberate configuration and is far more likely to be a typo.
+    maxConnectionsGlobal: int(env.MAX_CONNECTIONS_GLOBAL, 2_048, 1, 1_000_000),
     intentStaleMs: int(env.PAYMENT_INTENT_STALE_MS, 30_000, 1000, 600_000),
     createRateBurst: int(env.CREATE_RATE_BURST, 30, 1, 100_000),
     createRateRefill: int(env.CREATE_RATE_REFILL, 1, 1, 100_000),

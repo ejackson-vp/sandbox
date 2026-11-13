@@ -6,6 +6,7 @@
  */
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import { MetricsRegistry } from "../../shared/src/metrics.js";
 import { createEgressProxy, type EgressProxy } from "../../controller/src/egress-proxy.js";
 import { mintProxyToken } from "../../controller/src/tokens.js";
 
@@ -79,6 +80,85 @@ async function waitFor(fn: () => boolean, timeoutMs = 5_000): Promise<void> {
     await new Promise((r) => setTimeout(r, 5));
   }
   if (!fn()) throw new Error("condition not met in time");
+}
+
+/** The proxy's own header block; payload starts after it. */
+const ESTABLISHED =
+  "HTTP/1.1 200 Connection Established\r\nProxy-Agent: x402-egress-proxy\r\n\r\n";
+
+/** A peer that counts what it received and optionally speaks first. */
+async function peerServer(greeting?: Buffer): Promise<{ port: number; received: () => number }> {
+  const sockets = new Set<net.Socket>();
+  let received = 0;
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("data", (chunk: Buffer) => {
+      received += chunk.length;
+    });
+    socket.on("close", () => sockets.delete(socket));
+    if (greeting) socket.write(greeting);
+  });
+  const port = await listen(server);
+  cleanups.push(
+    () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  );
+  return { port, received: () => received };
+}
+
+/**
+ * A client tunnel: the status line, the payload relayed after it, and a promise
+ * for the socket closing, which is how a byte refusal becomes observable.
+ */
+function openTunnel(port: number, host: string, token: string) {
+  const socket = net.connect({ host: "127.0.0.1", port });
+  const chunks: Buffer[] = [];
+  let settled = false;
+  let resolveStatus!: (line: string) => void;
+  const status = new Promise<string>((resolve) => (resolveStatus = resolve));
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => (resolveClosed = resolve));
+  socket.on("data", (chunk: Buffer) => {
+    chunks.push(chunk);
+    if (settled) return;
+    if (Buffer.concat(chunks).includes("\r\n\r\n")) {
+      settled = true;
+      resolveStatus(Buffer.concat(chunks).toString("latin1").split("\r\n")[0]!);
+    }
+  });
+  socket.on("error", () => {
+    if (!settled) {
+      settled = true;
+      resolveStatus("reset");
+    }
+  });
+  socket.on("close", () => resolveClosed());
+  socket.on("connect", () => {
+    socket.write(
+      `CONNECT ${host} HTTP/1.1\r\nHost: ${host}\r\nProxy-Authorization: Bearer ${token}\r\n\r\n`,
+    );
+  });
+  cleanups.push(() => {
+    socket.destroy();
+  });
+  return {
+    socket,
+    status,
+    closed,
+    payload: (): Buffer => Buffer.concat(chunks).subarray(Buffer.byteLength(ESTABLISHED)),
+  };
+}
+
+/** Value of one rendered series, 0 when that label set has never moved. */
+function series(registry: MetricsRegistry, name: string): number {
+  const line = registry
+    .render()
+    .split("\n")
+    .find((candidate) => candidate.startsWith(`${name} `));
+  return line === undefined ? 0 : Number(line.slice(name.length + 1));
 }
 
 describe("egress proxy accounting", () => {
@@ -281,5 +361,184 @@ describe("egress denial attribution", () => {
       reason: "port_not_allowed",
       sessionId: "session-z",
     });
+  });
+});
+
+describe("egress proxy byte budget", () => {
+  it("counts both directions exactly", async () => {
+    const peer = await peerServer(Buffer.from("pong!"));
+    const registry = new MetricsRegistry({ cacheMs: 0 });
+    const { proxy, port } = await startProxy({
+      tokenSecret: SECRET,
+      registry,
+      maxBytesPerSession: 1_024,
+      resolve: async () => ["93.184.216.34"],
+      dial: () => net.connect({ host: "127.0.0.1", port: peer.port }),
+    });
+
+    const tunnel = openTunnel(port, "example.com:443", mintProxyToken(SECRET, "bytes-a", 60_000));
+    expect(await tunnel.status).toContain("200");
+    tunnel.socket.write("ping");
+
+    await waitFor(() => peer.received() === 4);
+    await waitFor(() => tunnel.payload().length === 5);
+    expect(tunnel.payload().toString()).toBe("pong!");
+    // 4 bytes up (client to peer) plus 5 down (peer to client). The proxy's own
+    // 200 block is protocol, not payload, and is not charged.
+    expect(proxy.stats().bytes).toBe(9);
+    expect(series(registry, 'sandbox_egress_bytes_total{scope="session"}')).toBe(9);
+    expect(series(registry, 'sandbox_egress_bytes_total{scope="global"}')).toBe(9);
+    // The same total is readable from the sidecar endpoint the runbook uses.
+    const stats = (await fetch(`http://127.0.0.1:${port}/stats`).then((res) => res.json())) as {
+      bytes: number;
+      active: number;
+    };
+    expect(stats.bytes).toBe(9);
+    expect(stats.active).toBe(1);
+  });
+
+  it("closes the tunnel and returns the slot when the session cap is crossed", async () => {
+    const peer = await peerServer();
+    const registry = new MetricsRegistry({ cacheMs: 0 });
+    const { proxy, port } = await startProxy({
+      tokenSecret: SECRET,
+      registry,
+      maxBytesPerSession: 10,
+      maxConnectionsPerSession: 2,
+      resolve: async () => ["93.184.216.34"],
+      dial: () => net.connect({ host: "127.0.0.1", port: peer.port }),
+    });
+
+    const tunnel = openTunnel(port, "example.com:443", mintProxyToken(SECRET, "bytes-b", 60_000));
+    expect(await tunnel.status).toContain("200");
+    // Exactly to the bound: accepted.
+    tunnel.socket.write("1234567890");
+    await waitFor(() => peer.received() === 10);
+    expect(proxy.stats().active).toBe(1);
+
+    tunnel.socket.write("x");
+    await tunnel.closed;
+    await waitFor(() => proxy.stats().active === 0);
+    expect(peer.received()).toBe(10);
+    expect(series(registry, 'sandbox_egress_limit_total{scope="session"}')).toBe(1);
+    expect(series(registry, 'sandbox_egress_limit_total{scope="global"}')).toBe(0);
+    // The refused byte is not egress.
+    expect(series(registry, 'sandbox_egress_bytes_total{scope="session"}')).toBe(10);
+  });
+
+  it("refuses a chunk that straddles the limit instead of writing part of it", async () => {
+    const peer = await peerServer();
+    const registry = new MetricsRegistry({ cacheMs: 0 });
+    const { proxy, port } = await startProxy({
+      tokenSecret: SECRET,
+      registry,
+      maxBytesPerSession: 10,
+      resolve: async () => ["93.184.216.34"],
+      dial: () => net.connect({ host: "127.0.0.1", port: peer.port }),
+    });
+
+    const tunnel = openTunnel(port, "example.com:443", mintProxyToken(SECRET, "bytes-c", 60_000));
+    expect(await tunnel.status).toContain("200");
+    tunnel.socket.write("123456");
+    await waitFor(() => peer.received() === 6);
+
+    // Four bytes of budget remain. A chunk of eight must not become a four-byte
+    // write the peer would read as a complete record.
+    tunnel.socket.write("abcdefgh");
+    await tunnel.closed;
+    await waitFor(() => proxy.stats().active === 0);
+    expect(peer.received()).toBe(6);
+    expect(series(registry, 'sandbox_egress_limit_total{scope="session"}')).toBe(1);
+  });
+
+  it("charges buffered pre-tunnel bytes exactly once", async () => {
+    const peer = await peerServer();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { proxy, port } = await startProxy({
+      tokenSecret: SECRET,
+      maxBytesPerSession: 1_024,
+      resolve: async () => {
+        await gate;
+        return ["93.184.216.34"];
+      },
+      dial: () => net.connect({ host: "127.0.0.1", port: peer.port }),
+    });
+
+    const tunnel = openTunnel(port, "example.com:443", mintProxyToken(SECRET, "bytes-d", 60_000));
+    // The reservation is taken before DNS, so this is the pre-tunnel window.
+    await waitFor(() => proxy.stats().active === 1);
+    tunnel.socket.write("hello");
+    // A turn for the write to reach the proxy while the resolver is gated: it
+    // lands in the early buffer (or the CONNECT's head), never both.
+    await new Promise((r) => setTimeout(r, 30));
+    release();
+
+    expect(await tunnel.status).toContain("200");
+    await waitFor(() => peer.received() === 5);
+    await new Promise((r) => setTimeout(r, 20));
+    // Counting the buffer at flush time and again in the pump would read 10.
+    expect(proxy.stats().bytes).toBe(5);
+  });
+
+  it("bounds the global window across sessions", async () => {
+    const peer = await peerServer();
+    const registry = new MetricsRegistry({ cacheMs: 0 });
+    const { proxy, port } = await startProxy({
+      tokenSecret: SECRET,
+      registry,
+      maxBytesPerSession: 1_024,
+      maxBytesGlobal: 10,
+      bytesWindowMs: 60_000,
+      resolve: async () => ["93.184.216.34"],
+      dial: () => net.connect({ host: "127.0.0.1", port: peer.port }),
+    });
+
+    const first = openTunnel(port, "example.com:443", mintProxyToken(SECRET, "bytes-e", 60_000));
+    expect(await first.status).toContain("200");
+    first.socket.write("123456");
+    await waitFor(() => peer.received() === 6);
+
+    const second = openTunnel(port, "example.com:443", mintProxyToken(SECRET, "bytes-f", 60_000));
+    expect(await second.status).toContain("200");
+    // Under its own per-session cap, over the shared window.
+    second.socket.write("123456");
+    await second.closed;
+    await waitFor(() => proxy.stats().active === 1);
+    expect(peer.received()).toBe(6);
+    expect(series(registry, 'sandbox_egress_limit_total{scope="global"}')).toBe(1);
+    expect(series(registry, 'sandbox_egress_limit_total{scope="session"}')).toBe(0);
+  });
+
+  it("resets the global window on the clock", async () => {
+    const peer = await peerServer();
+    let clock = 0;
+    const { proxy, port } = await startProxy({
+      tokenSecret: SECRET,
+      maxBytesPerSession: 1_024,
+      maxBytesGlobal: 10,
+      bytesWindowMs: 1_000,
+      now: () => clock,
+      resolve: async () => ["93.184.216.34"],
+      dial: () => net.connect({ host: "127.0.0.1", port: peer.port }),
+    });
+
+    const first = openTunnel(port, "example.com:443", mintProxyToken(SECRET, "bytes-g", 60_000));
+    expect(await first.status).toContain("200");
+    first.socket.write("123456");
+    await waitFor(() => peer.received() === 6);
+
+    const second = openTunnel(port, "example.com:443", mintProxyToken(SECRET, "bytes-h", 60_000));
+    expect(await second.status).toContain("200");
+    second.socket.write("123456");
+    await second.closed;
+    expect(peer.received()).toBe(6);
+
+    clock = 1_000;
+    const third = openTunnel(port, "example.com:443", mintProxyToken(SECRET, "bytes-i", 60_000));
+    expect(await third.status).toContain("200");
+    third.socket.write("123456");
+    await waitFor(() => peer.received() === 12);
+    expect(proxy.stats().bytes).toBe(12);
   });
 });

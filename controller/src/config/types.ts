@@ -125,6 +125,12 @@ export interface ControllerConfig {
   deniedCidrs: string[];
   egressMaxConnectionsPerSession: number;
   egressMaxGlobalConnections: number;
+  /** Bytes one session may move through the proxy in this process; 0 disables. */
+  egressMaxBytesPerSession: number;
+  /** Bytes all sessions may move inside one fixed window; 0 disables. */
+  egressMaxBytesGlobalWindow: number;
+  /** Length of the global egress byte window. */
+  egressBytesWindowMs: number;
   tiers: TierTable;
   platformLimits: PlatformLimits;
   /** Pre-booted, unleased sandboxes kept ready for fast claims (0 = off). */

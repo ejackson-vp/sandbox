@@ -128,6 +128,9 @@ export async function start(): Promise<ControllerProcess> {
       deniedCidrs: cfg.deniedCidrs,
       maxConnectionsPerSession: cfg.egressMaxConnectionsPerSession,
       maxGlobalConnections: cfg.egressMaxGlobalConnections,
+      maxBytesPerSession: cfg.egressMaxBytesPerSession,
+      maxBytesGlobal: cfg.egressMaxBytesGlobalWindow,
+      bytesWindowMs: cfg.egressBytesWindowMs,
       ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
       replicas: cfg.proxyReplicas,
     });
@@ -200,6 +203,9 @@ export async function start(): Promise<ControllerProcess> {
       deniedCidrs: cfg.deniedCidrs,
       maxConnectionsPerSession: cfg.egressMaxConnectionsPerSession,
       maxGlobalConnections: cfg.egressMaxGlobalConnections,
+      maxBytesPerSession: cfg.egressMaxBytesPerSession,
+      maxBytesGlobal: cfg.egressMaxBytesGlobalWindow,
+      bytesWindowMs: cfg.egressBytesWindowMs,
       ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
       replicas: cfg.proxyReplicas,
     });

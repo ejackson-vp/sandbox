@@ -37,9 +37,11 @@ concrete next step.
 - **HTTP receipt timeouts** bound slow clients: `HTTP_HEADERS_TIMEOUT_MS`
   (default 15 s) and `HTTP_REQUEST_TIMEOUT_MS` (default 60 s). Both stop once the
   request has been received, so a long-poll `exec` is unaffected. A
-  per-connection concurrency cap is deliberately absent — the API is tailnet-only
-  and the per-IP bucket plus these timers is proportionate for one operator; it
-  becomes necessary if the API is ever exposed publicly or scaled out.
+  per-client concurrent request cap (default 64 in flight per `req.ip`, 2048
+  process-wide, probes exempt) is now enforced in front of the body parser; it
+  was deliberately absent while the API was tailnet-only and became necessary
+  once the listener moved behind a public tunnel
+  ([admission-control.md](admission-control.md#concurrent-request-cap)).
 - **Client IP behind one reverse proxy**: `TRUST_PROXY_HOPS` (default 0) trusts
   a forwarded hop, so `req.ip` is the real client instead of the proxy pod. The
   homelab sets it to 1 *and* scopes `allow-api` to the tailscale namespace, so

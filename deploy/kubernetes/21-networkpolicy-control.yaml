@@ -243,7 +243,10 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: ["api", "controller", "relay"]
+        # The proxy is included because it is the only exporter of the egress
+        # byte counters. Its metrics port is scraped by pod name, same as the
+        # relay, and is reachable from nothing else.
+        values: ["api", "controller", "relay", "egress-proxy"]
   policyTypes: ["Ingress"]
   ingress:
     - from:

@@ -35,8 +35,9 @@ controller should likewise move to pod discovery with `containerPort: metrics`
 | API | `api.sandbox-system.svc.cluster.local` | `9100` |
 | Controller | `controller.sandbox-system.svc.cluster.local` | `9100` |
 | Relay | `relay-0.relay-headless.sandbox-system.svc.cluster.local` and `relay-1.…` | `9100` |
+| Egress proxy | `egress-proxy-0.egress-proxy-headless.sandbox-system.svc.cluster.local` | `9100` |
 
-The job adds `role: api|controller|relay`. Every rule and dashboard panel
+The job adds `role: api|controller|relay|proxy`. Every rule and dashboard panel
 selects on that label, so it is part of the contract, not a convenience.
 
 The application never exposes `/metrics` on the service listener or the public
@@ -56,7 +57,7 @@ a family to catch an id-shaped label before it reaches storage.
 | File | Contract |
 | --- | --- |
 | [`contract/prometheus-scrape.yaml`](contract/prometheus-scrape.yaml) | The scrape job, bare-list form for `additionalScrapeConfigs` |
-| [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Nineteen SLO rules, portable Prometheus/vmalert rule file |
+| [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Twenty-one SLO rules, portable Prometheus/vmalert rule file |
 | [`contract/grafana-dashboard.json`](contract/grafana-dashboard.json) | `Sandbox control plane`, uid `sandbox-control-plane` |
 | [`contract/kustomization.yaml`](contract/kustomization.yaml) | Renders the three ConfigMaps, namespace `monitoring` |
 | [`contract/README.md`](contract/README.md) | How to consume the ConfigMaps, including with an existing Prometheus |
@@ -137,6 +138,8 @@ evaluators all load them unchanged.
 | `SandboxWarmPoolUnderTarget` | live pods below target, target > 0, per profile | 15m | warning |
 | `SandboxWarmPoolBudgetExhausted` | at least 3 `budget_exhausted` growth decisions in 30m, per profile | 15m | warning |
 | `SandboxWarmPoolDrainThrash` | at least 5 idle drains and 5 growths in 1h, per profile | 30m | warning |
+| `SandboxEgressBytesNearCap` | egress above 75% of the global hourly byte budget | 10m | warning |
+| `SandboxEgressLimitRejections` | any egress byte budget refusal, per scope | 5m | warning |
 | `SandboxMetricsTargetDown` | `up{job="sandbox-control"} == 0` | 2m | critical |
 | `SandboxBlastRadius` | controller or relay down with ≥5 relay sessions in the last 15m | 5m | critical |
 | `SandboxLedgerDivergence` | any `sandbox_ledger_divergence{reason}` above zero | 1m | critical |
@@ -204,6 +207,20 @@ one second to one hour, so change the expression together with the interval and
 keep the recorded reason. A divergence is only as fast as the next sample: at
 the default, a page can lag the event by up to five minutes, and that is the
 cost of moving the read off the scrape path.
+
+**The egress rules are scraped from the proxy by pod name.** `sandbox_egress_bytes_total`
+and `sandbox_egress_limit_total` are exported only by the proxy role, and it is a
+separate target in the shipped scrape config:
+`egress-proxy-0.egress-proxy-headless.sandbox-system.svc.cluster.local:9100`
+with `role: proxy`, scraped by pod name for the same reason the relay is. The
+`allow-metrics-scrape` policy admits `app=egress-proxy` on 9100 and nothing else.
+They do not select on `role`, so a target scraped without the label still
+evaluates them. The bytes
+counter carries the same total under `scope="session"` and `scope="global"` by
+construction, because every chunk is charged to both budgets: the expressions
+select one scope and never sum across them. `SandboxEgressBytesNearCap` hardcodes
+75% of the 20 GiB default for `EGRESS_MAX_BYTES_GLOBAL_WINDOW` over its 1 h
+default window, so change the range and threshold together with either.
 
 **The rules do not deliver notifications.** The rule file carries no receiver.
 The homelab stack evaluates with `-notifier.blackhole`, so alerts are visible as

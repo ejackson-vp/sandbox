@@ -90,3 +90,26 @@ describe("controller mTLS", () => {
     });
   });
 });
+
+describe("concurrent connection cap", () => {
+  it("caps one client at 64 in-flight requests by default", () => {
+    expect(loadConfig(base).maxConnectionsPerClient).toBe(64);
+  });
+
+  it("caps the process at 2048 in-flight requests by default", () => {
+    expect(loadConfig(base).maxConnectionsGlobal).toBe(2_048);
+  });
+
+  it("accepts 0 as the off switch for the per-client check", () => {
+    expect(loadConfig({ ...base, MAX_CONNECTIONS_PER_CLIENT: "0" }).maxConnectionsPerClient).toBe(0);
+  });
+
+  it("refuses a global cap of 0, which would refuse every request", () => {
+    expect(() => loadConfig({ ...base, MAX_CONNECTIONS_GLOBAL: "0" })).toThrow(/invalid integer/);
+  });
+
+  it("refuses a negative or non-integer cap", () => {
+    expect(() => loadConfig({ ...base, MAX_CONNECTIONS_PER_CLIENT: "-1" })).toThrow(/invalid integer/);
+    expect(() => loadConfig({ ...base, MAX_CONNECTIONS_GLOBAL: "2.5" })).toThrow(/invalid integer/);
+  });
+});
