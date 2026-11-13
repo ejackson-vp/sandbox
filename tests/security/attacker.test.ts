@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSessionStore, SandboxClient, type SessionHandle } from "../../sdk/src/index.js";
 import { mintProxyToken } from "../../controller/src/tokens.js";
+import { dataPlaneShard } from "../../controller/src/data-plane-shard.js";
 import { applyYaml, clusterAvailable, deleteQuietly, kubectl } from "./kubectl.js";
 import { probePod, runProbes, type ProbeCase } from "./probe.js";
 import {
@@ -252,7 +253,24 @@ describe.skipIf(!available)("anonymous attacker (real cluster)", () => {
       // per-session HMAC this test can mint, and it must not be accepted where a
       // guest relay token is expected.
       const crossSession = mintProxyToken(proxyTokenSecret, "sbx_othersession0000", 600_000);
-      const foreignSession = await portForward("svc/relay", 8443);
+      // The relay registry is per-shard. Probing the shard that does not own
+      // this session answers 404 `session_not_registered`, which says nothing
+      // about the token check, so address the owning shard by name. The replica
+      // count is read from the cluster rather than assumed.
+      const relayReplicas = Number(
+        kubectl([
+          "get",
+          "statefulset",
+          "relay",
+          "-n",
+          "sandbox-system",
+          "-o",
+          "jsonpath={.spec.replicas}",
+        ]) || 1,
+      );
+      const ownerRelay =
+        relayReplicas > 1 ? `svc/relay-${dataPlaneShard(handle.sessionId, relayReplicas)}` : "svc/relay";
+      const foreignSession = await portForward(ownerRelay, 8443);
       try {
         const wrongToken = await upgradeStatus(
           foreignSession.port,
