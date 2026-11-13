@@ -76,6 +76,7 @@ async function startController(
     relayUrl?: string;
     provisioner?: Provisioner;
     leadership?: Pick<Leadership, "isLeader" | "onChange">;
+    acquireSettled?: () => boolean;
   } = {},
 ): Promise<Harness> {
   const store = await freshStore();
@@ -94,6 +95,7 @@ async function startController(
     relay,
     provisioner,
     ...(opts.leadership ? { leadership: opts.leadership } : {}),
+    ...(opts.acquireSettled ? { acquireSettled: opts.acquireSettled } : {}),
     // These tests never reach the capacity routes.
     capacity: {} as CapacityService,
   });
@@ -150,6 +152,27 @@ describe("controller readiness", () => {
         leadership: { ok: false, reason: "not_leader" },
         store: { ok: false, reason: "read_only" },
       },
+    });
+  });
+
+  it("stays not ready until the writer acquire has settled", async () => {
+    // Holding the Lease is not enough: acquire enables writes and then runs
+    // startup recovery. Until the whole step settles, creates must not route
+    // here even though the store may look writable.
+    const pending = await startController({ acquireSettled: () => false });
+    const before = await get(pending.base, "/internal/readyz");
+    expect(before.status).toBe(503);
+    expect(before.body).toMatchObject({
+      ok: false,
+      components: { acquire: { ok: false, reason: "not_acquired" } },
+    });
+
+    const settled = await startController({ acquireSettled: () => true });
+    const after = await get(settled.base, "/internal/readyz");
+    expect(after.status).toBe(200);
+    expect(after.body).toMatchObject({
+      ok: true,
+      components: { acquire: { ok: true } },
     });
   });
 

@@ -187,6 +187,11 @@ async function main(): Promise<void> {
   let wake: (() => void) | undefined;
   let suspend: ((id: string) => Promise<void>) | undefined;
   let resume: ((id: string) => Promise<void>) | undefined;
+  // Readiness is false until acquire has enabled writes and finished startup
+  // recovery. The store check alone answers ready after `setWritesBlocked(false)`
+  // even if recovery then fails, which would route creates to a replica whose
+  // reconcile loop never started.
+  let acquireSettled = false;
   const control = createControlApi({
     cfg,
     store,
@@ -194,6 +199,7 @@ async function main(): Promise<void> {
     provisioner,
     capacity,
     leadership,
+    acquireSettled: () => acquireSettled,
     wake: () => wake?.(),
     suspend: (id) => {
       if (!suspend) return Promise.reject(new Error("reconciler not started"));
@@ -249,10 +255,25 @@ async function main(): Promise<void> {
       // On Postgres this is where the advisory writer lock is taken, so a lock
       // held by a stale process fails here rather than on the first request.
       await store.setWritesBlocked(false);
-      const recovered = await store.recoverInterruptedOperations();
-      if (recovered.requests > 0 || recovered.sessions > 0) {
-        log.warn("sandbox_operations_recovered", recovered);
+      try {
+        const recovered = await store.recoverInterruptedOperations();
+        if (recovered.requests > 0 || recovered.sessions > 0) {
+          log.warn("sandbox_operations_recovered", recovered);
+        }
+      } catch (error) {
+        // Recovery failed after the lock was taken. Close the guard again before
+        // rethrowing: a writable store whose recovery did not finish must not
+        // report ready or serve a write.
+        await store.setWritesBlocked(true).catch(() => undefined);
+        throw error;
       }
+      // The role can move while recovery runs. Do not leave a follower holding
+      // the writer lock; bindLeadership will not start the loop either.
+      if (!leadership.isLeader()) {
+        await store.setWritesBlocked(true).catch(() => undefined);
+        return;
+      }
+      acquireSettled = true;
       // Unblock any startup fence as soon as the relay is reachable. The control
       // API fails closed until this succeeds, and the reconciler retries it.
       void fence.reconcile().catch((err) => {
@@ -263,6 +284,7 @@ async function main(): Promise<void> {
     start: () => reconciler.start(),
     stop: () => reconciler.stop(),
     release: () => {
+      acquireSettled = false;
       // The guard closes synchronously inside the adapter, even when the unlock
       // is an async round trip, so the next write is refused before this returns.
       // Awaiting here would only delay handing the lease over.

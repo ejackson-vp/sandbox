@@ -143,6 +143,9 @@ describe.skipIf(!HAS_DATABASE)(
               () => undefined,
             );
           },
+          // Never expected here: B's budget is far longer than the test. Keep
+          // production's exit out of the worker if that changes.
+          exhausted: (failure) => eventsB.push(`exhausted:${failure}`),
         },
         retry,
       );
@@ -267,6 +270,7 @@ describe.skipIf(!HAS_DATABASE)(
 
       // Exactly one writer at every phase above: A before the split, A during it,
       // nobody while A stands down, B once the lock is free.
+      expect(eventsB.filter((event) => event.startsWith("exhausted"))).toEqual([]);
       await leaseA.stop();
       await leaseB.stop();
     });

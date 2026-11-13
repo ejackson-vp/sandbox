@@ -23,16 +23,12 @@ import * as k8s from "@kubernetes/client-node";
 import { log } from "@x402s/shared/runtime";
 import type { ControllerConfig } from "./config.js";
 import { BaseLeadership } from "./leadership.js";
+import { CALL_TIMEOUT_MS, withDeadline } from "./with-deadline.js";
 
 /** Renewal cadence. Comfortably below the duration, so one failed call is tolerated. */
 const LEASE_RENEW_INTERVAL_MS = 2_000;
 /** How long a holder may go unrenewed before another replica may force-acquire. */
 const LEASE_DURATION_MS = 10_000;
-/**
- * One API call must not outlive a renewal window. Without a ceiling a hung
- * request would keep the loop from noticing that its own lease expired.
- */
-const LEASE_CALL_TIMEOUT_MS = 1_500;
 
 /**
  * A Lease as this module reads and writes it.
@@ -180,7 +176,7 @@ export class LeaseLeadership extends BaseLeadership {
     this.identity = options.identity;
     this.renewIntervalMs = options.renewIntervalMs ?? LEASE_RENEW_INTERVAL_MS;
     this.leaseDurationMs = options.leaseDurationMs ?? LEASE_DURATION_MS;
-    this.callTimeoutMs = options.callTimeoutMs ?? LEASE_CALL_TIMEOUT_MS;
+    this.callTimeoutMs = options.callTimeoutMs ?? CALL_TIMEOUT_MS;
     this.now = options.now ?? (() => Date.now());
     this.monotonic = options.monotonic ?? (() => performance.now());
   }
@@ -504,19 +500,4 @@ function statusCode(err: unknown): number | undefined {
 
 function isConflict(err: unknown): boolean {
   return statusCode(err) === 409;
-}
-
-/** Reject after `ms` so a hung API call cannot stall the renewal loop. */
-async function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }

@@ -7,6 +7,7 @@
 import { expect } from "vitest";
 import {
   bindLeadership,
+  type AcquireFailure,
   type AcquireRetryOptions,
 } from "../../../controller/src/leadership.js";
 import {
@@ -254,6 +255,8 @@ export interface WedgeWorld {
   leaseA: LeaseLeadership;
   leaseB: LeaseLeadership;
   eventsB: string[];
+  /** Failures B reported after giving the Lease back. Never production's exit. */
+  readonly exhausted: AcquireFailure[];
   readonly bFailures: number;
   close(): Promise<void>;
 }
@@ -293,6 +296,7 @@ export async function openWedgeWorld(
     client: linkB,
   });
   const eventsB: string[] = [];
+  const exhausted: AcquireFailure[] = [];
   let failures = 0;
 
   bindLeadership(leaseA, {
@@ -328,6 +332,11 @@ export async function openWedgeWorld(
           () => undefined,
         );
       },
+      // Production exits here. The suite records instead, so a regression that
+      // exhausts the budget fails an assertion rather than the worker.
+      exhausted: (failure) => {
+        exhausted.push(failure);
+      },
     },
     retryB,
   );
@@ -341,6 +350,7 @@ export async function openWedgeWorld(
     leaseA,
     leaseB,
     eventsB,
+    exhausted,
     get bFailures() {
       return failures;
     },

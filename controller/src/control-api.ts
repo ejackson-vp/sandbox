@@ -79,6 +79,15 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
     readinessChecks.leadership = () =>
       leadership.isLeader() ? { ok: true } : { ok: false, reason: "not_leader" };
   }
+  // Holding the Lease is not the same as being able to write. Acquire enables
+  // writes and then runs startup recovery; if recovery fails or hangs, the
+  // leadership check is still true and the store may still look writable. This
+  // keeps readiness false until the whole acquire step has settled.
+  if (deps.acquireSettled) {
+    const acquireSettled = deps.acquireSettled;
+    readinessChecks.acquire = () =>
+      acquireSettled() ? { ok: true } : { ok: false, reason: "not_acquired" };
+  }
   const readiness = new ReadinessCache(readinessChecks);
   // A leadership change must be visible on the next probe, not after the TTL.
   deps.leadership?.onChange(() => readiness.invalidate());

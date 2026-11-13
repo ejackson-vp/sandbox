@@ -10,6 +10,7 @@
  * leadership-split-brain.test.ts.
  */
 import { beforeAll, describe, expect, it } from "vitest";
+import { bindLeadership, SoloLeadership } from "../../controller/src/leadership.js";
 import {
   PostgresStore,
   WriterLockUnavailableError,
@@ -25,6 +26,174 @@ import {
   tryWrite,
   waitFor,
 } from "./support/leadership-fence-harness.js";
+
+/**
+ * The acquire policy without Postgres: what is retried, for how long, and what
+ * happens when the budget runs out.
+ *
+ * Production exits after releasing the Lease. Every test injects `exhausted`
+ * so the runner survives, and asserts on what the default would have seen.
+ */
+describe("acquire policy", () => {
+  function lockRefusal(): Error {
+    return new WriterLockUnavailableError(
+      "another process holds the store writer lock; refusing to become the writer",
+    );
+  }
+
+  it("stands down inside the shipped budget with no retry options", async () => {
+    const leadership = new SoloLeadership("controller-0");
+    const failures: string[] = [];
+    let attempts = 0;
+    let leaderWhenExhausted = true;
+    const startedAt = Date.now();
+
+    bindLeadership(leadership, {
+      acquire: async () => {
+        attempts += 1;
+        throw lockRefusal();
+      },
+      start: () => undefined,
+      stop: () => undefined,
+      release: () => undefined,
+      exhausted: (failure) => {
+        leaderWhenExhausted = leadership.isLeader();
+        failures.push(failure);
+      },
+    });
+
+    await leadership.start();
+    await waitFor(() => failures.length > 0, 7_000);
+
+    const elapsed = Date.now() - startedAt;
+    // Six attempts, 200ms doubling to 2s: about five seconds. Changing the
+    // attempts or the ceiling moves this out of the window.
+    expect(attempts).toBe(6);
+    expect(failures).toEqual(["lock_refused"]);
+    expect(leaderWhenExhausted).toBe(false);
+    expect(elapsed).toBeGreaterThan(4_000);
+    expect(elapsed).toBeLessThan(7_000);
+  }, 10_000);
+
+  it("stops retrying when the role is lost during a backoff", async () => {
+    const leadership = new SoloLeadership("controller-0");
+    let attempts = 0;
+    let exhausted = 0;
+
+    bindLeadership(
+      leadership,
+      {
+        acquire: async () => {
+          attempts += 1;
+          throw lockRefusal();
+        },
+        start: () => undefined,
+        stop: () => undefined,
+        release: () => undefined,
+        exhausted: () => {
+          exhausted += 1;
+        },
+      },
+      { attempts: 4, initialDelayMs: 100, maxDelayMs: 100, callTimeoutMs: 500 },
+    );
+
+    await leadership.start();
+    await waitFor(() => attempts >= 1);
+    // The first backoff is 100ms; drop the role inside it.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await leadership.stop();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    // The re-check after the backoff must win: no second attempt, no exhaustion.
+    expect(attempts).toBe(1);
+    expect(exhausted).toBe(0);
+  });
+
+  it("keeps the lease and retries longer when the store is unavailable", async () => {
+    const leadership = new SoloLeadership("controller-0");
+    let attempts = 0;
+    let started = false;
+    let exhausted = 0;
+
+    bindLeadership(
+      leadership,
+      {
+        acquire: async () => {
+          attempts += 1;
+          if (attempts < 5) throw new Error("connect ECONNREFUSED 10.0.0.1:5432");
+        },
+        start: () => {
+          started = true;
+        },
+        stop: () => undefined,
+        release: () => undefined,
+        exhausted: () => {
+          exhausted += 1;
+        },
+      },
+      {
+        // A lock budget that would give up after two attempts, and a longer
+        // store budget that carries the same replica through five.
+        attempts: 2,
+        initialDelayMs: 10,
+        maxDelayMs: 10,
+        unavailableAttempts: 10,
+        unavailableInitialDelayMs: 20,
+        unavailableMaxDelayMs: 20,
+        callTimeoutMs: 500,
+      },
+    );
+
+    await leadership.start();
+    await waitFor(() => started);
+
+    expect(attempts).toBe(5);
+    expect(exhausted).toBe(0);
+    expect(leadership.isLeader()).toBe(true);
+  });
+
+  it("abandons an attempt that hangs past the call deadline", async () => {
+    const leadership = new SoloLeadership("controller-0");
+    const failures: string[] = [];
+    let attempts = 0;
+
+    bindLeadership(
+      leadership,
+      {
+        acquire: () => {
+          attempts += 1;
+          // A connect to a blackholed host: no settlement, no cancellation.
+          return new Promise<void>(() => undefined);
+        },
+        start: () => undefined,
+        stop: () => undefined,
+        release: () => undefined,
+        exhausted: (failure) => {
+          failures.push(failure);
+        },
+      },
+      {
+        attempts: 2,
+        initialDelayMs: 10,
+        maxDelayMs: 10,
+        unavailableAttempts: 2,
+        unavailableInitialDelayMs: 10,
+        unavailableMaxDelayMs: 10,
+        callTimeoutMs: 25,
+      },
+    );
+
+    await leadership.start();
+    await waitFor(() => failures.length > 0, 2_000);
+
+    // The deadline turned two hung attempts into two timeouts, and a timeout is
+    // a store failure, not a rival lock.
+    expect(attempts).toBe(2);
+    expect(failures).toEqual(["store_unavailable"]);
+    expect(leadership.isLeader()).toBe(false);
+  });
+});
+
 /**
  * The acquire wedge: the Lease moves to a replica that cannot take the writer
  * lock, and the lock does not free.
@@ -80,6 +249,7 @@ describe.skipIf(!HAS_DATABASE)(
         await world.leaseA.tick();
         expect(world.leaseA.isLeader()).toBe(false);
         expect(world.storeA.writesAreBlocked).toBe(true);
+        expect(world.exhausted).toEqual([]);
       } finally {
         await world.close();
       }
@@ -107,7 +277,12 @@ describe.skipIf(!HAS_DATABASE)(
         }
         await waitFor(() => !world.leaseB.isLeader());
         await waitFor(() => world.api.holder === "");
+        await waitFor(() => world.exhausted.length > 0);
 
+        // The hook runs after the release, and the failure class says why: a
+        // rival held the writer lock, so the role was handed back.
+        expect(world.exhausted).toEqual(["lock_refused"]);
+        expect(world.api.holder).toBe("");
         expect(world.eventsB).toContain("acquire:failed");
         expect(world.eventsB).toContain("stop");
         expect(world.eventsB).toContain("release");
