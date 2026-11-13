@@ -129,10 +129,35 @@ guest/websockets.go             polled WebSocket window
 
 ## Module size budget
 
-`npm run lint:structure` fails any `.ts`/`.go` module over 550 lines. The
-budget is a backstop, not a target: most modules are 100–350 lines. If a module
-grows past the budget, split it by use case or adapter, not by arbitrary line
-count.
+`npm run lint:structure` fails any counted source file over 650 lines. The scan
+walks the repo from the root and skips only generated directories (`node_modules`,
+`dist`, `bin`, `coverage`, `artifacts`, `.git` and friends), so `tests/`,
+`verification/`, `site/`, `examples/` and the repo root are all in scope: moving
+a file just outside a root cannot hide it. Counted extensions are `.ts`, `.tsx`,
+`.mts`, `.cts` and `.go`, matched case-insensitively. The budget is a backstop,
+not a target: most modules are 100–350 lines, and 550 is the number to aim at.
+The ceiling stays at 650 until the modules above 550 are split, and it never
+goes up. Split by use case or adapter, never by arbitrary line count.
+
+`scripts/check-structure.mjs` carries an explicit `BASELINE` map of the files
+that are over budget today, each pinned to its exact line count. It fails in
+four cases:
+
+- a file over budget that is not in `BASELINE`, because a new file gets a
+  smaller module, not an entry;
+- a baselined file that grew, because the pinned count may only go down and the
+  file has to be split;
+- a baselined file that shrank, because the count is lowered in the same change
+  and the entry is deleted once the file fits;
+- an entry that is at or under budget, or whose file is gone.
+
+Every failure prints the whole baseline, and the message names the rule that was
+broken.
+
+The script cannot see the map's previous value. Growing a file and raising its
+number in the same commit reads as a clean baseline, so that direction is
+enforced by review of the `BASELINE` diff, not by the check. Treat a diff that
+adds an entry or raises a number as a failed review.
 
 Completed slices:
 
@@ -170,6 +195,11 @@ Next slices:
 3. Extend the `shared/src` layer guard to the other workspaces and enable
    `exactOptionalPropertyTypes` (a dependency-cruiser config would replace the
    hand-rolled check in `scripts/check-structure.mjs`).
+4. Split the modules that sit above 550 lines: `controller/src/provisioning.ts`
+   (595), `controller/src/reconciler.ts` (600),
+   `tests/integration/api-flow.test.ts` (1228) and
+   `tests/unit/cli-commands.test.ts` (1001). Then delete the `BASELINE` map and
+   lower `MAX_LINES` to 550.
 
 ## Testing strategy
 

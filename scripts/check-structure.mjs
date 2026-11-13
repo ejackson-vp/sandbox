@@ -6,14 +6,78 @@
  * docs/architecture-principles.md.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, posix, relative } from "node:path";
+import { extname, join, posix, relative } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 // Ratchet: 550 is the target. Temporarily 650 because two controller modules
-// are above it (provisioning.ts, reconciler.ts). Lower this as they are split;
-// never raise it again.
+// (provisioning.ts, reconciler.ts) are above the 550 target. Lower this as they
+// are split; never raise it again.
 const MAX_LINES = 650;
-const ROOTS = ["shared/src", "sdk/src", "api/src", "controller/src", "cli/src", "scripts", "guest"];
+
+/**
+ * The size scan walks the repo from the root, because an include list is an
+ * invitation to move a file just outside it: `verification/`, `site/`,
+ * `examples/` and the repo root were all uncounted while ROOTS was an
+ * allowlist. Only generated directories are skipped; nothing tracked lives in
+ * them, and walking node_modules would take a minute.
+ */
+const EXCLUDED_DIRS = new Set([
+  ".git",
+  ".tmp-sandbox",
+  "__pycache__",
+  "artifacts",
+  "bin",
+  "coverage",
+  "dist",
+  "node_modules",
+]);
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".go"]);
+
+/**
+ * The over-budget files, and the exact line count each one is at today.
+ *
+ * This is a ratchet that only shrinks. A file in here may not grow: the guard
+ * fails and the pinned number may only go down. It fails on a shrink too, so
+ * the number is lowered in the same change rather than drifting. An entry is
+ * deleted only once the file fits, which the guard also enforces.
+ *
+ * What the script cannot see is the previous value of the map: growing a file
+ * and raising its number in the same commit reads as a clean baseline. That one
+ * is caught by reviewing this diff, not by the check, so keep the diff empty
+ * unless a file got smaller.
+ *
+ * No issue tracks the remaining splits yet, so there is nothing to cite here.
+ * When one is filed, add its number.
+ */
+const BASELINE = new Map([
+  ["tests/integration/api-flow.test.ts", 1228],
+  ["tests/unit/cli-commands.test.ts", 1001],
+]);
+
+function countLines(path) {
+  // Count real lines: a file ending in "\n" must not gain a phantom line.
+  return readFileSync(path, "utf8").replace(/\n$/, "").split("\n").length;
+}
+
+function printBaseline() {
+  console.error(`baseline (over ${MAX_LINES} lines, pinned to the exact count):`);
+  for (const [path, lines] of [...BASELINE].sort((a, b) => b[1] - a[1])) {
+    console.error(`  ${lines}\t${path}`);
+  }
+}
+
+/** Every counted source file under `dir`. */
+function* sources(dir) {
+  for (const entry of readdirSync(dir)) {
+    if (EXCLUDED_DIRS.has(entry)) continue;
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) {
+      yield* sources(path);
+    } else if (SOURCE_EXTENSIONS.has(extname(entry).toLowerCase())) {
+      yield path;
+    }
+  }
+}
 
 function* files(dir) {
   for (const entry of readdirSync(dir)) {
@@ -29,20 +93,64 @@ function* files(dir) {
 }
 
 const offenders = [];
-for (const root of ROOTS) {
-  for (const path of files(join(ROOT, root))) {
-    // Count real lines: a file ending in "\n" must not gain a phantom line.
-    const text = readFileSync(path, "utf8").replace(/\n$/, "");
-    const lines = text.split("\n").length;
-    if (lines > MAX_LINES) offenders.push({ path: relative(ROOT, path), lines });
+const unused = [];
+const grew = [];
+const shrank = [];
+const seen = new Set();
+
+for (const path of sources(ROOT)) {
+  const rel = relative(ROOT, path);
+  const lines = countLines(path);
+  const baseline = BASELINE.get(rel);
+  seen.add(rel);
+  if (baseline === undefined) {
+    if (lines > MAX_LINES) offenders.push({ path: rel, lines });
+  } else if (lines <= MAX_LINES) {
+    // Fixed: the entry has to go in the same change.
+    unused.push({ path: rel, lines, baseline });
+  } else if (lines > baseline) {
+    grew.push({ path: rel, lines, baseline });
+  } else if (lines < baseline) {
+    shrank.push({ path: rel, lines, baseline });
   }
 }
+for (const [rel, baseline] of BASELINE) {
+  if (!seen.has(rel)) unused.push({ path: rel, lines: 0, baseline });
+}
 
-if (offenders.length > 0) {
-  console.error(`files over ${MAX_LINES} lines:`);
-  for (const { path, lines } of offenders.sort((a, b) => b.lines - a.lines)) {
-    console.error(`  ${lines}\t${path}`);
+if (offenders.length + unused.length + grew.length + shrank.length > 0) {
+  if (offenders.length > 0) {
+    console.error(`files over ${MAX_LINES} lines that are not in BASELINE (split them):`);
+    for (const { path, lines } of offenders.sort((a, b) => b.lines - a.lines)) {
+      console.error(`  ${lines}\t${path}`);
+    }
   }
+  if (grew.length > 0) {
+    console.error(
+      "BASELINE files that grew (the pinned count may only go down; split the file):",
+    );
+    for (const { path, lines, baseline } of grew.sort((a, b) => b.lines - a.lines)) {
+      console.error(`  ${path}: ${lines} lines now, baselined at ${baseline}`);
+    }
+  }
+  if (shrank.length > 0) {
+    console.error(
+      "BASELINE files that shrank (lower the pinned count; delete the entry once it fits):",
+    );
+    for (const { path, lines, baseline } of shrank.sort((a, b) => b.lines - a.lines)) {
+      console.error(`  ${path}: ${lines} lines now, baselined at ${baseline}`);
+    }
+  }
+  if (unused.length > 0) {
+    console.error(
+      "BASELINE entries at or under budget (delete them, the ratchet only shrinks):",
+    );
+    for (const { path, lines, baseline } of unused.sort((a, b) => b.baseline - a.baseline)) {
+      const now = lines === 0 ? "gone or no longer counted" : `${lines} lines now`;
+      console.error(`  ${path}: ${now}, baselined at ${baseline}`);
+    }
+  }
+  printBaseline();
   process.exit(1);
 }
 
@@ -289,6 +397,7 @@ if (
 }
 
 console.log(
-  `structure ok: every module is <= ${MAX_LINES} lines; ${modules.length} shared modules layered, ` +
+  `structure ok: every module is <= ${MAX_LINES} lines (${BASELINE.size} baselined); ` +
+    `${modules.length} shared modules layered, ` +
     `${entryOwners.size} symbols over ${sharedEntries.length} entries, no root barrel`,
 );
