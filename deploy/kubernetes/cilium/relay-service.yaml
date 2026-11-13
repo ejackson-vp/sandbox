@@ -1,0 +1,43 @@
+# Cilium-specific: allow sandbox workloads to reach the relay Service ClusterIP.
+#
+# Warm-pool pods (`warm-*`) bake the relay Service ClusterIP into their pod spec
+# at boot: a guest resolves no DNS of its own and must not hold a Pod IP that
+# changes when the relay is replaced (12-relay.yaml, and the
+# stableServiceAddress seam in controller/src/reconciler-context.ts). A ClusterIP
+# is not a Pod, so the `app=relay` podSelector rule in
+# 20-networkpolicy-sandbox.yaml does not match it.
+#
+# On a cluster with kubeProxyReplacement=true (this cluster: Cilium v1.20,
+# kube-proxy-replacement=true), the relay ClusterIP is not DNAT'ed to a backend
+# pod before egress policy evaluation. Unlike the kubeProxyReplacement=false
+# path documented in controller-apiserver.yaml, the destination stays the
+# Service frontend, no rule matches, and the packet is dropped silently.
+#
+# The observable failure is a warm pod that never becomes claimable: the guest's
+# WebSocket dial to ws://<relay-clusterip>:8443 sees a connect timeout (not a
+# refusal), gives up after its 60s relay dial timeout, logs `guest_failed`, and
+# exits 1. The controller then recycles the pod with reason "dead" and creates a
+# replacement, so the pool churns continuously and every session pays a cold
+# start because no warm pod ever registers with the relay.
+#
+# `toServices` names the Service rather than hard-coding a ClusterIP, so the
+# rule survives Service recreation and stays correct if the Service is recreated
+# with a different address. Allow rules are additive across CiliumNetworkPolicy
+# and the Kubernetes NetworkPolicy in ../20-networkpolicy-sandbox.yaml, so this
+# widens egress by exactly one Service on one port and adds no ingress.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-relay-service
+  namespace: sandbox-workloads
+spec:
+  endpointSelector: {}
+  egress:
+    # Guest-initiated relay channel (WebSocket).
+    - toServices:
+        - k8sService:
+            serviceName: relay
+            namespace: sandbox-system
+      toPorts:
+        - ports:
+            - {port: "8443", protocol: TCP}
