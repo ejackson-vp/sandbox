@@ -248,6 +248,14 @@ export interface UnclaimedLedgerEntry {
  * `maxTier` and `maxConcurrent` are ceilings on what a free session may
  * consume, applied on top of the shared per-window and concurrency budgets.
  */
+/** What an operator writes to add or replace an entry. */
+export interface AllowlistEntryInput {
+  address: string;
+  label: string;
+  maxTier: SessionTier;
+  maxConcurrent: number;
+}
+
 export interface PayerAllowlistEntry {
   address: string;
   label: string;

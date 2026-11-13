@@ -1,6 +1,8 @@
 import type {
   AllowlistDecision,
+  AllowlistEntryInput,
   ChallengeBurnResult,
+  PayerAllowlistEntry,
   ClaimOperationResult,
   ClaimedRefund,
   ExecRequestRecord,
@@ -238,6 +240,10 @@ export interface ControlApiStore {
    * concurrent creates cannot both pass the concurrency ceiling.
    */
   authorizeAllowlistedPayer(address: string, tier: SessionTier): Promise<AllowlistDecision>;
+  /** Operator surface: list, add/replace, disable (never delete). */
+  listAllowlist(): Promise<PayerAllowlistEntry[]>;
+  upsertAllowlist(input: AllowlistEntryInput, now: number): Promise<PayerAllowlistEntry>;
+  disableAllowlist(address: string, now: number): Promise<boolean>;
   /** Single-use challenge nonce (#47): mint, burn, and never resurrect. */
   issueChallengeNonce(
     nonce: string,

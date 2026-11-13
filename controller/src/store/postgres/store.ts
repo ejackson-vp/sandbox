@@ -21,6 +21,7 @@ import type { SessionTier } from "@x402s/shared/protocol";
 import {
   NON_TERMINAL_STATE_SQL,
   type AllowlistDecision,
+  type AllowlistEntryInput,
   type ChallengeBurnResult,
   type ClaimedRefund,
   type LedgerStatus,
@@ -194,6 +195,18 @@ export class PostgresStore implements StoreBackend {
 
   authorizeAllowlistedPayer(address: string, tier: SessionTier): Promise<AllowlistDecision> {
     return this.allowlistRepo.authorize(address, tier);
+  }
+
+  listAllowlist() {
+    return this.allowlistRepo.list();
+  }
+
+  upsertAllowlist(input: AllowlistEntryInput, now: number) {
+    return this.allowlistRepo.upsert(input, now);
+  }
+
+  disableAllowlist(address: string, now: number): Promise<boolean> {
+    return this.allowlistRepo.disable(address, now);
   }
 
   pruneChallengeNonces(): Promise<number> {

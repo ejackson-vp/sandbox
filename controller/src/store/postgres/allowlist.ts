@@ -22,6 +22,7 @@ import type { SessionTier } from "@x402s/shared/protocol";
 import {
   NON_TERMINAL_STATE_SQL,
   type AllowlistDecision,
+  type AllowlistEntryInput,
   type PayerAllowlistEntry,
 } from "../models.js";
 import { advisoryKey, type PgConnection } from "./pg.js";
@@ -44,13 +45,6 @@ function mapEntry(row: AllowlistRow): PayerAllowlistEntry {
     createdAt: Number(row.created_at),
     disabledAt: row.disabled_at === null ? null : Number(row.disabled_at),
   };
-}
-
-export interface AllowlistEntryInput {
-  address: string;
-  label: string;
-  maxTier: SessionTier;
-  maxConcurrent: number;
 }
 
 export class PgAllowlistRepository {

@@ -423,6 +423,14 @@ curl -H "x-internal-token: $ADMIN" \
 curl -X POST -H "x-internal-token: $ADMIN" -H "content-type: application/json" \
   -d '{"reason":"settlement_failed"}' \
   http://controller:3001/internal/payment-intents/<paymentKey>/fail
+
+# free-entitlement wallets (ADR 0013): list, add or replace, disable
+curl -H "x-internal-token: $ADMIN" http://controller:3001/internal/payer-allowlist
+curl -X PUT -H "x-internal-token: $ADMIN" -H "content-type: application/json" \
+  -d '{"address":"0x…","label":"owner-agent","maxTier":"long","maxConcurrent":2}' \
+  http://controller:3001/internal/payer-allowlist
+curl -X DELETE -H "x-internal-token: $ADMIN" \
+  http://controller:3001/internal/payer-allowlist/<address>
 ```
 
 The fail endpoint answers `409` with `{"error":"ledger_settled","ledgerStatus":"SETTLED"}`

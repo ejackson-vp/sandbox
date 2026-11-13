@@ -106,10 +106,11 @@ describe("rejected argument vectors", () => {
 });
 
 describe("admin capacity", () => {
-  it("requires the capacity subcommand", async () => {
+  it("prints the admin usage when no section is given", async () => {
     const { code, err } = await invoke(["admin"]);
     expect(code).toBe(2);
-    expect(err).toBe("usage: sandbox admin capacity\n");
+    expect(err).toContain("sandbox admin capacity");
+    expect(err).toContain("sandbox admin allowlist add <address>");
   });
 
   it("calls the controller with the admin token and pretty-prints the body", async () => {

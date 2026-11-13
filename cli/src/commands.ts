@@ -42,6 +42,9 @@ Usage:
   sandbox pricing
   sandbox sessions              # locally stored session handles
   sandbox admin capacity        # inspect controller capacity/reservations
+  sandbox admin allowlist       # list free-entitlement wallets
+  sandbox admin allowlist add <address> --label <name> [--max-tier T] [--max-concurrent N]
+  sandbox admin allowlist disable <address>
 
 Common options:
   --api-url <url>               default http://localhost:8080

@@ -127,6 +127,18 @@ export const allowlistAuthorizeSchema = z.object({
   tier: z.enum(["short", "standard", "extended", "long", "custom"]),
 });
 
+/**
+ * Add or replace one allowlist entry. `maxTier` is a preset (a `custom` tier has
+ * no rank, so it cannot be a ceiling) and `maxConcurrent = 0` means "no extra
+ * ceiling beyond the shared budgets".
+ */
+export const allowlistEntrySchema = z.object({
+  address: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  label: z.string().min(1).max(64),
+  maxTier: z.enum(["short", "standard", "extended", "long"]),
+  maxConcurrent: z.number().int().min(0).max(100),
+});
+
 export const operationSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/),
   envelope: z.string().min(1).max(16 * 1024 * 1024),
