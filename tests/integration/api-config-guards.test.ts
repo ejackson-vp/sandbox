@@ -16,14 +16,14 @@ describe("configuration guards", () => {
         PAYMENT_MODE: "testnet",
         NETWORK: "eip155:8453",
         PAY_TO: "0x1111111111111111111111111111111111111111",
-        CAPABILITY_SECRET: "capability-secret-0123456789",
+        CAPABILITY_SECRET: "test-only-capability-secret",
       }),
     ).toThrow(/mainnet/i);
   });
 
   it("refuses mock payments without the explicit dev acknowledgement", async () => {
     expect(() =>
-      loadConfig({ PAYMENT_MODE: "mock", ALLOW_INSECURE_DEV: "false", CAPABILITY_SECRET: "capability-secret-0123456789" }),
+      loadConfig({ PAYMENT_MODE: "mock", ALLOW_INSECURE_DEV: "false", CAPABILITY_SECRET: "test-only-capability-secret" }),
     ).toThrow(/insecure/i);
   });
 });
