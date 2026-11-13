@@ -37,17 +37,19 @@ performs the effects; the table is the tested contract.
 
 ## Deployment invariants
 
-Some control-plane state is per process and cannot be shared by replicas. A
-second replica is not a capacity change for any of these; it is a second copy of
-the truth.
+Some control-plane state is per process. For most of it a second replica is not
+a capacity change; it is a second copy of the truth. The relay is the exception:
+its registries stay per process, but placement is a pure function of the session
+id, so N replicas hold disjoint sessions correctly. What N buys is smaller blast
+radius, not capacity and not high availability.
 
 | State | Component | Why a second replica is unsafe |
 |---|---|---|
 | The store, one writer | controller | Two reconcilers schedule the same rows. The `WHERE state = …` guards stop one effect applying twice; they do not stop two schedulers disagreeing about which effect to run. |
-| Guest registry, in memory | relay | A session is pinned to the pod holding its socket. A second registry means guests registered where the controller is not looking. |
+| Guest registry, in memory | relay | Safe to run N replicas only because placement is a pure function of the session id (`controller/src/data-plane-shard.ts`): every replica and the controller compute the same owner without shared state, and the guest token carries the shard so a misroute is refused with 421. What stays unsafe is two registries on one shard, from a surge or a parallel start. N shards halve the blast radius of a restart, nothing more. |
 | Rate-limit buckets, in memory | api | Limits are per replica, so N replicas multiply every limit by N. This is a known limitation of the single-replica deployment, not a guarded invariant. |
 
-The first two are enforced three ways, deliberately:
+The controller and the relay are enforced three ways, deliberately:
 
 - **Code.** ADR 0009: the controller takes a Kubernetes Lease, only the leader
   reconciles, and a standby refuses writes without the Postgres advisory lock so
@@ -55,14 +57,18 @@ The first two are enforced three ways, deliberately:
   pod ordinal is outside `RELAY_REPLICAS`, or when the replica count is above 1
   and it has no ordinal to pin itself to, so a scaled StatefulSet fails closed
   instead of serving from a registry the controller is not addressing.
-- **Manifest.** `replicas: 1` for the controller Deployment and the relay
-  StatefulSet, with a rollout that cannot run two pods against one resource:
-  `strategy: Recreate` (or `RollingUpdate` with `maxSurge: 0`) for the
-  controller, `podManagementPolicy: OrderedReady` and no surge for the relay.
+- **Manifest.** `replicas: 1` for the controller Deployment, with a rollout that
+  cannot run two pods against one resource: `strategy: Recreate` (or
+  `RollingUpdate` with `maxSurge: 0`). For the relay, `replicas: 2` matching
+  `RELAY_REPLICAS`, `podManagementPolicy: OrderedReady` and no surge, so a
+  replacement never runs beside the pod it replaces, and one `relay-<n>`
+  ClusterIP Service per shard, which is the address a guest without DNS dials.
 - **CI.** `scripts/check-singletons.mjs`, run by `npm run lint:structure` and
-  therefore by `make verify`, fails on any of those edits. It is a manifest
-  check, not a cluster check, so it catches the pull request rather than the
-  rollout.
+  therefore by `make verify`, fails on any of those edits: a controller replica
+  count other than 1, a relay count that disagrees with `RELAY_REPLICAS`, a
+  parallel pod management policy, a surge, or a shard without its Service. It is
+  a manifest check, not a cluster check, so it catches the pull request rather
+  than the rollout.
 
 This does not make the deployment highly available. ADR 0010 is the record: the
 store is Postgres with the same invariants, proved by the store contract suite
@@ -70,6 +76,12 @@ under `READ COMMITTED`, and the controller holds no database volume. Only one
 writer reconciles because the Lease says so, not because a volume would refuse a
 second mount. The guard exists so that nobody scales the manifest into a failure
 the code cannot see.
+
+Two relay shards do not change that. Both pods are pinned to the single
+control-plane node by the StatefulSet `nodeSelector`, and that node also hosts
+Postgres, the controller and the API, so losing it is still a full outage. The
+`topologySpreadConstraints` on the relay is `ScheduleAnyway`: it spreads the
+shards if a second control-plane node ever exists, and never leaves one Pending.
 
 ## DDIA ideas in practice
 

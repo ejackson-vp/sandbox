@@ -188,6 +188,18 @@ the container registry.
 
 ### Changed
 
+- The relay runs two shards in the committed manifests (`RELAY_REPLICAS: "2"`,
+  StatefulSet `replicas: 2`, `relay-0` and `relay-1` ClusterIP Services, soft
+  hostname spread). Placement is a pure function of the session id, so each
+  shard holds a disjoint half of the sessions and a single pod restart interrupts
+  roughly half of them instead of all. A full rollout still replaces both pods,
+  one ordinal at a time. This is blast radius, not HA: both pods stay on the one
+  control-plane node that also runs Postgres, the controller and the API.
+  `scripts/check-singletons.mjs` now checks that the StatefulSet count matches
+  `RELAY_REPLICAS`, that `podManagementPolicy` is `OrderedReady`, that
+  `maxSurge` is `0`, and that every shard has its Service. The relay server
+  certificate needs a `relay-<n>.relay-headless` SAN per shard
+  (`scripts/dev-secrets.sh` issues `relay-0`..`relay-9`).
 - **Breaking:** the SQLite store backend is removed. The controller requires
   `DATABASE_URL` and always uses Postgres; `STORE_BACKEND`, `DB_PATH` and the
   encrypted SQLite backup settings are refused at startup. The deployment runs a

@@ -221,7 +221,7 @@ jobs:
           set -euo pipefail
           kubectl -n "$NAMESPACE" rollout status statefulset/postgres --timeout=300s
           kubectl -n "$NAMESPACE" rollout status deploy/controller --timeout=300s
-          kubectl -n "$NAMESPACE" rollout status deploy/relay --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status statefulset/relay --timeout=300s
           kubectl -n "$NAMESPACE" rollout status deploy/api --timeout=300s
           kubectl get nodes
           kubectl -n "$NAMESPACE" get pods

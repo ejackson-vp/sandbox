@@ -120,8 +120,11 @@ make down
 
 `make dev-scale N` is the multi-replica validation path: it patches
 `RELAY_REPLICAS`/`PROXY_REPLICAS`, scales both StatefulSets, restarts the control
-plane and waits for the rollout. It is idempotent, and `make deploy` resets it.
-The controller stays at one replica (ADR 0010).
+plane and waits for the rollout. It is idempotent, and `make deploy` resets it to
+the committed values. The committed manifests run the relay at two shards (each
+holding a disjoint half of the sessions, so a single pod restart costs one shard
+rather than all of them) and the egress proxy at one. The controller stays at one
+replica ([ADR 0010](docs/adr/0010-controller-ha-storage.md)).
 
 Local clusters use `runc`, not microVMs. The demo exercises the same API, relay
 and guest as a real deployment.

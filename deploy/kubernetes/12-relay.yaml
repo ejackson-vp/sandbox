@@ -1,3 +1,15 @@
+# Shardless relay Service.
+#
+# Kept for two reasons: it is the guest address of a session created when
+# RELAY_REPLICAS was 1 (that ClusterIP is already baked into the pod), and it is
+# the address the controller uses when the count is 1. With two shards it selects
+# both pods, so it is not a correct target for a new session: a guest with a shard
+# claim would land on whichever pod the Service picked and be refused with 421.
+# New sessions get `relay-<n>` below.
+#
+# A session carried across the scale from one replica to two cannot reconnect:
+# its token has no shard claim, so every relay refuses it with 421 (ADR 0012).
+# Scaling is a rollout, not a live operation.
 apiVersion: v1
 kind: Service
 metadata:
@@ -19,19 +31,59 @@ spec:
       port: 9100
       targetPort: 9100
 ---
-# Headless Service for deterministic pod identity.
+# Per-shard guest address, one Service per relay pod.
 #
 # The relay registry is in process memory, so a session must always reach the
-# same replica. Each StatefulSet pod gets a stable ordinal name (`relay-0`), and
-# this Service publishes `<pod>.<service>` DNS names for the CONTROLLER's admin
-# calls (RELAY_HOST_TEMPLATE). A guest cannot resolve DNS and cannot dial a Pod
-# IP that changes on replacement, so the guest URL uses a ClusterIP instead: the
-# `relay` Service above at one replica, or one per-shard Service `relay-<n>`
-# selecting `statefulset.kubernetes.io/pod-name: relay-<n>` above one. Create
-# those with `make dev-scale N`; raising RELAY_REPLICAS without them defers
-# creates (the guest would have no address) rather than booting a guest against
-# a dead Pod IP. Hand this object and the StatefulSet together; either alone
-# leaves the controller's admin template unresolvable.
+# pod that holds its socket. The controller computes the shard from the session
+# id (`dataPlaneShard` in controller/src/data-plane-shard.ts) and hands the guest
+# that shard's ClusterIP, which selects exactly one StatefulSet pod. A Pod IP or
+# a Service name would not do: a guest runs with `dnsPolicy: None` and no DNS
+# egress, and a Pod IP changes when the pod is replaced.
+#
+# These are the committed form of what `scripts/dev-scale.sh` creates for a dev
+# cluster. They belong in the manifest so that a rollout does not depend on
+# someone remembering to run a script: a shard whose Service is missing defers
+# new creates (the guest would have no address) instead of booting a guest
+# against a dead Pod IP. Raising the replica count in the StatefulSet below
+# requires the matching `relay-<n>` Service in the same change;
+# scripts/check-singletons.mjs fails when the two disagree.
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-0
+  namespace: sandbox-system
+  labels: {app: relay, x402.io/relay-shard: "0"}
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: relay-0
+  ports:
+    - name: guest
+      port: 8443
+      targetPort: 8443
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-1
+  namespace: sandbox-system
+  labels: {app: relay, x402.io/relay-shard: "1"}
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: relay-1
+  ports:
+    - name: guest
+      port: 8443
+      targetPort: 8443
+---
+# Headless Service for deterministic pod identity.
+#
+# Each StatefulSet pod gets a stable ordinal name (`relay-0`), and this Service
+# publishes `<pod>.<service>` DNS names for the CONTROLLER's admin calls
+# (RELAY_HOST_TEMPLATE, `relay-{shard}.relay-headless`). The controller runs
+# in-cluster with working DNS, so it can use the name; the guest cannot, which is
+# why the per-shard ClusterIP Services above exist. Hand this object, the
+# per-shard Services and the StatefulSet together; any one alone leaves either
+# the controller's admin template or the guest address unresolvable.
 apiVersion: v1
 kind: Service
 metadata:
@@ -59,16 +111,28 @@ metadata:
   namespace: sandbox-system
   labels: {app: relay}
 spec:
-  replicas: 1
+  # Two shards. The registry is per process, so this is not capacity: it is
+  # blast radius. A single pod restart drops that shard's sessions, roughly half
+  # of them, instead of every session. A full rollout still replaces both pods,
+  # one ordinal at a time, so it interrupts each half in turn but never both at
+  # once. The controller computes the same shard from the session id, so
+  # placement needs no shared state.
+  replicas: 2
   # Pod ordinal -> pod name -> SHARD_INDEX (parsed from metadata.name below).
   # The controller computes the same ordinal from the session id.
   serviceName: relay-headless
   # Rolling updates replace one ordinal at a time and each ordinal has exactly
-  # one pod, so two registries for the same shard never coexist. That is the
-  # same property the Deployment got from maxSurge: 0.
+  # one pod, so two registries for the same shard never coexist and the two
+  # shards are never both down. The maxSurge: 0 below keeps that true.
   podManagementPolicy: OrderedReady
   updateStrategy:
     type: RollingUpdate
+    rollingUpdate:
+      # Explicit, not the StatefulSet default: a surge would start the
+      # replacement pod before the old one terminates, so two pods would hold a
+      # registry for the same ordinal. StatefulSets update highest ordinal
+      # first, so a rollout touches shard 1 and then shard 0, never both at once.
+      maxSurge: 0
   # A terminating relay drops every registry entry anyway; a shorter grace
   # period shrinks the window in which a stale keep-alive connection can still
   # be answered by the old pod while the replacement is starting. The
@@ -91,6 +155,21 @@ spec:
       automountServiceAccountToken: false
       nodeSelector:
         node-role.kubernetes.io/control-plane: ""
+      # SOFT spread, not node-loss tolerance. On the current cluster there is
+      # one control-plane node and the nodeSelector above pins both shards to
+      # it, so in practice both pods share that node and this constraint does
+      # nothing. It takes effect only if a second control-plane node appears or
+      # the nodeSelector is relaxed. `ScheduleAnyway` means a shard never goes
+      # Pending waiting for a second node, which matters more than spreading.
+      #
+      # Nothing here survives losing that node: Postgres, the controller and the
+      # API are on it too, so node loss is still a full outage (ADR 0010).
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: relay}
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists

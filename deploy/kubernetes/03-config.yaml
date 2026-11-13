@@ -59,16 +59,32 @@ data:
   PROXY_SERVICE_NAME: "egress-proxy"
   # Data-plane placement. Both default to 1, which keeps the ClusterIP Service
   # path (byte-identical pod endpoints). Raising either to match its
-  # StatefulSet's replicas switches provisioning to the shard's ready pod IP,
-  # resolved from the Service's EndpointSlice, and makes the relay/proxy reject
-  # a connection routed to the wrong shard.
+  # StatefulSet's replicas makes the relay/proxy reject a connection routed to
+  # the wrong shard, and changes what a guest dials: with
+  # RELAY_GUEST_ADDRESS=service (the default) the relay is that shard's
+  # `relay-<n>` ClusterIP, while the proxy stays an endpoint Pod IP. A proxy
+  # replacement therefore still breaks egress for the rest of a session.
   # Update these and the StatefulSet replicas in 12-relay.yaml / 13-egress-proxy.yaml
-  # in the same change; a mismatch silently reintroduces per-replica state.
+  # in the same change; a mismatch silently reintroduces per-replica state, and
+  # scripts/check-singletons.mjs fails when the relay count and the StatefulSet
+  # disagree.
+  #
+  # Relay is 2. That is blast radius, not capacity or HA: each shard holds a
+  # disjoint half of the sessions, so a single relay pod restart interrupts
+  # roughly half of them instead of all. A full rollout still replaces both pods,
+  # one ordinal at a time, so each half is interrupted in turn rather than both
+  # at once. Both pods are pinned to the single control-plane node by the
+  # StatefulSet nodeSelector, so losing that node still takes down Postgres, the
+  # controller and the API with the relay. Egress-proxy stays at 1: a proxy
+  # restart breaks egress for the rest of a session but does not end it
+  # (ADR 0012).
+  #
   # Raising RELAY_REPLICAS also requires the relay server certificate (the
   # relay-tls Secret, managed outside this repo) to carry
   # relay-<n>.relay-headless SANs for every shard: the controller's admin calls
-  # reach each shard by that name over mTLS.
-  RELAY_REPLICAS: "1"
+  # reach each shard by that name over mTLS. scripts/dev-secrets.sh issues
+  # relay-0..9 for a local cluster.
+  RELAY_REPLICAS: "2"
   PROXY_REPLICAS: "1"
   RELAY_HOST_TEMPLATE: "relay-{shard}.relay-headless"
   PROXY_HOST_TEMPLATE: "egress-proxy-{shard}.egress-proxy-headless"
