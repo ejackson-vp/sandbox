@@ -179,6 +179,12 @@ the container registry.
   cannot open it, the same as the relay, and the column is cleared when the
   session is finalized. This is a storage addition to the trust boundary, not a
   new plaintext surface; see [docs/threat-model.md](docs/threat-model.md).
+- `make test-restore-dump DUMP=<file>` restores a real `pg_dump -Fc` artifact
+  (decrypting it with `BACKUP_ENCRYPTION_KEY` when the file is openssl-encrypted)
+  into a scratch database and runs the store contract against that copy. The
+  homelab CronJob and the restore drill both stop short of that: one counts rows,
+  the other copies a database with `TEMPLATE`. See
+  [docs/backup-restore.md](docs/backup-restore.md).
 
 ### Changed
 

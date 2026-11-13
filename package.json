@@ -20,6 +20,7 @@
     "test": "npm run test:unit && npm run test:property",
     "test:unit": "vitest run tests/unit --fileParallelism",
     "test:store-contract": "vitest run tests/unit/store-contract-postgres.test.ts",
+    "test:store-contract-restored": "vitest run tests/restore",
     "test:restore-drill": "vitest run tests/integration/restore-drill.test.ts",
     "test:integration": "vitest run tests/integration --exclude \"**/restore-drill.test.ts\"",
     "test:security": "vitest run tests/security",

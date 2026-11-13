@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-go verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-restore-dump test-go verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -33,6 +33,7 @@ help:
 	@echo "  make demo-sse      stream SSE chunks through the relay"
 	@echo "  make demo-ws       WebSocket echo through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
+	@echo "  make test-restore-dump DUMP=file  restore a backup and run the store contract on it"
 	@echo "  make verify         build, typecheck, structure lint, unit + property + go tests"
 	@echo "  make verify-model   model-check the lifecycle/payment/operation/fence state machines (TLA+)"
 	@echo "  make docs-check     markdownlint + internal link check"
@@ -153,6 +154,16 @@ test-workloads:
 # compatibility (skips without its image). No cluster or guest binary needed.
 test-portable:
 	npm run test:portable
+
+# A dump nobody restored is a guess. DUMP is a real artifact (`pg_dump -Fc`,
+# optionally openssl-encrypted, as the homelab CronJob writes them). The script
+# decrypts if BACKUP_ENCRYPTION_KEY is set, restores into a scratch database it
+# creates, runs the store contract against that copy and drops it. DATABASE_URL
+# names the server; the database it points at is never written to.
+# docs/backup-restore.md has the commands for pulling a dump out of the cluster.
+test-restore-dump:
+	@test -n "$(DUMP)" || { echo "usage: make test-restore-dump DUMP=<path> [DATABASE_URL=...]"; exit 2; }
+	node scripts/restore-dump.mjs "$(DUMP)"
 
 demo-sse:
 	npx tsx scripts/sse-demo.ts
