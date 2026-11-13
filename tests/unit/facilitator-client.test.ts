@@ -6,12 +6,14 @@
  * facilitator or chain is involved.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { generateKeyPairSync } from "node:crypto";
 import type { Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import {
   FacilitatorError,
   X402FacilitatorClient,
+  createFacilitatorClient,
 } from "../../api/src/payments/facilitator-client.js";
 
 const PAYLOAD = { x402Version: 2, payload: { authorization: {} } } as unknown as PaymentPayload;
@@ -232,5 +234,63 @@ describe("facilitator client", () => {
 
     await client.getSupported();
     expect(running.requests[0]?.authorization).toBe("test GET /facilitator/supported");
+  });
+
+  it("refuses a supported body that is not the protocol", async () => {
+    running = await fakeFacilitator((_req, res) => json(res, 200, { unexpected: true }));
+    const client = new X402FacilitatorClient({ baseUrl: running.url, retries: 0 });
+
+    await expect(client.getSupported()).rejects.toBeInstanceOf(FacilitatorError);
+  });
+
+  it("refuses a response larger than the body bound", async () => {
+    const oversized = "x".repeat(300 * 1024);
+    running = await fakeFacilitator((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ isValid: true, filler: oversized }));
+    });
+    const client = new X402FacilitatorClient({ baseUrl: running.url, retries: 0 });
+
+    await expect(client.verify(PAYLOAD, REQUIREMENTS)).rejects.toThrow(/body bound/);
+  });
+
+  it("survives a non-JSON answer instead of throwing on parse", async () => {
+    running = await fakeFacilitator((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("not json at all");
+    });
+    const client = new X402FacilitatorClient({ baseUrl: running.url, retries: 0 });
+
+    // A 200 with an unparseable body is not a protocol answer: the refusal is
+    // typed, not a raw JSON syntax error escaping to the caller.
+    await expect(client.verify(PAYLOAD, REQUIREMENTS)).rejects.toBeInstanceOf(FacilitatorError);
+  });
+
+  it("attaches CDP auth only when both halves of the key are configured", async () => {
+    running = await fakeFacilitator((_req, res) =>
+      json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "mock:local" }] }),
+    );
+    const base = {
+      facilitatorUrl: running.url,
+      facilitatorTimeoutMs: 5_000,
+    };
+    // A real P-256 key: the auth helper derives the signing key from the
+    // secret, so a placeholder base64 string is not a valid input.
+    const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const secret = privateKey.export({ type: "pkcs8", format: "der" }).toString("base64");
+
+    await createFacilitatorClient({
+      ...base,
+      facilitatorApiKeyId: "key-id",
+      facilitatorApiKeySecret: secret,
+    }).getSupported();
+    expect(running.requests[0]?.authorization).toMatch(/^Bearer /);
+
+    await createFacilitatorClient({
+      ...base,
+      facilitatorApiKeyId: "key-id",
+      facilitatorApiKeySecret: undefined,
+    }).getSupported();
+    expect(running.requests[1]?.authorization).toBeUndefined();
   });
 });
