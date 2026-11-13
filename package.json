@@ -24,7 +24,7 @@
     "test:restore-drill": "vitest run tests/integration/restore-drill.test.ts",
     "test:integration": "vitest run tests/integration --exclude \"**/restore-drill.test.ts\"",
     "test:integration:coverage": "X402_COVERAGE_PARTIAL=1 vitest run tests/integration --exclude \"**/restore-drill.test.ts\" --coverage --coverage.reportsDirectory=coverage-integration",
-    "test:security": "vitest run tests/security",
+    "test:security": "vitest run --config vitest.security.config.ts",
     "test:fuzz": "vitest run tests/fuzz",
     "test:fuzz:coverage": "X402_COVERAGE_PARTIAL=1 vitest run tests/fuzz --coverage --coverage.reportsDirectory=coverage-fuzz",
     "clean": "rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist",

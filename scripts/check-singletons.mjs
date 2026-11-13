@@ -185,10 +185,15 @@ function checkRelay(entity, config, services, problems) {
   if (management !== "OrderedReady") {
     problems.push(`${file}: relay podManagementPolicy is ${management}, expected OrderedReady`);
   }
+  // A StatefulSet rolling update never surges: it terminates an ordinal before
+  // recreating it. `maxSurge` exists to *allow* a surge, it arrived in
+  // Kubernetes 1.34, and setting it to 0 on an older API server is rejected as
+  // an unknown field with strict decoding. So absence and "0" mean the same
+  // thing here, and requiring the explicit form only raised the cluster floor.
   const maxSurge = unquote(readPath(lines, ["spec", "updateStrategy", "rollingUpdate", "maxSurge"]));
-  if (maxSurge !== "0") {
+  if (maxSurge !== undefined && maxSurge !== "0") {
     problems.push(
-      `${file}: relay updateStrategy maxSurge is ${maxSurge ?? "unset"}, must be 0; ` +
+      `${file}: relay updateStrategy maxSurge is ${maxSurge}, must be 0 or unset; ` +
         "a surge runs two registries for one ordinal",
     );
   }

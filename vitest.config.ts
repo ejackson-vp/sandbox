@@ -1,44 +1,9 @@
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
 import { defineConfig } from "vitest/config";
-
-/**
- * Vite does not rewrite TypeScript's `./foo.js` specifiers to `./foo.ts`.
- * This tiny plugin does, so tests can import source files directly.
- */
-const tsSpecifierPlugin = {
-  name: "ts-specifier",
-  enforce: "pre" as const,
-  resolveId(source: string, importer?: string) {
-    if (!importer) return null;
-    if (!source.startsWith(".") || !source.endsWith(".js")) return null;
-    const candidate = resolve(dirname(importer), source.replace(/\.js$/, ".ts"));
-    return existsSync(candidate) ? candidate : null;
-  },
-};
+import { resolveConfig, tsSpecifierPlugin } from "./vitest.shared.js";
 
 export default defineConfig({
   plugins: [tsSpecifierPlugin],
-  resolve: {
-    // `@x402s/shared/<entry>` is a package export, so it resolves to
-    // `shared/dist`, and the coverage report scored the `shared/src` file those
-    // property tests actually exercise as untested. The durable-call protocol
-    // (shared/src/durable, 100 lines) is covered by
-    // tests/property/durable-external.test.ts and read 0%.
-    //
-    // Pointing the specifier at the source entry instead makes the report
-    // measure the file the test drives. `sdk` is deliberately not aliased:
-    // cli-args.test.ts imports the built package on purpose, because the CLI
-    // resolves @x402s/sdk to sdk/dist and an instanceof check needs the same
-    // class identity the shipped build has.
-    alias: [
-      { find: /^@x402s\/shared$/, replacement: resolve(import.meta.dirname, "shared/src/index.ts") },
-      {
-        find: /^@x402s\/shared\/(.+)$/,
-        replacement: resolve(import.meta.dirname, "shared/src/entries/$1.ts"),
-      },
-    ],
-  },
+  resolve: resolveConfig,
   test: {
     include: ["tests/**/*.test.ts"],
     testTimeout: 60_000,

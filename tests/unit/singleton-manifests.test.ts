@@ -58,8 +58,6 @@ spec:
   podManagementPolicy: OrderedReady
   updateStrategy:
     type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 0
   selector:
     matchLabels: {app: relay}
   template:
@@ -168,18 +166,22 @@ describe("singleton manifest guard", () => {
   });
 
   it("rejects a relay rollout that surges", () => {
-    const problems = check(CONTROLLER, RELAY.replace("maxSurge: 0", "maxSurge: 1"));
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/relay updateStrategy maxSurge is 1, must be 0/);
-  });
-
-  it("rejects a relay rollout that leaves the surge unset", () => {
     const problems = check(
       CONTROLLER,
-      RELAY.replace("    rollingUpdate:\n      maxSurge: 0\n", ""),
+      RELAY.replace(
+        "  updateStrategy:\n    type: RollingUpdate",
+        "  updateStrategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 1",
+      ),
     );
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/relay updateStrategy maxSurge is unset, must be 0/);
+    expect(problems[0]).toMatch(/relay updateStrategy maxSurge is 1, must be 0 or unset/);
+  });
+
+  it("accepts an unset relay surge, because a StatefulSet already updates one ordinal at a time", () => {
+    // Setting maxSurge at all needs Kubernetes 1.34, and an older API server
+    // rejects the field rather than ignoring it, which is how `make up` broke on
+    // the kind image. Absence and 0 mean the same thing here.
+    expect(check(CONTROLLER, RELAY)).toEqual([]);
   });
 
   it("rejects a missing per-shard Service", () => {
