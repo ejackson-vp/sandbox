@@ -33,18 +33,18 @@ tests in ~4 s instead of ~24 s, verified three times under
 `--sequence.shuffle`.
 
 Coverage covers the shipped TypeScript (`shared`, `sdk`, `api`, `controller`,
-`cli`), not tests or the Go guest. Two suites are measured and merged, because
-coverage is a union: the **unit and property** suites, and the **integration**
-suite. Integration used to be excluded, which scored the client and wiring code
-at zero even though end-to-end tests exercise it, so `sdk` and `api` read in the
-forties while `shared` and `cli` read near ninety. Measured together the total is
-about 78%, and integration on its own reaches 1068 lines no unit test touches.
+`cli`), not tests or the Go guest. Three suites are measured and merged, because
+coverage is a union: **unit and property**, **integration**, and the TypeScript
+**fuzz** targets. Integration used to be excluded, which scored the client and
+wiring code at zero even though end-to-end tests exercise it, so `sdk` and `api`
+read in the forties while `shared` and `cli` read near ninety.
 
 `scripts/coverage-merge.mjs` takes the maximum hit count per line, function and
-branch across both reports. It is the only place a total both suites reach can be
-gated, so it owns the merged floor, and CI publishes its output to the `badges`
-branch, which is what the README badge reads. `npm run test:integration:coverage`
-runs the second suite the same way CI does.
+branch across every report. It is the only place a total the whole set reaches
+can be gated, so it owns the merged floor, and CI publishes its output to the
+`badges` branch, which is what the README badge reads.
+`npm run test:integration:coverage` and `npm run test:fuzz:coverage` run the
+other two suites the same way CI does.
 
 `vitest.config.ts` sets a floor per module (plus a repo-wide one), a few points
 under each current total, so a regression fails `npm run test:coverage` and the
