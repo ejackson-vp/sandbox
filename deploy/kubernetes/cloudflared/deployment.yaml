@@ -1,0 +1,94 @@
+# The tunnel client. Two replicas so one pod restart or one node drain does not
+# take the public host down: Cloudflare load-balances the connections that belong
+# to the same tunnel.
+#
+# The tunnel token is read from the `cloudflared-tunnel` Secret by reference. It
+# is never templated here, never in a ConfigMap, and never in an argument that
+# would show in `kubectl describe pod`. See README.md for how to create it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: sandbox-system
+  labels: {app: cloudflared}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: cloudflared}
+  template:
+    metadata:
+      labels: {app: cloudflared}
+    spec:
+      # The namespace enforces the restricted Pod Security profile, and the
+      # securityContext below is what satisfies it: non-root, no privilege
+      # escalation, every capability dropped, RuntimeDefault seccomp.
+      serviceAccountName: cloudflared
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      # Spread across nodes when there is more than one; ScheduleAnyway because a
+      # single-node cluster must still run the public path.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: cloudflared}
+      containers:
+        - name: cloudflared
+          # cloudflared tracks Cloudflare's edge, so the tag is bumped rather
+          # than frozen. Pin the digest before deploying if you want the tag to
+          # be immutable:
+          #   crane digest cloudflare/cloudflared:2026.11.0
+          image: cloudflare/cloudflared:2026.11.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - tunnel
+            # The container image is not updated in place, so the auto-updater
+            # has nothing to replace and would only write to a read-only root.
+            - --no-autoupdate
+            # Readiness listener. Loopback-only clients and the kubelet use it;
+            # it is never routed by the tunnel itself.
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+          env:
+            # Token mode: the token carries the tunnel id, account and secret.
+            # `TUNNEL_TOKEN` is read by `cloudflared tunnel run` in place of an
+            # origin certificate file, which is what lets the root filesystem
+            # stay read-only.
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef: {name: cloudflared-tunnel, key: token}
+            - {name: HOME, value: /tmp}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "20m", memory: "32Mi"}
+            limits: {cpu: "200m", memory: "128Mi", ephemeral-storage: "32Mi"}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          readinessProbe:
+            # /ready answers 200 once at least one edge connection is registered,
+            # so a pod that cannot reach Cloudflare is not sent traffic.
+            httpGet: {path: /ready, port: 2000}
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /ready, port: 2000}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: "32Mi"}

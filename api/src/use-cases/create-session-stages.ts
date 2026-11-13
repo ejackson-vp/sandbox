@@ -35,6 +35,11 @@ import {
 import { paymentPayerKey } from "../admission.js";
 import type { ApiConfig } from "../config.js";
 import type { BudgetDecision, CapacityDecision } from "../controller-client.js";
+import {
+  confirmSettledOnChain,
+  recoveryAvailable,
+  recoverSettlement,
+} from "../payments/settlement-confirmation.js";
 import { createResponseFrom } from "../status.js";
 import {
   json,
@@ -220,17 +225,19 @@ export async function burnChallenge(
  * Durable per-payer and global budget (#48), before any capacity hold, intent
  * claim or settlement. The in-memory buckets are the first line; this one
  * survives a restart, and the global row cannot be influenced by a client-chosen
- * field. `authorizer` is proven here: the commitment signature recovers to it,
- * so the budget key is a key the caller controls.
+ * field. `payerKey` is proven here: the commitment signature recovers to the
+ * address, so the budget key is a key the caller controls. An allowlisted payer
+ * passes `allow:<address>` so a free session charges its own row rather than
+ * the paying one (ADR 0013).
  */
 export async function reserveBudget(
   deps: CreateSessionUseCaseDeps,
-  authorizer: `0x${string}`,
-  requirement: PaymentRequirements,
+  payerKey: string,
+  amountAtomic: string,
 ): Promise<Ok<BudgetDecision> | Failed> {
   let budget: BudgetDecision;
   try {
-    budget = await deps.controller.reserveBudget(authorizer, requirement.amount);
+    budget = await deps.controller.reserveBudget(payerKey, amountAtomic);
   } catch (err) {
     log.error("budget_reservation_failed", { error: (err as Error).message });
     return {
@@ -368,19 +375,37 @@ function settleVerdict(errorReason: string | undefined): "definite_failure" | "u
 }
 
 /**
- * An unknown settlement is not a failure. With a settlement lookup the intent
- * stays `claimed`, which is what lets `SettlementRecovery` ask the facilitator
- * whether the payment settled and record the debt if it did. Without a lookup
- * nothing could ever resolve it, so the intent is failed exactly as before: a
- * terminal row an operator can see beats a claim that ages out into nothing.
+ * An unknown settlement is not a failure. With a settlement lookup, or an
+ * on-chain verifier that can answer for the nonce, the intent stays `claimed`,
+ * which is what lets `SettlementRecovery` and the client's retry resolve it.
+ * With neither, nothing could ever resolve it, so the intent is failed exactly
+ * as before: a terminal row an operator can see beats a claim that ages out into
+ * nothing.
  */
 async function deferUnknownSettlement(
   deps: CreateSessionUseCaseDeps,
   key: string,
   reason: string,
 ): Promise<void> {
-  if (deps.settlementLookup.supported) return;
+  if (recoveryAvailable(deps)) return;
   await deps.controller.failIntent(key, reason).catch(() => undefined);
+}
+
+/**
+ * A settle whose answer was lost may still have landed. Ask the chain before
+ * answering: a settled nonce completes the entitlement now, instead of leaving
+ * the client to retry into `payment_in_progress` until the claim goes stale.
+ */
+async function recoverLostSettle(
+  deps: CreateSessionUseCaseDeps,
+  payload: PaymentPayload,
+  key: string,
+): Promise<Ok<SettledPayment> | null> {
+  if (!deps.settlementVerifier) return null;
+  if ((await confirmSettledOnChain(deps.settlementVerifier, payload)) !== "settled") return null;
+  log.warn("payment_recovered_after_lost_settle", { paymentKeyPrefix: key.slice(0, 12) });
+  const payer = paymentAuthorizer(payload) ?? undefined;
+  return { ok: true, value: payer ? { payer } : {} };
 }
 
 /**
@@ -453,21 +478,21 @@ export async function verifyAndSettle(
       error: failure.reason,
     });
     await deferUnknownSettlement(deps, key, "settle_error");
+    const recovered = await recoverLostSettle(deps, payload, key);
+    if (recovered) return recovered;
     return { ok: false, result: paymentRequired(requirement, "payment_settle_failed") };
   }
 
   if (!settle.success) {
     // A nonce conflict may mean an earlier attempt settled but crashed before
-    // the entitlement was durable. Recover instead of charging twice.
-    if (settle.errorReason === "nonce_already_used" && deps.settlementLookup.supported) {
-      try {
-        const existing = await deps.settlementLookup.lookup(key);
-        if (existing) {
-          log.warn("payment_recovered_after_nonce_conflict", { paymentKeyPrefix: key.slice(0, 12) });
-          return { ok: true, value: { payer: existing.payer, transaction: existing.transaction } };
-        }
-      } catch {
-        /* fall through */
+    // the entitlement was durable. The chain answers that for an EVM payment
+    // whether or not the facilitator exposes a settlement lookup, so recover
+    // instead of charging twice.
+    if (settle.errorReason === "nonce_already_used" && recoveryAvailable(deps)) {
+      const existing = await recoverSettlement(deps, key, payload);
+      if (existing) {
+        log.warn("payment_recovered_after_nonce_conflict", { paymentKeyPrefix: key.slice(0, 12) });
+        return { ok: true, value: { payer: existing.payer, transaction: existing.transaction } };
       }
     }
     // The facilitator answered, but an answer that says "broadcast, not yet
@@ -480,6 +505,8 @@ export async function verifyAndSettle(
         reason: settle.errorReason,
       });
       await deferUnknownSettlement(deps, key, settle.errorReason ?? "settlement_pending");
+      const recovered = await recoverLostSettle(deps, payload, key);
+      if (recovered) return recovered;
       return { ok: false, result: paymentRequired(requirement, "payment_settle_failed") };
     }
     await deps.controller.failIntent(key, settle.errorReason ?? "settlement_rejected").catch(() => undefined);
@@ -491,6 +518,34 @@ export async function verifyAndSettle(
         `payment_settlement_rejected:${settle.errorReason ?? "unknown"}`,
       ),
     };
+  }
+
+  // The facilitator said settled. On a chain that is a claim about a nonce, so
+  // confirm it before granting: a buggy or hostile facilitator must not be able
+  // to mint a session by answering `success`, and a refusal here is recoverable
+  // because the intent stays claimed while the chain can still answer.
+  if (deps.settlementVerifier) {
+    const verdict = await confirmSettledOnChain(deps.settlementVerifier, payload);
+    if (verdict !== "settled") {
+      log.warn("payment_not_confirmed_on_chain", {
+        paymentKeyPrefix: key.slice(0, 12),
+        verdict,
+      });
+      await deferUnknownSettlement(
+        deps,
+        key,
+        verdict === "unsettled" ? "chain_nonce_unused" : "chain_check_failed",
+      );
+      return {
+        ok: false,
+        result: json(503, {
+          error: "payment_unconfirmed",
+          reason: verdict,
+          retryable: true,
+          message: "settlement could not be confirmed on chain; retry with the same payment",
+        }),
+      };
+    }
   }
 
   return { ok: true, value: { payer: settle.payer, transaction: settle.transaction } };

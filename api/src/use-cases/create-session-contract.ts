@@ -16,6 +16,7 @@ import type { SettlementLookup } from "@x402s/shared/runtime";
 import type { RateLimiter } from "../admission.js";
 import type { ApiConfig } from "../config.js";
 import type { CapacityDecision, ControllerClient } from "../controller-client.js";
+import type { ChainSettlementVerifier } from "../payments/settlement-verifier.js";
 
 /** What the use case needs from the process. No `res`, no headers. */
 export interface CreateSessionUseCaseDeps {
@@ -23,6 +24,11 @@ export interface CreateSessionUseCaseDeps {
   controller: ControllerClient;
   resourceServer: x402ResourceServer;
   settlementLookup: SettlementLookup;
+  /**
+   * On-chain settlement check (F-10). Undefined when the deployment configured
+   * none, in which case the facilitator's answer is still the only signal.
+   */
+  settlementVerifier?: ChainSettlementVerifier;
   requirementFor(priceUsd: string, spec: SessionSpec): Promise<PaymentRequirements>;
   capabilityFor(key: string, commitment: string): string;
   /**

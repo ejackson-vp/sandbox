@@ -9,6 +9,15 @@ the container registry.
 
 ### Added
 
+- Controller refuses to start when `EXECUTION_MODE=kata` but the `RuntimeClass`
+  named by `RUNTIME_CLASS` is not handled by a microVM runtime (`kata`,
+  `kata-qemu`, `kata-clh`, or whatever `KATA_RUNTIME_HANDLERS` lists). A drifted
+  overlay that downgrades the handler to `runc` is now a startup error with the
+  handler and the fix in the message, instead of a silent loss of the guest
+  kernel while the API still advertises Kata. The resolved handler is logged,
+  exported as `sandbox_runtime_class_info`, and echoed by `/internal/healthz`;
+  `EXECUTION_MODE=dev` and `KUBERNETES_ENABLED=false` skip the check. See
+  [docs/adr/0005-kata-isolation-boundary.md](docs/adr/0005-kata-isolation-boundary.md).
 - Single-use challenge nonce in the 402 response (`accepts[0].extra.challengeNonce`,
   `cn_` + 128 bits), bound into the client commitment signature and burned in the
   controller's `challenge_nonces` table (schema v13) before capacity is held.
@@ -19,8 +28,11 @@ the container registry.
 - Kyverno `ClusterPolicy` that rejects a guest pod whose image is not
   `<repository>@sha256:<64 hex>` in the pinned repository, or whose digest is not
   the released one. Scoped by the namespace label `x402.io/image-policy`
-  (`enforce` by default, `dev-unpinned` documented for local kind). Not installed
-  by `make deploy`; see
+  (`enforce` by default, `dev-unpinned` documented for local kind). The allowlist
+  now carries the released 0.1.30 digests instead of placeholders, and
+  `make kyverno-policy` proves the four admission outcomes on a throwaway kind
+  cluster. Not installed by `make deploy`, and not yet in CI: Kyverno's install
+  manifest is not digest-pinned, which is F-15 itself. See
   [deploy/kubernetes/kyverno](deploy/kubernetes/kyverno/README.md) and #30.
 
 - Durable per-payer and global create budgets in the controller (schema v14,
@@ -136,9 +148,11 @@ the container registry.
   the packet-level isolation suite, and records the tested digests in
   `artifacts/isolation/tested-images.json`. `promote` needs it, so a release
   cannot be tagged when the suite did not run. A release owner can skip the
-  gate only by setting the repository variable `ISOLATION_EVIDENCE=none`, which
-  stamps a warning into the job summary and the top of the release notes;
-  without a runner or that acknowledgement the tag still fails. See
+  gate only by dispatching the release with `isolation_skip=true`, which stamps
+  a warning into the job summary and the top of the release notes; a tag push
+  cannot skip, and without a runner the tag still fails. The repository variable
+  `ISOLATION_EVIDENCE` is no longer read: it made every tag push since v0.1.26 a
+  no-op that still reported success. See
   [docs/release-process.md](docs/release-process.md#isolation-gate).
 - `sandbox_relay_connection_resets_total{mode="tcp_reset"|"terminate"}` records
   which mechanism ended a guest link after an epoch withdrawal (#128). The

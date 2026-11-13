@@ -18,6 +18,21 @@ overlay is the supported path for anything beyond a laptop.
 Isolation is treated as a property of the deployment, not of the application
 code. The application cannot detect or compensate for a weak runtime.
 
+`EXECUTION_MODE=kata` alone is a label, so the controller now checks the thing
+the label claims. At startup, when Kubernetes is enabled and the mode is `kata`,
+it reads the `RuntimeClass` named by `RUNTIME_CLASS` from the API server and
+refuses to start unless its handler is a microVM one: `kata`, `kata-qemu`,
+`kata-clh`, or whatever an operator lists in `KATA_RUNTIME_HANDLERS`. A missing
+`RuntimeClass`, a read error, and a `runc`/`runsc`/unknown handler are all
+startup failures, not warnings. This closes the silent downgrade: before it, a
+drifted overlay could leave the configuration saying `kata` while every guest
+ran on the host kernel, and nothing in the process could tell the difference.
+The resolved handler is logged, exported as `sandbox_runtime_class_info`, and
+echoed by `/internal/healthz`, so which runtime served a session stays
+answerable after the fact. `EXECUTION_MODE=dev` and `KUBERNETES_ENABLED=false`
+skip the check entirely: there is no RuntimeClass in that path and no claim to
+verify.
+
 ## Consequences
 
 - Escape requires a hypervisor or guest-kernel bug, not a container escape.

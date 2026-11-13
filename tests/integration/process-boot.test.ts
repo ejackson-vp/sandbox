@@ -278,9 +278,22 @@ describe("process boot", () => {
     expect(apiHealth.status).toBe(200);
     expect(apiHealth.body).toMatchObject({ ok: true, paymentMode: "mock", network: "mock:local" });
 
-    const controllerHealth = await getJson<{ ok: boolean }>(`${controllerUrl}/internal/healthz`);
+    // The controller probe now names the runtime it believes it is serving on.
+    // That is deliberate (ADR 0005): a dev run and a kata run must be
+    // distinguishable from the health check alone, or a drifted RuntimeClass is
+    // invisible. A harness that does not pass `runtime` still answers `{ok:true}`.
+    const controllerHealth = await getJson<{
+      ok: boolean;
+      runtime?: { executionMode: string; runtimeClass: string; handler: string | null };
+    }>(`${controllerUrl}/internal/healthz`);
     expect(controllerHealth.status).toBe(200);
-    expect(controllerHealth.body).toEqual({ ok: true });
+    expect(controllerHealth.body).toMatchObject({ ok: true });
+    if (controllerHealth.body.runtime) {
+      expect(controllerHealth.body.runtime.executionMode).toBe("dev");
+      expect(controllerHealth.body.runtime.runtimeClass).toBe("x402-sandbox");
+      // Not enforced outside a cluster, so no handler was read.
+      expect(controllerHealth.body.runtime.handler).toBeNull();
+    }
 
     // The co-located egress proxy has its own listener and its own probe.
     const proxyHealth = await getJson<{ ok: boolean }>(`${proxyUrl}/healthz`);

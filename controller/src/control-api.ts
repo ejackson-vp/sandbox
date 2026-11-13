@@ -23,6 +23,7 @@ import {
 } from "@x402s/shared/runtime";
 import { constantTimeEqual } from "./secrets.js";
 import { createCapacityRouter } from "./capacity/routes.js";
+import { registerAllowlistRoutes } from "./control-api/allowlist.js";
 import { registerBudgetRoutes } from "./control-api/budgets.js";
 import { registerChallengeNonceRoutes } from "./control-api/challenges.js";
 import { registerPaymentRoutes } from "./control-api/payments.js";
@@ -42,8 +43,13 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   // Liveness only: if this handler runs, the event loop is turning. Kubernetes
   // restarts the process when this stops answering. Dependency health belongs
   // in /internal/readyz; a store or relay blip must not restart a live process.
+  //
+  // When the process verified its RuntimeClass at startup, the resolved handler
+  // rides along. That is not dependency health: it is the isolation boundary
+  // this process will schedule guests with, and it must stay readable after the
+  // fact without the pod logs (docs/adr/0005).
   app.get("/internal/healthz", (_req, res) => {
-    res.json({ ok: true });
+    res.json(deps.runtime ? { ok: true, runtime: deps.runtime } : { ok: true });
   });
 
   const readinessChecks: Record<string, ComponentCheck> = {
@@ -179,6 +185,8 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   registerChallengeNonceRoutes(app, deps);
 
   registerBudgetRoutes(app, deps);
+
+  registerAllowlistRoutes(app, deps);
 
   registerSessionRoutes(app, deps);
 

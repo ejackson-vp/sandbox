@@ -11,6 +11,7 @@ import type { RelayTlsOptions } from "../relay.js";
 import type { RelayClientTlsOptions } from "../relay-client.js";
 import type { RuntimeProfileCatalog } from "../runtime-profiles.js";
 import type { PlatformLimits, TierTable } from "@x402s/shared/payment";
+import type { PaymentMode } from "@x402s/shared/protocol";
 
 export interface ControllerConfig {
   role: Role;
@@ -125,6 +126,12 @@ export interface ControllerConfig {
   deniedCidrs: string[];
   egressMaxConnectionsPerSession: number;
   egressMaxGlobalConnections: number;
+  /** Bytes one session may move through the proxy in this process; 0 disables. */
+  egressMaxBytesPerSession: number;
+  /** Bytes all sessions may move inside one fixed window; 0 disables. */
+  egressMaxBytesGlobalWindow: number;
+  /** Length of the global egress byte window. */
+  egressBytesWindowMs: number;
   tiers: TierTable;
   platformLimits: PlatformLimits;
   /** Pre-booted, unleased sandboxes kept ready for fast claims (0 = off). */
@@ -210,7 +217,7 @@ export interface ControllerConfig {
   /** Concurrent non-terminal sessions cluster-wide; 0 disables the check. */
   globalConcurrentSessions: number;
   /** Payment mode stamped on ledger rows written by settlement recovery. */
-  paymentMode: "mock" | "testnet";
+  paymentMode: PaymentMode;
   /** Facilitator base URL for settlement lookup; empty disables recovery's lookup. */
   facilitatorUrl: string;
   /**

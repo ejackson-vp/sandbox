@@ -1,5 +1,8 @@
 import type {
+  AllowlistDecision,
+  AllowlistEntryInput,
   ChallengeBurnResult,
+  PayerAllowlistEntry,
   ClaimOperationResult,
   ClaimedRefund,
   ExecRequestRecord,
@@ -13,6 +16,7 @@ import type {
   SessionState,
   StoreHealth,
 } from "./models.js";
+import type { PaymentMode, SessionTier } from "@x402s/shared/protocol";
 import type { ReservationStore } from "../capacity/reservation-store.js";
 import type { ClaimToken } from "@x402s/shared/durable";
 import type { BudgetDecision, BudgetLimits } from "./budget-decision.js";
@@ -197,7 +201,7 @@ export interface SettlementRecoveryStore {
     amount: string;
     asset: string;
     network: string;
-    mode: "mock" | "testnet";
+    mode: PaymentMode;
     status: LedgerStatus;
     reason: string;
     refundTransaction?: string | null;
@@ -230,6 +234,16 @@ export interface ControlApiStore {
     staleMs: number,
     requirementsJson?: string | null,
   ): Promise<IntentClaimResult>;
+  /**
+   * Decide whether a proven payer address gets a free session (ADR 0013).
+   * Enforced inside one transaction under an address-scoped lock, so two
+   * concurrent creates cannot both pass the concurrency ceiling.
+   */
+  authorizeAllowlistedPayer(address: string, tier: SessionTier): Promise<AllowlistDecision>;
+  /** Operator surface: list, add/replace, disable (never delete). */
+  listAllowlist(): Promise<PayerAllowlistEntry[]>;
+  upsertAllowlist(input: AllowlistEntryInput, now: number): Promise<PayerAllowlistEntry>;
+  disableAllowlist(address: string, now: number): Promise<boolean>;
   /** Single-use challenge nonce (#47): mint, burn, and never resurrect. */
   issueChallengeNonce(
     nonce: string,

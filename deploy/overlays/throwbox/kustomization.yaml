@@ -1,0 +1,44 @@
+# throwbox overlay — the public, hosted deployment.
+#
+#   kubectl kustomize deploy/overlays/throwbox   # render
+#
+# Composes the Talos overlay (Kata, published images, the homelab's pinned guest
+# digests) and turns it into the public API at https://api.throwbox.dev. It is a
+# separate directory rather than an edit to deploy/talos because that file is the
+# homelab's and Flux reconciles it; both can coexist on one cluster.
+#
+# What changes here:
+#
+#   PUBLIC_BASE_URL   https://api.throwbox.dev   the resource URL in the 402
+#                                                challenge. `.dev` is HSTS
+#                                                preloaded, so plain http is not
+#                                                an option.
+#   TRUST_PROXY_HOPS  1                          every socket peer is the
+#                                                tunnel. At 0 the per-IP bucket
+#                                                is one shared bucket.
+#
+# The static site at throwbox.dev is Cloudflare Pages, not a Kubernetes object.
+# The Tailscale Ingress from the homelab is left alone: it stays the operator
+# path and is no longer the public one.
+#
+# Requires the `cloudflared-tunnel` Secret in `sandbox-system`; this overlay
+# creates no credentials. See ../../kubernetes/cloudflared/README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../talos
+  - ../../kubernetes/cloudflared
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: control-config
+      namespace: sandbox-system
+    patch: |-
+      - op: replace
+        path: /data/PUBLIC_BASE_URL
+        value: https://api.throwbox.dev
+      - op: replace
+        path: /data/TRUST_PROXY_HOPS
+        value: "1"

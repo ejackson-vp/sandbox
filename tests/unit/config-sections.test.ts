@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadTiers } from "@x402s/shared/payment";
 import { parseCapacity } from "../../controller/src/config/capacity.js";
 import { DEFAULT_LEDGER_AUDIT_INTERVAL_MS, parseLedgerAudit } from "../../controller/src/config/audit.js";
+import { parseEgress } from "../../controller/src/config/egress.js";
 import { parsePaymentLimits } from "../../controller/src/config/payments.js";
 import { parseDataPlanePlacement } from "../../controller/src/config/relay.js";
 import { parseWarmPoolAllocation } from "../../controller/src/config/warm-pool.js";
@@ -130,5 +131,39 @@ describe("ledger audit interval", () => {
     expect(() => parseLedgerAudit({ LEDGER_AUDIT_INTERVAL_MS: "7200000" })).toThrow(
       /invalid integer/,
     );
+  });
+});
+
+describe("egress byte budgets", () => {
+  it("bounds one session at 1 GiB and the process at 20 GiB an hour by default", () => {
+    const egress = parseEgress({});
+    expect(egress.egressMaxBytesPerSession).toBe(1024 ** 3);
+    expect(egress.egressMaxBytesGlobalWindow).toBe(20 * 1024 ** 3);
+    expect(egress.egressBytesWindowMs).toBe(3_600_000);
+  });
+
+  it("keeps the connection budgets", () => {
+    const egress = parseEgress({});
+    expect(egress.egressMaxConnectionsPerSession).toBe(16);
+    expect(egress.egressMaxGlobalConnections).toBe(512);
+  });
+
+  it("accepts 0 as the off switch for either byte bound", () => {
+    const egress = parseEgress({
+      EGRESS_MAX_BYTES_PER_SESSION: "0",
+      EGRESS_MAX_BYTES_GLOBAL_WINDOW: "0",
+    });
+    expect(egress.egressMaxBytesPerSession).toBe(0);
+    expect(egress.egressMaxBytesGlobalWindow).toBe(0);
+  });
+
+  it("refuses a negative or non-integer byte bound", () => {
+    expect(() => parseEgress({ EGRESS_MAX_BYTES_PER_SESSION: "-1" })).toThrow(/invalid integer/);
+    expect(() => parseEgress({ EGRESS_MAX_BYTES_GLOBAL_WINDOW: "1.5" })).toThrow(/invalid integer/);
+  });
+
+  it("bounds the window to a minute and a day", () => {
+    expect(() => parseEgress({ EGRESS_BYTES_WINDOW_MS: "0" })).toThrow(/invalid integer/);
+    expect(() => parseEgress({ EGRESS_BYTES_WINDOW_MS: "86400001" })).toThrow(/invalid integer/);
   });
 });

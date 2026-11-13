@@ -34,6 +34,7 @@ never a session without a ledger row, or a ledger row without its entitlement.
 | `payment_key` | x402 payment key; primary key |
 | `session_id` | session that consumed the payment; unique |
 | `payer`, `amount`, `asset`, `network`, `mode` | payment identity |
+| `source` | `x402` (default) or `allowlist`; an allowlist row is always `amount = "0"` (schema v19, [ADR 0013](adr/0013-free-entitlement-from-proven-address.md)) |
 | `status` | `SETTLED`, `REFUND_PENDING`, `REFUND_SENDING`, `REFUNDED` |
 | `reason` | why a refund was requested |
 | `refund_tx` | mock transaction id or operator-supplied real transaction id |
@@ -73,6 +74,17 @@ refusal still fails the intent and releases the capacity hold.
 
 ## Settlement recovery (settle-then-crash)
 
+Settlement is verified on chain where the deployment can read one. An EIP-3009
+authorisation is settled exactly when its nonce is consumed, so
+`authorizationState(address authorizer, bytes32 nonce)` on the network's USDC
+contract is the answer to "did the money move", independent of what the
+facilitator said (F-10). Set `PAYMENT_RPC_URL` to enable it; the USDC address
+defaults per network (`PAYMENT_USDC_ADDRESS` overrides it). A settled nonce
+grants, an unsettled nonce refuses, and an unreadable answer fails closed
+without granting. The check runs before entitlement on the first attempt and
+first on the recovery path, so a hostile facilitator cannot mint a session by
+answering `success`.
+
 `payment_intents` records the payment requirements at claim time
 (`requirements_json`). A controller housekeeping pass lists intents that have
 been `claimed` for longer than `SETTLEMENT_RECOVERY_GRACE_MS` (default 5 min),
@@ -100,8 +112,11 @@ that ledger row is `SETTLED` the fail endpoint refuses the intent too, so the
 resolution is the refund policy below, not an outbox edit.
 
 Recovery needs a facilitator that exposes `GET /settlements/:paymentKey`
-(`FACILITATOR_URL`, the mock facilitator does). Without one it is a no-op, and
-the `409 reconciliation_pending` behaviour is unchanged.
+(`FACILITATOR_URL`, the mock facilitator does) or an on-chain verifier for the
+network. The API asks the chain first and falls back to the lookup. Without
+either it is a no-op, and the `409 reconciliation_pending` behaviour is
+unchanged. The controller-side recovery worker still reads only the lookup: an
+intent it cannot resolve is left claimed for the API's retry path.
 
 ## Refund policy
 
@@ -130,6 +145,19 @@ paths cannot refund twice. Housekeeping also scans terminal-before-READY
 sessions whose ledger is still `SETTLED`, terminal `relay_lost` sessions whose
 ledger is still `SETTLED`, and settlement rows with no session (`unsettled:*`,
 `duplicate:*`), repairing a crash between the write and the policy.
+
+## Free sessions
+
+An allowlisted wallet (ADR 0013) gets a session with no payment: the row is
+written with `amount = "0"`, `source = 'allowlist'`, the entry's label in
+`reason`, and the payer address that signed the commitment. No EIP-3009
+authorisation was used, so `settlement_nonce` is `null` and no facilitator was
+called.
+
+A $0 row is never a refund candidate: the three refund queries filter
+`source = 'x402'`, so a free session that ends before READY does not queue a
+refund for money that never moved. Everything else applies unchanged: the same
+intent claim, ledger transaction and idempotent replay as a paid session.
 
 ## Double charges
 
@@ -395,6 +423,14 @@ curl -H "x-internal-token: $ADMIN" \
 curl -X POST -H "x-internal-token: $ADMIN" -H "content-type: application/json" \
   -d '{"reason":"settlement_failed"}' \
   http://controller:3001/internal/payment-intents/<paymentKey>/fail
+
+# free-entitlement wallets (ADR 0013): list, add or replace, disable
+curl -H "x-internal-token: $ADMIN" http://controller:3001/internal/payer-allowlist
+curl -X PUT -H "x-internal-token: $ADMIN" -H "content-type: application/json" \
+  -d '{"address":"0x…","label":"owner-agent","maxTier":"long","maxConcurrent":2}' \
+  http://controller:3001/internal/payer-allowlist
+curl -X DELETE -H "x-internal-token: $ADMIN" \
+  http://controller:3001/internal/payer-allowlist/<address>
 ```
 
 The fail endpoint answers `409` with `{"error":"ledger_settled","ledgerStatus":"SETTLED"}`
@@ -423,10 +459,11 @@ a worker owns that claim and may be mid-send.
   and effectively-once depends on that adapter honouring the key. A provider that
   ignores it can still be paid twice across a crash; the ledger cannot detect
   that.
-- Recovery depends on a settlement lookup the facilitator must expose. Testnet's
-  public facilitator does not, so testnet still answers `409
-  reconciliation_pending` and the money is only visible to a human who reconciles
-  the on-chain transfer.
+- Recovery depends on a settlement lookup the facilitator must expose, or on
+  `PAYMENT_RPC_URL` for an on-chain check. With neither, testnet still answers
+  `409 reconciliation_pending` and the money is only visible to a human who
+  reconciles the on-chain transfer. The on-chain check has never run against a
+  live chain in CI: its tests use a fake verifier.
 - An ambiguous refund outcome (timeout, 5xx, no transaction id) is `unknown`, not
   a failed attempt: the row stays `REFUND_SENDING` and is retried each time its
   lease expires, with the same key, indefinitely. `REFUND_MAX_ATTEMPTS` bounds

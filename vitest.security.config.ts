@@ -12,6 +12,15 @@
  * It is not a coverage source. The lines it reaches are measured by the suites
  * that run without a cluster, and instrumenting a run that spends most of its
  * time waiting on packets would only add noise.
+ *
+ * The files, all included by the glob below: `network.test.ts` (packet-level
+ * isolation), `workload.test.ts` (lifecycle and pod hardening),
+ * `warm-pool.test.ts` (pool identity), `attacker.test.ts` (anonymous abuse:
+ * create floods, XFF spoofing, oversized bodies, slowloris, capability brute
+ * force, cross-session relay credentials, private egress and DNS rebinding).
+ * Each skips loudly when its own precondition is missing;
+ * `scripts/isolation-gate.sh` fails a release when the two it requires produced
+ * no executed tests.
  */
 import { defineConfig } from "vitest/config";
 import { resolveConfig, tsSpecifierPlugin } from "./vitest.shared.js";

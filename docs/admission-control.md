@@ -53,6 +53,37 @@ verified payer is recorded on the settled payment as before.
 The bench scripts raise both buckets for capacity runs and restore the
 ConfigMap defaults afterwards.
 
+## Concurrent request cap
+
+The token buckets bound the *rate* of creates. They say nothing about how many
+requests one client may hold open at once, which is the shape that exhausts a
+process: ten thousand slow reads spend no tokens. While the API was reachable
+only over the tailnet that was acceptable, one operator and one client, so the
+cap was deliberately absent ([production-readiness.md](production-readiness.md)
+§2). Behind a public tunnel it is required.
+
+| Env | Default | Meaning |
+|---|---:|---|
+| `MAX_CONNECTIONS_PER_CLIENT` | `64` | in-flight requests per `req.ip`; `0` disables the per-client check |
+| `MAX_CONNECTIONS_GLOBAL` | `2048` | in-flight requests across all clients; `0` is refused at startup |
+
+A request takes its slot synchronously when it is dispatched and returns it on
+`finish` or `close`, so a success, a handler error, a client abort and a
+response a timeout tore down all release it. Sockets are not counted:
+keep-alive means one socket can carry many requests, and a request already
+answered must not keep a slot. The key is `req.ip`, which follows
+`TRUST_PROXY_HOPS`, so behind the tunnel it is the real client rather than the
+tunnel pod.
+
+`/healthz` and `/readyz` are exempt and take no slot: a client at its cap must
+not be able to make a healthy pod look unready.
+
+A refusal is `429 { "error": "connection_limit" }`, counted as
+`sandbox_connection_limit_total{scope="client"|"global"}`. The per-client check
+runs first, so a client over its own cap is named as such rather than blamed on
+the shared pool. A refusal is not logged per request: shedding load is the
+point, and a log line each would move the flood to stderr.
+
 ## Durable per-payer and global budget
 
 The two token buckets live in the API process. A restart refills every bucket,
@@ -90,6 +121,10 @@ Three properties matter more than the numbers:
   and a settled payment cannot be invisible to the budget.
 - **Concurrency is counted from live rows**, not a counter, so a crash cannot
   leak a slot.
+- **An allowlisted payer gets its own namespace.** A free session (ADR 0013)
+  reserves under `allow:<address>` and counts only `source = 'allowlist'` live
+  sessions, so it can never consume or exhaust the paying payer's window. The
+  entry's own `max_concurrent` applies on top.
 
 A rejection is `429` with the budget that refused, the seconds until the window
 resets and what is left:
@@ -246,9 +281,11 @@ Two independent controls decide which guest image a session runs:
    (`controller/src/runtime-profiles.ts`), so a moved tag cannot change what runs
    inside the VM.
 2. **The API server**, via Kyverno, rejects a guest pod whose image is not
-   `<repository>@sha256:<64 hex>` in an allowed repository, or whose digest is
-   not one of the released digests. Manifests and install steps live in
-   [deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md).
+   `<repository>@sha256:<64 characters>` in an allowed repository, or whose
+   digest is not one of the released digests. The shape rule uses `?` wildcards
+   rather than a hex regex because Kyverno's deny conditions have no regex
+   operator; the allowlist is what pins the exact digest. Manifests and install
+   steps live in [deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md).
 
 The second control exists because the first one depends on the controller being
 honest. It is inert unless an operator installs Kyverno, and it is not part of

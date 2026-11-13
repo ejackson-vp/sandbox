@@ -22,7 +22,7 @@ import type {
   CreateSessionResponse,
   SessionSpec,
 } from "@x402s/shared/protocol";
-import { log } from "@x402s/shared/runtime";
+import { log, metrics } from "@x402s/shared/runtime";
 import { ControllerError, type IntentCompletion } from "../controller-client.js";
 import { createResponseFrom } from "../status.js";
 import {
@@ -49,6 +49,12 @@ interface CompletionContext {
   payload: PaymentPayload;
   receivedAt: number;
   timings: PaymentTimings;
+  /**
+   * Present when the session was granted by the payer allowlist (ADR 0013):
+   * amount 0, source `allowlist`, the label in the ledger's reason, and a
+   * budget row namespaced away from the payer's own.
+   */
+  allowance?: { label: string; budgetKey: string };
 }
 
 /** The settlement the payment facilitator reported, if any. */
@@ -101,6 +107,10 @@ export async function completeEntitlement(
 ): Promise<CreateSessionResult> {
   const { key, commitment, capability, capabilityHash, spec, body, authorizer } = ctx;
   const requirement = ctx.requirement;
+  // A free session records what actually moved: nothing. The claimed
+  // authorisation value is never written, because no authorisation was used.
+  const amount = ctx.allowance ? "0" : requirement.amount;
+  const source = ctx.allowance ? "allowlist" : "x402";
   const sessionId = `sbx_${randomBytes(12).toString("hex")}`;
   // The capability outlives the lease by a small grace window so a client can
   // still read the final status / fetch a late result.
@@ -131,12 +141,16 @@ export async function completeEntitlement(
         network: requirement.network,
         scheme: requirement.scheme,
         asset: requirement.asset,
-        amount: requirement.amount,
+        amount,
         payTo: requirement.payTo,
         payer: settled.payer,
         transaction: settled.transaction,
         mode: deps.config.paymentMode,
-        settlementNonce: settlementNonce(ctx.payload),
+        settlementNonce: ctx.allowance ? null : settlementNonce(ctx.payload),
+        source,
+        ...(ctx.allowance
+          ? { label: ctx.allowance.label, budgetKey: ctx.allowance.budgetKey }
+          : {}),
       },
     });
   } catch (err) {
@@ -168,6 +182,9 @@ export async function completeEntitlement(
     if (!replayCapability) return rejectRetiredCapabilityKey(winner.sessionId);
     return json(200, createResponseFrom(winner, replayCapability, winner.limits));
   }
+  metrics
+    .counter("sandbox_sessions_total", "Sessions created by entitlement source")
+    .inc({ source });
   log.info("session_created", {
     sessionId,
     tier: spec.tier,
@@ -199,8 +216,8 @@ export async function completeEntitlement(
         network: requirement.network,
         scheme: requirement.scheme,
         asset: requirement.asset,
-        amount: requirement.amount,
-        priceUsd: formatUsd(requirement.amount),
+        amount,
+        priceUsd: formatUsd(amount),
         payTo: requirement.payTo,
         payer: settled.payer,
         transaction: settled.transaction,

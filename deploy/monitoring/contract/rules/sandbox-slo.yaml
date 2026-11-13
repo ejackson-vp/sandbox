@@ -288,6 +288,62 @@ groups:
             neighbouring profile is being drained to fund this one.
           runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
 
+      # Egress byte budgets. `controller/src/egress-proxy.ts` refuses a chunk
+      # that would cross either bound and destroys the tunnel, so these are the
+      # volume counterpart of the connection caps above. Both families are
+      # exported only by the proxy role, which is not one of the three scrape
+      # targets in deploy/monitoring/contract/prometheus-scrape.yaml: add
+      # `egress-proxy.sandbox-system.svc.cluster.local:9100` with
+      # `role: proxy` before relying on them (docs/runbooks/egress-abuse.md).
+      # Like the warm-pool and audit rules they do not select on `role`, so a
+      # single target scraped without the label still evaluates them.
+      #
+      # The bytes counter carries the same total under `scope="session"` and
+      # `scope="global"` by construction, so every expression selects one scope
+      # and never sums across them.
+      - alert: SandboxEgressBytesNearCap
+        expr: |
+          sum(increase(sandbox_egress_bytes_total{scope="global"}[1h]))
+          > 15 * 1024 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Egress volume is above 75% of the global hourly budget"
+          description: >-
+            The proxy has moved more than 15 GiB in the last hour (current
+            {{ $value | humanize1024 }}B) against the 20 GiB default for
+            `EGRESS_MAX_BYTES_GLOBAL_WINDOW`. This is the proximity signal: once
+            the window is exhausted, every tunnel is refused with
+            `sandbox_egress_limit_total{scope="global"}` and paying sessions
+            break. Check the per-tenant suspects in the proxy log first, decide
+            whether the volume is abuse or a cap set too low, and raise the
+            bound only with a recorded reason. If the window was changed from
+            one hour, change the range and the threshold with it.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxEgressLimitRejections
+        expr: sum by (scope) (increase(sandbox_egress_limit_total[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Egress byte budget refusals ({{ $labels.scope }})"
+          description: >-
+            {{ $value | humanize }} tunnel chunks were refused by the
+            `{{ $labels.scope }}` egress byte budget in the last 15 minutes, and
+            the condition has held for 5. A refusal destroys the tunnel, so this
+            is a session that was cut off, not a soft throttle:
+            `scope="session"` means one tenant crossed
+            `EGRESS_MAX_BYTES_PER_SESSION` (1 GiB by default) and is either
+            abusing the proxy as an exit node or moving a legitimate large file;
+            `scope="global"` means the whole proxy hit the hourly window and
+            every tenant is affected. Read
+            docs/runbooks/egress-abuse.md before raising either bound.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
       - alert: SandboxMetricsTargetDown
         expr: up{job="sandbox-control"} == 0
         for: 2m

@@ -57,7 +57,15 @@ export const operationSchema = z.object({
    */
   payloadHash: payloadHashSchema.optional(),
   timeoutMs: z.number().int().min(100).max(3_600_000).optional(),
-  waitMs: z.number().int().min(0).max(120_000).optional(),
+  /**
+   * How long the API holds the request open before answering `202 pending`.
+   *
+   * Capped at 90 s, below the 100 s timeout a proxied request gets at the edge
+   * (Cloudflare answers 524 there). A longer wait means the client loses the 202
+   * and the request id it needs to re-poll, so the cap is a contract, not a
+   * tuning knob. Raise it only above a proxy that allows longer requests.
+   */
+  waitMs: z.number().int().min(0).max(90_000).optional(),
 });
 
 /** Fields that must never be accepted as JSON: they imply plaintext. */

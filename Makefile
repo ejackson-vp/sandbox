@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-restore-dump test-go coverage-go coverage-go-fuzz verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-restore-dump test-go coverage-go coverage-go-fuzz verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network kyverno-policy logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -42,6 +42,7 @@ help:
 	@echo "  make security-test  network + isolation tests against the real cluster"
 	@echo "  make kata           switch the deployment to the Kata microVM RuntimeClass"
 	@echo "  make security-isolation  release-gate Kata + Cilium suites with digests"
+	@echo "  make kyverno-policy prove the guest-image admission policy on a throwaway cluster"
 	@echo "  benchmarks live in the sandbox-bench repository"
 	@echo "  make logs           tail control-plane logs"
 	@echo "  make down           delete the kind cluster"
@@ -251,6 +252,13 @@ security-test: security-network
 
 security-isolation: guest
 	ARTIFACTS=$(or $(ARTIFACTS),artifacts/isolation) ./scripts/isolation-gate.sh
+
+# Prove the guest-image ClusterPolicy rejects a tag and admits the released
+# digest (#30). Creates its own kind cluster and deletes it; KEEP_CLUSTER=1 or
+# TEST_CONTEXT=<context> to reuse one. Not wired into CI: Kyverno's install
+# manifest is not digest-pinned, which is the F-15 gap itself.
+kyverno-policy:
+	./scripts/kyverno-policy-test.sh
 
 # Switch the running deployment to the Kata microVM RuntimeClass. The overlay
 # patches both the RuntimeClass handler and EXECUTION_MODE; the controller is

@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "The release the Talos overlay deploys, recorded so a digest can be tied to a tag offline.",
+    "A registry tag can be checked against nothing without the network, and a digest is opaque:",
+    "this file is the committed link between them. It is updated in the same change as",
+    "deploy/talos/kustomization.yaml and the allowlist in",
+    "deploy/kubernetes/kyverno/guest-image-policy.yaml, and scripts/check-deploy-pins.mjs",
+    "fails when the three disagree. Values are index digests from the v<release> GitHub",
+    "release / GHCR multi-arch index, not per-platform manifests."
+  ],
+  "talos": {
+    "release": "0.1.30",
+    "control": "0.1.30",
+    "guest": "0.1.30",
+    "guestDigest": "sha256:4872ec154b43fd4a09b6272abb7b5ab3923e4bb754caefefd3c4f9c54c3a398d",
+    "profiles": {
+      "python": "sha256:eb78d226ac40b3285252777562dd1a6b291db1fe797924927d0af9a9d800e49e",
+      "node": "sha256:b9ce875fc6ed7820469305b771b6730eb274aa289da6eacc48c20061243cbd60"
+    }
+  }
+}

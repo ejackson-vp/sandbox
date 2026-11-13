@@ -13,6 +13,7 @@ import {
   type SessionHandle,
 } from "@x402s/sdk";
 import { createAgentPayer } from "./agent-payer.js";
+import { runAdmin } from "./allowlist-admin.js";
 import { commands, err, HELP, type CommandContext } from "./commands.js";
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -31,6 +32,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       "baseline-memory": { type: "string" },
       idle: { type: "string" },
       name: { type: "string" },
+      label: { type: "string" },
+      "max-tier": { type: "string" },
+      "max-concurrent": { type: "string" },
       port: { type: "string" },
       method: { type: "string" },
       body: { type: "string" },
@@ -67,18 +71,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (command === "admin") {
-    if (positionals[1] !== "capacity") {
-      process.stderr.write("usage: sandbox admin capacity\n");
-      return 2;
-    }
-    const controllerUrl = process.env.CONTROLLER_URL ?? "http://localhost:3001";
-    const token = process.env.CONTROLLER_ADMIN_TOKEN ?? process.env.ADMIN_TOKEN ?? "";
-    const res = await fetch(new URL("/internal/capacity", controllerUrl), {
-      headers: { "x-internal-token": token },
+    return runAdmin(positionals.slice(1), values, {
+      out: (text) => process.stdout.write(text),
+      err: (text) => process.stderr.write(text),
     });
-    const body = await res.json().catch(() => ({}));
-    process.stdout.write(JSON.stringify(body, null, 2) + "\n");
-    return res.ok ? 0 : 1;
   }
 
   if (command === "pricing") {

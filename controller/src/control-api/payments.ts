@@ -184,6 +184,9 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
           transaction: body.payment.transaction,
           mode: body.payment.mode,
           settlementNonce: body.payment.settlementNonce ?? null,
+          source: body.payment.source ?? "x402",
+          ...(body.payment.label ? { label: body.payment.label } : {}),
+          ...(body.payment.budgetKey ? { budgetKey: body.payment.budgetKey } : {}),
         },
         {
           id: body.sessionId,

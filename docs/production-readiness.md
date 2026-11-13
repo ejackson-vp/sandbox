@@ -37,9 +37,11 @@ concrete next step.
 - **HTTP receipt timeouts** bound slow clients: `HTTP_HEADERS_TIMEOUT_MS`
   (default 15 s) and `HTTP_REQUEST_TIMEOUT_MS` (default 60 s). Both stop once the
   request has been received, so a long-poll `exec` is unaffected. A
-  per-connection concurrency cap is deliberately absent — the API is tailnet-only
-  and the per-IP bucket plus these timers is proportionate for one operator; it
-  becomes necessary if the API is ever exposed publicly or scaled out.
+  per-client concurrent request cap (default 64 in flight per `req.ip`, 2048
+  process-wide, probes exempt) is now enforced in front of the body parser; it
+  was deliberately absent while the API was tailnet-only and became necessary
+  once the listener moved behind a public tunnel
+  ([admission-control.md](admission-control.md#concurrent-request-cap)).
 - **Client IP behind one reverse proxy**: `TRUST_PROXY_HOPS` (default 0) trusts
   a forwarded hop, so `req.ip` is the real client instead of the proxy pod. The
   homelab sets it to 1 *and* scopes `allow-api` to the tailscale namespace, so
@@ -187,7 +189,18 @@ concrete next step.
   path for double-charge disputes. Durable per-payer and global spend/create
   budgets are implemented (#48, schema v14); the numbers still need to be
   sized against real traffic.
-- Mainnet is rejected at startup (`api/src/config.ts`).
+- Facilitator: `FACILITATOR_URL` defaults to the public testnet facilitator and
+  to the local mock facilitator in mock mode. CDP is supported with
+  `FACILITATOR_API_KEY_ID` and `FACILITATOR_API_KEY_SECRET` (both or neither,
+  https only), which mint a short-lived ES256 JWT per request. Every call has
+  `FACILITATOR_TIMEOUT_MS` (default 20 s); `verify` and `supported` retry a
+  bounded number of times, and `settle` never does, because the nonce makes it
+  idempotent at the facilitator and a lost answer is resolved on chain.
+- Mainnet: `PAYMENT_MODE=mainnet` plus an explicit `NETWORK` (`eip155:8453`),
+  a real `PAY_TO`, an explicit `FACILITATOR_URL` and `PAYMENT_RPC_URL` for the
+  on-chain settlement check. There is no mainnet default for any of them, and
+  startup refuses if one is missing. The SDK and CLI only build testnet
+  payments today, so a mainnet payer client is still outstanding.
 
 ## 6. Isolated target (Kata)
 

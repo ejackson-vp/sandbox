@@ -132,10 +132,13 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       return;
     }
     try {
+      // 90 s, not 120: the public API sits behind an edge proxy that answers 524
+      // at 100 s. A long command must come back `202 pending` so the client can
+      // re-poll, so the default wait stays under that ceiling.
       const waitMs =
         parsed.data.waitMs ??
         Math.min(
-          120_000,
+          90_000,
           (parsed.data.timeoutMs ?? deps.config.platformLimits.maxCommandSeconds * 1000) + 5_000,
         );
       const out = await deps.controller.operation(session.sessionId, {
@@ -233,8 +236,10 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       return;
     }
     const requestedWait = Number(req.query.waitMs);
+    // Clamped to the same 90 s ceiling as `waitMs` on the operation body: a poll
+    // behind the public edge must not outlive the proxy's 100 s timeout either.
     const waitMs = Number.isFinite(requestedWait)
-      ? Math.min(120_000, Math.max(0, requestedWait))
+      ? Math.min(90_000, Math.max(0, requestedWait))
       : 20_000;
     try {
       const out = await deps.controller.getOperation(session.sessionId, requestId, waitMs);

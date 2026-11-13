@@ -37,6 +37,14 @@ import { parseTransportSecurity } from "./config/tls.js";
 import type { ControllerConfig } from "./config/types.js";
 import { parseWarmPool, parseWarmPoolAllocation } from "./config/warm-pool.js";
 
+export {
+  DEFAULT_MICROVM_HANDLERS,
+  DEFAULT_RUNTIME_CLASS,
+  parseMicrovmHandlers,
+  verifyRuntimeClass,
+  type RuntimeClassCheck,
+} from "./config/kubernetes.js";
+
 export type { Role } from "./config/role.js";
 export type { ControllerConfig } from "./config/types.js";
 

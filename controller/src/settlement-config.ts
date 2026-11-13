@@ -11,9 +11,10 @@
  *    would be the wrong type for money.
  */
 import { envBool as bool, envInt as int } from "@x402s/shared/env";
+import type { PaymentMode } from "@x402s/shared/protocol";
 
 interface SettlementConfig {
-  paymentMode: "mock" | "testnet";
+  paymentMode: PaymentMode;
   facilitatorUrl: string;
   refundWebhookUrl: string;
   refundWebhookToken: string;
@@ -35,9 +36,9 @@ interface SettlementConfig {
 export function parseSettlement(
   env: NodeJS.ProcessEnv,
 ): SettlementConfig {
-  const paymentMode = (env.PAYMENT_MODE ?? "mock") as "mock" | "testnet";
-  if (paymentMode !== "mock" && paymentMode !== "testnet") {
-    throw new Error(`PAYMENT_MODE must be "mock" or "testnet", got ${paymentMode}`);
+  const paymentMode = (env.PAYMENT_MODE ?? "mock") as PaymentMode;
+  if (paymentMode !== "mock" && paymentMode !== "testnet" && paymentMode !== "mainnet") {
+    throw new Error(`PAYMENT_MODE must be "mock", "testnet" or "mainnet", got ${paymentMode}`);
   }
   const refundWebhookUrl = env.REFUND_WEBHOOK_URL ?? "";
   if (refundWebhookUrl && !/^https?:\/\//.test(refundWebhookUrl)) {

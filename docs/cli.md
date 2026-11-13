@@ -81,6 +81,27 @@ sandbox pricing
 
 Common flags: `--api-url`, `--payment-mode mock|testnet`, `--json`, `--quiet`.
 
+### Operator commands
+
+These call the controller's internal routes with `CONTROLLER_ADMIN_TOKEN` (or
+`ADMIN_TOKEN`), and `CONTROLLER_URL` (default `http://localhost:3001`). No new
+credential is created for them.
+
+```bash
+sandbox admin capacity                     # reservations and capacity
+
+sandbox admin allowlist                    # wallets that get a free session
+sandbox admin allowlist add 0xabc… --label owner-agent \
+  --max-tier long --max-concurrent 2       # default tier standard, 1 concurrent
+sandbox admin allowlist disable 0xabc…     # immediate; re-add to re-enable
+```
+
+The allowlist is a trust boundary: a listed address gets a $0 session at or
+below `--max-tier`, up to `--max-concurrent` live free sessions, with its budget
+namespaced away from paying payers. The deployment must also set
+`PAYER_ALLOWLIST_ENABLED=true` on the API. See
+[ADR 0013](adr/0013-free-entitlement-from-proven-address.md).
+
 There is no attestation opt-in flag: every mode is non-hardware-backed, and
 `docs/security-guarantees.md` says so plainly.
 

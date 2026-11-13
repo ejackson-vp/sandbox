@@ -25,6 +25,7 @@
  *    failing the intent here would race a slow but successful settlement.
  */
 import { log, metrics, type SettlementLookup } from "@x402s/shared/runtime";
+import type { PaymentMode } from "@x402s/shared/protocol";
 import type { PaymentIntentRecord } from "./store/models.js";
 import type { SettlementRecoveryStore } from "./store/ports.js";
 import type { RefundOutcome, RefundService } from "./refunds.js";
@@ -35,7 +36,7 @@ interface SettlementRecoveryOptions {
   /** Intents examined per pass. */
   limit: number;
   /** Payment mode stamped on the ledger row when the lookup omits it. */
-  mode: "mock" | "testnet";
+  mode: PaymentMode;
   now?: () => number;
 }
 
