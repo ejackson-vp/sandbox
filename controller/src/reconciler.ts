@@ -37,6 +37,7 @@ import { SettlementRecovery } from "./settlement-recovery.js";
 import { OperationFence } from "./operation-fence.js";
 import { RelayRecovery } from "./relay-recovery.js";
 import { ServiceAddressResolver } from "./service-address.js";
+import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
 import { cadenceFor } from "./reconcile-cadence.js";
 import { ClockGuard } from "./clock-guard.js";
 import { PhaseDispatcher } from "./reconciler/dispatch.js";
@@ -137,8 +138,9 @@ export class Reconciler {
       serviceAddress: this.serviceAddress.bind(this),
       stableServiceAddress: this.stableServiceAddress.bind(this),
     };
-    this.warm = new WarmPoolManager(this.ctx);
-    this.provisioning = new Provisioning(this.ctx, this.warm);
+    const endpoints = new DataPlaneEndpoints(this.ctx);
+    this.warm = new WarmPoolManager(this.ctx, endpoints);
+    this.provisioning = new Provisioning(this.ctx, this.warm, endpoints);
     this.lifecycle = new Lifecycle(this.ctx, this.provisioning);
     this.termination = new Termination(this.ctx);
     this.fence = deps.fence ?? new OperationFence(deps.store, deps.relay);

@@ -16,6 +16,7 @@ import { log, metrics } from "@x402s/shared/runtime";
 import type { RuntimeProfile } from "./config.js";
 import { DEFAULT_RUNTIME_PROFILE, sessionRuntime } from "./config.js";
 import type { WarmPodInfo } from "./k8s.js";
+import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { SessionRecord } from "./store/models.js";
 import { WarmPool, type WarmClaimOutcome } from "./warm-pool.js";
@@ -55,7 +56,11 @@ export class WarmPoolManager {
   /** Order is stable: `base` first, then catalog order. */
   private readonly order: string[] = [];
 
-  constructor(private readonly ctx: ReconcilerContext) {
+  constructor(
+    private readonly ctx: ReconcilerContext,
+    /** Shared with the provisioning path so warm and cold guests dial the same address. */
+    private readonly endpoints: DataPlaneEndpoints = new DataPlaneEndpoints(ctx),
+  ) {
     for (const profile of Object.values(ctx.cfg.runtimeProfiles)) {
       this.register(profile);
     }
@@ -66,7 +71,7 @@ export class WarmPoolManager {
   }
 
   private register(profile: RuntimeProfile): void {
-    this.pools.set(profile.name, new WarmPool(this.ctx, profile));
+    this.pools.set(profile.name, new WarmPool(this.ctx, profile, this.endpoints));
     this.state.set(profile.name, {
       profile: profile.name,
       target: 0,
