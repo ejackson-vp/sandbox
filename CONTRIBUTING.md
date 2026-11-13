@@ -21,6 +21,7 @@ Each command, and what it deliberately leaves out:
 | `make verify` | Build, typecheck, structure lint, unit, property, portable, `go test`, `go vet`. What a reviewer runs. |
 | `make test` | `tests/unit` plus `tests/integration` against a real guest binary. Needs `make guest` first. |
 | `make security-test` | `tests/security`. Needs a kind cluster with Cilium (`make up`). |
+| `npm run mutation` | Stryker against `shared/src/payment.ts`, `controller/src/control-api/payments.ts` and `sdk/src/transfers.ts`. Slow, nightly, needs `DATABASE_URL`. |
 
 `npm test` deliberately excludes `tests/integration` and `tests/security`: both
 need a guest binary or a live cluster, so including them is what made `npm test`
@@ -146,6 +147,58 @@ fatal and is not retried. A retry is recorded in the job summary.
 - TypeScript failures print `{ seed, path }`. Replay with
   `FUZZ_SEED=<seed> npm run test:fuzz`. Add the shrunk counterexample as a
   normal assertion so it is covered on every run, not only under a seed.
+
+## Mutation testing
+
+Line coverage answers "did this line run?". It cannot answer "did any test
+notice what this line did?", and the suite reached the point where that
+distinction mattered: 87% lines and a green run said nothing about whether the
+money routes were asserted or merely executed.
+
+Stryker answers the second question. It rewrites one line at a time (flip a
+comparison, drop a `!`, swap a return value, change an error code) and re-runs
+the tests that reached it. A **killed** mutant failed a test, which is what a
+test is for. A **survived** mutant ran the line, through the test, and every
+assertion stayed green: either the test is missing an assertion, or the mutation
+is equivalent (semantically identical to the original, for example a changed
+string that is never compared). "No coverage" is the third outcome: no selected
+test reached the line at all.
+
+```bash
+DATABASE_URL=postgres://postgres:pg@127.0.0.1:55432/sandbox npm run mutation
+```
+
+It needs Postgres because it forks vitest, and the global setup refuses to start
+without it. It mutates three modules where a survivor is a real bug rather than
+a style opinion:
+
+| File | What a survivor means |
+| --- | --- |
+| `shared/src/payment.ts` | Pricing, asset or validity-window validation is not pinned; a wrong mock scheme passes the suite. |
+| `controller/src/control-api/payments.ts` | A money route answers the same with a changed status, hash or claim check, so a client can be served twice or not at all. |
+| `sdk/src/transfers.ts` | Resume, chunk bounds or digest verification can change without a test noticing a truncated or corrupted transfer. |
+
+`stryker.config.mjs` limits `testFiles` to `tests/unit`, `tests/fuzz` and
+`tests/transfers`: integration and security need a guest binary or a cluster, so
+they would cost minutes per mutant and are out of scope. `coverageAnalysis:
+"perTest"` records which test reached which line in the dry run, so a mutant
+only re-runs those tests instead of all ~1100.
+
+The report is the point, not the number. The HTML report is written to
+`reports/mutation/index.html` (git-ignored), and the nightly
+`.github/workflows/mutation.yml` uploads it as an artifact with the per-file
+score in the job summary. Read it survivor by survivor: decide whether the test
+should assert something, or whether the mutant is equivalent. Add the assertion;
+do not chase the percentage. A `// Stryker disable next-line <Mutator>: <why>`
+comment is the last resort for a mutant that is provably equivalent, and it
+needs the reason, because the next reader cannot re-derive it.
+
+`thresholds.break` is `null`, so the job reports and does not fail. That is
+deliberate for the first landing: there is no baseline yet, and a `break` set
+today would either block every pull request or claim a floor the suite has not
+earned. Once a few nightly runs exist, watch the trend and set `break` to
+`low` (60), the point where it means "the suite stopped asserting" instead of
+"the code changed".
 
 ## Rules
 

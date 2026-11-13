@@ -1,0 +1,111 @@
+name: mutation
+
+# Mutation testing is slow by construction: it rewrites one line at a time and
+# re-runs the tests that reach it. That is exactly why it is not in PR CI. This
+# lane answers "did the tests that ran actually assert anything?" once a day,
+# and publishes the HTML report so a survivor can be triaged like a bug.
+#
+# `thresholds.break` is null on purpose (see stryker.config.mjs), so a run
+# cannot fail this workflow on a low score. `npm run mutation` still exits
+# non-zero on a crash, a compile error or a failing test, which is the signal
+# that the setup itself broke.
+on:
+  schedule:
+    # 03:41 UTC daily, before the nightly fault lane (04:17) so the two slow
+    # jobs do not queue behind each other on a busy runner pool.
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation
+  cancel-in-progress: false
+
+jobs:
+  stryker:
+    name: stryker (payment, control-api, transfers)
+    runs-on: ubuntu-latest
+    # The unit and fuzz suites need Postgres: tests/helpers/test-global-setup.ts
+    # refuses to start without DATABASE_URL, and Stryker starts vitest through
+    # that same config, so an unset variable here would fail every fork.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pg
+          POSTGRES_DB: sandbox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sandbox"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:pg@127.0.0.1:5432/sandbox
+      # ubuntu-latest has 4 vCPUs; every worker is a forked vitest with its own
+      # pool connections, so leaving one core for Postgres is faster than
+      # oversubscribing it.
+      STRYKER_CONCURRENCY: "3"
+    # The baseline is 5m13s wall on a 4-worker laptop, so expect roughly 8
+    # minutes on a 3-worker runner. This ceiling is the "something hangs"
+    # signal, not the expected time.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      # The suites import `@x402s/sdk` and a few other built entry points, and
+      # vitest only strips types, so the workspace has to be compiled first.
+      - run: npm run build
+      - name: run stryker
+        # No `continue-on-error`: a non-zero exit here means the harness is
+        # broken (dry run failed, sandbox could not start), not that the score
+        # was low. The score never breaks the build.
+        run: npm run mutation
+      - name: summarise the score per file
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, existsSync, readFileSync } from "node:fs";
+          const path = "reports/mutation/mutation.json";
+          const emit = (text) => {
+            if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, text + "\n");
+            else console.log(text);
+          };
+          if (!existsSync(path)) {
+            emit("### Mutation report missing\n\nStryker did not write `reports/mutation/mutation.json`; see the job log.");
+            process.exit(0);
+          }
+          const report = JSON.parse(readFileSync(path, "utf8"));
+          const rows = [];
+          for (const [file, entry] of Object.entries(report.files ?? {})) {
+            const mutants = entry.mutants ?? [];
+            const counted = mutants.filter((m) => m.status !== "Ignored" && m.status !== "CompileError");
+            const killed = counted.filter((m) => m.status === "Killed" || m.status === "Timeout");
+            const survived = counted.filter((m) => m.status === "Survived" || m.status === "NoCoverage");
+            const score = counted.length === 0 ? 0 : (killed.length / counted.length) * 100;
+            rows.push({ file, score, killed: killed.length, survived: survived.length, total: counted.length });
+          }
+          rows.sort((a, b) => a.score - b.score);
+          const lines = ["### Mutation score", "", "| File | Score | Detected | Undetected | Mutants |", "| --- | ---: | ---: | ---: | ---: |"];
+          for (const r of rows) {
+            lines.push(`| \`${r.file}\` | ${r.score.toFixed(1)}% | ${r.killed} | ${r.survived} | ${r.total} |`);
+          }
+          lines.push("", "A survivor is a line the suite ran without noticing a change. The report is the deliverable, not this number.");
+          emit(lines.join("\n"));
+          NODE
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: mutation-report-${{ github.run_id }}
+          path: reports/mutation/
+          # A survivor list is only useful if it outlives the default week: this
+          # is read days after the run during triage.
+          retention-days: 30
+          if-no-files-found: warn

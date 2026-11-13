@@ -6,6 +6,10 @@ guest/bin/
 .DS_Store
 coverage/
 coverage-*/
+# Stryker copies the project into `.stryker-tmp/` and writes the HTML report to
+# `reports/`. Neither is source; the nightly workflow uploads the report.
+.stryker-tmp/
+reports/
 __pycache__/
 *.pyc
 
