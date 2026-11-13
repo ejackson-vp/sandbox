@@ -12,6 +12,12 @@
 # deploy/kubernetes/kustomization.yaml, so this file is inert until an operator
 # applies it. See README.md beside this file for the install and the local-kind
 # exception.
+#
+# Executed against Kyverno v1.13.4 by scripts/kyverno-policy-test.sh. That run
+# found the file had never been installable: deny conditions have no
+# `Matches`/`NotMatches` operator, and `NotIn` is deprecated, so the API server
+# rejected the ClusterPolicy itself. Rule 1 uses `AnyNotIn` with `?` wildcards
+# and rule 2 uses `AnyNotIn`; both are accepted by 1.13 and by 1.20.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -21,10 +27,13 @@ metadata:
     policies.kyverno.io/category: Supply chain
     policies.kyverno.io/severity: high
     policies.kyverno.io/subject: Pod
-    policies.kyverno.io/minversion: "1.11"
+    # Claim only what has been executed: scripts/kyverno-policy-test.sh runs on
+    # 1.13.4. The `AnyNotIn` operator rule 1 needs is not documented for older
+    # releases, and the previous "1.11" was never tested against any version.
+    policies.kyverno.io/minversion: "1.13"
     policies.kyverno.io/description: >-
       A sandbox guest pod must run an image reference of the form
-      <repository>@sha256:<64 hex>. A tag, a foreign repository, or a digest that
+      <repository>@sha256:<64 characters>. A tag, a foreign repository, or a digest that
       is not on the released allowlist is rejected. Both rules read their scope
       from the namespace label x402.io/image-policy, which
       deploy/kubernetes/00-namespaces.yaml sets to "enforce" on
@@ -38,7 +47,7 @@ spec:
   background: true
   rules:
     # ---------------------------------------------------------------- #
-    # 1. The reference is repository@sha256:<64 hex>.                   #
+    # 1. The reference is repository@sha256:<64 chars>.                 #
     # ---------------------------------------------------------------- #
     # This rule runs for "enforce" and for the documented local-kind
     # "dev-unpinned" mode: the digest shape is never relaxed, only the
@@ -55,19 +64,26 @@ spec:
                     values: ["enforce", "dev-unpinned"]
       validate:
         message: >-
-          sandbox guest pods must run <repository>@sha256:<64 hex>: the
+          sandbox guest pods must run <repository>@sha256:<64 characters>: the
           repositories are x402-sandbox/guest (local builds) and
           ghcr.io/ejackson-vp/sandbox-guest (releases). A tag-only reference
           (":dev", ":latest", ":0.1.31") or a different repository is rejected
           because it can be repointed after review.
+        # `AnyNotIn` with `?` wildcards, not a regex: Kyverno's deny conditions
+        # have no `Matches`/`NotMatches` operator (1.13 rejects a policy that
+        # uses one), and `?` matches one character. That is a 64-character
+        # digest suffix, not strictly 64 hex characters; rule 2's allowlist is
+        # what pins the exact digest, and a non-hex suffix cannot be pulled.
         foreach:
           - list: "request.object.spec.[containers, initContainers][]"
             deny:
               conditions:
                 any:
                   - key: "{{ element.image }}"
-                    operator: NotMatches
-                    value: "^(x402-sandbox/guest|ghcr\\.io/ejackson-vp/sandbox-guest)@sha256:[0-9a-f]{64}$"
+                    operator: AnyNotIn
+                    value:
+                      - "x402-sandbox/guest@sha256:????????????????????????????????????????????????????????????????"
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:????????????????????????????????????????????????????????????????"
 
     # ---------------------------------------------------------------- #
     # 2. The digest is the released one.                                #
@@ -105,7 +121,9 @@ spec:
               conditions:
                 any:
                   - key: "{{ element.image }}"
-                    operator: NotIn
+                    # `NotIn` is deprecated in 1.13; `AnyNotIn` is the same
+                    # negative membership test and is what 1.20 keeps.
+                    operator: AnyNotIn
                     value:
                       # base image, GUEST_IMAGE_DIGEST (release 0.1.30)
                       - "ghcr.io/ejackson-vp/sandbox-guest@sha256:4872ec154b43fd4a09b6272abb7b5ab3923e4bb754caefefd3c4f9c54c3a398d"

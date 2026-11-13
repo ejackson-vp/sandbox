@@ -1,8 +1,8 @@
 # Kyverno guest-image admission
 
 `guest-image-policy.yaml` is a Kyverno `ClusterPolicy` that rejects any sandbox
-guest pod whose image is not `<repository>@sha256:<64 hex>`, or whose digest is
-not the released one. It is the second layer behind the controller's own digest
+guest pod whose image is not `<repository>@sha256:<64 characters>`, or whose
+digest is not the released one. It is the second layer behind the controller's own digest
 check (`controller/src/runtime-profiles.ts`): the controller refusing to run an
 unpinned image depends on the controller being honest, and this does not.
 
@@ -10,7 +10,8 @@ Nothing here is wired into `deploy/kubernetes/kustomization.yaml`, and
 `deploy/kind/up.sh` does not install Kyverno, so an install that does not opt in
 behaves exactly as before. That is deliberate: a `ClusterPolicy` is inert without
 the CRD, and silently applying a third-party operator from `make deploy` would be
-a bigger change than this control.
+a bigger change than this control. `make kyverno-policy` proves the policy on a
+throwaway cluster; see [Verify](#verify).
 
 ## Scope
 
@@ -30,7 +31,8 @@ namespace rather than being a manual step.
 ## Install
 
 ```bash
-# 1. Kyverno (its own instructions; any 1.11+ install works)
+# 1. Kyverno (its own instructions; tested on 1.13.4, the version
+#    scripts/kyverno-policy-test.sh installs)
 helm repo add kyverno https://kyverno.github.io/kyverno
 helm install kyverno kyverno/kyverno -n kyverno --create-namespace --set admissionController.replicas=1
 
@@ -74,8 +76,30 @@ production cluster must never carry it.
 ## Verify
 
 The policy is only meaningful against an API server with Kyverno installed, so
-this is a manual step, not a CI job. On a cluster that has the policy and a
-namespace labelled `enforce`:
+the executable check is a script, not a unit test. It creates its own kind
+cluster, installs Kyverno, applies this policy, and asks the API server to admit
+four pods with `--dry-run=server` (nothing is scheduled, no image is pulled):
+
+```bash
+make kyverno-policy
+# or, against a cluster you already have:
+TEST_CONTEXT=kind-x402-sandbox ./scripts/kyverno-policy-test.sh
+```
+
+It asserts: a tag is rejected, a foreign repository pinned by digest is rejected,
+an unreleased digest is rejected, the digest in `deploy/release-pins.json` is
+admitted, and a namespace without the label is not affected. Exits non-zero on
+the first disagreement.
+
+**This is not in CI yet.** Kyverno's own install manifest is a rolling list of
+unpinned images, and adding that to a workflow would introduce the exact
+supply-chain gap F-15 is about. Wiring the script into CI needs Kyverno's images
+pinned by digest, which is a separate change. What CI does check offline is the
+allowlist itself: `scripts/check-deploy-pins.mjs` fails when the policy's digests
+disagree with the release map and the Talos overlay.
+
+On a cluster that has the policy and a namespace labelled `enforce`, the same
+cases by hand:
 
 ```bash
 # rejected: tag-only reference

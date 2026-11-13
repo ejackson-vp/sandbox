@@ -28,8 +28,11 @@ the container registry.
 - Kyverno `ClusterPolicy` that rejects a guest pod whose image is not
   `<repository>@sha256:<64 hex>` in the pinned repository, or whose digest is not
   the released one. Scoped by the namespace label `x402.io/image-policy`
-  (`enforce` by default, `dev-unpinned` documented for local kind). Not installed
-  by `make deploy`; see
+  (`enforce` by default, `dev-unpinned` documented for local kind). The allowlist
+  now carries the released 0.1.30 digests instead of placeholders, and
+  `make kyverno-policy` proves the four admission outcomes on a throwaway kind
+  cluster. Not installed by `make deploy`, and not yet in CI: Kyverno's install
+  manifest is not digest-pinned, which is F-15 itself. See
   [deploy/kubernetes/kyverno](deploy/kubernetes/kyverno/README.md) and #30.
 
 - Durable per-payer and global create budgets in the controller (schema v14,
