@@ -221,7 +221,14 @@ export class MockExactFacilitatorScheme implements SchemeNetworkFacilitator {
   }
 
   async settle(payload: PaymentPayload, requirements: PaymentRequirements): Promise<SettleResponse> {
-    const parsed = await this.validate(payload, requirements);
+    // `verify` catches a throw from `validate` and calls it a malformed payload.
+    // `settle` did not, so any field the parser reads without a guard became a
+    // 500 at the facilitator instead of a refusal. Same answer on both sides,
+    // and the explicit shape check above is still the first line of defence.
+    const parsed = await this.validate(payload, requirements).catch(() => ({
+      error: "malformed_payload",
+      message: "could not parse payment",
+    }));
     if ("error" in parsed) {
       return {
         success: false,
@@ -265,6 +272,19 @@ export class MockExactFacilitatorScheme implements SchemeNetworkFacilitator {
     }
     const accepted = payload.accepted;
     if (!accepted) return { error: "malformed_payload", message: "missing accepted requirements" };
+    // The comparisons below are the only place these are read before the inner
+    // payload is checked, and `payTo.toLowerCase()` throws on a caller-supplied
+    // object that simply omits it. `verify` swallowed that throw and answered
+    // malformed_payload, so the two entry points disagreed about whose fault a
+    // missing field is: `settle` reached the mock facilitator's handler and
+    // became a 500 on client-controlled input.
+    if (
+      typeof accepted.payTo !== "string" ||
+      typeof accepted.asset !== "string" ||
+      typeof accepted.amount !== "string"
+    ) {
+      return { error: "malformed_payload", message: "accepted requirements are incomplete" };
+    }
     if (accepted.network !== requirements.network || requirements.network !== this.network) {
       return { error: "network_mismatch", message: "payment is for a different network" };
     }

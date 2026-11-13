@@ -91,9 +91,14 @@ export default {
   tempDirName: ".stryker-tmp",
 
   // Report, do not fail. See the header.
+  // `break` gates now that there is a measured baseline. It is set at `low`
+  // rather than just under today's score, so it means "the suite stopped
+  // asserting" instead of "somebody changed one branch". A survivor that is
+  // equivalent is expected and is listed in the pull request that owns it;
+  // the score is here to catch a collapse, not to be maximised.
   thresholds: {
     high: 80,
     low: 60,
-    break: null,
+    break: 60,
   },
 };
