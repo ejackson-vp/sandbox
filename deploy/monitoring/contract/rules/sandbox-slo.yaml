@@ -3,14 +3,16 @@
 # Portable Prometheus/vmalert rule file. The scrape job adds a `role` label
 # (`api`, `controller`, `relay`), so most expressions below select the process
 # that owns the metric instead of double-counting across roles. The warm-pool
-# profile rules deliberately do not: those families are controller-only and
-# must keep working when a deployment scrapes one process without a role label.
+# profile rules and the ledger audit rules deliberately do not: those families
+# are controller-only and must keep working when a deployment scrapes one
+# process without a role label.
 #
 # Thresholds are the ones agreed in issue #38. They are deliberately small and
 # explainable for a single-tenant homelab; tune them only with a recorded
-# reason. `reconciliation_pending` and the warm-pool rules carry caveats in
-# deploy/monitoring/README.md because the current API does not export a
-# per-error-code counter and the warm pool can be disabled.
+# reason. `reconciliation_pending`, the warm-pool rules and the ledger audit
+# rules carry caveats in deploy/monitoring/README.md: the API does not export a
+# per-error-code counter, the warm pool can be disabled, and the audit gauges
+# are absent until the first successful sample.
 groups:
   - name: sandbox-slo
     interval: 30s
@@ -322,4 +324,125 @@ groups:
             (affected count: {{ $value }}). This is the blast-radius rule from
             issue #38: per-component health can be green while a tenant impact
             is large. Check the down role first, then tell the affected tenant.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      # Ledger audit. `controller/src/ledger-audit-sampler.ts` publishes one
+      # sample per `LEDGER_AUDIT_INTERVAL_MS` (300 s by default, one second to
+      # one hour accepted). Three properties of that sampler shape the rules:
+      #
+      #  - the divergence, stale and age gauges are created by the first
+      #    successful sample, so before one lands the families are absent
+      #    rather than zero. `x > 0` cannot see "never sampled";
+      #  - a failed read leaves the last good counts and their timestamp in
+      #    place, so a failure is neither a fresh reading nor a clean one;
+      #  - the age gauge is recomputed from the clock on every scrape, so it
+      #    keeps rising when the timer has stopped.
+      #
+      # Like the warm-pool rules these do not select on `role`: the families
+      # are exported only by the controller, and a deployment that scrapes a
+      # single process without a role label must still evaluate them.
+      - alert: SandboxLedgerDivergence
+        expr: max by (reason) (sandbox_ledger_divergence) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: sandbox
+        annotations:
+          summary: "Ledger divergence: {{ $labels.reason }}"
+          description: >-
+            The last completed audit sample found {{ $value | humanize }}
+            payment intent and ledger pairs that disagree, reason
+            `{{ $labels.reason }}`. Every reason is money and records
+            disagreeing: `settled_without_ledger` is a settled intent with no
+            ledger row, `intent_failed_ledger_settled` is a refused payment the
+            books say was delivered, and `duplicate_refund_claim` is one signed
+            authorisation being refunded twice. There is no safe threshold and
+            no reason to wait for a second sample, so any non-zero count pages;
+            the gauge only moves on a completed sample, so 1 minute means one
+            sample confirmed, not scrape noise. Look the key up with
+            `GET /internal/payments/<paymentKey>` and read
+            docs/payment-ledger.md before touching the rows.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxSessionsStale
+        expr: max by (phase) (sandbox_sessions_stale) >= 3
+        for: 15m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "{{ $value }} sessions are past their deadline in {{ $labels.phase }}"
+          description: >-
+            Three or more sessions in `{{ $labels.phase }}` have been past
+            their deadline by more than the 60 s grace period for 15 minutes
+            (current count: {{ $value }}). The threshold is three, not one: a
+            single long-lived session, or one reconciler pass running late,
+            is not a cleanup outage. Three sessions still overdue across three
+            audit samples mean termination is not finishing. Check the
+            reconciler's `sandbox_lease_expired` log line,
+            `sandbox_reconcile_queue_depth` and admission capacity before
+            terminating the rows by hand.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxLedgerAuditStale
+        expr: max(sandbox_ledger_audit_age_seconds) > 600
+        for: 5m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "The ledger audit has not completed a sample in two intervals"
+          description: >-
+            `sandbox_ledger_audit_age_seconds` has been above 600 s for 5
+            minutes (current {{ $value }} s). 600 s is two default sampling
+            intervals (`LEDGER_AUDIT_INTERVAL_MS` defaults to 300000), so two
+            intervals have passed without a successful sample: one tick was
+            missed and the next did not land either, or the timer is stopped.
+            The age is recomputed on every scrape, so a stopped sampler cannot
+            look fresh. Check the controller log for audit read failures, the
+            Postgres connection and `LEDGER_AUDIT_INTERVAL_MS`. If that
+            interval is raised, raise this threshold with it: the rule is two
+            intervals, not 600 s.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxLedgerAuditNeverSampled
+        expr: absent(sandbox_ledger_audit_age_seconds)
+        for: 15m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "The ledger audit has never completed a sample"
+          description: >-
+            `sandbox_ledger_audit_age_seconds` has been absent for 15 minutes,
+            which means no audit sample has ever succeeded. The gauge families
+            are created by the first successful sample, so the divergence and
+            stale rules above match nothing in this state: `> 0` cannot fire on
+            a series that does not exist. Three default intervals is longer
+            than the startup sample plus a slow first read, so this is not a
+            deploy race. Check that the controller role is the one running
+            (`start()` is called there only), that it can reach Postgres, and
+            whether `sandbox_ledger_audit_failures_total` is climbing. If the
+            controller target is also down, `SandboxMetricsTargetDown` is the
+            primary alert.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxLedgerAuditFailing
+        expr: increase(sandbox_ledger_audit_failures_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "The ledger audit keeps failing to read the store"
+          description: >-
+            Audit samples have failed in every 15 minute window for 15 minutes
+            ({{ $value | humanize }} failures in the current window). A failed
+            read changes no gauge: the last good counts and their timestamp are
+            kept, so this is the signal for an audit that fails part of the
+            time but still succeeds often enough to keep
+            `SandboxLedgerAuditStale` quiet. A single failed sample is a blip
+            and does not fire this rule. Check Postgres reachability, the
+            read-only audit connection and its 2 s statement timeout; the
+            age alert takes over if every sample starts failing.
           runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
