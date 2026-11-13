@@ -15,6 +15,7 @@
 import { sha256Hex } from "@x402s/shared/crypto";
 import { resolveSessionSpec, specHash } from "@x402s/shared/payment";
 import { log } from "@x402s/shared/runtime";
+import { recoverSettlement } from "../payments/settlement-confirmation.js";
 import {
   json,
   type CreateSessionInput,
@@ -111,16 +112,14 @@ export async function createSession(
       settled,
     );
 
-  // Recovery path: a previous attempt may have settled before crashing.
+  // Recovery path: a previous attempt may have settled before crashing. The
+  // chain is asked first (F-10), then the facilitator lookup for anything the
+  // chain cannot answer.
   if (recovered) {
-    try {
-      const existing = await deps.settlementLookup.lookup(key);
-      if (existing) {
-        log.warn("payment_recovered_from_settlement", { paymentKeyPrefix: key.slice(0, 12) });
-        return complete({ payer: existing.payer, transaction: existing.transaction });
-      }
-    } catch (err) {
-      log.warn("settlement_lookup_failed", { error: (err as Error).message });
+    const existing = await recoverSettlement(deps, key, payload);
+    if (existing) {
+      log.warn("payment_recovered_from_settlement", { paymentKeyPrefix: key.slice(0, 12) });
+      return complete({ payer: existing.payer, transaction: existing.transaction });
     }
   }
 

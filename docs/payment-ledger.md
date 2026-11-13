@@ -73,6 +73,17 @@ refusal still fails the intent and releases the capacity hold.
 
 ## Settlement recovery (settle-then-crash)
 
+Settlement is verified on chain where the deployment can read one. An EIP-3009
+authorisation is settled exactly when its nonce is consumed, so
+`authorizationState(address authorizer, bytes32 nonce)` on the network's USDC
+contract is the answer to "did the money move", independent of what the
+facilitator said (F-10). Set `PAYMENT_RPC_URL` to enable it; the USDC address
+defaults per network (`PAYMENT_USDC_ADDRESS` overrides it). A settled nonce
+grants, an unsettled nonce refuses, and an unreadable answer fails closed
+without granting. The check runs before entitlement on the first attempt and
+first on the recovery path, so a hostile facilitator cannot mint a session by
+answering `success`.
+
 `payment_intents` records the payment requirements at claim time
 (`requirements_json`). A controller housekeeping pass lists intents that have
 been `claimed` for longer than `SETTLEMENT_RECOVERY_GRACE_MS` (default 5 min),
@@ -100,8 +111,11 @@ that ledger row is `SETTLED` the fail endpoint refuses the intent too, so the
 resolution is the refund policy below, not an outbox edit.
 
 Recovery needs a facilitator that exposes `GET /settlements/:paymentKey`
-(`FACILITATOR_URL`, the mock facilitator does). Without one it is a no-op, and
-the `409 reconciliation_pending` behaviour is unchanged.
+(`FACILITATOR_URL`, the mock facilitator does) or an on-chain verifier for the
+network. The API asks the chain first and falls back to the lookup. Without
+either it is a no-op, and the `409 reconciliation_pending` behaviour is
+unchanged. The controller-side recovery worker still reads only the lookup: an
+intent it cannot resolve is left claimed for the API's retry path.
 
 ## Refund policy
 
@@ -423,10 +437,11 @@ a worker owns that claim and may be mid-send.
   and effectively-once depends on that adapter honouring the key. A provider that
   ignores it can still be paid twice across a crash; the ledger cannot detect
   that.
-- Recovery depends on a settlement lookup the facilitator must expose. Testnet's
-  public facilitator does not, so testnet still answers `409
-  reconciliation_pending` and the money is only visible to a human who reconciles
-  the on-chain transfer.
+- Recovery depends on a settlement lookup the facilitator must expose, or on
+  `PAYMENT_RPC_URL` for an on-chain check. With neither, testnet still answers
+  `409 reconciliation_pending` and the money is only visible to a human who
+  reconciles the on-chain transfer. The on-chain check has never run against a
+  live chain in CI: its tests use a fake verifier.
 - An ambiguous refund outcome (timeout, 5xx, no transaction id) is `unknown`, not
   a failed attempt: the row stays `REFUND_SENDING` and is retried each time its
   lease expires, with the same key, indefinitely. `REFUND_MAX_ATTEMPTS` bounds

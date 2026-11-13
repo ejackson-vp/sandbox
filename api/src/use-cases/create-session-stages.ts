@@ -35,6 +35,11 @@ import {
 import { paymentPayerKey } from "../admission.js";
 import type { ApiConfig } from "../config.js";
 import type { BudgetDecision, CapacityDecision } from "../controller-client.js";
+import {
+  confirmSettledOnChain,
+  recoveryAvailable,
+  recoverSettlement,
+} from "../payments/settlement-confirmation.js";
 import { createResponseFrom } from "../status.js";
 import {
   json,
@@ -368,18 +373,19 @@ function settleVerdict(errorReason: string | undefined): "definite_failure" | "u
 }
 
 /**
- * An unknown settlement is not a failure. With a settlement lookup the intent
- * stays `claimed`, which is what lets `SettlementRecovery` ask the facilitator
- * whether the payment settled and record the debt if it did. Without a lookup
- * nothing could ever resolve it, so the intent is failed exactly as before: a
- * terminal row an operator can see beats a claim that ages out into nothing.
+ * An unknown settlement is not a failure. With a settlement lookup, or an
+ * on-chain verifier that can answer for the nonce, the intent stays `claimed`,
+ * which is what lets `SettlementRecovery` and the client's retry resolve it.
+ * With neither, nothing could ever resolve it, so the intent is failed exactly
+ * as before: a terminal row an operator can see beats a claim that ages out into
+ * nothing.
  */
 async function deferUnknownSettlement(
   deps: CreateSessionUseCaseDeps,
   key: string,
   reason: string,
 ): Promise<void> {
-  if (deps.settlementLookup.supported) return;
+  if (recoveryAvailable(deps)) return;
   await deps.controller.failIntent(key, reason).catch(() => undefined);
 }
 
@@ -458,16 +464,14 @@ export async function verifyAndSettle(
 
   if (!settle.success) {
     // A nonce conflict may mean an earlier attempt settled but crashed before
-    // the entitlement was durable. Recover instead of charging twice.
-    if (settle.errorReason === "nonce_already_used" && deps.settlementLookup.supported) {
-      try {
-        const existing = await deps.settlementLookup.lookup(key);
-        if (existing) {
-          log.warn("payment_recovered_after_nonce_conflict", { paymentKeyPrefix: key.slice(0, 12) });
-          return { ok: true, value: { payer: existing.payer, transaction: existing.transaction } };
-        }
-      } catch {
-        /* fall through */
+    // the entitlement was durable. The chain answers that for an EVM payment
+    // whether or not the facilitator exposes a settlement lookup, so recover
+    // instead of charging twice.
+    if (settle.errorReason === "nonce_already_used" && recoveryAvailable(deps)) {
+      const existing = await recoverSettlement(deps, key, payload);
+      if (existing) {
+        log.warn("payment_recovered_after_nonce_conflict", { paymentKeyPrefix: key.slice(0, 12) });
+        return { ok: true, value: { payer: existing.payer, transaction: existing.transaction } };
       }
     }
     // The facilitator answered, but an answer that says "broadcast, not yet
@@ -491,6 +495,34 @@ export async function verifyAndSettle(
         `payment_settlement_rejected:${settle.errorReason ?? "unknown"}`,
       ),
     };
+  }
+
+  // The facilitator said settled. On a chain that is a claim about a nonce, so
+  // confirm it before granting: a buggy or hostile facilitator must not be able
+  // to mint a session by answering `success`, and a refusal here is recoverable
+  // because the intent stays claimed while the chain can still answer.
+  if (deps.settlementVerifier) {
+    const verdict = await confirmSettledOnChain(deps.settlementVerifier, payload);
+    if (verdict !== "settled") {
+      log.warn("payment_not_confirmed_on_chain", {
+        paymentKeyPrefix: key.slice(0, 12),
+        verdict,
+      });
+      await deferUnknownSettlement(
+        deps,
+        key,
+        verdict === "unsettled" ? "chain_nonce_unused" : "chain_check_failed",
+      );
+      return {
+        ok: false,
+        result: json(503, {
+          error: "payment_unconfirmed",
+          reason: verdict,
+          retryable: true,
+          message: "settlement could not be confirmed on chain; retry with the same payment",
+        }),
+      };
+    }
   }
 
   return { ok: true, value: { payer: settle.payer, transaction: settle.transaction } };

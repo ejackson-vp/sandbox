@@ -18,6 +18,7 @@ import {
   type TierTable,
 } from "@x402s/shared/payment";
 import { DEFAULT_METRICS_PORT } from "@x402s/shared/runtime";
+import { usdcAddressFor } from "./payments/settlement-verifier.js";
 
 type PaymentMode = "mock" | "testnet";
 
@@ -33,6 +34,14 @@ export interface ApiConfig {
   network: string;
   payTo: string;
   facilitatorUrl: string;
+  /**
+   * JSON-RPC endpoint used to read EIP-3009 authorization state on chain.
+   * Unset on the mock path and on a testnet deployment without an RPC. Mainnet
+   * refuses to start without it.
+   */
+  paymentRpcUrl?: string;
+  /** USDC contract that holds the authorizations. Defaults per network. */
+  paymentUsdcAddress?: `0x${string}`;
   controllerUrl: string;
   /** Client certificate for the controller's mTLS listener, when enabled. */
   controllerTls?: { certFile: string; keyFile: string; caFile: string };
@@ -103,6 +112,49 @@ function parsePayment(env: NodeJS.ProcessEnv): Pick<ApiConfig, "paymentMode" | "
     throw new Error("PAY_TO must be a real receiving address in testnet mode");
   }
   return { paymentMode, network: requestedNetwork, payTo, facilitatorUrl };
+}
+
+/**
+ * The on-chain settlement verifier (F-10). It is opt-in for the mock and
+ * testnet paths: no `PAYMENT_RPC_URL` means the facilitator lookup is still the
+ * only recovery mechanism, which is what those deployments had before.
+ *
+ * The USDC address defaults per network so a deployment cannot accidentally
+ * read a different token's state, and an override is validated as a 20-byte
+ * address rather than trusted.
+ */
+function parseChainVerification(
+  env: NodeJS.ProcessEnv,
+  paymentMode: PaymentMode,
+  network: string,
+): Pick<ApiConfig, "paymentRpcUrl" | "paymentUsdcAddress"> {
+  // The mock scheme has no chain, so a mock deployment ignores the setting
+  // rather than refusing to start because a dev box has one exported.
+  if (paymentMode === "mock") return {};
+  const rpcUrl = (env.PAYMENT_RPC_URL ?? "").trim();
+  if (rpcUrl.length === 0) {
+    return {};
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(rpcUrl);
+  } catch {
+    throw new Error("PAYMENT_RPC_URL must be an absolute http(s) URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("PAYMENT_RPC_URL must be an absolute http(s) URL");
+  }
+  const override = (env.PAYMENT_USDC_ADDRESS ?? "").trim();
+  if (override.length > 0 && !/^0x[0-9a-fA-F]{40}$/.test(override)) {
+    throw new Error("PAYMENT_USDC_ADDRESS must be a 20-byte EVM address");
+  }
+  const usdcAddress = (override || usdcAddressFor(network)) as `0x${string}` | undefined;
+  if (!usdcAddress) {
+    throw new Error(
+      `PAYMENT_RPC_URL requires a known USDC address for ${network}; set PAYMENT_USDC_ADDRESS`,
+    );
+  }
+  return { paymentRpcUrl: rpcUrl, paymentUsdcAddress: usdcAddress };
 }
 
 function parseCredentials(
@@ -184,6 +236,8 @@ function parseControllerTls(env: NodeJS.ProcessEnv, controllerUrl: string): ApiC
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const payment = parsePayment(env);
 
+  const chainVerification = parseChainVerification(env, payment.paymentMode, payment.network);
+
   const credentials = parseCredentials(env);
 
   const port = int(env.PORT, 3000, 1, 65535);
@@ -201,6 +255,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     metricsPort: int(env.METRICS_PORT, DEFAULT_METRICS_PORT, 0, 65535),
     metricsHost: env.METRICS_HOST ?? "0.0.0.0",
     ...payment,
+    ...chainVerification,
     ...credentials,
     controllerUrl,
     ...(controllerTls ? { controllerTls } : {}),

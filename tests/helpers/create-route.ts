@@ -83,6 +83,9 @@ interface CreateResult {
   controller: ControllerStub;
   payment402: ReturnType<typeof vi.fn>;
   paymentKey: string;
+  /** The authorizer and EIP-3009 nonce in the signed header, for verifier assertions. */
+  authorizer: `0x${string}`;
+  settlementNonce: `0x${string}`;
 }
 
 /**
@@ -96,6 +99,9 @@ export async function postCreate(
   patch: (ctx: { controller: ControllerStub; body: Record<string, unknown> }) => void = () => undefined,
   opts: {
     settlementLookup?: SettlementLookup;
+    settlementVerifier?: {
+      isSettled(authorizer: `0x${string}`, nonce: `0x${string}`): Promise<boolean>;
+    };
     resourceServer?: {
       verifyPayment?: (...args: unknown[]) => Promise<unknown>;
       settlePayment?: (...args: unknown[]) => Promise<unknown>;
@@ -122,7 +128,12 @@ export async function postCreate(
     accepts: [REQUIREMENT],
   } as never);
   const header = new x402HTTPClient(client).encodePaymentSignatureHeader(payload)["PAYMENT-SIGNATURE"]!;
-  const key = paymentKey(decodePaymentSignatureHeader(header));
+  const decoded = decodePaymentSignatureHeader(header);
+  const key = paymentKey(decoded);
+  const authorization = (decoded.payload as { authorization?: { from?: string; nonce?: string } })
+    .authorization;
+  const authorizer = (authorization?.from ?? "0x0000000000000000000000000000000000000000") as `0x${string}`;
+  const settlementNonce = (authorization?.nonce ?? `0x${"0".repeat(64)}`) as `0x${string}`;
 
   if (body.clientSignature === undefined) {
     body.clientSignature = await account.signMessage({
@@ -170,6 +181,7 @@ export async function postCreate(
     controller,
     resourceServer: opts.resourceServer ?? {},
     settlementLookup: opts.settlementLookup ?? { supported: false, lookup: async () => null },
+    ...(opts.settlementVerifier ? { settlementVerifier: opts.settlementVerifier } : {}),
     requirementFor: async () => REQUIREMENT,
     payment402,
     capabilityFor: () => "capability",
@@ -192,5 +204,7 @@ export async function postCreate(
     controller,
     payment402,
     paymentKey: key,
+    authorizer,
+    settlementNonce,
   };
 }

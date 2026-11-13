@@ -61,6 +61,63 @@ describe("api config guards", () => {
   });
 });
 
+describe("chain verification configuration", () => {
+  const testnet = {
+    ...base,
+    PAYMENT_MODE: "testnet",
+    PAY_TO: "0x1111111111111111111111111111111111111111",
+  };
+
+  it("is off unless PAYMENT_RPC_URL is set", () => {
+    expect(loadConfig(testnet).paymentRpcUrl).toBeUndefined();
+  });
+
+  it("accepts an absolute http(s) RPC URL and defaults the USDC contract", () => {
+    const cfg = loadConfig({ ...testnet, PAYMENT_RPC_URL: "https://mainnet.base.org" });
+    expect(cfg.paymentRpcUrl).toBe("https://mainnet.base.org");
+    expect(cfg.paymentUsdcAddress).toBe("0x036CbD53842c5426634e7929541eC2318f3dCF7e");
+  });
+
+  it("rejects a non-http RPC URL", () => {
+    expect(() => loadConfig({ ...testnet, PAYMENT_RPC_URL: "ws://rpc.invalid" })).toThrow(
+      /PAYMENT_RPC_URL/,
+    );
+  });
+
+  it("rejects a malformed USDC override", () => {
+    expect(() =>
+      loadConfig({ ...testnet, PAYMENT_RPC_URL: "https://rpc.invalid", PAYMENT_USDC_ADDRESS: "0x1234" }),
+    ).toThrow(/PAYMENT_USDC_ADDRESS/);
+  });
+
+  it("accepts a USDC override for a network with no default", () => {
+    const cfg = loadConfig({
+      ...testnet,
+      NETWORK: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+      PAYMENT_RPC_URL: "https://rpc.invalid",
+      PAYMENT_USDC_ADDRESS: "0x2222222222222222222222222222222222222222",
+    });
+    expect(cfg.paymentUsdcAddress).toBe("0x2222222222222222222222222222222222222222");
+  });
+
+  it("requires an explicit USDC address on a network with no default", () => {
+    expect(() =>
+      loadConfig({
+        ...testnet,
+        NETWORK: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+        PAYMENT_RPC_URL: "https://rpc.invalid",
+      }),
+    ).toThrow(/PAYMENT_USDC_ADDRESS/);
+  });
+
+  it("ignores the RPC URL on the mock path", () => {
+    // The mock scheme never uses a nonce on chain, so a configured verifier
+    // would refuse every mock payment. It is not built there.
+    const cfg = loadConfig({ ...base, PAYMENT_RPC_URL: "https://rpc.invalid" });
+    expect(cfg.paymentMode).toBe("mock");
+  });
+});
+
 describe("controller mTLS", () => {
   const files = {
     CONTROLLER_TLS_CERT_FILE: "/controller/tls.crt",

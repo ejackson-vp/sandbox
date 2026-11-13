@@ -33,6 +33,8 @@ import {
 import type { ApiConfig } from "./config.js";
 import { RateLimiter } from "./admission.js";
 import { ControllerClient } from "./controller-client.js";
+import { buildSettlementVerifier } from "./payments/settlement-confirmation.js";
+import type { ChainSettlementVerifier } from "./payments/settlement-verifier.js";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 import { createSessionHandler } from "./routes/create-session.js";
@@ -61,6 +63,8 @@ interface ApiDeps {
   resourceServer?: x402ResourceServer;
   /** Injectable for tests. */
   settlementLookup?: SettlementLookup;
+  /** Injectable for tests: bypasses the viem client. */
+  settlementVerifier?: ChainSettlementVerifier;
 }
 
 export async function createApp(deps: ApiDeps): Promise<express.Express> {
@@ -78,6 +82,11 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     (config.paymentMode === "mock"
       ? new HttpSettlementLookup(config.facilitatorUrl)
       : new UnsupportedSettlementLookup());
+
+  // F-10: a chain read is authoritative and needs no facilitator answer, so it
+  // replaces the unsupported lookup for EVM networks. Absent here, the previous
+  // behaviour is unchanged.
+  const settlementVerifier = deps.settlementVerifier ?? buildSettlementVerifier(config);
 
   const resourceServer =
     deps.resourceServer ??
@@ -293,6 +302,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
       controller,
       resourceServer,
       settlementLookup,
+      settlementVerifier,
       requirementFor,
       payment402,
       capabilityFor,
