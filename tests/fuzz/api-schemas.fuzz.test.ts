@@ -116,7 +116,7 @@ describe("operationSchema", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("bounds timeoutMs and waitMs", () => {
+  it("bounds timeoutMs and waitMs, with waitMs below the edge proxy timeout", () => {
     fc.assert(
       fc.property(fc.integer({ min: -10_000, max: 5_000_000 }), (value) => {
         const parsed = operationSchema.safeParse({
@@ -126,7 +126,9 @@ describe("operationSchema", () => {
           waitMs: value,
         });
         const timeoutOK = value >= 100 && value <= 3_600_000;
-        const waitOK = value >= 0 && value <= 120_000;
+        // 90 s: a proxied request that waits longer is killed by the edge at
+        // 100 s, so the client never sees the 202 it needs to poll.
+        const waitOK = value >= 0 && value <= 90_000;
         expect(parsed.success).toBe(timeoutOK && waitOK);
       }),
       { numRuns: 200, ...fuzzSeed },

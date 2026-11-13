@@ -228,7 +228,10 @@ export class ClientRuntime {
     // retry inside the loop below.
     const payloadHash = sha256Hex(canonicalJson(operation));
     const envelope = await sealJsonTo(handle.guestPublicKey!, operation);
-    const waitMs = Math.min(120_000, (timeoutMs ?? 60_000) + 10_000);
+    // Matches the API's waitMs cap: the schema rejects anything above 90 s, which
+    // is below the edge proxy's 100 s timeout. A longer command answers 202 and
+    // the loop below polls.
+    const waitMs = Math.min(90_000, (timeoutMs ?? 60_000) + 10_000);
     const queueDeadline = Date.now() + queueMs;
 
     for (;;) {
