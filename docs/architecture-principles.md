@@ -105,9 +105,10 @@ api/src/routes/sessions.ts      status, operations, data plane, lifecycle
 api/src/schemas.ts              request schemas + plaintext guard
 api/src/status.ts               controller view -> public wire status
 
-controller/src/reconciler.ts    scheduler: tick, health, lease, dispatch
-controller/src/provisioning.ts  cold/warm provisioning + readiness handshake
-controller/src/provisioning/    endpoints + claims, admission prerequisites, pod create and observation
+controller/src/reconciler.ts    scheduler: tick, dispatch, state switch
+controller/src/reconciler/      bounded dispatch, lease/health policy, clock reports
+controller/src/provisioning.ts  cold/warm provisioning: admission, create, resume
+controller/src/provisioning/    endpoints + claims, admission prerequisites, pod create, readiness handshake
 controller/src/warm-pool.ts     warm-pool policy and lifecycle
 controller/src/lifecycle.ts     suspend/resume, idle/expiry policy, PVC cleanup
 controller/src/termination.ts   terminate/finalise/reap
@@ -137,7 +138,13 @@ a file just outside a root cannot hide it. Counted extensions are `.ts`, `.tsx`,
 `.mts`, `.cts` and `.go`, matched case-insensitively. The budget is a backstop,
 not a target: most modules are 100–350 lines, and 550 is the number to aim at.
 The ceiling stays at 650 until the modules above 550 are split, and it never
-goes up. Split by use case or adapter, never by arbitrary line count.
+goes up. Split by use case or adapter, never by arbitrary line count. Today the
+gap is six modules: `cli/src/commands.ts` (605), `tests/unit/effects.test.ts`
+(597), `guest/supervisor.go` (594), `controller/src/relay/registry.ts` (587),
+`tests/integration/relay-reconnect.test.ts` (581) and `scripts/control-faults.ts`
+(574). The two controller modules that used to lead that list, `provisioning.ts`
+and `reconciler.ts`, are split; the guard prints the current list, and the
+ceiling drops to 550 when it prints nothing.
 
 `scripts/check-structure.mjs` carries an explicit `BASELINE` map of the files
 that are over budget today, each pinned to its exact line count. It is empty:
@@ -165,12 +172,16 @@ Completed slices:
 
 - SDK split behind a stable `SandboxClient` facade.
 - Reconciler split into warm-pool, provisioning, lifecycle, termination and a
-  scheduler; persistence split into models/schema.
+  scheduler; persistence split into models/schema. The scheduler's dispatch,
+  lease/health policy and clock reporting now live in `controller/src/reconciler/`,
+  so `reconciler.ts` is tick, phase order and the state switch.
 - Controller use cases on the shared effect interpreter: suspend/resume,
   termination, readiness and both create transitions execute the effect list
   their transition returns. The create path (`register_relay`,
   `ensure_workspace_pvc`, `start_pod`) delegates to the provisioning use case
-  through a port, so no effect is built by hand outside the table.
+  through a port, so no effect is built by hand outside the table. The
+  provisioning use case is two modules: the create half in `provisioning.ts`,
+  the readiness handshake in `provisioning/readiness.ts`.
 - API split into create/session routers, schemas, status mapping and composition.
 - Wire protocol split by concept. `@x402s/shared` has no root entry: consumers
   import a subpath (`./protocol`, `./runtimes`, `./money`, `./crypto`,
@@ -197,10 +208,12 @@ Next slices:
 3. Extend the `shared/src` layer guard to the other workspaces and enable
    `exactOptionalPropertyTypes` (a dependency-cruiser config would replace the
    hand-rolled check in `scripts/check-structure.mjs`).
-4. Split the two modules that still sit above 550 lines:
-   `controller/src/provisioning.ts` (595) and `controller/src/reconciler.ts`
-   (600). Both fit under the temporary 650 ceiling, so they have to go before
-   `MAX_LINES` can be lowered to 550.
+4. Split the six modules that still sit above 550 lines, then lower
+   `MAX_LINES` to 550: `cli/src/commands.ts` (605), `tests/unit/effects.test.ts`
+   (597), `guest/supervisor.go` (594), `controller/src/relay/registry.ts` (587),
+   `tests/integration/relay-reconnect.test.ts` (581) and
+   `scripts/control-faults.ts` (574). The two controller modules that used to
+   lead this list, `provisioning.ts` and `reconciler.ts`, are done.
 
 ## Testing strategy
 

@@ -9,9 +9,13 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, posix, relative } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-// Ratchet: 550 is the target. Temporarily 650 because two controller modules
-// (provisioning.ts, reconciler.ts) are above the 550 target. Lower this as they
-// are split; never raise it again.
+// Ratchet: 550 is the budget; the ceiling is still 650 because six modules sit
+// above it. The two controller modules this comment used to name,
+// controller/src/provisioning.ts and controller/src/reconciler.ts, are split.
+// What is left over 550: cli/src/commands.ts, tests/unit/effects.test.ts,
+// guest/supervisor.go, controller/src/relay/registry.ts,
+// tests/integration/relay-reconnect.test.ts and scripts/control-faults.ts.
+// Lower to 550 when the guard prints nothing; never raise it again.
 const MAX_LINES = 650;
 
 /**
