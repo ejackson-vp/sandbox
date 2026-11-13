@@ -27,14 +27,14 @@ import {
   record,
   reservationArb,
   nodeInfo,
-  nodeShapeArb,
+  nodeShapesArb,
 } from "../helpers/capacity-harness.js";
 
 describe("summary reports one accounting, not two", () => {
   it("counts every reservation once and withholds overhead once per node", async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.array(nodeShapeArb, { minLength: 1, maxLength: 4 }),
+        nodeShapesArb,
         fc.array(reservationArb([]), { maxLength: 8 }),
         async (nodeShapes, rows) => {
           const nodes = nodeShapes.map(nodeInfo);

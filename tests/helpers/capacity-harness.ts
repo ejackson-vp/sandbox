@@ -63,6 +63,21 @@ export const nodeShapeArb: fc.Arbitrary<NodeShape> = fc.record({
   labelled: fc.boolean(),
 });
 
+/**
+ * A cluster of one to four nodes with distinct ids.
+ *
+ * Distinct because the id is the key the store counts a reservation under. Two
+ * shapes that happen to share a name collapse into one row, and the test's
+ * per-node arithmetic then disagrees with a service that is behaving correctly.
+ * That is a fixture collision, not a bug, but it fails about one run in six and
+ * a red run nobody can reproduce is worse than no test.
+ */
+export const nodeShapesArb: fc.Arbitrary<NodeShape[]> = fc.uniqueArray(nodeShapeArb, {
+  selector: (shape) => shape.id,
+  minLength: 1,
+  maxLength: 4,
+});
+
 export function nodeInfo(shape: NodeShape): NodeInfo {
   return {
     name: shape.id,
