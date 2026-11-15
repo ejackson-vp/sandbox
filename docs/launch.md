@@ -84,7 +84,9 @@ it with the smallest session you can buy.
    ```
 
    `PAYMENT_USDC_ADDRESS` is optional; it defaults to the Base USDC contract and
-   exists only to override it.
+   exists only to override it. `PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS` (default 900,
+   which is 30 minutes at Base's 2 s block time) bounds the block scan that finds
+   the `AuthorizationUsed` log for a payment.
 
 3. Start the API and confirm the assertions pass. A missing verifier, a mock
    `PAY_TO` or an unset `NETWORK` refuses to start, which is the intended

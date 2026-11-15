@@ -74,16 +74,27 @@ refusal still fails the intent and releases the capacity hold.
 
 ## Settlement recovery (settle-then-crash)
 
-Settlement is verified on chain where the deployment can read one. An EIP-3009
-authorisation is settled exactly when its nonce is consumed, so
-`authorizationState(address authorizer, bytes32 nonce)` on the network's USDC
-contract is the answer to "did the money move", independent of what the
-facilitator said (F-10). Set `PAYMENT_RPC_URL` to enable it; the USDC address
-defaults per network (`PAYMENT_USDC_ADDRESS` overrides it). A settled nonce
-grants, an unsettled nonce refuses, and an unreadable answer fails closed
-without granting. The check runs before entitlement on the first attempt and
-first on the recovery path, so a hostile facilitator cannot mint a session by
-answering `success`.
+Settlement is verified on chain where the deployment can read one. A consumed
+EIP-3009 nonce is not by itself a payment: a 1-atomic-unit authorisation and a
+50 000-unit one both use up a nonce. The check proves the transfer instead
+(F-17):
+
+1. `AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)` on the
+   network's USDC contract, filtered on both indexed topics over a bounded block
+   window (`PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS`, default 900 blocks: 30 minutes
+   at Base's 2 s block time), names the transaction that consumed the nonce.
+2. That transaction's receipt must carry a `Transfer` on the same contract with
+   `from == authorizer`, `to == PAY_TO` and `value >= the amount the server
+   priced.
+
+Both facts are read from the raw log topics and data, so the verdict is the
+chain's, not an RPC's decoding. Set `PAYMENT_RPC_URL` to enable it; the USDC
+address defaults per network (`PAYMENT_USDC_ADDRESS` overrides it). A proven
+transfer grants. No log in the window, a different recipient or a short amount
+is `unsettled` and refuses. An unreadable answer is `unavailable` and also
+refuses, so no branch of this check grants without the transfer. The check runs
+before entitlement on the first attempt and first on the recovery path, so a
+hostile facilitator cannot mint a session by answering `success`.
 
 `payment_intents` records the payment requirements at claim time
 (`requirements_json`). A controller housekeeping pass lists intents that have
@@ -463,7 +474,7 @@ a worker owns that claim and may be mid-send.
   `PAYMENT_RPC_URL` for an on-chain check. With neither, testnet still answers
   `409 reconciliation_pending` and the money is only visible to a human who
   reconciles the on-chain transfer. The on-chain check has never run against a
-  live chain in CI: its tests use a fake verifier.
+  live chain in CI: its tests use a fake chain reader.
 - An ambiguous refund outcome (timeout, 5xx, no transaction id) is `unknown`, not
   a failed attempt: the row stays `REFUND_SENDING` and is retried each time its
   lease expires, with the same key, indefinitely. `REFUND_MAX_ATTEMPTS` bounds

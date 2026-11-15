@@ -141,9 +141,10 @@ export async function createSession(
 
   // Recovery path: a previous attempt may have settled before crashing. The
   // chain is asked first (F-10), then the facilitator lookup for anything the
-  // chain cannot answer.
+  // chain cannot answer. Both are given the requirement this attempt priced, so
+  // recovery proves the same transfer the first attempt would have.
   if (recovered) {
-    const existing = await recoverSettlement(deps, key, payload);
+    const existing = await recoverSettlement(deps, key, payload, requirement);
     if (existing) {
       log.warn("payment_recovered_from_settlement", { paymentKeyPrefix: key.slice(0, 12) });
       return complete({ payer: existing.payer, transaction: existing.transaction });
