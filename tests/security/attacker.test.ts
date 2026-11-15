@@ -173,7 +173,15 @@ describe.skipIf(!available)("anonymous attacker (real cluster)", () => {
           createAttempt(API, { "x-forwarded-for": `203.0.113.${index + 1}` }),
         ),
       );
-      expect(spoofed.every((attempt) => attempt.status === 429)).toBe(true);
+      // The property: twelve distinct spoofed addresses do not get twelve fresh
+      // buckets. If the header were trusted, every one would be a 402 challenge.
+      // The bucket refills on a timer, so allow a token or two for the time the
+      // batch takes; what must not happen is a challenge per address, or a
+      // session.
+      const challenged = spoofed.filter((attempt) => attempt.status === 402).length;
+      expect(challenged).toBeLessThanOrEqual(2);
+      expect(spoofed.filter((attempt) => attempt.status === 201)).toHaveLength(0);
+      expect(spoofed.some((attempt) => attempt.status === 429)).toBe(true);
     },
     120_000,
   );

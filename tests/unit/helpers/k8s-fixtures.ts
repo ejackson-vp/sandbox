@@ -99,6 +99,9 @@ export interface SentPod {
   };
   spec: {
     runtimeClassName: string;
+    // Mandatory: the controller sets the tenant PriorityClass on every sandbox
+    // pod, so a spec without it is a regression.
+    priorityClassName: string;
     activeDeadlineSeconds: number;
     dnsPolicy: string;
     automountServiceAccountToken: boolean;
