@@ -2,6 +2,11 @@
 
 Four deployment profiles are gated separately. "Unverified" is not "passed".
 
+**Provenance.** This gate is a code-and-process assessment written by the same
+assistant that wrote most of the code under review. It is not an independent
+reviewer and not a penetration test. Where a row depends on an executed run, the
+row cites it; where it depends on reading code and tests, it says so.
+
 ## Gate checklist
 
 | Control | Status | Evidence |
@@ -9,110 +14,104 @@ Four deployment profiles are gated separately. "Unverified" is not "passed".
 | Payment replay cannot mint a second entitlement | PASS | F-02 integration tests |
 | Receipt holder cannot bind another client key | PASS | F-02 integration tests |
 | Capability is bound to the client commitment | PASS | F-02, `capabilityFor(key, commitment)` |
-| A captured create request is not a permanent replay | PASS | F-07, challenge nonce (#47), `tests/unit/challenge-nonce.test.ts` |
+| A captured create request is not a permanent replay | PASS | F-07, challenge nonce (#47) |
 | Exactly-once ledger under crash/retry (mock) | PASS | crash-recovery test, `countPayments` |
-| Unknown-database downgrade / destructive upgrade | PASS | F-03 migration tests |
+| Unknown-database downgrade / destructive upgrade | PASS | F-03 migration tests, additive ladder to v19 |
 | Custom price ≠ admitted limit divergence | PASS | property test, controller re-resolution |
-| Egress per-session and global budgets | PASS | F-01, 32-way concurrency test |
+| Egress per-session and global **connection** budgets | PASS | F-01, 32-way concurrency test |
+| Egress per-session and global **byte** budgets | PASS | `tests/unit/egress-budget.test.ts`; alert rules and a scrape target exist (`deploy/monitoring`) |
 | Egress destination validation (SSRF matrix) | PASS | 24-case suite |
+| API concurrent connections per client | PASS | `tests/unit/connection-limit.test.ts` |
 | Rate-limit penalties survive high cardinality | PASS | F-05 |
-| Image published only after a passing scan | **FAIL** | F-06 |
-| Real-mode settled-but-not-provisioned reconciliation | PARTIAL | F-10 (#31): recovery + ledger row; needs a facilitator that exposes a settlement lookup |
-| Real-mode refunds executed | PARTIAL | F-10 (#31): worker + webhook contract, mock-tested only; never run against real money |
-| Actions/images pinned by digest | **FAIL** | F-15 |
-| Guest pod image pinned at admission | PARTIAL | Kyverno policy shipped; unexecuted against a cluster (#30) |
-| Least-privilege workflow tokens | **FAIL** | 3 `TokenPermissionsID` alerts |
-| Kata guest→host isolation | **UNVERIFIED** | release gate added (`make security-isolation`); no run yet (#44) |
-| Cilium pod→pod / pod→API / metadata isolation | **UNVERIFIED** | packet-level suite wired into the release gate; no run yet (#44) |
-| Image vulnerability status | **UNVERIFIED** | no image built |
-| Multi-replica controller | NOT SUPPORTED | SQLite on a ReadWriteOnce volume; [ADR 0010](../docs/adr/0010-controller-ha-storage.md) targets Postgres behind the store port, which needs async store ports first |
-| Capacity quotas per payer/IP | PASS | durable per-payer + global budget (#48), restart test |
+| Image published only after a passing scan | PASS | staged tag, scan by digest, promote after both scans |
+| Actions and base images pinned | PASS | every `uses:` is a SHA, every `FROM` is `@sha256:`; `check-deploy-pins.mjs` |
+| Guest pod image pinned at admission | PASS | Kyverno policy fixed and executed: `scripts/kyverno-policy-test.sh` green on kind 1.32.2 with Kyverno 1.13.4, six admission outcomes |
+| Runtime class cannot silently degrade | PASS | startup read of the RuntimeClass, non-microVM handler refuses to serve; fake-apiserver tests. Guard applies when `EXECUTION_MODE=kata` (F-18) |
+| Least-privilege workflow tokens | PASS | job-scoped `permissions`, `contents: read` default |
+| Cilium pod→pod / pod→API / metadata isolation | PASS (Cilium) | packet-level suite green per pull request, plus the anonymous attacker suite |
+| Kata guest→host isolation | **UNVERIFIED** | no run on KVM hardware yet (#44) |
+| Real-mode settled-but-not-provisioned recovery | PARTIAL | API-side chain recovery proven in tests; the controller worker still needs a facilitator lookup (F-19) |
+| Real-mode refunds executed | PARTIAL | worker and webhook contract, mock-tested only; never moved funds |
+| Chain verdict binds amount and recipient | PARTIAL | nonce use is proven on chain; amount is bound by the preceding verify, and that invariant now has a regression test (F-17) |
+| Free entitlement cannot be obtained by a non-allowlisted payer | PASS | F-20: check runs after commitment proof, on the proven signer; 100% mutation score |
+| Allowlisted payer cannot exhaust a paid payer's budget | PASS | separate `allow:<address>` budget namespace |
+| Mainnet cannot activate silently | PASS | startup assertions: explicit `NETWORK`, real `PAY_TO`, `FACILITATOR_URL`, on-chain verifier |
+| Facilitator credentials never travel in plaintext | PASS | `FACILITATOR_API_KEY_*` requires an `https://` URL at startup |
+| Capacity quotas per payer/IP | PASS | durable per-payer and global budget (#48) |
 | Budget survives a controller restart | PASS | `tests/unit/payer-budget.test.ts` |
+| Multi-replica controller | SUPPORTED (writer-safe) | Postgres, Kubernetes Lease, writer guard, measured handover. The store is still a single primary (ADR 0010) |
+| Postgres durability | PARTIAL | daily logical backups complete in the reference deployment; no PITR, restore drill exists but has not run on production data (#162) |
+| Alerts reach a human | **FAIL** | the rule file ships no receiver; the reference stack evaluates with `-notifier.blackhole` |
+| Incident procedures rehearsed | **FAIL** | four runbooks and a tabletop script, none executed (#60) |
+| Emergency stop | **FAIL** | no kill switch; scaling the API to zero also stops reads for live sessions |
+| Independent test of the guest/host boundary | **FAIL** | not performed |
 
 ---
 
 ## 1. Local development — **READY**
 
-Profile: `make up` / local processes, `PAYMENT_MODE=mock`, `runc` or local
-`LocalProvisioner`, single operator, no untrusted users, no real money.
+Profile: `make up`, `PAYMENT_MODE=mock`, `runc`, single operator, no untrusted
+users, no real money.
 
-**Verdict: READY.** All offline suites pass (227 tests). The fixed issues remove
-the paths that would let one local session exhaust the proxy, replay a mock
-receipt, or lose the local ledger on a schema bump.
-
-Conditions:
-
-- Do not expose the API or egress proxy to the internet.
-- Treat `mock:local` as having no economic security (it does not).
-- Expect sessions created before the upgrade to lose their capability (F-08).
+**Verdict: READY.** Build, typecheck, 1331 unit, 162 property, 78 integration,
+40 portable and the Go suite pass. The original conditions still hold: do not
+expose the API or the proxy, treat `mock:local` as having no economic security,
+and expect a capability minted before an upgrade to stop verifying (F-08).
 
 ## 2. Trusted private beta — **CONDITIONAL**
 
-Profile: a small set of known users or internal agents, mock payments **or**
-pre-funded credit (no automatic real settlement), single replica, operator
-reachable, guests run code you would tolerate on a shared VM.
+Profile: known users or internal agents, mock payments or pre-funded credit,
+operator reachable, guests run code you would tolerate on a shared node.
 
-**Verdict: CONDITIONAL — approved only with every condition below.**
+**Verdict: CONDITIONAL.** Conditions:
 
-1. Deploy images by **digest**, never by tag, until F-06 is fixed.
-2. If real settlement is used at all, a human must reconcile
-   `REFUND_PENDING` / failed-intent cases manually (F-10 runbook), and the beta
-   must cap exposure per user.
-3. Keep `TRUST_PROXY_HOPS=0` unless a proxy you control overwrites
+1. Deploy images by digest. The pins now exist and CI fails on drift, so this is
+   a deployment check rather than a hope.
+2. Keep `TRUST_PROXY_HOPS=0` unless a proxy you control overwrites
    `X-Forwarded-For` (F-09).
-4. Run single-replica API/controller; do not scale the controller.
-5. Accept that a capture of the live challenge *and* its signed request, replayed
-   before the real client, is equivalent to the client (F-07 residual). A capture
-   of an older request no longer works (#47).
-6. Onboard only tenants for whom `runc`-class isolation is acceptable; Kata is
-   unverified here.
+3. Accept that Kata is unverified here and say so to the tenant.
+4. A human reconciles `REFUND_PENDING` if real settlement is used (F-19).
+5. Accept the F-07 residual: a capture of the live challenge *and* its signed
+   request, replayed first, is equivalent to the client.
 
 ## 3. Public beta with payment enforcement — **BLOCKED**
 
-Profile: anonymous internet users, real (testnet or mainnet-equivalent)
-settlement, money changes hands automatically.
+Profile: anonymous internet users, real settlement, money moves automatically.
 
-**Verdict: BLOCKED.** Blockers, in order:
+**Verdict: BLOCKED.** Five blockers, in order:
 
-1. **F-06** — a failed scan still leaves a pullable version/latest tag.
-2. **F-10** — a crash between settlement and entitlement loses the payment in
-   testnet mode (no lookup, no refund). Real refunds are never executed.
-3. **F-15 / TokenPermissions** — release and CodeQL workflows are not pinned or
-   least-privilege; CI supply chain is not gated.
-4. **Kata and Cilium are UNVERIFIED.** A public beta that runs hostile code
-   cannot claim tenant isolation from `runc` or from unit tests.
-5. **Incident response: written, not rehearsed.** Three runbooks and a tabletop
-   script exist under `docs/runbooks/`. No exercise has been run, so the
-   procedures are unverified and the gaps they will find are unknown
-   ([tabletop.md](../docs/runbooks/tabletop.md)). The durable per-payer and
-   global create budget (#48) closed the quota half of this blocker; the
-   detection, containment and escalation half is what remains.
+1. **Kata is unverified.** Cilium is proven per pull request; the VM boundary has
+   never run on KVM hardware. A public beta that runs hostile code cannot claim
+   isolation from unit tests.
+2. **No real settlement has executed.** One settle and one refund must move funds
+   and appear in the ledger before the copy on the site is true.
+3. **Nothing pages.** Alerts evaluate into a blackhole. A payment incident would
+   be discovered by a customer.
+4. **Incident response is written, not rehearsed.**
+5. **No kill switch.** The only emergency stop also stops reads for live sessions.
+
+Closed since the last gate: image promotion order (F-06), action and base-image
+pinning (F-15), the Kyverno policy being invalid rather than merely unexecuted,
+the SQLite single-writer limit, and the missing egress byte budget.
 
 ## 4. Unrestricted hostile multi-tenant production — **BLOCKED**
 
-Profile: arbitrary internet tenants, real money, untrusted code, SLA.
+Profile: arbitrary internet tenants, real money, untrusted code, an SLA.
 
 **Verdict: BLOCKED.** All public-beta blockers, plus:
 
-- No executed microVM isolation or packet-level network attestation. The
-  release gate now runs the Kata/Cilium suites on a disposable cluster and
-  records the digests it tested (`docs/release-process.md#isolation-gate`), and
-  blocks a tag when the suite did not run. Until the first green run exists,
-  this row is still unverified.
-- Control plane is a single writer on a SQLite file on a `ReadWriteOnce` volume
-  pinned to the control-plane node. The lease failover is implemented and
-  measured, but a replacement pod waits 30 s to 2 min for the volume, so what
-  ships is single-node HA ([ADR 0010](../docs/adr/0010-controller-ha-storage.md)).
-  The accepted direction is Postgres behind the store port (#25); until that
-  lands there is no PITR automation and no cross-region story.
-- Capability remains a bearer token for its TTL (F-07); no per-request
-  proof-of-possession.
-- No KMS/HSM for `CAPABILITY_SECRET` / `CONTROLLER_ADMIN_TOKEN` rotation. Key ids
-  plus a previous-key verify set make a manual rotation safe without draining
-  sessions ([docs/runbooks/secret-rotation.md](../docs/runbooks/secret-rotation.md));
-  custody is still a Kubernetes Secret.
-- No per-tenant spend caps, anomaly detection, or abuse escalation path.
-- No independent penetration test of the guest/host boundary.
+- **No independent test of the guest/host boundary.** This review is by the
+  author of the code.
+- **No PITR and no measured database failover.** The store is one Postgres
+  primary; backups are daily and logical (#162).
+- **Checkpoints are plaintext and node-pinned** (ADR 0007). Any product that
+  sells suspendable sessions inherits that.
+- **Relay state is in process memory**, so a restart still costs one interrupted
+  operation per session even though the session survives (#24).
+- **The capability is a bearer token for its TTL** (F-07). No per-request proof
+  of possession.
+- **Key custody is a Kubernetes Secret.** Rotation by key id is implemented;
+  there is no KMS or HSM.
 
 ## OpenSSF process decisions (proposed, not decided)
 
@@ -163,34 +162,37 @@ rather than leaving it undecided.
 
 | Blocker | Evidence required |
 |---|---|
-| F-06 | A release run where the version/latest tags appear only after Trivy passes; a deliberately failing scan produces no deployable tag |
-| F-10 | End-to-end test in a non-production settlement sandbox: crash after settle → retry returns the entitlement or a refund is executed; ledger auditable |
-| F-15 | Actions pinned to SHAs, images by digest, job-scoped `permissions` |
-| Kata/Cilium | A release run whose `isolation` job is green, with `tested-images.json` naming the same control and guest digests that `promote` tags. `make security-isolation` reproduces it locally. A release cut with `ISOLATION_EVIDENCE=none` does not satisfy this row. |
-| Abuse | ~~Durable per-payer quota with a test that survives a restart~~ met by #48 (`tests/unit/payer-budget.test.ts`). The remaining abuse gap is incident response: written but unrehearsed (blocker 5) |
+| Kata isolation | A release run whose `isolation` job is green on a KVM-capable runner, with `tested-images.json` naming the same control and guest digests that `promote` tagged. `make security-isolation` against a real Kata cluster is acceptable for a one-off, and does not replace the per-tag run |
+| Real money | One settle and one refund on a mainnet-equivalent network, with the ledger rows and the transaction hashes recorded |
+| Paging | One alert delivered to a person through the configured receiver, and the runbook step it triggered written down |
+| Kill switch | A create refused with `503` while an existing session keeps executing, demonstrated and tested |
+| Incident response | A recorded tabletop with a gap list that has owners and dates (#60) |
+| F-19 | A settled-but-unentitled payment reconciled by the controller with no client retry |
+| F-17 | The ordering test stays green: a chain-settled nonce with a failed verify grants nothing |
 
 ## Appendix — point-in-time security assessment
 
-Recorded after `dd44e93`, so the rating has the same provenance as the findings.
-This is a code-and-process assessment, not an independent penetration test.
+Recorded against `5d4d50a` plus the delta review. Code-and-process, not an
+independent test.
 
 | Profile | Rating | Binding constraint |
 |---|---|---|
 | Local development / trusted private beta | **8 / 10** | Bearer capability within its TTL; dev attestation is insecure by design |
-| Public beta with payment enforcement | **4 / 10 — blocked** | F-10, F-06, unverified isolation |
-| Unrestricted hostile multi-tenant | **3 / 10 — blocked** | Kata/Cilium unexecuted, no HA ledger, no durable quotas |
+| Public beta with payment enforcement | **6 / 10 — blocked** | Kata unverified, no paging, real money unexecuted |
+| Unrestricted hostile multi-tenant | **4 / 10 — blocked** | No independent boundary test, no PITR, plaintext checkpoints |
 
-Dimension grades: design **A-**, audited code paths **B+**, verification **B-**
-(the isolation suites are unexecuted), supply chain **B** (pins landed; release
-promotion open), operations **C** (single writer per ADR 0010, manual key rotation without a KMS, no refunds).
+Dimension grades: design **A-**, audited code paths **B+** (the delta review
+covered the new trust surfaces), verification **B** (Cilium and the attacker
+suite run; Kata does not), supply chain **A-** (SHA and digest pins enforced in
+CI, provenance attested, promotion gated), operations **D** (nothing pages, no
+kill switch, no rehearsal, single primary database).
 
-Confidence: medium-high on the paths covered by tests; low on every isolation
-claim, because no cluster was available.
+Confidence: medium-high on the paths covered by tests and by executed CI;
+low on every isolation claim that depends on Kata, and low on anything that
+depends on money actually moving, because it has not.
 
 The three changes that would move public-beta readiness most:
 
-1. Run the Kata and Cilium suites in the release gate on a Kata-capable runner
-   (the gate exists; it has not executed yet, #44).
-2. Close the release-promotion and settlement-refund gaps (#42, #31).
-3. Add durable per-payer quotas and a freshness nonce / per-request proof of
-   possession (#48, #47).
+1. Run the Kata suite on KVM hardware and record the digests (#44).
+2. Wire one alert to a human and add the kill switch.
+3. Execute one real settle and one real refund.

@@ -1,6 +1,7 @@
 # Findings
 
-Base revision: `9d4bf54`. Fixes merged in `381dad3` (PR #36); follow-up work is
+Base revision: `9d4bf54` for F-01 to F-16, reviewed again at `5d4d50a` for
+F-17 to F-20 (see [Delta review](#delta-review-5d4d50a)). Follow-up work is
 tracked as GitHub issues #31, #42–#48 and #64. See `EVIDENCE.md`.
 Severity is impact if exploited **in the configuration named in each entry**.
 Confidence: `proven` (regression test), `code-confirmed` (read and traced, not
@@ -22,8 +23,12 @@ executed), `theoretical` (no concrete path found).
 | F-12 | — | reviewed | CodeQL `go/zipslip` (`archive.go:54`) | False positive, guards present |
 | F-13 | — | reviewed | CodeQL `go/request-forgery` (`relay.go:61`) | False positive under the deploy assumption |
 | F-14 | Low | reviewed | CodeQL `js/resource-exhaustion` (`registry.ts:181`) | Bounded; residual |
-| F-15 | Medium | code-confirmed | GitHub Actions and base images pinned by tag, not digest/SHA | **Open** |
+| F-15 | Medium | code-confirmed | GitHub Actions and base images pinned by tag, not digest/SHA | **Fixed**: every `uses:` is a 40-character SHA and every `FROM` is `@sha256:`; `scripts/check-deploy-pins.mjs` fails CI on drift between the overlay and the release |
 | F-16 | — | reviewed | CodeQL `js/missing-rate-limiting` ×10 on controller/relay `/internal` routes | Fixed by shared TokenBucket; query model gap documented; alerts #217/#218 dismissed as false positive |
+| F-17 | Medium | code-confirmed | The chain verdict proves the EIP-3009 **nonce was used**, not that this amount reached this address. The safety of that rests on an implicit invariant: the chain is only consulted after a successful `verifyPayment` for the same requirement | Accepted with a test gap; see below |
+| F-18 | Low | code-confirmed | The runtime-class guard only runs when `EXECUTION_MODE=kata`. A cluster deployed with the default `dev` skips it, and the only signal is the `executionMode` field in the evidence | Accepted (dev is explicit); healthz now reports the resolved handler in every mode |
+| F-19 | Medium | code-confirmed | Background settlement recovery in the controller still uses the facilitator lookup only, so a settled-but-unentitled payment is recorded as debt only if the client retries the create and the API resolves it from the chain | Open; the client-retry path is the gap |
+| F-20 | Medium | code-confirmed | The allowlist is a free tier on the public create path. The credential is a long-lived wallet key held by the agent host that runs model-authored code, so a compromised host gets free sessions until the entry is disabled | Accepted with a tier ceiling and a concurrency cap; see below |
 
 ---
 
@@ -468,3 +473,130 @@ updates them), pin base images by digest, and enable `docker` SBOM/provenance
 No open Dependabot alerts and no open secret-scanning alerts at the time of
 review. Seven Dependabot PRs were merged into `9d4bf54`; the test suite covers
 the resulting majors (TypeScript 7, Vitest 5, Node 26 base).
+
+---
+
+## Delta review (`5d4d50a`)
+
+458 commits and 607 files landed between `9d4bf54` and the revision this section
+was written against. The audit was scoped to the trust boundaries that changed,
+not to every line: payments and settlement, the new allowlist, the runtime-class
+guard, egress accounting, API admission, the store migrations and the CI
+workflows. Prose, tests, coverage and refactors with no behaviour change were
+read only where they touched those paths.
+
+Provenance, stated plainly: this review was written by the same assistant that
+wrote most of the change. It is a code-and-process assessment by an interested
+party, not an independent one. That is a weaker control than a second reviewer
+and should be read as such. The release gate records it as a residual.
+
+### F-17 — the chain verdict proves nonce use, not amount or recipient
+
+**Attacker prerequisites:** a paying wallet, and a path where the chain answer is
+consulted without a preceding successful verify.
+**Surface:** `confirmSettledOnChain` (`api/src/payments/settlement-confirmation.ts`)
+and its callers.
+**Boundary:** on-chain state → entitlement.
+**CWE:** CWE-345 (insufficient verification of data authenticity).
+
+**Expected:** an entitlement is granted only when *this* transfer settled: this
+payer, this nonce, this amount, this recipient.
+
+**Actual:** `authorizationState(authorizer, nonce)` returns `true` once that
+nonce is used, for any amount and any recipient. The verifier reads nothing else
+from the chain.
+
+**Why it is not exploitable today:** `verifyAndSettle` calls
+`resourceServer.verifyPayment(payload, requirement)` with the server's own
+requirement before it settles, and every recovery path that consults the chain
+is reachable only after that verify returned `isValid`. The amount is therefore
+bound by the verify, and the chain answer only answers "did it land".
+
+**Effect if the invariant breaks:** a 1-atomic-unit EIP-3009 transfer with a
+chosen nonce would entitle a session worth 50,000 units. That is a single
+refactor away from being live: any new caller that consumes the chain verdict
+directly, or a mis-ordered recovery branch, converts it into free sessions.
+
+**Fix applied:** the invariant is now stated at the call site and pinned by a
+test that a chain-used nonce does not grant when verification has not passed for
+that payload.
+
+**Residual:** the controller's background recovery still uses the facilitator
+lookup only (F-19), so the chain answer is not used everywhere it could be.
+
+### F-18 — the runtime-class guard is conditional on a label
+
+**Surface:** `controller/src/config/kubernetes.ts`.
+**Boundary:** configuration → the isolation level actually used.
+
+The guard reads the `RuntimeClass` and refuses a non-microVM handler, but only
+when `EXECUTION_MODE=kata`. With the default `dev`, no read happens. Isolation
+itself comes from `runtimeClassName` on the pod, not from the label, so a
+`dev` deployment on a `kata` RuntimeClass is still a VM; the risk is the reverse
+case, a cluster whose RuntimeClass is `runc` and whose mode was left at `dev`.
+That deployment advertises `executionMode: dev` in its evidence, and `/internal/healthz`
+now reports the resolved handler in every mode, so the state is observable
+rather than silent.
+
+**Recommendation, not applied:** log a startup warning when
+`KUBERNETES_ENABLED=true` and `EXECUTION_MODE=dev`, because that combination is
+the one where an operator believes they have VMs and might not.
+
+### F-19 — settled-but-unentitled recovery depends on the client retrying
+
+**Surface:** `SettlementRecovery` in the controller.
+**Boundary:** money moved → recorded obligation.
+
+The API resolves a lost or ambiguous settle from the chain, so a client that
+retries is made whole. If the API dies after settlement and the client never
+retries, the controller's worker asks the facilitator's settlement lookup, which
+the public testnet facilitator does not expose and CDP does not document, so no
+`REFUND_PENDING` row is written. The money moved and no debt is recorded.
+
+This is the remaining half of F-10: the forward path is fixed, the background
+reconciliation is not. **Fix:** give the worker the same `ChainSettlementVerifier`
+the API uses, keyed on the intent's stored authorizer and nonce.
+
+### F-20 — the allowlist is a free tier on the public create path
+
+**Surface:** `POST /v1/sessions` with `PAYER_ALLOWLIST_ENABLED=true`.
+**Boundary:** a proven wallet address → an entitlement with no payment.
+**CWE:** CWE-284 (improper access control) as the generic class; the design is
+deliberate (ADR 0013) and the concern is the residual.
+
+**Expected:** only an operator-added address is granted; only within its tier
+ceiling and concurrency cap; only with a fresh single-use challenge; and the paid
+path is unchanged for everyone else.
+
+**Actual:** the check runs after `proveCommitment` and before any facilitator
+call, keyed on the address recovered from the commitment signature, never on a
+claimed field. Every refusal (missing row, disabled, tier, concurrency, different
+signer) falls through to the paid path. A lookup failure answers `503` rather
+than charging a wallet that is meant to be free. Budgets use a separate
+`allow:<address>` namespace. Mutation testing kills every mutant in the module.
+
+**Residual, accepted:** the credential is a long-lived wallet key, and for the
+Hermes agent it sits on the host that executes model-authored commands. A host
+compromise therefore yields free sessions until the row is disabled. The bounds
+are the entry's `max_tier` and `max_concurrent`; the mitigation is to keep both
+low and to alert on `sandbox_sessions_total{source="allowlist"}` volume. A
+short-lived signed grant was considered and rejected on operational cost; if the
+agent host is ever exposed, that trade should be revisited.
+
+Free sessions also skip the facilitator, so they are not screened by the KYT and
+OFAC checks a paying payment gets. The value of that is low, but it means an
+allowlisted wallet is the one path into the service that is not compliance
+screened.
+
+---
+
+## What this review does not cover
+
+- **Kata isolation.** No run against real hardware. Cilium is proven in CI per
+  pull request; the VM boundary is not.
+- **Real money.** No settle and no refund has moved funds.
+- **The guest binary.** The Go hardening and archive paths were not re-audited;
+  F-12's guards are unchanged.
+- **Dependencies.** No fresh advisory sweep; the runtime audit is clean and the
+  five open advisories are dev-only tooling.
+- **An independent reviewer.** See the provenance note above.
