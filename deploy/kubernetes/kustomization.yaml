@@ -4,6 +4,9 @@ resources:
   - 00-namespaces.yaml
   - 01-runtimeclass.yaml
   - 03-config.yaml
+  # Before every workload: pods reference these by name, and the API server
+  # validates the reference at admission.
+  - 04-priorityclasses.yaml
   - 04-rbac.yaml
   # Postgres comes before the workloads that dial it, so `kubectl kustomize`
   # renders (and `apply.sh` applies) the Service and StatefulSet first.

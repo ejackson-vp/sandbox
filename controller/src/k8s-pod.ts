@@ -5,6 +5,15 @@
 import * as k8s from "@kubernetes/client-node";
 import type { SessionLimits } from "@x402s/shared/protocol";
 
+/**
+ * The PriorityClass every sandbox and warm-pool pod runs under.
+ *
+ * Negative on purpose: a tenant is evicted before any unclassified workload on
+ * a shared node. Defined with the rest of the classes in
+ * `deploy/kubernetes/04-priorityclasses.yaml`.
+ */
+export const TENANT_PRIORITY_CLASS = "sandbox-tenant";
+
 type PodEnvSpec = {
   executionMode: string;
   image: string;
@@ -104,6 +113,12 @@ export function buildPod(namespace: string, opts: PodBuild): k8s.V1Pod {
     },
     spec: {
       runtimeClassName: opts.runtimeClass,
+      // Tenants lose every eviction and preemption contest with the workloads
+      // that keep paid sessions alive. The class is defined in
+      // deploy/kubernetes/04-priorityclasses.yaml; a cluster that does not
+      // install it would reject these pods at admission, so the manifests and
+      // the controller ship together.
+      priorityClassName: TENANT_PRIORITY_CLASS,
       restartPolicy: "Never",
       automountServiceAccountToken: false,
       enableServiceLinks: false,

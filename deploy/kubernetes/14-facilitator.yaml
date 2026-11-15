@@ -40,6 +40,7 @@ spec:
       annotations:
         x402.io/warning: "MOCK FACILITATOR: no chain, no funds, no economic security"
     spec:
+      priorityClassName: sandbox-critical
       enableServiceLinks: false
       automountServiceAccountToken: false
       nodeSelector:

@@ -54,6 +54,7 @@ spec:
       # The database is the last thing a drain should kill: it gets the full
       # termination window to checkpoint and shut down cleanly.
       terminationGracePeriodSeconds: 120
+      priorityClassName: sandbox-critical
       enableServiceLinks: false
       automountServiceAccountToken: false
       nodeSelector:

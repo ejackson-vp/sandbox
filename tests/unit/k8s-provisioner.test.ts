@@ -64,6 +64,9 @@ describe("createPod", () => {
     // Mandatory, not a default: without it the guest runs on the shared kernel
     // and every isolation claim in the docs is false.
     expect(pod.spec.runtimeClassName).toBe("kata-fc");
+    // A tenant must lose every eviction contest with the control plane on a
+    // shared node. Defined in deploy/kubernetes/04-priorityclasses.yaml.
+    expect(pod.spec.priorityClassName).toBe("sandbox-tenant");
     // Lease, plus the longest command, plus the provisioning slack the
     // reconciler relies on before Kubernetes kills the pod out from under it.
     expect(pod.spec.activeDeadlineSeconds).toBe(600 + 120 + 300);

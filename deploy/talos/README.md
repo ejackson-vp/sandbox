@@ -1,8 +1,8 @@
 # Deploying to a real cluster (Talos)
 
-In the homelab this path is **reconciled by Flux** from `ejackson-vp/homelab`
-(`apps/sandbox/release.yaml`); nothing here is applied by hand. Standalone, or to
-preview exactly what Flux will apply:
+In a Flux-managed deployment this path is **reconciled from a private
+repository**; nothing here is applied by hand. Standalone, or to preview exactly
+what Flux will apply:
 
 ```bash
 kubectl kustomize deploy/talos   # render only
@@ -12,8 +12,8 @@ kubectl apply -k deploy/talos    # only if you are not running Flux
 This overlay does **not** create credentials: the base ships no Secrets. The
 controller needs `x402-secrets` and `postgres-credentials` in `sandbox-system`
 before applying — locally `scripts/dev-secrets.sh` writes both (git-ignored), on
-a real deployment they come from your secret store. The homelab applies them
-from the private repository (SOPS-encrypted).
+a real deployment they come from your secret store. A private deployment applies
+them from its own encrypted secret store.
 
 This is the overlay used for a two-node Talos cluster with the
 `kata-containers` system extension. It extends `deploy/kata`, so sandboxes run
@@ -30,18 +30,78 @@ kubeadm config; on any other cluster you have to set it.
 kubectl label node <sandbox-node> x402.io/sandbox-pool=true
 ```
 
-Only label nodes you are willing to run hostile code on. Do **not** label the
-node running etcd unless it is genuinely disposable — a runaway sandbox there
-takes the control plane with it. On Talos this belongs in the machine config so
-it survives a reinstall (`KubeNodeConfig.labels`), not in an imperative
-`kubectl label`.
+On Talos put this in the machine config (`machine.nodeLabels`) rather than
+running `kubectl label`, so a reimage does not silently drop it and leave the
+pool unschedulable.
 
-Verify the runtime is actually available before deploying, or pods will sit in
+**Label every node you are willing to run hostile code on, and on a small
+cluster that is all of them.** A two-node deployment has nowhere else to put a
+sandbox, so the etcd node runs tenants too. That is a capacity decision, not a
+mistake, but it moves the risk from "is the etcd node labelled" to "can this node
+absorb both roles at once". Three numbers decide that.
+
+### 1.1 The memory budget
+
+Sandboxes are scheduled on **requests** and can consume up to their **limits**,
+so a node can be fully committed and still oversubscribed in practice. Size the
+warm pool against the limits, not the requests:
+
+```text
+warm_pods_per_node x memory_limit_per_tier
+  + control plane (etcd, apiserver, controller, postgres, api, relay, proxy)
+  + 2 GiB headroom
+<= node allocatable memory
+```
+
+With 12 GiB nodes and a 512 MiB `short` limit, twenty warm pods spread over two
+nodes is 5 GiB of limits per node before anything is claimed for the control
+plane. That fits, but only if the scheduler spreads them. If the pool is
+concentrated on one node, lower `WARM_POOL_BASE_MIN` until the arithmetic works
+for a single node, because that is what a drained or cordoned peer produces.
+
+### 1.2 Eviction order
+
+The manifests install two PriorityClasses
+([`04-priorityclasses.yaml`](../kubernetes/04-priorityclasses.yaml)):
+`sandbox-critical` for Postgres, the API, the controller, the relay, the egress
+proxy and the facilitator, and `sandbox-tenant` for every sandbox and warm-pool
+pod. A tenant is preempted and evicted before any unclassified workload on the
+same node. Without them every pod is priority 0 and the kubelet resolves pressure
+by QoS, which is how a busy guest can take the database down with it.
+
+etcd and the apiserver are static pods and are not covered by a PriorityClass.
+Protect them with a kubelet reservation instead, in the machine config:
+
+```yaml
+machine:
+  kubelet:
+    extraConfig:
+      systemReserved: { cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi }
+      kubeReserved: { cpu: 500m, memory: 512Mi, ephemeral-storage: 2Gi }
+      evictionHard: { memory.available: 512Mi, nodefs.available: 10% }
+```
+
+### 1.3 Disk
+
+On Talos, etcd's data and `local-path-provisioner`'s volumes both live on the
+ephemeral disk. Checkpoint writes are tenant-controlled, and etcd is
+fsync-sensitive: sustained write latency shows up as slow API calls, and the
+controller holds its leadership through a Kubernetes Lease, so a slow apiserver
+turns into leader churn. Two things keep this bounded: the per-tier `diskMiB`
+limit, which caps what a checkpoint may write, and, where the hardware allows
+it, a separate disk for local-path. If neither is possible, say so in the
+deployment notes rather than implying the control plane has isolation it does
+not have.
+
+### 1.4 Verify
+
+Verify the runtime is available before deploying, or pods will sit in
 `ContainerCreating` forever:
 
 ```bash
 kubectl get runtimeclass x402-sandbox -o jsonpath='{.handler}{"\n"}'   # expect: kata
 talosctl -n <sandbox-node> ls /dev/kvm                                 # expect: kvm
+kubectl get priorityclass sandbox-critical sandbox-tenant              # both present
 ```
 
 ## 2. Storage
@@ -112,14 +172,14 @@ kubectl apply -k deploy/monitoring/contract  # three ConfigMaps, no workloads
 ```
 
 The runnable stack — VictoriaMetrics single-node, vmalert and Grafana — is
-cluster-specific and lives in the private homelab repository
-(`apps/sandbox-monitoring/`). Flux reconciles it there in three ordered steps:
-namespace, contract, stack. Nothing in this repository points at those
-workloads. By hand, apply the app first, then the namespace, contract and stack:
+cluster-specific and lives in the private deployment repository. Flux reconciles
+it there in three ordered steps: namespace, contract, stack. Nothing in this
+repository points at those workloads. By hand, apply the app first, then the
+namespace, contract and stack:
 
 ```bash
 kubectl apply -k deploy/talos
-# namespace + stack come from ejackson-vp/homelab:
+# namespace + stack come from the private deployment repository:
 #   kubectl apply -k apps/sandbox-monitoring-namespace
 #   kubectl apply -k apps/sandbox-monitoring
 ```
