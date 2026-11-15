@@ -5,9 +5,9 @@ Each step names what you must supply, the commands, and the check that proves th
 step happened. A step is not done because a command exited zero; it is done when
 its check passes.
 
-Nothing here is applied by hand in the homelab except where it says so: the
-`sandbox` app is reconciled by Flux from `ejackson-vp/homelab`. Standing up a new
-host is the exception, because it is a new cluster.
+Nothing here is applied by hand in the reference deployment except where it
+says so: the `sandbox` app is reconciled by Flux from a private repository.
+Standing up a new host is the exception, because it is a new cluster.
 
 ## 0. Preconditions
 

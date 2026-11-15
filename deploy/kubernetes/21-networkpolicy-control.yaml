@@ -21,9 +21,10 @@ spec:
 # The second rule is the public path: the cloudflared tunnel
 # (deploy/kubernetes/cloudflared) dials the API Service on 3000. It is explicit
 # rather than leaning on the port-only rule above, because a deployment that
-# scopes that rule to the Tailscale namespace for operator access (the homelab
-# does) would otherwise leave the tunnel answering 502. The Tailscale Ingress
-# stays in place for operators; it is no longer the public path.
+# scopes that rule to the Tailscale namespace for operator access (the
+# reference deployment does) would otherwise leave the tunnel answering 502.
+# The Tailscale Ingress stays in place for operators; it is no longer the public
+# path.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -91,8 +92,9 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
-    # The API also has the mTLS listener. In the homelab the 3001 rule above is
-    # narrowed to the relay, so the API can only use the client-certificate path.
+    # The API also has the mTLS listener. In the reference deployment the 3001
+    # rule above is narrowed to the relay, so the API can only use the
+    # client-certificate path.
     - from:
         - podSelector:
             matchLabels: {app: api}
@@ -263,8 +265,9 @@ spec:
   policyTypes: ["Ingress"]
   ingress:
     - from:
-        # Homelab Prometheus/Grafana live in `monitoring`; either namespace is
-        # accepted so the manifest also fits an `observability` deployment.
+        # The operator's Prometheus/Grafana live in the `monitoring` namespace;
+        # either is accepted so the manifest also fits an `observability`
+        # deployment.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring

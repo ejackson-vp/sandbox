@@ -2,8 +2,8 @@
 
 > Benchmark tooling and raw results live in the [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench) repository; paths below refer to that repo.
 
-Measured on the live Talos homelab, not the kind/dev rig. This is the number to
-quote for this deployment.
+Measured on the live Talos reference deployment, not the kind/dev rig. This is
+the number to quote for this deployment.
 
 ## Environment
 

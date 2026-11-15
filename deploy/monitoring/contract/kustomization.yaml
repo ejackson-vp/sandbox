@@ -2,9 +2,9 @@
 # names and is useful with any Prometheus-compatible scraper.
 #
 # The runnable VictoriaMetrics + vmalert + Grafana stack is cluster-specific and
-# lives in the private homelab repository (`apps/sandbox-monitoring/`). Nothing
-# in this directory knows about a metrics backend, a retention period or an
-# image tag.
+# lives in the private deployment repository (`apps/sandbox-monitoring/`).
+# Nothing in this directory knows about a metrics backend, a retention period or
+# an image tag.
 #
 #   kubectl kustomize deploy/monitoring/contract   # render only
 #   kubectl apply -k deploy/monitoring/contract    # ConfigMaps into `monitoring`
@@ -24,7 +24,7 @@ resources:
 
 configMapGenerator:
   # Stable names on purpose. Kustomize appends a content hash only within the
-  # Kustomization that generates the ConfigMap; the homelab stack lives in a
+  # Kustomization that generates the ConfigMap; the monitoring stack lives in a
   # different Kustomization, so a hashed name would be unknowable there.
   # Consumers mount these by name.
   - name: vmalert-rules

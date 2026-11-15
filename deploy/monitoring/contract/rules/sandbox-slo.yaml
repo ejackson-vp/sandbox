@@ -8,7 +8,7 @@
 # process without a role label.
 #
 # Thresholds are the ones agreed in issue #38. They are deliberately small and
-# explainable for a single-tenant homelab; tune them only with a recorded
+# explainable for a single-tenant deployment; tune them only with a recorded
 # reason. `reconciliation_pending`, the warm-pool rules and the ledger audit
 # rules carry caveats in deploy/monitoring/README.md: the API does not export a
 # per-error-code counter, the warm pool can be disabled, and the audit gauges
