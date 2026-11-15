@@ -140,3 +140,38 @@ Alert numbers reviewed: 181–190 (rate limiting), 178 (request forgery),
 | `TRUST_PROXY_HOPS > 0` behind a real proxy | Deployment-specific | XFF trust untested in situ |
 | Long-running soak, fd/connection leaks | Time-boxed review | Only bounded deterministic tests |
 | Refund worker (real mode) | Not implemented | F-10 open |
+
+---
+
+## Delta review (revision `5d4d50a`)
+
+| Item | Value |
+|---|---|
+| Revision reviewed | `5d4d50a` (merge of the security-first branch), plus the delta-review commit |
+| Span since the base review | 458 commits, 607 files, +93,531 lines |
+| Scope | payments and settlement, the allowlist, the runtime-class guard, egress accounting, API admission, store migrations, CI workflows |
+| Environment | `make verify` locally against Postgres 17 in Docker; CI on GitHub-hosted runners |
+| Kata | still not executed (see below) |
+| Real money | not executed |
+
+### Commands and results
+
+| Command | Result |
+|---|---|
+| `make verify` | PASS: build, typecheck, structure, unit 1331, property 162, portable 40, `go test`, `go vet` |
+| `npm run test:integration` (local guest) | PASS: 78 tests, 13 files |
+| `gh pr checks` on the merged branch | `unit`, `postgres contract`, `integration (local guest)`, `isolation (kind + cilium)`, `fuzz (short)`, `markdownlint`, `internal links` all pass |
+| `scripts/kyverno-policy-test.sh` | PASS: kind v1.32.2, Kyverno v1.13.4, six admission outcomes |
+| `node scripts/check-deploy-pins.mjs` | overlay and Kyverno allowlist match release 0.1.30 |
+| Stryker on `api/src/use-cases/create-session-allowlist.ts` | 100%, 24 killed, 0 survived |
+| `npx vitest run tests/unit/chain-settlement.test.ts` | 14 pass, including the F-17 ordering test |
+
+### What the executed evidence does not include
+
+- **Kata.** The `isolation` job deploys kind with Cilium under the `runc`
+  RuntimeClass; the suites that need a Kata runtime are deliberately excluded from
+  CI and have not been run locally either. This is the one isolation row that
+  remains UNVERIFIED.
+- **Money.** No settlement and no refund has moved funds on any network.
+- **Paging.** No alert has been delivered to a person.
+- **Incident response.** The tabletop has not been run (#60).

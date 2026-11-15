@@ -39,6 +39,27 @@ describe("chain-verified settlement", () => {
     expect(result.controller.completeIntent).toHaveBeenCalledTimes(1);
   });
 
+  it("does not entrust a chain-settled nonce when verification fails (F-17)", async () => {
+    const isSettled = vi.fn(async () => true);
+    const result = await postCreate(() => undefined, {
+      settlementVerifier: { isSettled },
+      // The chain says this nonce is used, but the payload was never verified
+      // against the server's requirement, so the amount is unbound. The chain
+      // answer must never be consulted for an unverified payload, or a
+      // 1-atomic-unit transfer would buy a session.
+      resourceServer: {
+        verifyPayment: async () => ({ isValid: false, invalidReason: "value_mismatch" }),
+        settlePayment: async () => {
+          throw new Error("settle must not be called for an invalid payload");
+        },
+      },
+    });
+
+    expect(result.status).toBe(402);
+    expect(isSettled).not.toHaveBeenCalled();
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+  });
+
   it("refuses a settle the chain has not seen", async () => {
     const result = await postCreate(
       () => undefined,
