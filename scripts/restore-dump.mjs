@@ -5,7 +5,7 @@
  *   node scripts/restore-dump.mjs postgres-20261112T032300Z.dump.enc
  *   make test-restore-dump DUMP=postgres-20261112T032300Z.dump.enc
  *
- * The homelab CronJob (`homelab/apps/sandbox/postgres-backup.yaml`) writes
+ * The reference CronJob (`apps/sandbox/postgres-backup.yaml`) writes
  * `pg_dump -Fc | openssl enc -aes-256-cbc -pbkdf2` and then counts rows from
  * `sessions` in a scratch database. That proves the artifact decompresses; it
  * does not prove the payment, session, operation or reservation invariants

@@ -172,9 +172,9 @@ the container registry.
 - `RELAY_GUEST_ADDRESS` selects the address a guest dials: `service` (default)
   uses the stable relay ClusterIP, `pod` uses the ready relay Pod IP. Pod mode
   exists for clusters whose policy denies Service VIPs from guest netns (the
-  homelab Cilium does); it keeps sessions working but cannot follow a relay Pod
-  replacement, so the relay-loss grace ends the session `failure:relay_lost` and
-  the refund policy pays it out. See
+  reference deployment's Cilium does); it keeps sessions working but cannot
+  follow a relay Pod replacement, so the relay-loss grace ends the session
+  `failure:relay_lost` and the refund policy pays it out. See
   [ADR 0012](docs/adr/0012-guest-reconnects-after-relay-loss.md).
 
 ### Security
@@ -196,8 +196,8 @@ the container registry.
 - `make test-restore-dump DUMP=<file>` restores a real `pg_dump -Fc` artifact
   (decrypting it with `BACKUP_ENCRYPTION_KEY` when the file is openssl-encrypted)
   into a scratch database and runs the store contract against that copy. The
-  homelab CronJob and the restore drill both stop short of that: one counts rows,
-  the other copies a database with `TEMPLATE`. See
+  reference CronJob and the restore drill both stop short of that: one counts
+  rows, the other copies a database with `TEMPLATE`. See
   [docs/backup-restore.md](docs/backup-restore.md).
 
 ### Changed
@@ -412,9 +412,9 @@ the container registry.
 - Monitoring is split by ownership: this repository keeps the portable contract
   under `deploy/monitoring/contract/` (scrape list, SLO rules, Grafana
   dashboard, metric/SLO docs), and the cluster-specific VictoriaMetrics +
-  vmalert + Grafana stack moves to the private homelab repository. Object
+  vmalert + Grafana stack moves to the private deployment repository. Object
   names, the dashboard uid and the scrape targets are unchanged.
-- Grafana's homelab memory request is raised to 256Mi (limit 512Mi) after the
+- Grafana's memory request is raised to 256Mi (limit 512Mi) after the
   measured 228Mi steady state made it the first eviction candidate (#101).
 
 ### Fixed
@@ -435,7 +435,7 @@ the container registry.
   and relay, a bounded-label scrape contract, process/event-loop/GC metrics, a
   Grafana dashboard and a scrape manifest. The public ingress no longer serves
   `/metrics` (#37).
-- Lightweight homelab monitoring under `deploy/monitoring/`: VictoriaMetrics
+- Lightweight monitoring under `deploy/monitoring/`: VictoriaMetrics
   single-node, Grafana and vmalert with 14-day retention, a provisioned
   dashboard and the issue #38 SLO rules (including target-down and
   blast-radius) (#38).

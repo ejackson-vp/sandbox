@@ -9,7 +9,7 @@ the relay's credential handling.
 
 ## Before the day
 
-- [ ] A kind or homelab cluster from `make up`, one node, `PAYMENT_MODE=mock`.
+- [ ] A kind or long-lived cluster from `make up`, one node, `PAYMENT_MODE=mock`.
 - [ ] Operator access to `sandbox-system` and `sandbox-workloads`, `kubectl`,
       `jq`, and a checkout at the revision under test.
 - [ ] One throwaway session, kept READY, as the test subject.

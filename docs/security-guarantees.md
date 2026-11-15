@@ -151,9 +151,9 @@ kernel. Nothing here removes the host.
   suspended expiry or max lifetime, and never reused. It is **plaintext**: no
   component encrypts it, the controller never mounts it, and there is no
   checkpoint key in the control plane. The node/storage administrator can read
-  it, and the repository provides no at-rest encryption for the homelab's
-  `local-path` storage. A labelled PVC that no session owns is reaped after
-  `ORPHAN_PVC_GRACE_MS`. See
+  it, and the repository provides no at-rest encryption for the reference
+  deployment's `local-path` storage. A labelled PVC that no session owns is
+  reaped after `ORPHAN_PVC_GRACE_MS`. See
   [lifecycle.md](lifecycle.md#checkpoint-at-rest-expiry-and-backup) and
   [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md).
 - Paths are canonicalised and must stay inside the workspace; `..` and symlink

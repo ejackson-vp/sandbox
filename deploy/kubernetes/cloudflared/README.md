@@ -45,8 +45,8 @@ kubectl create secret generic cloudflared-tunnel \
   --from-literal=token='<connector token>'
 ```
 
-In the homelab this Secret is applied from the private repository like the
-others; the public repo only names it.
+In a private deployment this Secret is applied from its own secret store like
+the others; the public repo only names it.
 
 ## Creating the tunnel
 

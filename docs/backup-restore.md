@@ -54,12 +54,12 @@ configuration in that layer:
   backup alone gives an RPO of a day. Decide the window, then verify the restore
   meets the RTO you wrote down.
 
-The homelab overlay takes a smaller step: a nightly `pg_dump` CronJob in
-`homelab/apps/sandbox/postgres-backup.yaml`, encrypted with the cluster's
-existing backup key, restored into a scratch database to prove it reads, and
-kept for seven days. That catches a bad migration or a deleted row. It is not
-disaster recovery, because the dump sits on a PVC on the same node as the
-primary; copy the files off-node or move to one of the two options above.
+The reference deployment takes a smaller step: a nightly `pg_dump` CronJob,
+encrypted with the cluster's existing backup key, restored into a scratch
+database to prove it reads, and kept for seven days. That catches a bad
+migration or a deleted row. It is not disaster recovery, because the dump sits
+on a PVC on the same node as the primary; copy the files off-node or move to one
+of the two options above.
 
 ## Restore verification
 
@@ -68,7 +68,7 @@ run against a database restored from the artifact, because it proves the
 payment, session, transition and reservation invariants survived the restore,
 not just that `pg_dump` exited zero.
 
-### The homelab dump
+### The CronJob dump
 
 `make test-restore-dump DUMP=<file>` (`node scripts/restore-dump.mjs <file>`)
 runs the whole loop:
@@ -134,8 +134,8 @@ and `openssl` on `PATH`, from a client at least as new as the server that wrote
 the dump (`postgresql-client`, or `brew install libpq`).
 
 Get a dump onto the machine first. It lives on the `postgres-backups` PVC, so
-copying it out needs a pod with that volume mounted; `homelab/apps/sandbox/README.md`
-has that command. Then:
+copying it out needs a pod with that volume mounted; the private deployment
+repository has that command. Then:
 
 ```sh
 export BACKUP_ENCRYPTION_KEY="$(kubectl -n sandbox-system get secret x402-secrets \
@@ -218,7 +218,7 @@ runs in the `postgres contract` CI job, and is excluded from
 
 The copy is a server-side `TEMPLATE` of a cleanly closed source, which is not a
 production restore path: CloudNativePG `bootstrap.recovery`, pgBackRest and the
-homelab `pg_dump` CronJob all replay WAL or restore a dump. The drill also says
+`pg_dump` CronJob all replay WAL or restore a dump. The drill also says
 nothing about point-in-time recovery, a cross-region restore, or the Kubernetes
 objects around the database (pods, PVCs, the Lease).
 
@@ -246,7 +246,7 @@ What is still unproven:
 - **Columns that only one side has.** A dump taken before a ladder step is
   compared on the columns both sides share, and the skipped columns are named.
   An altered value in a column the dump predates is not seen.
-- **Anything off-node.** The homelab dump lands on the same local-path PVC as
+- **Anything off-node.** The CronJob dump lands on the same local-path PVC as
   the primary. It catches a bad migration or a deleted row; it is not disaster
   recovery, and no drill here changes that.
 - **WAL replay and PITR.** No test in this repository replays WAL,
