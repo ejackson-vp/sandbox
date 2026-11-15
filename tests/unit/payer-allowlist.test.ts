@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { sha256Hex } from "@x402s/shared/crypto";
+import { metrics } from "@x402s/shared/runtime";
 import {
   allowlistBudgetKey,
   allowlistPaymentKey,
@@ -197,6 +198,85 @@ describe("allowlisted payer", () => {
     expect(result.status).toBe(429);
     expect(result.body).toMatchObject({ error: "budget_exhausted", scope: "payer_concurrent" });
     expect(result.controller.completeIntent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The free tier has no volume ceiling of its own: an entry is bounded per create
+ * by `max_tier` and `max_concurrent`, and nothing watches how much of the create
+ * traffic it absorbs. These counters are the detection half, so they have to
+ * carry the same names and label values the alert rules read, and no address.
+ */
+describe("allowlist decision metrics", () => {
+  /** One sample, or null when the series is absent. */
+  function sample(text: string, series: string): number | null {
+    const line = text.split("\n").find((row) => row.startsWith(`${series} `));
+    return line === undefined ? null : Number(line.slice(series.length + 1));
+  }
+
+  // 520 ms: the registry caches rendered text for 500 ms, so a render taken
+  // earlier would answer with the previous snapshot.
+  async function rendered(): Promise<string> {
+    await new Promise((resolve) => setTimeout(resolve, 520));
+    return metrics.render();
+  }
+
+  const GRANTED = "sandbox_allowlist_decisions_total{result=\"granted\"}";
+  const ALLOWLIST_SESSIONS = "sandbox_sessions_total{source=\"allowlist\"}";
+
+  it("counts a granted free session in both families", async () => {
+    const before = await rendered();
+
+    const result = await postCreate(({ controller }) => allow(controller));
+    expect(result.status).toBe(201);
+
+    const after = await rendered();
+    expect(sample(after, ALLOWLIST_SESSIONS)).toBe((sample(before, ALLOWLIST_SESSIONS) ?? 0) + 1);
+    expect(sample(after, GRANTED)).toBe((sample(before, GRANTED) ?? 0) + 1);
+    // The address is customer identity and never a label value.
+    expect(after).not.toContain(result.authorizer);
+  });
+
+  it("counts a refusal by reason without counting a session", async () => {
+    const before = await rendered();
+
+    const result = await postCreate(
+      ({ controller }) => refuse(controller, "concurrency_exhausted"),
+      {
+        resourceServer: {
+          verifyPayment: async () => ({ isValid: true }),
+          settlePayment: async () => ({
+            success: false,
+            errorReason: "insufficient_funds",
+            transaction: "",
+            network: "mock:local",
+          }),
+        },
+      },
+    );
+    // The refusal is the paid path's problem, not a grant: no free session.
+    expect(result.status).toBe(402);
+
+    const after = await rendered();
+    const refused = 'sandbox_allowlist_decisions_total{result="concurrency_exhausted"}';
+    expect(sample(after, refused)).toBe((sample(before, refused) ?? 0) + 1);
+    expect(sample(after, ALLOWLIST_SESSIONS)).toBe(sample(before, ALLOWLIST_SESSIONS));
+  });
+
+  it("counts the ordinary paid path as not_allowlisted", async () => {
+    const before = await rendered();
+
+    const result = await postCreate(
+      ({ controller }) => refuse(controller, "not_allowlisted"),
+      { resourceServer: settledResourceServer },
+    );
+    expect(result.status).toBe(201);
+
+    const after = await rendered();
+    const paidPath = 'sandbox_allowlist_decisions_total{result="not_allowlisted"}';
+    expect(sample(after, paidPath)).toBe((sample(before, paidPath) ?? 0) + 1);
+    // The ratio alert is only meaningful because this outcome is separable.
+    expect(sample(after, ALLOWLIST_SESSIONS)).toBe(sample(before, ALLOWLIST_SESSIONS));
   });
 });
 

@@ -30,8 +30,21 @@ ran on the host kernel, and nothing in the process could tell the difference.
 The resolved handler is logged, exported as `sandbox_runtime_class_info`, and
 echoed by `/internal/healthz`, so which runtime served a session stays
 answerable after the fact. `EXECUTION_MODE=dev` and `KUBERNETES_ENABLED=false`
-skip the check entirely: there is no RuntimeClass in that path and no claim to
-verify.
+skip the check entirely: there is no handler to read in that path and no claim
+to verify. The two are not equally quiet, because only one of them schedules
+pods:
+
+- `KUBERNETES_ENABLED=false` schedules nothing here, so skipping costs nothing.
+- `KUBERNETES_ENABLED=true` with `EXECUTION_MODE=dev` still applies
+  `RUNTIME_CLASS` to every sandbox and reads no handler, so a `runc` class and a
+  kata one look identical in the object. The controller starts, because dev is
+  the legitimate kind and local-cluster profile and `make up` depends on it, but
+  it logs `runtime_class_isolation_not_enforced` naming the class and exports
+  `sandbox_runtime_isolation_unenforced{runtime_class, execution_mode} 1`. The
+  series exists only in that state, so `== 1` is the check and absence means
+  either a verified handler or no cluster, never a third thing. A deployment
+  left in that state is one scrape away from being visible instead of a line in
+  a boot log nobody kept.
 
 ## Consequences
 
