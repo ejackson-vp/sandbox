@@ -13,11 +13,11 @@ import type { CreateSessionRequest } from "@x402s/shared/protocol";
 import { LATENCY_BUCKETS, metrics, recordRateLimited } from "@x402s/shared/runtime";
 import type { RateLimiter } from "../admission.js";
 import { createSchema } from "../schemas.js";
-import {
-  createSession,
-  type CreateSessionResult,
-  type CreateSessionUseCaseDeps,
-} from "../use-cases/create-session.js";
+import { createSession } from "../use-cases/create-session.js";
+import type {
+  CreateSessionResult,
+  CreateSessionUseCaseDeps,
+} from "../use-cases/create-session-contract.js";
 
 interface CreateSessionDeps extends CreateSessionUseCaseDeps {
   ipCreateLimiter: RateLimiter;

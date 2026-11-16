@@ -218,12 +218,9 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       }
       res.json({ state: out.state, requestId: out.requestId, envelope: out.envelope });
     } catch (err) {
-      respondControllerError(res, err, {
-        log: "file_get_failed",
-        // The read path passes the controller's status through, 410 included,
-        // rather than reinterpreting it.
-        translate: (e) => ({ status: e.status === 410 ? 410 : e.status }),
-      });
+      // The read path passes the controller's status and code through, 410
+      // included, rather than reinterpreting either.
+      respondControllerError(res, err, { log: "file_get_failed" });
     }
   });
 

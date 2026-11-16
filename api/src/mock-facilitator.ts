@@ -74,7 +74,6 @@ class SqliteNonceStore implements MockNonceStore {
 export interface MockFacilitatorHandle {
   app: express.Express;
   close(): void;
-  reset(): void;
   setFailSettle(enabled: boolean): void;
 }
 
@@ -205,10 +204,6 @@ export async function createMockFacilitator(opts: MockFacilitatorOptions = {}): 
   return {
     app,
     close: () => db.close(),
-    reset: () => {
-      failSettle = false;
-      db.exec("DELETE FROM mock_nonces;");
-    },
     setFailSettle: (v: boolean) => {
       failSettle = v;
     },

@@ -103,30 +103,28 @@ export function decodePayment(
 
 /**
  * Per-payer admission, before the payment intent is claimed or the payment is
- * settled, so a throttled payer is never charged. Returns the bucket key.
+ * settled, so a throttled payer is never charged.
+ *
+ * `null` means "continue". The bucket key is a rate-limit identity rather than a
+ * trust decision, so it is not returned: nothing downstream reads it.
  */
 export function admitPayer(
   deps: CreateSessionUseCaseDeps,
   payload: PaymentPayload,
   sourceIp: string,
-): Ok<string> | Failed {
+): CreateSessionResult | null {
   const payerKey = paymentPayerKey(payload, sourceIp);
-  if (!deps.createLimiter.take(payerKey)) {
-    recordRateLimited("payer");
-    return {
-      ok: false,
-      result: json(
-        429,
-        {
-          error: "rate_limited",
-          scope: "payer",
-          message: "this payer is creating sessions too quickly; retry after the advertised delay",
-        },
-        { "Retry-After": String(deps.createLimiter.retryAfterSeconds(payerKey)) },
-      ),
-    };
-  }
-  return { ok: true, value: payerKey };
+  if (deps.createLimiter.take(payerKey)) return null;
+  recordRateLimited("payer");
+  return json(
+    429,
+    {
+      error: "rate_limited",
+      scope: "payer",
+      message: "this payer is creating sessions too quickly; retry after the advertised delay",
+    },
+    { "Retry-After": String(deps.createLimiter.retryAfterSeconds(payerKey)) },
+  );
 }
 
 /** The proven identity of the payer and the challenge it signed. */
