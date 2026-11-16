@@ -6,7 +6,7 @@
     <title>sandbox — a Linux box with a very short life</title>
     <meta
       name="description"
-      content="Rent a disposable Linux machine by the session. Pay once in USDC on Base, run code, and let the machine forget everything when the lease ends. Hosted beta. No account. No key. No leftovers."
+      content="Rent a disposable Linux machine by the session. Pay once in USDC on Base, run code, and let the machine forget everything when the lease ends. Hosted beta, one operator, no account, no key, no leftovers."
     />
     <meta name="theme-color" content="#f4efe3" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#101613" media="(prefers-color-scheme: dark)" />
@@ -64,7 +64,8 @@
 
             <p class="lede reveal">
               <strong>sandbox</strong> rents Linux machines by the session. Pick a length, pay once in USDC on
-              Base, run your thing. The lease ends and the machine is gone.
+              Base, run your thing. The lease ends and the machine is gone, files and all. There is no suspend and
+              no resume, so nothing you write outlives the lease.
             </p>
 
             <div class="cta-row reveal">
@@ -146,7 +147,7 @@
           <div><dt>182 MiB</dt><dd>idle guest memory</dd></div>
           <div><dt>0</dt><dd>accounts, keys, signups</dd></div>
         </dl>
-        <p class="stat-note" id="stat-note">Two-node Kata cluster, control 0.1.16, 2026-11-09. A baseline, not a promise. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/performance-cluster.md">Method and caveats</a>.</p>
+        <p class="stat-note" id="stat-note">Two-node Kata cluster, control 0.1.16, 2026-11-09, n=50. 0.1.22 measured 292 to 354 ms server ready across two runs, so this is a baseline, not a promise. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/performance-cluster.md">Method and caveats</a>.</p>
       </section>
 
       <section class="section" id="idea">
@@ -166,14 +167,14 @@
           <article class="law reveal">
             <span class="law-num">02</span>
             <h3>No peeking.</h3>
-            <p>Commands and files are sealed to the guest's key. The API and controller route ciphertext only.</p>
-            <p class="law-note">transport only · no hardware root of trust · isolation unverified</p>
+            <p>Commands and files are sealed to the guest's key. The API, controller and relay route ciphertext only, and hold no key to any of it.</p>
+            <p class="law-note">ciphertext in transit · Kata microVM · boundary tested · escape untested</p>
           </article>
           <article class="law reveal">
             <span class="law-num">03</span>
             <h3>No leftovers.</h3>
-            <p>Three things end the lease: the guest watchdog, the controller deadline, Kubernetes. The pod and its memory-backed workspace go with it.</p>
-            <p class="law-note">delete is idempotent</p>
+            <p>Three things end the lease: the guest watchdog, the controller deadline, Kubernetes. The pod and its workspace go with it, and nothing is written somewhere that outlives them.</p>
+            <p class="law-note">delete is idempotent · no suspend, no resume</p>
           </article>
         </div>
       </section>
@@ -184,7 +185,7 @@
             <p class="kicker reveal">the life</p>
             <h2 class="reveal">Born, useful,<br /><span class="serif">gone.</span></h2>
           </div>
-          <p class="lede reveal">The lease is the only thing that can keep it alive.</p>
+          <p class="lede reveal">The lease is the only thing that can keep it alive. There is no suspend and no resume here: the workspace dies with the lease, and the next session starts empty.</p>
         </div>
 
         <ol class="timeline">
@@ -195,15 +196,15 @@
             <code>POST /v1/sessions → 402</code>
           </li>
           <li class="reveal">
-            <span class="time">127 ms</span>
+            <span class="time">provisioning</span>
             <h3>Wake</h3>
-            <p>Warm pool or cold boot. Capability and session come back once.</p>
+            <p>Cold boot, or a warm pool if one is running. Capability and session come back once.</p>
             <code>201 · READY</code>
           </li>
           <li class="reveal">
             <span class="time">300 s</span>
             <h3>Work</h3>
-            <p>Sealed commands, files under <code>/workspace</code>, one foreground operation.</p>
+            <p>Sealed commands, files under <code>/workspace</code>, one foreground operation at a time. Background processes die when the command returns.</p>
             <code>exec · file.put · http</code>
           </li>
           <li class="reveal">
@@ -258,15 +259,19 @@
             <p class="lede reveal">Same machine at every size. The clock starts when it is ready.</p>
             <p class="reveal menu-note">
               Prices are configuration, not economics. The live table is <code>GET /v1/pricing</code> on the
-              hosted API; this page does not restate the numbers. Payments are real USDC on Base. Free access is
-              by invitation.
+              hosted API; this page does not restate the numbers. Payment is real USDC on Base, settled through
+              the Coinbase CDP facilitator, charged once per session. There are no accounts and no stored
+              balance: the payment is the identity. Free access is by invitation.
             </p>
             <div class="house-limits reveal">
               <p class="house-limits-title">house limits</p>
               <dl>
+                <div><dt>lease</dt><dd>30 min maximum per session</dd></div>
+                <div><dt>command</dt><dd>300 s, capped by the remaining lease</dd></div>
                 <div><dt>files</dt><dd>8 MiB per payload</dd></div>
                 <div><dt>output</dt><dd>256 KiB, then truncated</dd></div>
-                <div><dt>operations</dt><dd>one foreground at a time</dd></div>
+                <div><dt>operations</dt><dd>one foreground at a time; background processes die with the command</dd></div>
+                <div><dt>egress</dt><dd>egress proxy only, destinations on 443. No inbound networking</dd></div>
               </dl>
             </div>
             <a class="text-link reveal" href="https://api.throwbox.dev/v1/pricing">Read the live price table <span aria-hidden="true">→</span></a>
@@ -321,6 +326,7 @@
               <li>Why hand-rolled envelopes fail</li>
               <li>How to destroy in a <code>finally</code> block</li>
               <li>What <code>outcome_unknown</code> means</li>
+              <li>What a <code>402</code> or a <code>429</code> means</li>
               <li>What isolation does not promise</li>
             </ul>
             <div class="agents-actions reveal">
@@ -396,7 +402,7 @@ blindly retry a side effect.</code></pre>
 
         <div class="callout reveal">
           <span class="callout-icon" aria-hidden="true">!</span>
-          <p><strong>Hosted beta, one region, no SLA.</strong> Payments are real USDC on Base. Isolation between sessions has not been verified on the hosted cluster, there is no hardware attestation, and a suspended workspace is plaintext on disk. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md">What is missing, in order</a>.</p>
+          <p><strong>Hosted beta, one operator, one region, no SLA.</strong> Payment is real USDC on Base. One control-plane node and one Postgres primary carry the control plane, so losing that node is an outage and no failover has been measured. Sessions are ephemeral: no suspend, no resume. Isolation is a Kata microVM, tested for the boundary properties in the suite; that is not a hardware root of trust, and no escape has been attempted. <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/isolation-evidence.md">What the isolation run proved</a>.</p>
         </div>
       </section>
 
@@ -404,7 +410,7 @@ blindly retry a side effect.</code></pre>
         <div class="section-head">
           <p class="kicker reveal">the small print</p>
           <h2 class="reveal">In large type, <span class="serif">because it matters.</span></h2>
-          <p class="lede reveal">Every claim has a test or a doc behind it. The gaps are listed the same way.</p>
+          <p class="lede reveal">Every claim here points at a doc or a test. The gaps are listed the same way.</p>
         </div>
 
         <div class="claims">
@@ -414,22 +420,29 @@ blindly retry a side effect.</code></pre>
               <li>The lease ends on time: guest watchdog, controller deadline, Kubernetes</li>
               <li>Commands and files stay sealed in transit; the API, controller and relay see ciphertext</li>
               <li>One settled payment maps to one session; a retried payment returns it instead of billing twice</li>
-              <li>Egress by policy: the guest dials out to the relay and an allowlisting proxy on 443, and no inbound route to a sandbox exists</li>
+              <li>Egress by policy: through the egress proxy, to port 443 destinations, with no inbound route to a sandbox</li>
+              <li>A session that never reaches READY, or one a relay failure ends, is recorded in the ledger for a full refund; sending it is a separate worker, so it is not instant</li>
             </ul>
           </article>
           <article class="claim no reveal">
             <h3>Not yet</h3>
             <ul>
-              <li>Isolation on the hosted deployment is unverified: Kata is the design, and no guest-kernel check has been run there</li>
+              <li>The boundary is tested, not attacked: no escape attempt has been made, and a suite that passes is not a claim the hypervisor resists a determined one</li>
+              <li>The security review was written by the author of the code, not an independent reviewer, and it is not a penetration test</li>
               <li>No hardware root of trust: the dev attestation key ships in the repo</li>
-              <li>Checkpoints are plaintext on disk, readable by the storage admin</li>
-              <li>No SLA: one control-plane node, one Postgres primary, no failover drill</li>
+              <li>Checkpoint storage is plaintext, which is why suspend and resume are not offered</li>
+              <li>No SLA: one operator, one region, one control-plane node, one Postgres primary, no measured failover</li>
               <li>No GPUs, no arbitrary OCI images, no memory snapshots</li>
               <li>Not parity with a general-purpose sandbox platform</li>
             </ul>
           </article>
         </div>
-        <p class="claims-note">Read the <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md">guarantee matrix</a> and <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/threat-model.md">threat model</a> before repeating any of this as a security claim.</p>
+
+        <div class="risks reveal">
+          <h3>Accepted risks, in one paragraph</h3>
+          <p>Isolation between sessions is a Kata microVM, and the boundary properties the suite tests were verified on a real Kata cluster at control 0.1.30 and guest 0.1.29: the guest ran its own kernel and could not reach another session, the Kubernetes API, a node, the metadata endpoint, a Service VIP or the internet except through the egress proxy. That is not a hardware root of trust and it is not an escape test: no escape attempt has been made, so nothing here claims the hypervisor survives one. There is no hardware attestation either, and the attestation key ships in the repo, so the client proves which key it is talking to and not what the operator is running. The security review was written by the person who wrote the code, not an independent reviewer, and it is not a penetration test. Checkpoint storage is plaintext, which is why suspend is not offered. If a hostile-tenant guarantee is what you need, this beta does not sell one yet, and the docs say which controls are proven and which are not.</p>
+        </div>
+        <p class="claims-note">Read the <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md">guarantee matrix</a>, the <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/isolation-evidence.md">isolation evidence</a> and the <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/threat-model.md">threat model</a> before repeating any of this as a security claim.</p>
       </section>
 
       <section class="section smallprint" id="terms">
@@ -443,22 +456,23 @@ blindly retry a side effect.</code></pre>
           <article>
             <h3>Acceptable use</h3>
             <p>Use a session for work you have the right to do. Not allowed: attacking or scanning systems you do not own, spam, crypto mining, illegal content, escaping the sandbox, or reaching another session, the cluster network or its metadata service.</p>
-            <p>Report abuse to <a href="mailto:abuse@throwbox.dev">abuse@throwbox.dev</a>.</p>
+            <p>Report abuse to <a href="mailto:abuse@throwbox.dev">abuse@throwbox.dev</a>. That address reaches the operator, because the operator is the whole company.</p>
           </article>
           <article>
-            <h3>Refunds</h3>
+            <h3>Money</h3>
+            <p>One payment, one session, in USDC on Base, settled through the Coinbase CDP facilitator. There is no account to top up and no balance to spend later: what you pay covers the session you asked for, and the lease ends when it ends. Free access is by invitation only.</p>
             <p>If a session never reaches ready, or we end it because the relay could not recover, the payment is refunded in full to the paying wallet. A session you destroy, or one that simply expires after it was ready, is not refunded: the time was delivered.</p>
             <p>Refunds are queued in the payment ledger and sent by a separate worker, so they are not instant. If one cannot be sent automatically it stays queued and an operator resolves it.</p>
           </article>
           <article>
             <h3>What we record</h3>
             <p>Session metadata (tier, limits, timings, state), the paying wallet address, and the payment ledger. Commands, file contents and output stay ciphertext: the API, controller and relay hold no key.</p>
-            <p>Two exceptions, said everywhere else too: the guest sees whatever you run, and a suspended session's workspace is plaintext on disk for the node or storage administrator. This page sets no cookies and runs no analytics.</p>
+            <p>The guest sees whatever you run, and nothing you write is kept: the workspace dies with the lease. Checkpoint storage is plaintext, which is why there is no suspend. This page sets no cookies and runs no analytics.</p>
           </article>
           <article>
             <h3>What we do not promise</h3>
-            <p>No SLA and no uptime target. No hardware attestation, so the provider could run a different guest. Isolation between sessions is not verified on the hosted deployment.</p>
-            <p>Free access is by invitation.</p>
+            <p>No SLA and no uptime target. No hardware attestation, so the provider could run a different guest. The boundary is tested for the properties in the suite; no escape has been attempted, and the review is not independent.</p>
+            <p>One operator, one region, one control-plane node, one Postgres primary. If that node is lost, the control plane is down until it comes back.</p>
           </article>
         </div>
       </section>
@@ -527,7 +541,7 @@ blindly retry a side effect.</code></pre>
 
       <div class="footer-bottom">
         <span>© <span id="year">2026</span> sandbox contributors</span>
-        <span class="status"><i aria-hidden="true"></i> beta · hosted</span>
+        <span class="status"><i aria-hidden="true"></i> beta · hosted · one operator</span>
         <span><a href="mailto:abuse@throwbox.dev">abuse@throwbox.dev</a> · no cookies, no analytics, no account</span>
       </div>
       <p class="colophon">Set in your system's serif and mono. No fonts were downloaded. No cookies were set. This page is three files and a text document.</p>
