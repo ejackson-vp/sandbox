@@ -1547,109 +1547,6 @@ h3 {
   text-underline-offset: 2px;
 }
 
-/* ---------- small print ---------- */
-
-.claims {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(30px, 5vw, 64px);
-}
-
-.claim h3 {
-  margin-bottom: 12px;
-  font-family: var(--serif);
-  font-size: clamp(1.7rem, 2.4vw, 2rem);
-  font-style: italic;
-  font-weight: 400;
-  letter-spacing: -0.02em;
-}
-
-.claim.yes h3 {
-  color: var(--mint-ink);
-}
-
-.claim.no h3 {
-  color: var(--peach-ink);
-}
-
-.claim ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.claim li {
-  position: relative;
-  padding: 10px 0 10px 24px;
-  border-top: 1px dashed var(--line);
-  color: var(--muted);
-  font-size: 13.3px;
-  line-height: 1.55;
-}
-
-.claim li:first-child {
-  padding-top: 0;
-  border-top: 0;
-}
-
-.claim.yes li::before {
-  content: "✓";
-  position: absolute;
-  left: 0;
-  top: 10px;
-  color: var(--mint-ink);
-  font-weight: 700;
-}
-
-.claim.no li::before {
-  content: "×";
-  position: absolute;
-  left: 0;
-  top: 10px;
-  color: var(--peach-ink);
-  font-weight: 700;
-}
-
-.claim.yes li:first-child::before,
-.claim.no li:first-child::before {
-  top: 0;
-}
-
-.claims-note {
-  max-width: 74ch;
-  margin: 18px 0 0;
-  color: var(--muted);
-  font-size: 12.4px;
-}
-
-.claims-note a {
-  color: var(--mint-ink);
-  text-underline-offset: 2px;
-}
-
-.risks {
-  max-width: 86ch;
-  margin-top: clamp(30px, 5vw, 52px);
-  padding-top: 22px;
-  border-top: 1.5px solid var(--ink);
-}
-
-.risks h3 {
-  margin-bottom: 12px;
-  font-family: var(--serif);
-  font-size: clamp(1.45rem, 2vw, 1.7rem);
-  font-style: italic;
-  font-weight: 400;
-  letter-spacing: -0.02em;
-}
-
-.risks p {
-  margin: 0;
-  color: var(--ink-2);
-  font-size: 13.8px;
-  line-height: 1.65;
-}
-
 /* ---------- terms ---------- */
 
 .terms {
@@ -1955,7 +1852,6 @@ h3 {
   .menu-grid,
   .agents-inner,
   .run-grid,
-  .claims,
   .terms {
     grid-template-columns: minmax(0, 1fr);
   }
