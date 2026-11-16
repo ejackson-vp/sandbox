@@ -40,8 +40,8 @@ import {
   proveCommitment,
   quoteWithoutPayment,
   reserveBudget,
-  verifyAndSettle,
 } from "./create-session-stages.js";
+import { verifyAndSettle } from "./create-session-settlement.js";
 
 /**
  * Run the handshake and return the answer. The caller owns the socket; this
