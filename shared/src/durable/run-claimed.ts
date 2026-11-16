@@ -16,6 +16,7 @@
  * conditional `UPDATE`, and the grant path keeps its payment + ledger + session
  * transaction. `runClaimed` never invents a token and never writes a row.
  */
+import type { BackoffOptions } from "../backoff.js";
 import { isExhausted, nextAttemptAtMs, type RetryPolicy } from "./retry.js";
 import { toFailure, type ExternalOutcome, type Failure } from "./outcome.js";
 
@@ -54,6 +55,13 @@ export interface ClaimedCall<TValue> {
   /** The pass's clock, so the backoff and the query agree on "now". */
   readonly nowMs: number;
   /**
+   * How the retry delay is sampled. The default is full jitter, so a fleet
+   * released by the same provider outage does not come back in one wave. A
+   * caller whose schedule is asserted passes `{ jitter: false }` or a pinned
+   * random source.
+   */
+  readonly backoff?: BackoffOptions;
+  /**
    * The provider call. The caller classifies it because only the caller knows
    * its protocol; a throw here is treated as unknown, never as a refusal.
    */
@@ -64,14 +72,19 @@ export interface ClaimedCall<TValue> {
   readonly fail: (failure: Failure, retry: RetryDecision) => Promise<boolean>;
 }
 
-export function retryDecision(policy: RetryPolicy, attemptsSoFar: number, nowMs: number): RetryDecision {
+export function retryDecision(
+  policy: RetryPolicy,
+  attemptsSoFar: number,
+  nowMs: number,
+  backoff: BackoffOptions = {},
+): RetryDecision {
   const attempts = attemptsSoFar + 1;
   return {
     attempts,
     exhausted: isExhausted(policy, attempts),
     // One implementation of "when is it due": `retry.ts` owns the backoff, and
     // a second `now + backoff` here was a copy of it.
-    nextAttemptAtMs: nextAttemptAtMs(policy, attemptsSoFar, nowMs),
+    nextAttemptAtMs: nextAttemptAtMs(policy, attemptsSoFar, nowMs, backoff),
   };
 }
 
@@ -92,7 +105,7 @@ export async function runClaimed<TValue>(work: ClaimedCall<TValue>): Promise<Cla
   }
 
   if (outcome.kind === "definite_failure") {
-    const retry = retryDecision(work.policy, work.attemptsSoFar, work.nowMs);
+    const retry = retryDecision(work.policy, work.attemptsSoFar, work.nowMs, work.backoff);
     const released = await work.fail(outcome.failure, retry);
     if (!released) return { kind: "claim_lost", stage: "fail", failure: outcome.failure };
     return { kind: "refused", failure: outcome.failure, retry };

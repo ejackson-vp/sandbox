@@ -48,6 +48,7 @@ import {
   type ClaimToken,
   type RetryPolicy,
 } from "@x402s/shared/durable";
+import type { BackoffOptions } from "@x402s/shared/runtime";
 import { sendRefund, type RefundExecutor, type RefundRequest } from "./refund-executor.js";
 import type { PaymentLedgerRecord } from "./store/models/money.js";
 import type { RefundWorkerStore } from "./store/ports.js";
@@ -75,6 +76,12 @@ interface RefundWorkerOptions {
   claimLeaseMs?: number;
   /** Timeout the executor applies to one call; used to check the lease. */
   callTimeoutMs?: number;
+  /**
+   * Uniform source for the retry jitter. Defaults to `Math.random`, which is
+   * what keeps a fleet of workers from retrying the same provider in one wave.
+   * A test pins it so the schedule it asserts stays exact.
+   */
+  retryRandom?: () => number;
   now?: () => number;
 }
 
@@ -96,6 +103,7 @@ interface RefundWorkerResult {
 export class RefundWorker {
   private readonly now: () => number;
   private readonly retry: RetryPolicy;
+  private readonly backoff: BackoffOptions;
   private readonly limit: number;
 
   constructor(
@@ -104,6 +112,7 @@ export class RefundWorker {
     opts: RefundWorkerOptions,
   ) {
     this.now = opts.now ?? (() => Date.now());
+    this.backoff = opts.retryRandom ? { random: opts.retryRandom } : {};
     this.limit = opts.limit;
     this.retry = refundRetryPolicy({
       maxAttempts: opts.maxAttempts,
@@ -196,6 +205,7 @@ export class RefundWorker {
         policy: this.retry,
         attemptsSoFar: ledger.refundAttempts,
         nowMs: now,
+        backoff: this.backoff,
         call: () => sendRefund(executor, requestOf(ledger)),
         complete: (value) => this.store.completeRefundClaim(ledger.paymentKey, token, value.transaction),
         fail: (failure, retry) =>

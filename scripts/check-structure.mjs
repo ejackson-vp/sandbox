@@ -197,6 +197,11 @@ const SHARED_LAYERS = [
         "dev-attestation.ts",
         "runtimes.ts",
         "money.ts",
+        // Backoff is arithmetic plus an injected random source. It is exported
+        // from the `runtime` entry because that is who consumes it, but it has
+        // no clock, no I/O and no process state, so it belongs in this layer and
+        // `durable/` may import it.
+        "backoff.ts",
       ].includes(rel) ||
       rel.startsWith("protocol/") ||
       rel.startsWith("domain/") ||

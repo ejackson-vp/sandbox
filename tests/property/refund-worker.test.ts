@@ -24,7 +24,8 @@
  */
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { asClaimToken, backoffMs, refundRetryPolicy } from "@x402s/shared/durable";
+import { backoffCeiling, backoffMs } from "@x402s/shared/runtime";
+import { asClaimToken, refundRetryPolicy } from "@x402s/shared/durable";
 import { RefundWorker, type RefundExecutor } from "../../controller/src/refund-worker.js";
 import {
   KEY,
@@ -63,6 +64,10 @@ describe("refund worker claim/complete/retry loop", () => {
               claimLeaseMs: policy.leaseMs,
               callTimeoutMs: policy.callTimeoutMs,
               limit: 10,
+              // The schedule is what this property asserts, so the sample is
+              // pinned to the top of the range. Production jitters (and the
+              // bounds of that sample are asserted in backoff.test.ts).
+              retryRandom: () => 1,
               now: () => clock,
             });
             const before = { ...ledger.row() };
@@ -252,13 +257,38 @@ describe("refund worker claim/complete/retry loop", () => {
     );
   });
 
-  it("keeps the backoff exponential, capped, and safe at absurd attempt counts", () => {
+  it("spreads the due time it records, instead of pinning every worker to the ceiling", async () => {
+    // One refusal, two sources: the row's due time is the sample, not the
+    // closed form. This is the assertion that the fleet leaves in waves.
+    async function dueDelay(sample: number): Promise<number> {
+      const ledger = new MemoryLedger(pendingRow(KEY, 1_000_000));
+      const clock = 1_000_000;
+      await new RefundWorker(ledger, provider(ledger, () => "refuse"), {
+        maxAttempts: 4,
+        retryBaseMs: 1_000,
+        retryMaxMs: 60_000,
+        claimLeaseMs: 30_000,
+        callTimeoutMs: 1_000,
+        limit: 1,
+        retryRandom: () => sample,
+        now: () => clock,
+      }).run();
+      return ledger.row().refundNextAttemptAt! - clock;
+    }
+
+    expect(await dueDelay(1)).toBe(1_000); // the ceiling: base * 2 ** 0
+    expect(await dueDelay(0.5)).toBe(500);
+    expect(await dueDelay(0)).toBe(0);
+  });
+
+  it("keeps the backoff exponential, capped, bounded by jitter, and safe at absurd attempt counts", () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 0, max: 1_000_000 }),
         fc.integer({ min: 0, max: 20_000 }),
         fc.integer({ min: 0, max: 1_000_000 }),
-        (baseDelayMs, maxDelayMs, attempts) => {
+        fc.double({ min: 0, max: 1, noNaN: true }),
+        (baseDelayMs, maxDelayMs, attempts, sample) => {
           const policy = refundRetryPolicy({
             maxAttempts: 10,
             baseDelayMs,
@@ -266,19 +296,32 @@ describe("refund worker claim/complete/retry loop", () => {
             leaseMs: 10,
             callTimeoutMs: 1,
           });
-          const delay = backoffMs(policy, attempts);
-          expect(delay).toBeLessThanOrEqual(policy.maxDelayMs);
-          expect(delay).toBeGreaterThanOrEqual(0);
           // The closed form, with the clamp: 2 ** n overflows long before the
           // ceiling matters, and the result must stay a safe integer.
+          const ceiling = backoffCeiling(policy, attempts);
           const expected = Math.min(
             policy.maxDelayMs,
             policy.baseDelayMs * 2 ** Math.floor(attempts),
           );
-          expect(delay).toBe(Number.isFinite(expected) ? expected : policy.maxDelayMs);
+          expect(ceiling).toBe(Number.isFinite(expected) ? expected : policy.maxDelayMs);
+
+          // A sampled delay is inside the window, always. This is the assertion
+          // that a herd cannot be pushed past the ceiling the caller budgeted.
+          const delay = backoffMs(policy, attempts, { random: () => sample });
+          expect(delay).toBeGreaterThanOrEqual(0);
+          expect(delay).toBeLessThanOrEqual(ceiling);
+          expect(delay).toBeLessThanOrEqual(policy.maxDelayMs);
           expect(Number.isSafeInteger(delay)).toBe(true);
-          // Non-decreasing in the attempt count.
-          expect(backoffMs(policy, attempts + 1)).toBeGreaterThanOrEqual(delay);
+
+          // The ceiling never decreases with the attempt count, and neither does
+          // a sample drawn from the same point of the range.
+          expect(backoffCeiling(policy, attempts + 1)).toBeGreaterThanOrEqual(ceiling);
+          expect(
+            backoffMs(policy, attempts + 1, { random: () => sample }),
+          ).toBeGreaterThanOrEqual(delay);
+
+          // Without jitter the delay is the ceiling exactly.
+          expect(backoffMs(policy, attempts, { jitter: false })).toBe(ceiling);
         },
       ),
       { numRuns: 300 },

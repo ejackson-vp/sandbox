@@ -8,9 +8,9 @@
  * machine.
  */
 import { describe, expect, it } from "vitest";
+import { backoffMs } from "@x402s/shared/runtime";
 import {
   asClaimToken,
-  backoffMs,
   claimDecision,
   claimLease,
   deadlinePassed,
@@ -149,19 +149,36 @@ describe("retry policy", () => {
   const policy = retryPolicy({ maxAttempts: 4, baseDelayMs: 100, maxDelayMs: 500, leaseMs: 30_000 });
 
   it("backs off exponentially from the base delay and stops at the ceiling", () => {
-    expect(backoffMs(policy, 0)).toBe(100);
-    expect(backoffMs(policy, 1)).toBe(200);
-    expect(backoffMs(policy, 2)).toBe(400);
-    expect(backoffMs(policy, 3)).toBe(500);
+    // `jitter: false` is the ceiling, not a sample: the schedule a reader can
+    // check. The jitter itself is asserted in backoff.test.ts.
+    expect(backoffMs(policy, 0, { jitter: false })).toBe(100);
+    expect(backoffMs(policy, 1, { jitter: false })).toBe(200);
+    expect(backoffMs(policy, 2, { jitter: false })).toBe(400);
+    expect(backoffMs(policy, 3, { jitter: false })).toBe(500);
     // A huge attempt count must not overflow into Infinity or a non-integer.
-    expect(backoffMs(policy, 1_024)).toBe(500);
-    expect(backoffMs(policy, -1)).toBe(100);
+    expect(backoffMs(policy, 1_024, { jitter: false })).toBe(500);
+    expect(backoffMs(policy, -1, { jitter: false })).toBe(100);
+  });
+
+  it("samples under the ceiling by default, so a worker fleet does not wake in phase", () => {
+    // Every attempt inside the window, and the sample is what moves: the same
+    // policy with the top of the range pinned is the ceiling, the bottom is zero.
+    for (const random of [0, 0.25, 0.5, 0.75, 1]) {
+      const delay = backoffMs(policy, 2, { random: () => random });
+      expect(delay).toBe(Math.floor(400 * random));
+    }
+    expect(backoffMs(policy, 3, { random: () => 1 })).toBe(500);
+    expect(backoffMs(policy, 3, { random: () => 0 })).toBe(0);
   });
 
   it("turns a refusal into the next due time using the same clock as the query", () => {
     expect(retryPolicy().baseDelayMs).toBe(60_000);
-    expect(nextAttemptAtMs(policy, 0, 10_000)).toBe(10_100);
-    expect(nextAttemptAtMs(policy, 2, 10_000)).toBe(10_400);
+    expect(nextAttemptAtMs(policy, 0, 10_000, { jitter: false })).toBe(10_100);
+    expect(nextAttemptAtMs(policy, 2, 10_000, { jitter: false })).toBe(10_400);
+    // The default is a jittered due time: one second at most, never before now.
+    const jittered = nextAttemptAtMs(policy, 0, 10_000);
+    expect(jittered).toBeGreaterThanOrEqual(10_000);
+    expect(jittered).toBeLessThanOrEqual(10_100);
     expect(isExhausted(policy, 4)).toBe(true);
   });
 
