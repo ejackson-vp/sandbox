@@ -1,0 +1,57 @@
+# Rule tests for the relay selectors. `promtool test rules` loads the real rule
+# file, so these fail if a selector stops naming the role that exports the
+# family. Run from this directory:
+#
+#   promtool test rules sandbox-slo.test.yaml
+#
+# Both families are exported by the relay process, which the scrape contract
+# labels `role: relay`. The first case is the alert firing; the second is the
+# old selector, which must stay silent.
+rule_files:
+  - sandbox-slo.yaml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'sandbox_relay_pending_requests{role="relay",instance="relay-0:9100"}'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: SandboxRelayPendingRequests
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: sandbox
+            exp_annotations:
+              summary: "The relay has had a request pending for 5 minutes"
+              description: "`sandbox_relay_pending_requests` has stayed above zero for 5 minutes (current 1). A guest is not answering a forwarded operation; check relay disconnects and the session's guest process."
+              runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+  - interval: 1m
+    input_series:
+      - series: 'sandbox_relay_pending_requests{role="controller",instance="controller:9100"}'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: SandboxRelayPendingRequests
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'sandbox_relay_sessions{role="relay",instance="relay-0:9100"}'
+        values: '6+0x12'
+      - series: 'up{job="sandbox-control",role="relay",instance="relay-0:9100"}'
+        values: '1x4 0+0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SandboxBlastRadius
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: sandbox
+              role: relay
+              instance: relay-0:9100
+            exp_annotations:
+              summary: "A control-plane role is down with sessions in flight"
+              description: "The controller or relay has been down for 5 minutes while at least 5 relay sessions were registered in the preceding 15 minutes (affected count: 6). This is the blast-radius rule from issue #38: per-component health can be green while a tenant impact is large. Check the down role first, then tell the affected tenant."
+              runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"

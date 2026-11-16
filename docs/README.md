@@ -23,6 +23,8 @@ jump to the full index below.
 
 ### "I want to run it"
 
+- [orr.md](orr.md): operational readiness, dependencies, SLOs, capacity,
+  failure modes and what is missing
 - [deploy/talos/README.md](../deploy/talos/README.md) — real cluster, Kata, Flux
 - [control-plane-faults.md](control-plane-faults.md) — failure injection
 - [backup-restore.md](backup-restore.md) — database backups, PITR and restore verification
@@ -31,6 +33,9 @@ jump to the full index below.
 - [production-readiness.md](production-readiness.md) — known gaps, ordered
 
 ### "Something is happening right now"
+
+Read [orr.md](orr.md) first if you are deciding whether to page, roll back or
+ride it out.
 
 | Situation | Runbook |
 | --- | --- |
