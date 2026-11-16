@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import { mintProxyToken } from "../../controller/src/tokens.js";
-import { applyYaml, clusterAvailable, CONTEXT, deleteQuietly, kubectl, kubectlJson, kubectlTry } from "./kubectl.js";
+import { applyYaml, clusterAvailable, CONTEXT, deleteQuietly, kubectl, kubectlJson, kubectlTry, serviceEndpoint } from "./kubectl.js";
 import { probePod, runProbes, type ProbeCase } from "./probe.js";
 
 const available = clusterAvailable();
@@ -44,8 +44,8 @@ describe.skipIf(!available)("network isolation (real cluster)", () => {
       "-o",
       "jsonpath={.status.podIP}",
     ]);
-    proxyIp = kubectl(["-n", "sandbox-system", "get", "svc", "egress-proxy", "-o", "jsonpath={.spec.clusterIP}"]);
-    relayIp = kubectl(["-n", "sandbox-system", "get", "svc", "relay", "-o", "jsonpath={.spec.clusterIP}"]);
+    proxyIp = serviceEndpoint("egress-proxy");
+    relayIp = serviceEndpoint("relay");
     nodeIp = kubectl([
       "get",
       "nodes",

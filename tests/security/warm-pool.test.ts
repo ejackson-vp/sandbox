@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionStatus } from "../../shared/src/entries/protocol.js";
 import { SandboxClient, FileSessionStore, type SessionHandle } from "../../sdk/src/index.js";
-import { clusterAvailable, kubectl, kubectlTry } from "./kubectl.js";
+import { clusterAvailable, kubectlTry, serviceEndpoint } from "./kubectl.js";
 
 const API = process.env.API_URL ?? "http://localhost:8080";
 const available = clusterAvailable() && (await (async () => {
@@ -96,7 +96,11 @@ describe.skipIf(!available || pool.length === 0)("warm pool (real cluster)", () 
   }, 60_000);
 
   it("does not let a sandbox use the relay claim endpoint", async () => {
-    const relayIp = kubectl(["-n", "sandbox-system", "get", "svc", "relay", "-o", "jsonpath={.spec.clusterIP}"]).trim();
+    // The address the guest is given, for the same reason network.test.ts uses
+    // one: a ClusterIP is not reachable from inside a Kata microVM, and a guest
+    // that cannot connect at all would "pass" this case without the relay ever
+    // answering. Dial the relay endpoint and assert on its reply.
+    const relayIp = serviceEndpoint("relay");
     expect(relayIp).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
 
     const client = makeClient();
