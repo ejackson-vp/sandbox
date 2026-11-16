@@ -65,6 +65,26 @@ describe("api config guards", () => {
   });
 });
 
+describe("insecure dev acknowledgement", () => {
+  it("defaults to false, so mock payments are refused when it is unset", () => {
+    const { ALLOW_INSECURE_DEV, ...withoutSwitch } = base;
+    void ALLOW_INSECURE_DEV;
+    expect(() => loadConfig(withoutSwitch)).toThrow(/ALLOW_INSECURE_DEV/);
+  });
+
+  it("accepts mock payments once the switch is explicit", () => {
+    expect(loadConfig({ ...base, ALLOW_INSECURE_DEV: "true" }).paymentMode).toBe("mock");
+  });
+
+  it("refuses any value it does not recognise instead of guessing", () => {
+    // A typo must fail closed: the API treats it as false, and mock then
+    // refuses to start rather than running with an unacknowledged dev path.
+    expect(() => loadConfig({ ...base, ALLOW_INSECURE_DEV: "flase" })).toThrow(
+      /ALLOW_INSECURE_DEV/,
+    );
+  });
+});
+
 describe("facilitator client configuration", () => {
   it("defaults to a bounded per-call timeout", () => {
     expect(loadConfig(base).facilitatorTimeoutMs).toBe(20_000);
@@ -111,6 +131,9 @@ describe("mainnet mode", () => {
   const mainnet = {
     ...base,
     PAYMENT_MODE: "mainnet",
+    // Real money and the dev switch are mutually exclusive; the fixtures start
+    // from the switch on, so a mainnet case has to turn it off explicitly.
+    ALLOW_INSECURE_DEV: "false",
     NETWORK: "eip155:8453",
     PAY_TO: "0x1111111111111111111111111111111111111111",
     FACILITATOR_URL: "https://facilitator.example.test",
@@ -165,6 +188,12 @@ describe("mainnet mode", () => {
   it("refuses to start without an on-chain verifier", () => {
     const { PAYMENT_RPC_URL, ...rest } = mainnet;
     expect(() => loadConfig(rest)).toThrow(/PAYMENT_RPC_URL/);
+  });
+
+  it("refuses real payments while the insecure dev switch is on", () => {
+    expect(() => loadConfig({ ...mainnet, ALLOW_INSECURE_DEV: "true" })).toThrow(
+      /PAYMENT_MODE=mainnet requires ALLOW_INSECURE_DEV=false/,
+    );
   });
 });
 

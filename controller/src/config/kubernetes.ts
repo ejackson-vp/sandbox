@@ -20,7 +20,7 @@ import {
   parseRuntimeProfiles,
   type RuntimeProfileCatalog,
 } from "../runtime-profiles.js";
-import { envBool as bool } from "@x402s/shared/env";
+import { envAllowInsecureDev, envBool as bool } from "@x402s/shared/env";
 import type { Role } from "./role.js";
 import type { ControllerConfig } from "./types.js";
 
@@ -192,9 +192,12 @@ export function parseExecution(
   }
 
   const runtimeClass = env.RUNTIME_CLASS ?? DEFAULT_RUNTIME_CLASS;
-  // Gates guest-image digest enforcement only; no execution mode is
-  // hardware-backed, so there is nothing else to acknowledge.
-  const allowInsecureDev = bool(env.ALLOW_INSECURE_DEV, true);
+  // Gates guest-image digest enforcement and dev attestation. Parsed through
+  // the shared helper so both processes share one default: false. This loader
+  // used to default it to true, so a mainnet deployment that omitted the
+  // variable had the controller accepting simulated attestation and an
+  // unpinned tag while the API beside it enforced the real-money rules.
+  const allowInsecureDev = envAllowInsecureDev(env);
 
   const guestImage = env.GUEST_IMAGE ?? DEFAULT_GUEST_IMAGE;
   const guestImageDigest = env.GUEST_IMAGE_DIGEST ?? "sha256:unpinned-dev-image";

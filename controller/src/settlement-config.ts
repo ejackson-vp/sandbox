@@ -102,9 +102,13 @@ function parsePaymentNetwork(env: NodeJS.ProcessEnv, paymentMode: PaymentMode): 
 /**
  * Settlement reconciliation and refund execution (#31). All of it is opt-in by
  * configuration: no webhook means no automatic transfer of funds.
+ *
+ * `allowInsecureDev` is passed in rather than re-read so the flag and the
+ * payment mode are validated against one parse, the same way the API does.
  */
 export function parseSettlement(
   env: NodeJS.ProcessEnv,
+  allowInsecureDev: boolean,
 ): SettlementConfig {
   const paymentMode = (env.PAYMENT_MODE ?? "mock") as PaymentMode;
   if (paymentMode !== "mock" && paymentMode !== "testnet" && paymentMode !== "mainnet") {
@@ -122,6 +126,19 @@ export function parseSettlement(
   if (paymentMode === "mainnet" && !chain.rpcUrl) {
     throw new Error(
       "PAYMENT_MODE=mainnet requires PAYMENT_RPC_URL: settlement recovery must be verified on chain",
+    );
+  }
+  // Real payments and the dev switch are mutually exclusive. ALLOW_INSECURE_DEV
+  // accepts simulated attestation and an unpinned guest image, so a controller
+  // that has it on while settling mainnet is provisioning sandboxes whose
+  // isolation evidence anyone can forge. The API refuses the same pair; this is
+  // the controller's half of that rule, because a mainnet config can be handed
+  // to this process directly.
+  if (paymentMode === "mainnet" && allowInsecureDev) {
+    throw new Error(
+      "refusing to start: PAYMENT_MODE=mainnet requires ALLOW_INSECURE_DEV=false; " +
+        "the insecure switch accepts simulated dev attestation and an unpinned guest image, " +
+        "so real payments must not run with it on",
     );
   }
   return {

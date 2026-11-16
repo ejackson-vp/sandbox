@@ -178,6 +178,9 @@ async function startController(): Promise<ControllerProcess> {
   Object.assign(process.env, {
     ROLE: "controller",
     KUBERNETES_ENABLED: "false",
+    // The local process provisioner runs the dev image tag, and this suite has
+    // no pinned digest to give it: the dev path is what it is exercising.
+    ALLOW_INSECURE_DEV: "true",
     DATABASE_URL: databaseUrl,
     ADMIN_TOKEN: ADMIN,
     RELAY_ADMIN_TOKEN: RELAY_ADMIN,
@@ -215,6 +218,9 @@ async function startApi(): Promise<ApiProcess> {
     CONTROLLER_ADMIN_TOKEN: ADMIN,
     CAPABILITY_SECRET: CAPABILITY,
     PUBLIC_BASE_URL: apiUrl,
+    // Mock payments have no economic security, so the dev path is an explicit
+    // acknowledgement rather than something the payment mode implies.
+    ALLOW_INSECURE_DEV: "true",
     // The default is 60 s, longer than the test timeout; a facilitator that
     // does not answer should fail as a boot error, not as a killed test.
     FACILITATOR_INIT_TIMEOUT_MS: "15000",
@@ -233,6 +239,8 @@ async function startRole(
   Object.assign(process.env, {
     ROLE: role,
     KUBERNETES_ENABLED: "false",
+    // Same dev path as the controller above: no pinned guest image here.
+    ALLOW_INSECURE_DEV: "true",
     CONTROLLER_URL: controllerUrl,
     ADMIN_TOKEN: ADMIN,
     RELAY_ADMIN_TOKEN: RELAY_ADMIN,

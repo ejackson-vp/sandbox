@@ -24,6 +24,29 @@ export function envInt(
 }
 
 /**
+ * The one default for `ALLOW_INSECURE_DEV`, and the one parser for it.
+ *
+ * The flag switches off the two checks that make a deployment safe to point at
+ * real money: it accepts simulated dev attestation and an unpinned guest image.
+ * It used to be parsed twice, with opposite defaults. The API defaulted it to
+ * `PAYMENT_MODE === "mock"` and the controller defaulted it to `true`, so a
+ * mainnet deployment that simply omitted the variable had the API enforcing the
+ * real-money rules while the controller beside it accepted dev evidence and a
+ * moved tag. False is the only default both processes can defend; a deployment
+ * that wants the dev path says so once, and each process refuses the
+ * combination it cannot serve (`PAYMENT_MODE=mainnet` with this on).
+ *
+ * An unrecognised value is false rather than an error for the same reason: a
+ * typo then fails closed in both processes (mock refuses to start, the
+ * controller demands a pinned digest) instead of silently enabling the path.
+ */
+export const ALLOW_INSECURE_DEV_DEFAULT = false;
+
+export function envAllowInsecureDev(env: Record<string, string | undefined>): boolean {
+  return envBool(env.ALLOW_INSECURE_DEV, ALLOW_INSECURE_DEV_DEFAULT);
+}
+
+/**
  * A certificate, key and CA file set, all three or none.
  *
  * Splitting a TLS pair across two deployments is the failure this refuses: a

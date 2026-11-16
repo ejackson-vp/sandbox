@@ -206,6 +206,7 @@ const cfg = loadControllerConfig({
   ADMIN_TOKEN: ADMIN,
   ROLE: "controller",
   KUBERNETES_ENABLED: "false",
+  ALLOW_INSECURE_DEV: "true",
   RELAY_ADMIN_TOKEN: "r".repeat(24),
   WAKE_TOKEN: "w".repeat(24),
   PROXY_TOKEN_SECRET: "p".repeat(24),

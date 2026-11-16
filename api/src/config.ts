@@ -13,7 +13,7 @@
  *    (`PAYMENT_RPC_URL`) must be configured. Every check fails closed, so no
  *    single flag can silently turn on real payments.
  */
-import { envBool as bool, envInt as int, envTlsFiles } from "@x402s/shared/env";
+import { envAllowInsecureDev, envBool as bool, envInt as int, envTlsFiles } from "@x402s/shared/env";
 import {
   CAPABILITY_KEY_ID_PATTERN,
   capabilityKeyRing,
@@ -174,9 +174,20 @@ function parsePayment(
     throw new Error(`mock payment mode requires network ${MOCK_NETWORK}, got ${requestedNetwork}`);
   }
 
-  const allowInsecureDev = bool(env.ALLOW_INSECURE_DEV, paymentMode === "mock");
+  // Parsed through `@x402s/shared/env` so this process and the controller
+  // cannot disagree about the default; they used to (the controller defaulted
+  // to true, this file to the mock mode). Mock has no economic security, so it
+  // must be acknowledged explicitly rather than implied by the payment mode,
+  // and real money must never be paired with the switch that accepts simulated
+  // attestation and an unpinned image.
+  const allowInsecureDev = envAllowInsecureDev(env);
   if (paymentMode === "mock" && !allowInsecureDev) {
     throw new Error("mock payments require ALLOW_INSECURE_DEV=true (mock payments have no economic security)");
+  }
+  if (paymentMode === "mainnet" && allowInsecureDev) {
+    throw new Error(
+      "refusing to start: PAYMENT_MODE=mainnet requires ALLOW_INSECURE_DEV=false; the insecure switch accepts simulated dev attestation and an unpinned guest image, so real payments cannot be enabled beside it",
+    );
   }
 
   if (paymentMode === "mainnet" && !env.FACILITATOR_URL) {

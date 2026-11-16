@@ -90,7 +90,7 @@ export function loadControllerConfig(env: NodeJS.ProcessEnv = process.env): Cont
     ...parseWarmPool(env, warmPool),
     ...parseProvisioningLimits(env),
     ...parsePaymentLimits(env),
-    ...parseSettlement(env),
+    ...parseSettlement(env, execution.allowInsecureDev),
     ...parseCapacity(env),
     ...parseLedgerAudit(env),
     ...parseGuestMeasurementAllowlist(env),
