@@ -1,9 +1,21 @@
-# Kata isolation evidence: control 0.1.30, guest 0.1.29
+# Kata isolation evidence
 
 What the release gate's `Kata guest-to-host isolation` row has been waiting for: the
 packet-level suite and the lifecycle suite, run against a real two-node Talos
 cluster with Cilium and the `x402-sandbox` RuntimeClass handled by `kata`, with
 the image digests the cluster actually ran.
+
+## Runs
+
+| Control | Guest | Result |
+| --- | --- | --- |
+| `0.1.32` `sha256:540af95a…` | `0.1.31` `sha256:eea680fa…` | **23 passed, 1 skipped** (the `X-Forwarded-For` case, skipped because this deployment sets `TRUST_PROXY_HOPS=1`). The attacker suite passes here, including the per-client connection cap that `0.1.30` did not have. |
+| `0.1.30` `sha256:39c8d2d0…` | `0.1.29` `sha256:bd5161d7…` | 20 passed, 1 failed, 3 skipped. The failure was version skew: `0.1.30` had no connection limiter, and `main` refused with `429 connection_limit` where the deployed build returned retryable 503s. |
+
+The detailed record below is the first run; the second repeated the same four
+suites against the promoted pair on the same cluster and produced the numbers in
+the table. The boundary properties are the same in both, and the digest line in
+each section names the pair it describes.
 
 **Takeaway:** the Kata boundary is verified for the properties this suite tests
 (separate guest kernel, no Service VIP, no API, node, metadata or peer reachability,
