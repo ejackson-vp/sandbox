@@ -14,7 +14,7 @@ concrete next step.
 | 4 | **Relay is an in-memory registry per pod** | a restart loses pending ciphertext and the registration; with the default stable ClusterIP the guest reconnects and the interrupted operation is `outcome_unknown`. On clusters whose guest policy denies Service VIPs, `RELAY_GUEST_ADDRESS=pod` keeps sessions working but cannot follow the replacement, so the grace ends `relay_lost` and refunds ([ADR 0012](adr/0012-guest-reconnects-after-relay-loss.md)). Replicas hold disjoint sessions, addressed by deterministic shard affinity and enforced in the token, so N>1 no longer splits a session. A restart still costs one interrupted operation and up to `RELAY_LOSS_GRACE_MS`, or the rest of a shorter lease, of no operations while the guest reconnects, and that case is refunded | Redis/NATS with per-session queues and TTLs (ciphertext only) if a relay restart must also stop interrupting the operation in flight |
 | 5 | **Settlement recovery needs a facilitator lookup** | the controller can now reconcile a settled-but-unentitled payment into a refundable ledger row, but only if the facilitator exposes `GET /settlements/:paymentKey`. Testnet's public facilitator does not, so that window still answers `409 reconciliation_pending` | use a facilitator with a settlement lookup or a webhook, and record the run that proves it |
 | 6 | **Real refunds have never run** | mock mode auto-refunds; a real mode records `REFUND_PENDING` and the refund worker sends it to an operator-configured webhook. Nothing in this repository has moved testnet funds, and the webhook contract is defined here rather than by a facilitator | a settlement-sandbox end-to-end run: settle, kill the controller, prove the refund executes. See [payment-ledger.md](payment-ledger.md) |
-| 7 | **Image pinning has no admission layer on the cluster** | the controller refuses to start with an unpinned guest image when `KUBERNETES_ENABLED=true`, and pulls `repo@sha256:…` whenever a digest is configured, dev mode or not, so a moved tag cannot change what runs inside the VM. A compromised *node* can still run anything | a Kyverno `ClusterPolicy` now rejects a guest pod whose image is not the pinned repository+digest ([deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md)); it is inert until Kyverno is installed, and it has not been executed against a cluster |
+| 7 | **Image pinning has no admission layer on the cluster** | the controller refuses to start with an unpinned guest image when `KUBERNETES_ENABLED=true`, and pulls `repo@sha256:…` whenever a digest is configured, dev mode or not, so a moved tag cannot change what runs inside the VM. A compromised *node* can still run anything | a Kyverno `ClusterPolicy` now rejects a guest pod whose image is not the pinned repository+digest ([deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md)); it is inert until an operator installs Kyverno, `make kyverno-policy` proves the four admission outcomes on a throwaway kind cluster, and no PR CI job installs Kyverno |
 | 8 | **Dev attestation key is public by design** | anyone can forge dev evidence, so it is only safe while `ALLOW_INSECURE_DEV=true` | hardware attestation. The other credentials are no longer in the public repo: local runs generate them, and a private deployment injects its own SOPS-encrypted secrets |
 | 9 | **Checkpoint workspaces are plaintext PVCs** | node/storage admins can read suspended session files; the reference deployment's `local-path` has no encryption and the controller cannot verify a CSI driver's parameters | decided in [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md): no at-rest encryption is claimed anywhere, the boundary is stated in [security-guarantees.md](security-guarantees.md) and [lifecycle.md](lifecycle.md), and PVC expiry plus an orphan-volume sweep are implemented. The real fix — client-side encrypted checkpoint objects with a client-held key — is a protocol change and is split into follow-up 1 in the ADR |
 | 10 | **No memory snapshot** | resume loses processes, memory and open sockets; this is disk-only | Firecracker snapshot or Kata/CRIU on a KVM host; until then call it a checkpoint, not a snapshot |
@@ -48,9 +48,11 @@ concrete next step.
   reference deployment sets it to 1 *and* scopes `allow-api` to the tailscale
   namespace, so no workload can forge `X-Forwarded-For`; kind keeps it at 0.
 - **Image scanning** runs in the release workflow: Trivy on both images, SARIF
-  to the Security tab, and a failure on fixable CRITICAL/HIGH. Note that the
-  image tags are pushed before the scan, so a failed scan blocks the GitHub
-  Release but not the pullable tag; promotion-after-scan is tracked in #42.
+  to the Security tab, and a failure on fixable CRITICAL/HIGH. The build pushes
+  only a run-scoped `staging-<run-id>-<sha>` tag, the scan gates that exact
+  index digest, and the promotion job is the only thing that creates the
+  version, `major.minor` and `latest` tags, so a failed scan leaves no pullable
+  release tag (#42, #56).
 - **API→controller mTLS**: the controller's 3004 listener requires a client
   certificate with `CN=api`; the API presents it and no longer sends the bearer
   token on that path. NetworkPolicy admits the API only on 3004.
@@ -103,9 +105,11 @@ concrete next step.
   invariants under `READ COMMITTED`, proved by the store contract suite. The
   controller has no database volume any more, so a second replica no longer
   waits on a PVC. What is still single-node is the database itself: one primary
-  StatefulSet, no streaming replica, no PITR ([ADR 0010](adr/0010-controller-ha-storage.md)).
+  StatefulSet, no streaming replica, and no PITR provisioned
+  ([ADR 0015](adr/0015-postgres-pitr.md): the component exists, but no
+  environment has the bucket or Secret it needs, so item 1 above applies).
   Remaining: move the store onto CloudNativePG or pgBackRest and record a
-  failover with the Postgres backend.
+  failover with the Postgres backend ([ADR 0010](adr/0010-controller-ha-storage.md)).
 - Persist relay state so a relay restart does not interrupt the operation in
   flight either. A restart no longer fails a paid session (the guest reconnects),
   and a guest that cannot reconnect ends it with `failure:relay_lost`, which is

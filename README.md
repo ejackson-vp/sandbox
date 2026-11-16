@@ -140,13 +140,14 @@ Without a cluster, most of the system is testable in under a minute:
 
 ```bash
 npm ci
-make verify          # typecheck, structure lint, unit + property tests
+make verify          # build, typecheck, structure lint, unit + property + portable + go tests
 make test            # adds integration tests against the real guest binary
 ```
 
 `make security-test` runs the packet-level isolation suite against a live
-cluster. `make guest && npm run test:coverage` prints the TypeScript coverage
-behind the README badge.
+cluster. `make guest && npm run test:coverage` prints coverage for the unit and
+property suites; the README badge merges those with the integration and fuzz
+runs (`scripts/coverage-merge.mjs`).
 
 ## Interfaces
 

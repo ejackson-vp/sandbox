@@ -5,7 +5,7 @@ cookies, no analytics. Open it, or serve the directory.
 
 It is published at **<https://throwbox.dev>**. The hosted API it describes is
 **<https://api.throwbox.dev>**, a Cloudflare Tunnel to the `api` Service; see
-[`deploy/kubernetes/cloudflared/`](../../deploy/kubernetes/cloudflared/README.md).
+[`deploy/kubernetes/cloudflared/`](../deploy/kubernetes/cloudflared/README.md).
 
 ## Preview locally
 

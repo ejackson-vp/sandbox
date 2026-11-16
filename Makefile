@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-restore-dump pitr-drill test-go coverage-go coverage-go-fuzz verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network kyverno-policy logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads test-portable demo-sse demo-ws cli fmt test test-unit test-integration test-restore-dump pitr-drill test-go coverage-go coverage-go-fuzz vet-go verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network kyverno-policy logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -35,7 +35,7 @@ help:
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make test-restore-dump DUMP=file  restore a backup and run the store contract on it"
 	@echo "  make pitr-drill    PITR: base backup, WAL replay to a timestamp, store contract (needs docker)"
-	@echo "  make verify         build, typecheck, structure lint, unit + property + go tests"
+	@echo "  make verify         build, typecheck, structure lint, unit + property + portable + go tests"
 	@echo "  make verify-model   model-check the lifecycle/payment/operation/fence state machines (TLA+)"
 	@echo "  make docs-check     markdownlint + internal link check"
 	@echo "  make assets         re-render docs/assets/social-preview.png"
@@ -288,7 +288,7 @@ logs:
 	$(KUBECTL) -n $(NAMESPACE) logs -l app=controller -f --tail=100 --prefix
 
 clean:
-	rm -rf shared/dist api/dist controller/dist cli/dist guest/bin
+	rm -rf shared/dist sdk/dist api/dist controller/dist cli/dist guest/bin
 
 down:
 	./deploy/kind/down.sh
