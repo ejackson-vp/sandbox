@@ -301,3 +301,93 @@ describe("store backend selection", () => {
     expect(cfg.databaseUrl).toBe("postgres://user:pw@db:5432/sandbox");
   });
 });
+
+describe("chain-verified settlement recovery config (F-19)", () => {
+  const mainnet = {
+    ...base,
+    PAYMENT_MODE: "mainnet",
+    NETWORK: "eip155:8453",
+    FACILITATOR_URL: "https://facilitator.example",
+    GUEST_IMAGE_DIGEST: PINNED,
+  };
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+
+  it("refuses to start a mainnet controller without an RPC URL", () => {
+    expect(() => loadControllerConfig(mainnet)).toThrow(/PAYMENT_RPC_URL/);
+  });
+
+  it("accepts mainnet with an RPC URL and defaults the USDC contract", () => {
+    const cfg = loadControllerConfig({
+      ...mainnet,
+      PAYMENT_RPC_URL: "https://mainnet.base.org",
+    });
+    expect(cfg.paymentMode).toBe("mainnet");
+    expect(cfg.paymentNetwork).toBe("eip155:8453");
+    expect(cfg.paymentRpcUrl).toBe("https://mainnet.base.org");
+    expect(cfg.paymentUsdcAddress).toBe(BASE_USDC);
+  });
+
+  it("honours a validated PAYMENT_USDC_ADDRESS override", () => {
+    const override = "0x2222222222222222222222222222222222222222";
+    const cfg = loadControllerConfig({
+      ...mainnet,
+      PAYMENT_RPC_URL: "https://mainnet.base.org",
+      PAYMENT_USDC_ADDRESS: override,
+    });
+    expect(cfg.paymentUsdcAddress).toBe(override);
+    expect(() =>
+      loadControllerConfig({
+        ...mainnet,
+        PAYMENT_RPC_URL: "https://mainnet.base.org",
+        PAYMENT_USDC_ADDRESS: "not-an-address",
+      }),
+    ).toThrow(/PAYMENT_USDC_ADDRESS/);
+  });
+
+  it("requires an explicit mainnet network and refuses an unknown one", () => {
+    const { NETWORK, ...withoutNetwork } = mainnet;
+    void NETWORK;
+    expect(() =>
+      loadControllerConfig({ ...withoutNetwork, PAYMENT_RPC_URL: "https://mainnet.base.org" }),
+    ).toThrow(/NETWORK/);
+    expect(() =>
+      loadControllerConfig({
+        ...mainnet,
+        NETWORK: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        PAYMENT_RPC_URL: "https://mainnet.base.org",
+      }),
+    ).toThrow(/mainnet allowlist/);
+  });
+
+  it("refuses a mainnet network outside mainnet mode", () => {
+    expect(() =>
+      loadControllerConfig({
+        ...base,
+        PAYMENT_MODE: "testnet",
+        NETWORK: "eip155:8453",
+        GUEST_IMAGE_DIGEST: PINNED,
+      }),
+    ).toThrow(/mainnet/);
+  });
+
+  it("leaves the mock path without a chain reader", () => {
+    // A dev box that exports an RPC URL still has no chain under the mock
+    // scheme, and mock mode must behave exactly as it did before.
+    const cfg = loadControllerConfig({ ...dev, PAYMENT_RPC_URL: "https://rpc.invalid" });
+    expect(cfg.paymentMode).toBe("mock");
+    expect(cfg.paymentNetwork).toBe("mock:local");
+    expect(cfg.paymentRpcUrl).toBeUndefined();
+    expect(cfg.paymentUsdcAddress).toBeUndefined();
+  });
+
+  it("allows a testnet without an RPC but validates one when set", () => {
+    const testnet = { ...base, PAYMENT_MODE: "testnet", GUEST_IMAGE_DIGEST: PINNED };
+    const withoutChain = loadControllerConfig(testnet);
+    expect(withoutChain.paymentNetwork).toBe("eip155:84532");
+    expect(withoutChain.paymentRpcUrl).toBeUndefined();
+    expect(
+      loadControllerConfig({ ...testnet, PAYMENT_RPC_URL: "https://sepolia.base.org" })
+        .paymentRpcUrl,
+    ).toBe("https://sepolia.base.org");
+  });
+});

@@ -211,7 +211,7 @@ const SHARED_LAYERS = [
   },
   {
     name: "payment",
-    match: (rel) => ["payment.ts", "tiers.ts"].includes(rel),
+    match: (rel) => ["payment.ts", "tiers.ts", "settlement-verifier.ts", "settlement-verdict.ts"].includes(rel),
   },
   {
     name: "runtime",

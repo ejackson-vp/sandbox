@@ -19,7 +19,7 @@ import {
   type ChainSettlementVerifier,
   type DisproofReason,
   type SettlementProof,
-} from "../../api/src/payments/settlement-verifier.js";
+} from "../../shared/src/entries/settlement.js";
 
 export const USDC = usdcAddressFor("eip155:8453")!;
 export const AUTHORIZER = "0x1111111111111111111111111111111111111111" as const;

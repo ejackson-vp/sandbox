@@ -192,11 +192,13 @@ spec_hash)`:
 3. `complete` — in one database transaction: insert payment, insert session, mark
    the intent `settled`.
 
-If the process dies between 2 and 3, a retry finds `claimed`, asks the
-facilitator for the settlement record (mock facilitator endpoint), and completes
-the entitlement without charging again. Where settlement lookup is unavailable
-(real testnet/mainnet facilitators), the API answers `409
-reconciliation_pending` rather than guessing.
+If the process dies between 2 and 3, a retry finds `claimed`, asks the chain to
+prove the transfer for the EIP-3009 nonce (then the facilitator's settlement
+record, where one exists), and completes the entitlement without charging again.
+Where neither source can answer, the API answers `409 reconciliation_pending`
+rather than guessing. The controller's recovery worker runs the same proof, with
+the terms recorded on the intent, and records the debt
+([ADR 0014](adr/0014-chain-verified-settlement-recovery.md)).
 
 One payment creates at most one session: the intent is keyed by payment,
 `payments.payment_key` is UNIQUE, `sessions.payment_key` is UNIQUE, and the

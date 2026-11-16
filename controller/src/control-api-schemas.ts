@@ -27,6 +27,15 @@ export const intentClaimSchema = z.object({
       payTo: z.string().min(2).max(128),
     })
     .optional(),
+  /**
+   * The proven EIP-3009 authoriser and nonce, recorded at claim time so
+   * `SettlementRecovery` can ask the chain whether this payment settled without
+   * the API's request or a facilitator lookup (F-19). `null` and omission both
+   * mean "not recorded": the free allowlist path sends a null nonce, and an
+   * older API sends neither.
+   */
+  authorizer: z.string().regex(/^0x[0-9a-fA-F]{40}$/).nullish(),
+  settlementNonce: z.string().regex(/^0x[0-9a-fA-F]{64}$/).nullish(),
 });
 
 /** Reserve one create against the durable budget (#48). */

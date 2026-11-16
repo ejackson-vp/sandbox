@@ -176,6 +176,20 @@ the container registry.
   follow a relay Pod replacement, so the relay-loss grace ends the session
   `failure:relay_lost` and the refund policy pays it out. See
   [ADR 0012](docs/adr/0012-guest-reconnects-after-relay-loss.md).
+- Controller settlement recovery proves the transfer, not the nonce (F-19,
+  schema v20). `payment_intents` now records the EIP-3009 `authorizer` and
+  `settlement_nonce` at claim time, and `SettlementRecovery` runs the same
+  `AuthorizationUsed` + `Transfer` proof as the API, with the recipient and
+  amount from the intent's own `requirements_json`. A used nonce whose transfer
+  went elsewhere or underpaid writes nothing; a `not-found` nonce falls back to
+  `GET /settlements/:paymentKey`. On a network whose facilitator exposes no
+  lookup, a settle-then-crash with no client retry now writes the
+  `REFUND_PENDING` row instead of losing the money silently. The verifier and
+  the verdict mapping moved to `shared/src/settlement-verifier.ts` and
+  `shared/src/settlement-verdict.ts` so both processes run one implementation. A
+  mainnet controller refuses to start without `PAYMENT_RPC_URL`; mock mode is
+  unchanged. See
+  [ADR 0014](docs/adr/0014-chain-verified-settlement-recovery.md).
 
 ### Security
 

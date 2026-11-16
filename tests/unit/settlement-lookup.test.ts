@@ -70,7 +70,9 @@ async function facilitator(respond: (paymentKey: string) => Reply): Promise<stri
 
 /** A claimed intent whose owner died before completing the entitlement. */
 async function seedStaleClaim(store: PostgresStore): Promise<void> {
-  const claim = await store.claimPaymentIntent(PAYMENT_KEY, "b".repeat(64), 30_000, REQUIREMENTS);
+  const claim = await store.claimPaymentIntent(PAYMENT_KEY, "b".repeat(64), 30_000, {
+    requirementsJson: REQUIREMENTS,
+  });
   if (claim.status !== "claimed") throw new Error("expected claim");
 }
 
@@ -189,7 +191,7 @@ describe("controller consumer", () => {
     const result = await new SettlementRecovery(
       store,
       new RefundService(store),
-      new HttpSettlementLookup(baseUrl),
+      { verifier: null, lookup: new HttpSettlementLookup(baseUrl) },
       { graceMs: 0, limit: 10, mode: "testnet" },
     ).run();
 
@@ -210,7 +212,7 @@ describe("controller consumer", () => {
     const result = await new SettlementRecovery(
       store,
       new RefundService(store),
-      new HttpSettlementLookup(baseUrl),
+      { verifier: null, lookup: new HttpSettlementLookup(baseUrl) },
       { graceMs: 0, limit: 10, mode: "testnet" },
     ).run();
 

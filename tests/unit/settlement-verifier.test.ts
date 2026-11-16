@@ -16,7 +16,7 @@ import {
   AUTHORIZATION_USED_EVENT,
   UsdcSettlementVerifier,
   type AuthorizationUsedFilter,
-} from "../../api/src/payments/settlement-verifier.js";
+} from "../../shared/src/entries/settlement.js";
 import { buildSettlementVerifier } from "../../api/src/payments/settlement-confirmation.js";
 import {
   AMOUNT,

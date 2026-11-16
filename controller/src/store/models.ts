@@ -291,8 +291,32 @@ export interface PaymentIntentRecord {
    * Settlement recovery needs them to describe a payment the API no longer has.
    */
   requirementsJson: string | null;
+  /**
+   * EIP-3009 authorising address, proven by the client commitment before the
+   * claim. Recovery uses it in the transfer proof for the recorded nonce, so a
+   * settle-then-crash is resolvable without the API's request (F-19). Null on
+   * rows claimed before schema v20.
+   */
+  authorizer: string | null;
+  /** The EIP-3009 nonce to ask the chain about. Null on pre-v20 rows. */
+  settlementNonce: string | null;
   createdAt: number;
   updatedAt: number;
+}
+
+/**
+ * What a claim records about the payment, beyond its key and spec.
+ *
+ * All three are optional so an older API keeps working: a claim without them
+ * stores NULL, recovery falls back to the facilitator lookup, and the columns
+ * are backfilled the next time the same intent is reclaimed.
+ */
+export interface IntentAttribution {
+  requirementsJson?: string | null;
+  /** The proven `authorization.from`. */
+  authorizer?: string | null;
+  /** The EIP-3009 nonce from the same authorization. */
+  settlementNonce?: string | null;
 }
 
 export class PaymentAlreadyRedeemedError extends Error {
@@ -538,6 +562,8 @@ export function mapIntent(r: Record<string, unknown>): PaymentIntentRecord {
     claimToken: (r.claim_token as string | null) ?? null,
     claimExpiresAt: (r.claim_expires_at as number | null) ?? null,
     requirementsJson: (r.requirements_json as string | null) ?? null,
+    authorizer: (r.authorizer as string | null) ?? null,
+    settlementNonce: (r.settlement_nonce as string | null) ?? null,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number,
   };

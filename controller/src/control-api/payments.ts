@@ -43,9 +43,16 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
       parsed.data.paymentKey,
       parsed.data.specHash,
       parsed.data.staleMs ?? 30_000,
-      // Recorded so settlement recovery can describe the payment after the API
-      // has forgotten the request (#31).
-      parsed.data.requirements ? JSON.stringify(parsed.data.requirements) : null,
+      {
+        // Recorded so settlement recovery can describe the payment after the API
+        // has forgotten the request (#31), and ask the chain about its nonce
+        // instead of depending on a facilitator lookup (F-19).
+        requirementsJson: parsed.data.requirements
+          ? JSON.stringify(parsed.data.requirements)
+          : null,
+        authorizer: parsed.data.authorizer ?? null,
+        settlementNonce: parsed.data.settlementNonce ?? null,
+      },
     );
     if (result.status === "mismatch") {
       res.status(409).json({ status: "mismatch", error: "spec_hash_mismatch" });

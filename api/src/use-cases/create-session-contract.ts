@@ -16,7 +16,7 @@ import type { SettlementLookup } from "@x402s/shared/runtime";
 import type { RateLimiter } from "../admission.js";
 import type { ApiConfig } from "../config.js";
 import type { CapacityDecision, ControllerClient } from "../controller-client.js";
-import type { ChainSettlementVerifier } from "../payments/settlement-verifier.js";
+import type { ChainSettlementVerifier } from "@x402s/shared/settlement";
 
 /** What the use case needs from the process. No `res`, no headers. */
 export interface CreateSessionUseCaseDeps {

@@ -196,10 +196,16 @@ export class ControllerClient {
     specHash: string,
     staleMs?: number,
     requirements?: { network: string; scheme: string; asset: string; amount: string; payTo: string },
+    /**
+     * The proven EIP-3009 authoriser and nonce. The controller records them on
+     * the intent so its recovery worker can read settlement from the chain
+     * without the API's request (F-19).
+     */
+    attribution?: { authorizer?: string; settlementNonce?: string | null },
   ): Promise<IntentClaim> {
     const res = await this.raw("/internal/payment-intents/claim", {
       method: "POST",
-      body: JSON.stringify({ paymentKey, specHash, staleMs, requirements }),
+      body: JSON.stringify({ paymentKey, specHash, staleMs, requirements, ...attribution }),
     });
     // A body of literal `null` is valid JSON, so `.catch` does not catch it and
     // `body.status` would throw a TypeError instead of a ControllerError.

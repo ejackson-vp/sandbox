@@ -200,8 +200,12 @@ concrete next step.
 - Mainnet: `PAYMENT_MODE=mainnet` plus an explicit `NETWORK` (`eip155:8453`),
   a real `PAY_TO`, an explicit `FACILITATOR_URL` and `PAYMENT_RPC_URL` for the
   on-chain settlement check. There is no mainnet default for any of them, and
-  startup refuses if one is missing. The SDK and CLI only build testnet
-  payments today, so a mainnet payer client is still outstanding.
+  startup refuses if one is missing. The controller validates the same three
+  payment settings and refuses to start a mainnet controller without
+  `PAYMENT_RPC_URL`, because its settlement recovery reads the chain
+  ([ADR 0014](adr/0014-chain-verified-settlement-recovery.md)). The SDK and CLI
+  only build testnet payments today, so a mainnet payer client is still
+  outstanding.
 
 ## 6. Isolated target (Kata)
 

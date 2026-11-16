@@ -132,18 +132,35 @@ before entitlement on the first attempt and first on the recovery path, so a
 hostile facilitator cannot mint a session by answering `success`.
 
 `payment_intents` records the payment requirements at claim time
-(`requirements_json`). A controller housekeeping pass lists intents that have
-been `claimed` for longer than `SETTLEMENT_RECOVERY_GRACE_MS` (default 5 min),
-asks the facilitator's settlement lookup whether that payment key settled, and
-if it did, writes a ledger row:
+(`requirements_json`) and, since schema v20, the EIP-3009 `authorizer` and
+`settlement_nonce`. A controller housekeeping pass lists intents that have been
+`claimed` for longer than `SETTLEMENT_RECOVERY_GRACE_MS` (default 5 min) and
+asks the chain first, with the same proof the API uses: the `AuthorizationUsed`
+log for the recorded nonce, then a `Transfer` in that transaction from the
+recorded authorizer to the `payTo` in the intent's own requirements, for at
+least the recorded amount. A used nonce with the wrong recipient or a short
+value is not a settlement and writes no debt. This works on a network whose
+facilitator exposes no settlement lookup, which the public testnet facilitator
+does not (F-19).
+
+If the chain cannot answer for that intent (no `PAYMENT_RPC_URL`, a non-EVM
+network, a nonce outside the lookback window, unusable recorded terms, or a row
+claimed before v20), it falls back to the facilitator's settlement lookup. A
+`proven` answer from either source writes a ledger row:
 
 | Field | Value |
 |---|---|
 | `session_id` | `unsettled:<paymentKey>` (synthetic; no session exists) |
 | `status` | `SETTLED`, then the refund policy below applies |
 | `reason` | `settled_without_entitlement` |
-| `payer`, `amount` | from the lookup |
+| `payer`, `amount` | from the source; the chain path uses the recorded authorizer and the requirements amount |
 | `asset`, `network` | from the requirements recorded at claim |
+| `settlement_nonce` | the recorded nonce, so a refund can be keyed by it |
+
+A `disproven` chain answer is final for that network: the lookup is not asked,
+because the chain is authoritative and a weaker source must not override it. A
+`not-found` answer or a failed read writes nothing and is retried (or falls back
+to the lookup) on the next pass.
 
 That closes F-10's worst case: the money moved, the client got a 402, and nothing
 recorded the debt. The row is now visible in
@@ -159,10 +176,13 @@ resolution is the refund policy below, not an outbox edit.
 
 Recovery needs a facilitator that exposes `GET /settlements/:paymentKey`
 (`FACILITATOR_URL`, the mock facilitator does) or an on-chain verifier for the
-network. The API asks the chain first and falls back to the lookup. Without
-either it is a no-op, and the `409 reconciliation_pending` behaviour is
-unchanged. The controller-side recovery worker still reads only the lookup: an
-intent it cannot resolve is left claimed for the API's retry path.
+network. Both the API and the controller ask the chain first and fall back to
+the lookup, through one shared verifier
+(`shared/src/settlement-verifier.ts`, [ADR 0014](adr/0014-chain-verified-settlement-recovery.md)).
+Without either it is a no-op, and the `409 reconciliation_pending` behaviour is
+unchanged. A mainnet controller refuses to start without `PAYMENT_RPC_URL`, so a
+real deployment cannot silently fall back to a lookup the network may not
+expose.
 
 ## Refund policy
 
@@ -329,8 +349,9 @@ unreliable network is not achievable from this side.
 Metrics: `sandbox_refunds_total{mode,result}` (policy outcomes),
 `sandbox_refund_worker_total{result}` (`refunded`, `failed`, `unknown`,
 `exhausted`, `reclaimed`, `claim_lost`), `sandbox_refunds_pending` and
-`sandbox_refunds_sending` (gauges), `sandbox_settlement_recovery_total{result}`.
-Logs carry a 12-character payment key prefix, never the full key; the
+`sandbox_refunds_sending` (gauges),
+`sandbox_settlement_recovery_total{result,source}` (`source` is `chain` or
+`lookup`). Logs carry a 12-character payment key prefix, never the full key; the
 idempotency key contains the payment key, so it is not logged either.
 
 ## Ledger audit

@@ -1,31 +1,49 @@
 /**
- * Settlement reconciliation and refund execution (#31, F-10).
+ * Settlement reconciliation and refund execution (#31, F-10, F-19).
  *
  * What is pinned:
  *
- *  - a payment the facilitator settled but no session consumed becomes a
- *    refundable ledger row, keyed by payment key, with a synthetic session id;
- *  - mock mode refunds it immediately, a real mode leaves REFUND_PENDING;
+ *  - a payment that settled but no session consumed becomes a refundable ledger
+ *    row, keyed by payment key, with a synthetic session id;
+ *  - the chain is asked first, from the authorizer and nonce recorded on the
+ *    intent, so recovery works when the facilitator exposes no settlement
+ *    lookup (the public testnet facilitator does not);
+ *  - a chain answer is final: `unsettled` is never overridden by a lookup, and a
+ *    read that failed is left for the next pass rather than recorded as debt;
+ *  - mock mode refunds immediately, a real mode leaves REFUND_PENDING;
  *  - the worker is idempotent, backs off, and gives up after a bounded number of
  *    attempts instead of retrying forever;
  *  - a second payment for a client key pair that already owns a session is
  *    refunded and refused, not turned into a second session (double charge).
  *
- * The facilitator here is a stub: no test in this repository talks to a real
- * settlement backend, and none of this has moved real money.
+ * The chain and the facilitator here are stubs: no test in this repository talks
+ * to a real settlement backend, and none of this has moved real money.
  */
 import { describe, expect, it, vi } from "vitest";
-import { 
+import {
   DuplicateEntitlementError,
   type PaymentRecord,
   type SessionRecord,
- } from "../../controller/src/store/models.js";
+} from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { countRows, freshStore } from "../helpers/test-store.js";
 import { RefundService } from "../../controller/src/refunds.js";
 import { RefundWorker, type RefundExecutor } from "../../controller/src/refund-worker.js";
-import { SettlementRecovery } from "../../controller/src/settlement-recovery.js";
+import {
+  SettlementRecovery,
+  type SettlementRecoverySources,
+} from "../../controller/src/settlement-recovery.js";
+import type { SettlementProof } from "../../shared/src/entries/settlement.js";
 import type { SettlementLookup } from "../../shared/src/entries/runtime.js";
+import {
+  AUTHORIZER,
+  NONCE,
+  RECIPIENT,
+  TERMS,
+  disproven,
+  notFound,
+  proven,
+} from "../helpers/settlement-fixtures.js";
 
 const NOW = Date.now();
 const PAYER = "0x00000000000000000000000000000000000000aa";
@@ -36,6 +54,17 @@ const REQUIREMENTS = JSON.stringify({
   asset: "mock:usdc",
   amount: "50000",
   payTo: "0x0000000000000000000000000000000000000402",
+});
+
+/** Base Sepolia, the network a chain-read deployment would configure. */
+const TESTNET_NETWORK = "eip155:84532";
+const TESTNET_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+const TESTNET_REQUIREMENTS = JSON.stringify({
+  network: TESTNET_NETWORK,
+  scheme: "exact",
+  asset: TESTNET_USDC,
+  amount: TERMS.amount.toString(),
+  payTo: RECIPIENT,
 });
 
 const SESSION_LIMITS = {
@@ -109,23 +138,43 @@ function sessionRecord(id: string, key: string, client: string): SessionRecord {
   } as unknown as SessionRecord;
 }
 
-/** A claimed intent whose owner died, with the requirements recorded. */
-async function seedStaleClaim(store: PostgresStore, key: string): Promise<void> {
-  const claim = await store.claimPaymentIntent(key, "b".repeat(64), 30_000, REQUIREMENTS);
+/**
+ * A claimed intent whose owner died, with the requirements and (unless asked
+ * otherwise) the authorizer and nonce a v20 controller records at claim time.
+ */
+async function seedStaleClaim(
+  store: PostgresStore,
+  key: string,
+  opts: { requirements?: string; attribution?: boolean } = {},
+): Promise<void> {
+  const attribution = opts.attribution ?? true;
+  const claim = await store.claimPaymentIntent(key, "b".repeat(64), 30_000, {
+    requirementsJson: opts.requirements ?? REQUIREMENTS,
+    authorizer: attribution ? AUTHORIZER : null,
+    settlementNonce: attribution ? NONCE : null,
+  });
   if (claim.status !== "claimed") throw new Error("expected claim");
 }
 
-function lookupReturning(record: { settled: boolean; payer?: string; amount?: string }): SettlementLookup {
+function lookupReturning(record: {
+  settled: boolean;
+  payer?: string;
+  amount?: string;
+}): SettlementLookup {
   return { supported: true, lookup: vi.fn(async () => (record.settled ? record : null)) };
 }
 
-describe("settlement recovery", () => {
+function sources(overrides: Partial<SettlementRecoverySources> = {}): SettlementRecoverySources {
+  return { verifier: null, lookup: null, ...overrides };
+}
+
+describe("settlement recovery from the facilitator lookup", () => {
   it("records a settled payment with no entitlement as refundable", async () => {
     const store = await freshStore();
-    await seedStaleClaim(store, PAYMENT_KEY);
+    await seedStaleClaim(store, PAYMENT_KEY, { attribution: false });
     const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
 
-    const result = await new SettlementRecovery(store, new RefundService(store), lookup, {
+    const result = await new SettlementRecovery(store, new RefundService(store), sources({ lookup }), {
       graceMs: 0,
       limit: 10,
       mode: "testnet",
@@ -145,9 +194,11 @@ describe("settlement recovery", () => {
 
   it("refunds a recovered mock payment immediately", async () => {
     const store = await freshStore();
-    await seedStaleClaim(store, PAYMENT_KEY);
+    await seedStaleClaim(store, PAYMENT_KEY, { attribution: false });
 
-    await new SettlementRecovery(store, new RefundService(store), lookupReturning({ settled: true }), {
+    await new SettlementRecovery(store, new RefundService(store), sources({
+      lookup: lookupReturning({ settled: true }),
+    }), {
       graceMs: 0,
       limit: 10,
       mode: "mock",
@@ -160,9 +211,11 @@ describe("settlement recovery", () => {
 
   it("leaves an unsettled intent alone: the API still owns the retry", async () => {
     const store = await freshStore();
-    await seedStaleClaim(store, PAYMENT_KEY);
+    await seedStaleClaim(store, PAYMENT_KEY, { attribution: false });
 
-    const result = await new SettlementRecovery(store, new RefundService(store), lookupReturning({ settled: false }), {
+    const result = await new SettlementRecovery(store, new RefundService(store), sources({
+      lookup: lookupReturning({ settled: false }),
+    }), {
       graceMs: 0,
       limit: 10,
       mode: "testnet",
@@ -174,11 +227,11 @@ describe("settlement recovery", () => {
     expect((await store.getPaymentIntent(PAYMENT_KEY))?.status).toBe("claimed");
   });
 
-  it("is a no-op without a settlement lookup", async () => {
+  it("is a no-op with neither a chain read nor a settlement lookup", async () => {
     const store = await freshStore();
     await seedStaleClaim(store, PAYMENT_KEY);
 
-    const result = await new SettlementRecovery(store, new RefundService(store), null, {
+    const result = await new SettlementRecovery(store, new RefundService(store), sources(), {
       graceMs: 0,
       limit: 10,
       mode: "testnet",
@@ -190,9 +243,9 @@ describe("settlement recovery", () => {
 
   it("does not duplicate a row that already exists", async () => {
     const store = await freshStore();
-    await seedStaleClaim(store, PAYMENT_KEY);
+    await seedStaleClaim(store, PAYMENT_KEY, { attribution: false });
     const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
-    const recovery = new SettlementRecovery(store, new RefundService(store), lookup, {
+    const recovery = new SettlementRecovery(store, new RefundService(store), sources({ lookup }), {
       graceMs: 0,
       limit: 10,
       mode: "testnet",
@@ -203,6 +256,207 @@ describe("settlement recovery", () => {
 
     expect(second.recovered).toBe(0);
     expect(await store.listLedgerByStatus("REFUND_PENDING")).toHaveLength(1);
+  });
+});
+
+describe("chain-verified settlement recovery (F-19, F-17)", () => {
+  const chainOpts = {
+    graceMs: 0,
+    limit: 10,
+    mode: "testnet" as const,
+    network: TESTNET_NETWORK,
+  };
+
+  /** A verifier that answers one proof and records the terms it was asked about. */
+  function proofVerifier(answer: SettlementProof) {
+    return { settlementProof: vi.fn(async () => answer) };
+  }
+
+  it("records a settled payment from the chain with no facilitator lookup", async () => {
+    const store = await freshStore();
+    await seedStaleClaim(store, PAYMENT_KEY, { requirements: TESTNET_REQUIREMENTS });
+    const verifier = proofVerifier(proven());
+
+    const result = await new SettlementRecovery(store, new RefundService(store), sources({ verifier }), chainOpts).run();
+
+    // The public testnet facilitator exposes no `GET /settlements/:key`, so the
+    // chain is the only source in this case.
+    expect(result).toEqual({ checked: 1, recovered: 1, errors: 0 });
+    // The worker proves the transfer the API priced: authorizer and nonce from
+    // the claim, recipient and amount from the same intent's requirements. A
+    // nonce on its own is not a settlement.
+    expect(verifier.settlementProof).toHaveBeenCalledWith(TERMS);
+    const ledger = (await store.getLedgerByPayment(PAYMENT_KEY))!;
+    expect(ledger.status).toBe("REFUND_PENDING");
+    expect(ledger.sessionId).toBe(`unsettled:${PAYMENT_KEY}`);
+    expect(ledger.reason).toBe("settled_without_entitlement");
+    expect(ledger.payer).toBe(AUTHORIZER);
+    expect(ledger.amount).toBe(TERMS.amount.toString());
+    expect(ledger.asset).toBe(TESTNET_USDC);
+    expect(ledger.network).toBe(TESTNET_NETWORK);
+    // The nonce the chain proved is the nonce the refund can be keyed by.
+    expect(ledger.settlementNonce).toBe(NONCE);
+  });
+
+  it("writes exactly one row when a lookup is also configured", async () => {
+    const store = await freshStore();
+    await seedStaleClaim(store, PAYMENT_KEY, { requirements: TESTNET_REQUIREMENTS });
+    const verifier = proofVerifier(proven());
+    const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
+    const recovery = new SettlementRecovery(store, new RefundService(store), sources({ verifier, lookup }), chainOpts);
+
+    await recovery.run();
+    const second = await recovery.run();
+
+    expect(second.recovered).toBe(0);
+    expect(await store.listLedgerByStatus("REFUND_PENDING")).toHaveLength(1);
+    // The chain already proved it; the weaker source is never consulted.
+    expect(lookup.lookup).not.toHaveBeenCalled();
+    expect(verifier.settlementProof).toHaveBeenCalledTimes(1);
+  });
+
+  it("records nothing for a used nonce whose transfer went to another address", async () => {
+    const store = await freshStore();
+    await seedStaleClaim(store, PAYMENT_KEY, { requirements: TESTNET_REQUIREMENTS });
+    const verifier = proofVerifier(disproven("transfer_to_another_recipient"));
+    const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
+
+    const result = await new SettlementRecovery(store, new RefundService(store), sources({ verifier, lookup }), chainOpts).run();
+
+    expect(result).toEqual({ checked: 1, recovered: 0, errors: 0 });
+    expect(await store.getLedgerByPayment(PAYMENT_KEY)).toBeNull();
+    expect((await store.getPaymentIntent(PAYMENT_KEY))?.status).toBe("claimed");
+    // A positive disproof is final for this network; the lookup cannot override
+    // it into a debt.
+    expect(lookup.lookup).not.toHaveBeenCalled();
+  });
+
+  it("records nothing for a used nonce that underpaid the price", async () => {
+    const store = await freshStore();
+    await seedStaleClaim(store, PAYMENT_KEY, { requirements: TESTNET_REQUIREMENTS });
+    const verifier = proofVerifier(disproven("transfer_below_price"));
+
+    const result = await new SettlementRecovery(store, new RefundService(store), sources({ verifier }), chainOpts).run();
+
+    expect(result).toEqual({ checked: 1, recovered: 0, errors: 0 });
+    expect(await store.getLedgerByPayment(PAYMENT_KEY)).toBeNull();
+    // The full terms were checked; the nonce alone would have looked settled.
+    expect(verifier.settlementProof).toHaveBeenCalledWith(TERMS);
+  });
+
+  it("withholds when the nonce is outside the window, then falls back to the lookup", async () => {
+    const store = await freshStore();
+    await seedStaleClaim(store, PAYMENT_KEY, { requirements: TESTNET_REQUIREMENTS });
+    const verifier = proofVerifier(notFound());
+
+    const withheld = await new SettlementRecovery(store, new RefundService(store), sources({ verifier }), chainOpts).run();
+    expect(withheld).toEqual({ checked: 1, recovered: 0, errors: 0 });
+    expect(await store.getLedgerByPayment(PAYMENT_KEY)).toBeNull();
+    expect((await store.getPaymentIntent(PAYMENT_KEY))?.status).toBe("claimed");
+
+    // `not-found` is "could not place the payment", so the lookup may still
+    // answer for the payment key.
+    const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
+    const fellBack = await new SettlementRecovery(store, new RefundService(store), sources({ verifier, lookup }), chainOpts).run();
+    expect(fellBack).toEqual({ checked: 1, recovered: 1, errors: 0 });
+    expect(lookup.lookup).toHaveBeenCalledWith(PAYMENT_KEY);
+    expect((await store.getLedgerByPayment(PAYMENT_KEY))?.reason).toBe("settled_without_entitlement");
+  });
+
+  it("leaves the intent alone on a chain read error and retries it later", async () => {
+    const store = await freshStore();
+    await seedStaleClaim(store, PAYMENT_KEY, { requirements: TESTNET_REQUIREMENTS });
+    let rpcDown = true;
+    const verifier = {
+      settlementProof: vi.fn(async () => {
+        if (rpcDown) throw new Error("rpc unavailable");
+        return proven();
+      }),
+    };
+    const recovery = new SettlementRecovery(store, new RefundService(store), sources({ verifier }), chainOpts);
+
+    const first = await recovery.run();
+    expect(first).toEqual({ checked: 1, recovered: 0, errors: 1 });
+    expect(await store.getLedgerByPayment(PAYMENT_KEY)).toBeNull();
+    expect((await store.getPaymentIntent(PAYMENT_KEY))?.status).toBe("claimed");
+
+    // The next pass asks again; the intent was only deferred, never failed.
+    rpcDown = false;
+    const second = await recovery.run();
+    expect(second).toEqual({ checked: 1, recovered: 1, errors: 0 });
+    expect((await store.getLedgerByPayment(PAYMENT_KEY))?.status).toBe("REFUND_PENDING");
+  });
+
+  it("does not ask the chain about another network's payment", async () => {
+    const store = await freshStore();
+    // Recorded requirements name mock:local, while the verifier reads Base
+    // Sepolia. One USDC contract cannot answer for another chain.
+    await seedStaleClaim(store, PAYMENT_KEY, { requirements: REQUIREMENTS });
+    const verifier = proofVerifier(proven());
+    const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
+
+    const result = await new SettlementRecovery(store, new RefundService(store), sources({ verifier, lookup }), chainOpts).run();
+
+    expect(result).toEqual({ checked: 1, recovered: 1, errors: 0 });
+    expect(verifier.settlementProof).not.toHaveBeenCalled();
+    expect((await store.getLedgerByPayment(PAYMENT_KEY))?.reason).toBe("settled_without_entitlement");
+  });
+
+  it("falls back to the lookup when the intent has no recorded nonce", async () => {
+    const store = await freshStore();
+    // A row claimed before schema v20 has no authorizer or nonce to ask about.
+    await seedStaleClaim(store, PAYMENT_KEY, {
+      requirements: TESTNET_REQUIREMENTS,
+      attribution: false,
+    });
+    const verifier = proofVerifier(proven());
+    const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
+
+    const result = await new SettlementRecovery(store, new RefundService(store), sources({ verifier, lookup }), chainOpts).run();
+
+    expect(result).toEqual({ checked: 1, recovered: 1, errors: 0 });
+    expect(verifier.settlementProof).not.toHaveBeenCalled();
+    expect(lookup.lookup).toHaveBeenCalledWith(PAYMENT_KEY);
+  });
+
+  it("will not prove a payment whose recorded terms have no usable price", async () => {
+    const store = await freshStore();
+    // No amount in the requirements: `value >= 0` would prove any transfer, so
+    // the chain is not asked and the nonce alone decides nothing.
+    await seedStaleClaim(store, PAYMENT_KEY, {
+      requirements: JSON.stringify({
+        network: TESTNET_NETWORK,
+        scheme: "exact",
+        asset: TESTNET_USDC,
+        amount: "0",
+        payTo: RECIPIENT,
+      }),
+    });
+    const verifier = proofVerifier(proven());
+    const lookup = lookupReturning({ settled: true, payer: PAYER, amount: "50000" });
+
+    const result = await new SettlementRecovery(store, new RefundService(store), sources({ verifier, lookup }), chainOpts).run();
+
+    expect(verifier.settlementProof).not.toHaveBeenCalled();
+    expect(result).toEqual({ checked: 1, recovered: 1, errors: 0 });
+    expect(lookup.lookup).toHaveBeenCalledWith(PAYMENT_KEY);
+  });
+
+  it("backfills the authorizer and nonce when a stale claim is reclaimed", async () => {
+    const store = await freshStore();
+    // Claimed by a build that did not record attribution, and already stale.
+    const first = await store.claimPaymentIntent(PAYMENT_KEY, "b".repeat(64), -1);
+    expect(first.status).toBe("claimed");
+    expect((await store.getPaymentIntent(PAYMENT_KEY))?.authorizer).toBeNull();
+
+    const reclaimed = await store.claimPaymentIntent(PAYMENT_KEY, "b".repeat(64), -1, {
+      authorizer: AUTHORIZER,
+      settlementNonce: NONCE,
+    });
+    expect(reclaimed.status).toBe("claimed");
+    const intent = (await store.getPaymentIntent(PAYMENT_KEY))!;
+    expect(intent.authorizer).toBe(AUTHORIZER);
+    expect(intent.settlementNonce).toBe(NONCE);
   });
 });
 

@@ -19,6 +19,7 @@
  * seams can be read without the scheduler around them.
  */
 import { HttpSettlementLookup, LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
+import { buildChainSettlementVerifier } from "@x402s/shared/settlement";
 import type { ControllerConfig } from "./config.js";
 import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
@@ -154,9 +155,10 @@ export class Reconciler {
       leaseGraceMs: deps.cfg.leaseGraceMs,
       now: () => this.now(),
     });
-    // Both are inert unless configured: recovery needs a facilitator that
-    // exposes a settlement lookup, and the worker needs an operator-owned
-    // refund endpoint. With neither, real-mode refunds stay REFUND_PENDING.
+    // Both are inert unless configured: recovery needs a chain read or a
+    // facilitator that exposes a settlement lookup, and the worker needs an
+    // operator-owned refund endpoint. With neither, real-mode refunds stay
+    // REFUND_PENDING.
     this.refundWorker = new RefundWorker(
       deps.store,
       deps.cfg.refundWebhookUrl
@@ -170,16 +172,34 @@ export class Reconciler {
         now: () => this.now(),
       },
     );
+    // The chain is asked first (F-19): it is authoritative, and it is the only
+    // answer on a network whose facilitator exposes no settlement lookup. The
+    // lookup stays as the fallback for a network this deployment cannot read.
+    const verifier = deps.cfg.settlementRecoveryEnabled
+      ? buildChainSettlementVerifier({
+          mock: deps.cfg.paymentMode === "mock",
+          network: deps.cfg.paymentNetwork,
+          rpcUrl: deps.cfg.paymentRpcUrl,
+          usdcAddress: deps.cfg.paymentUsdcAddress,
+          lookbackBlocks: deps.cfg.paymentSettlementLookbackBlocks,
+          chunkBlocks: deps.cfg.paymentSettlementScanChunkBlocks,
+        })
+      : undefined;
     this.settlementRecovery = new SettlementRecovery(
       deps.store,
       new RefundService(deps.store),
-      deps.cfg.settlementRecoveryEnabled && deps.cfg.facilitatorUrl
-        ? new HttpSettlementLookup(deps.cfg.facilitatorUrl)
-        : null,
+      {
+        verifier: verifier ?? null,
+        lookup:
+          deps.cfg.settlementRecoveryEnabled && deps.cfg.facilitatorUrl
+            ? new HttpSettlementLookup(deps.cfg.facilitatorUrl)
+            : null,
+      },
       {
         graceMs: deps.cfg.settlementRecoveryGraceMs,
         limit: 25,
         mode: deps.cfg.paymentMode,
+        network: deps.cfg.paymentNetwork,
         now: () => this.now(),
       },
     );
