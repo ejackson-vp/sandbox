@@ -1,19 +1,24 @@
 # sandbox
 
-> Pay once with x402, get a temporary Linux machine. No account, no API key, no signup. The control plane routes sealed commands and files, and the VM is destroyed when the lease ends.
+> Pay once with x402, get a temporary Linux machine. No account, no API key, no signup. The control plane routes sealed commands and files, and the machine is destroyed when the lease ends.
 
-**sandbox** is a hosted beta at `https://api.throwbox.dev`. Payments there are **real USDC on Base**, priced per session, and the price comes from `GET /v1/pricing` rather than from this document. The source is MIT and self-hostable; `deploy/overlays/throwbox` is the public deployment. Free access is by invitation.
+**sandbox** is a hosted beta at `https://api.throwbox.dev`. Payments there are **real USDC on Base** (`eip155:8453`), settled through the Coinbase CDP facilitator, priced per session. The price comes from `GET /v1/pricing` rather than from this document. There are no accounts and no stored balance: the payment is the identity, and one payment buys one session. The source is MIT and self-hostable; `deploy/overlays/throwbox` is the public deployment. Free access is by invitation.
 
-Isolation between sessions has **not been verified** on the hosted deployment. There is no hardware attestation, no encrypted checkpoint and no SLA. Read [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md) before repeating anything here as a security claim.
+The beta is one operator, one region, one control-plane node and one Postgres primary. Sessions are ephemeral. There is no suspend and no resume: the workspace is an `emptyDir` that dies with the pod, and nothing you write outlives the lease. Checkpoint storage in this repository is plaintext, which is why the hosted beta does not sell checkpoints.
 
-- Source: https://github.com/ejackson-vp/sandbox
+Isolation between sessions is a Kata microVM. The boundary properties the suite tests are verified on a real Kata cluster at control `0.1.30` and guest `0.1.29`: the guest runs its own kernel, and it cannot reach another session, the Kubernetes API, a node, the metadata endpoint, a Service VIP or the internet except through the egress proxy. That is not a hardware root of trust, and it is not an escape test: no escape attempt has been made, so nothing here claims the hypervisor resists one. There is no hardware attestation, no encrypted checkpoint and no SLA. The security review was written by the author of the code, not an independent reviewer. Read [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md) and [isolation evidence](https://github.com/ejackson-vp/sandbox/blob/main/docs/isolation-evidence.md) before repeating anything here as a security claim.
+
+- Source: <https://github.com/ejackson-vp/sandbox>
 - Licence: MIT
-- Status: beta
+- Status: beta, hosted, one operator, one region
 - Hosted API base: `https://api.throwbox.dev`
 - Local API base: `http://localhost:8080`
+- Payment: real USDC on Base, per session, through the CDP facilitator
+- Accounts: none. No stored balance, no top-up, no refund credit
+- Sessions: ephemeral. No suspend, no resume, no persistence
 - Live pricing: `GET https://api.throwbox.dev/v1/pricing`
 
-This repository's CLI and SDK still ship `mock` and `testnet` payment modes only. The hosted service settles through its own facilitator; do not point the `testnet` payer at it, and do not hardcode a price.
+This repository's CLI and SDK build `mock` and `testnet` payments only, so a mainnet payer client is still yours to write: do not point the `testnet` payer at the hosted service, and do not hardcode a price. If your wallet is on the invitation allowlist, a create is free up to a tier and concurrency ceiling the operator sets, and no payment header is needed.
 
 ## Start here
 
@@ -22,6 +27,7 @@ This repository's CLI and SDK still ship `mock` and `testnet` payment modes only
 - [CLI and SDK](https://github.com/ejackson-vp/sandbox/blob/main/docs/cli.md): every command and client method.
 - [HTTP API](https://github.com/ejackson-vp/sandbox/blob/main/docs/api.md): routes, envelopes, status codes.
 - [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md): what is enforced and what is not. Read before repeating a security claim.
+- [Isolation evidence](https://github.com/ejackson-vp/sandbox/blob/main/docs/isolation-evidence.md): the Kata boundary run, the probes that were denied, and what it does not prove.
 - [Threat model](https://github.com/ejackson-vp/sandbox/blob/main/docs/threat-model.md): STRIDE by component.
 - [Production readiness](https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md): the ordered gap between the hosted beta and a production service.
 - [Workload compatibility](https://github.com/ejackson-vp/sandbox/blob/main/docs/workload-compatibility.md): what actually runs in the guest.
@@ -33,8 +39,14 @@ Use the CLI or the SDK. Do not hand-roll the sealed envelopes, the x402 payment,
 1. Build the project: `npm ci && npm run build`.
 2. Prefer the one-shot path for a single task: `sandbox run --json ...`.
 3. For multi-step work, create a session, run operations, then destroy it in a `finally` block.
-4. Collect outputs before the lease ends. Nothing survives termination.
+4. Collect outputs before the lease ends. Nothing survives termination, and there is no suspend to park work in.
 5. Treat command failures as data, not transport errors. Results carry `ok: false` and a stable `error.code`.
+
+### When a create is refused
+
+- `402` means a price is owed, not that you were charged. Nothing settles until you sign the `PAYMENT-REQUIRED` header and retry with `PAYMENT-SIGNATURE`. One payment buys one session; the same payment replayed returns that session instead of billing again. If you are not the payer, stop and tell the human.
+- `429` with `rate_limited` means slow down. Honour `Retry-After`, retry once, and do not raise parallelism: one foreground operation per session is the rule, and the limits below bound the rest.
+- `429` with `creates_disabled` means the operator has turned new sessions off. Stop. Do not retry, do not re-sign, and do not try the same payment against another session. Wait for the operator to restore it. (This code is reserved for the kill switch and is not returned by the current release; today an emergency stop shows up as a `502` or `503` at the public host.)
 
 ### Install and build
 
@@ -83,8 +95,6 @@ sandbox download <id> /workspace/src ./src --extract
 sandbox ls       <id> /workspace --recursive
 sandbox stat     <id> /workspace/out.txt
 
-sandbox suspend <id>
-sandbox resume  <id>
 sandbox destroy <id>
 ```
 
@@ -157,7 +167,7 @@ Request body (tiers: `short`, `standard`, `extended`, `long`, `custom`):
 }
 ```
 
-Custom tiers additionally require `durationSeconds`, `cpuMillis`, `memoryMiB` and `diskMiB`. Optional checkpoint fields: `idlePolicy`, `maxLifetimeSeconds`, `baselineCpuMillis`, `baselineMemoryMiB`.
+Custom tiers additionally require `durationSeconds`, `cpuMillis`, `memoryMiB` and `diskMiB`. Do not send checkpoint fields (`idlePolicy`, `maxLifetimeSeconds`): the hosted beta does not offer suspended sessions.
 
 The response carries `sessionId`, `capability`, `state`, `limits`, `capabilityExpiresAt` and payment details. `201` is a new session, `200` is an idempotent replay.
 
@@ -177,14 +187,9 @@ The envelope is a sealed box. The API never sees the operation type, command, en
 
 `202` means still running; poll the request. `409 outcome_unknown` is terminal and means the controller restarted with the request in flight: the command may have run. Do not blindly retry with a new id if the command is not idempotent.
 
-### Suspend and resume
+### No suspend, no resume
 
-```http
-POST /v1/sessions/{id}/suspend   -> 200 SUSPENDED
-POST /v1/sessions/{id}/resume    -> 202 RESUMING; poll until READY
-```
-
-A checkpoint is **disk only**. Processes, memory and sockets do not survive. Resume boots a fresh guest with a new key against the same workspace. The checkpoint is plaintext on disk and readable by the storage administrator. Do not park secrets in a suspended workspace.
+A session ends when its lease ends or you destroy it. There is no suspend, no resume and no checkpoint endpoint on the hosted beta: `POST /v1/sessions/{id}/suspend` exists in the open-source build, where the workspace is a plaintext PVC, and the hosted service does not sell that. If you need work to survive, download it before the lease ends.
 
 ## Limits
 
@@ -194,16 +199,17 @@ A checkpoint is **disk only**. Processes, memory and sockets do not survive. Res
 | | `standard` 300 s / 1 vCPU / 1 GiB / 1 GiB |
 | | `extended` 900 s / 2 vCPU / 2 GiB / 2 GiB |
 | | `long` 1800 s / 2 vCPU / 4 GiB / 4 GiB |
-| Custom ceiling | 2 vCPU / 4 GiB / 8 GiB, up to 30 minutes by default |
-| Workspace | `/workspace`, paths confined to it |
+| Lease | 1800 s maximum on the hosted deployment; 3600 s is the protocol ceiling and no deployment may exceed it |
+| Custom ceiling | 2 vCPU / 4 GiB / 8 GiB |
+| Workspace | `/workspace`, paths confined to it, destroyed with the lease |
 | File or archive | 8 MiB per payload |
-| Command output | 256 KiB, then truncated |
-| Command time | `min(requested, remaining lease, maxCommandSeconds)` |
+| Command output | 256 KiB per stream, then truncated |
+| Command time | 300 s, `min(requested, remaining lease, maxCommandSeconds)` |
 | Result wait | `waitMs` up to 90 000 ms, then `202 pending` |
 | Listing | 5000 entries |
-| Concurrency | one active foreground operation per session |
+| Concurrency | one active foreground operation per session; background processes are killed when the command returns |
 | Processes | pod `pids.max` 1024; `maxProcesses` is advisory |
-| Networking | no inbound; egress only through an allowlisting proxy on 443 |
+| Networking | no inbound; egress only through the egress proxy, to destinations on 443, so the guest cannot reach the cluster network or the metadata service |
 
 Prices are configuration (`SESSION_TIERS`), not economics. Read `GET /v1/pricing` on the API you are calling for the live table; never hardcode a price in a client. The 90 s `waitMs` cap is deliberate: a longer request is killed by the edge proxy at 100 s, so the client never sees the `202` it needs to poll.
 
@@ -215,10 +221,11 @@ Prices are configuration (`SESSION_TIERS`), not economics. Read `GET /v1/pricing
 | 401 | `capability_required` | missing capability |
 | 402 | `payment_required`, `payment_invalid:*`, `payment_settlement_rejected:*` | payment problem |
 | 404 | `session_not_found` | wrong capability or unknown session |
-| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `outcome_unknown`, `session_not_usable`, `session_suspended`, `resume_unavailable` | conflict |
+| 409 | `payment_in_progress`, `spec_mismatch`, `busy`, `outcome_unknown`, `session_not_usable` | conflict |
 | 410 | `lease_expired`, `capability_expired`, `result_expired` | gone |
 | 413 | `payload_too_large` | envelope too big |
 | 429 | `rate_limited` (`scope: payer` or `ip`) | honour `Retry-After` |
+| 429 | `creates_disabled` | reserved: operator has switched new sessions off. Stop, do not retry a payment |
 | 503 | `control_plane_unavailable`, `provisioning_unavailable` | transient |
 
 Command-level errors (`ok: false`) include `path_outside_workspace`, `quota_exceeded`, `file_too_large`, `unsafe_archive`, `not_found`, `invalid_cwd`, `spawn_failed`, `service_not_found`, `port_in_use`, `service_not_listening`.
@@ -226,24 +233,27 @@ Command-level errors (`ok: false`) include `path_outside_workspace`, `quota_exce
 ## Rules for agents
 
 - Always destroy a session in a `finally` block, even if the command failed.
-- Collect output files before the lease expires.
+- Collect output files before the lease expires. Nothing survives termination.
 - Do not put secrets inline in command strings. Pass them with `--env` or the SDK's env field, and remember they are inside the sealed envelope but still visible to the guest process.
 - Keep payloads under 8 MiB. Chunk or split larger inputs.
 - Use `--json` or the SDK's typed results. Do not scrape human output.
 - Do not retry a non-idempotent command with a new `requestId` after `outcome_unknown`.
+- On `402`, pay once and retry with the same payment. On `429`, back off. On `429 creates_disabled`, stop until the operator says otherwise.
 - Use the warm-pool path through the API; do not try to talk to a guest directly. There is no inbound networking.
 - For an HTTP service, start it with `service.start` and call it with the relay `http.request` operation. Do not expect a routable port.
 
 ## Security scope, in one paragraph
 
-The transport is sealed client-side to the guest's ephemeral key. The API, controller, relay, database and payment layer route ciphertext and hold no decryption key. Isolation between sandboxes is designed as the Kata VM boundary, not cryptography, and it has **not been verified on the hosted deployment**: no guest-kernel check has been run there, so do not rely on it yet. There is **no hardware root of trust**: the development attestation key ships in the repository, so anyone can produce the binding. Suspended workspace PVCs are plaintext at rest and readable by the node or storage administrator. Do not describe this system as confidential computing, attested, provider-blind or isolated. The full matrix is in [security-guarantees.md](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md).
+The transport is sealed client-side to the guest's ephemeral key. The API, controller, relay, database and payment layer route ciphertext and hold no decryption key. Isolation between sandboxes is a Kata microVM, and the boundary properties the suite tests are verified at control `0.1.30` and guest `0.1.29`: separate guest kernel, no reach to a peer session, the Kubernetes API, a node, the metadata endpoint, a Service VIP or the internet except the proxy, and no host mounts or service-account token in the guest. That is not a hardware root of trust and no escape was attempted, so it is not a claim that the hypervisor resists one. The development attestation key ships in the repository, so anyone can produce the binding: the client learns which key it is talking to, not what the operator is running. The security review is by the author of the code, not an independent reviewer, and it is not a penetration test. Checkpoint storage in this repository is plaintext, which is why suspend is not offered here. Do not describe this system as confidential computing, attested, provider-blind or isolated. The full matrix is in [security-guarantees.md](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md).
 
 ## Hosted beta: rules, refunds, data
 
-- **Acceptable use.** Run work you have the right to do. Not allowed: attacking or scanning systems you do not own, spam, crypto mining, illegal content, escaping the sandbox, or reaching another session, the cluster network or its metadata service. Report abuse to abuse@throwbox.dev.
+- **Acceptable use.** Run work you have the right to do. Not allowed: attacking or scanning systems you do not own, spam, crypto mining, illegal content, escaping the sandbox, or reaching another session, the cluster network or its metadata service. Report abuse to <abuse@throwbox.dev>.
+- **Payment.** Real USDC on Base (`eip155:8453`), one charge per session, settled through the Coinbase CDP facilitator. No accounts and no stored balance. Free access is by invitation only.
 - **Refunds.** Full refund to the paying wallet if a session never reaches READY, or if the service ends it because the relay could not recover (`failure:relay_lost`). No refund for a session the client destroys, or for one that simply expires after READY. Refunds are queued in the payment ledger and sent by a separate worker, so they are not instant; a refund that cannot be sent automatically stays queued for an operator.
-- **Data.** Session metadata (tier, limits, timings, state), the paying wallet address and the payment ledger are recorded. Commands, file contents and output are ciphertext to the API, controller and relay. The guest sees what it runs, and a suspended workspace is plaintext on disk.
-- **No SLA.** One region, one control-plane node, one Postgres primary. Free access is by invitation.
+- **Data.** Session metadata (tier, limits, timings, state), the paying wallet address and the payment ledger are recorded. Commands, file contents and output are ciphertext to the API, controller and relay. The guest sees what it runs, and nothing you write survives the lease.
+- **No SLA.** One operator, one region, one control-plane node, one Postgres primary. A control-plane node loss is an outage until it comes back, and no failover has been measured.
+- **No suspend.** There is no checkpoint, no resume and no place to park a workspace. Finish and download within the lease.
 
 ## Local verification
 
