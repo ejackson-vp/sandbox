@@ -16,6 +16,7 @@
  * (settlement recovery) and to a duplicate charge, which is why it is a public
  * method rather than three copies of an if-statement.
  */
+import { isTerminal } from "@x402s/shared/protocol";
 import { log, metrics } from "@x402s/shared/runtime";
 import type { PaymentLedgerRecord } from "./store/models/money.js";
 import type { SessionRecord, SessionState } from "./store/models/session.js";
@@ -64,9 +65,7 @@ export class RefundService {
   }
 
   async refund(session: SessionRecord, finalState: SessionState): Promise<RefundOutcome> {
-    if (finalState !== "FAILED" && finalState !== "EXPIRED" && finalState !== "DESTROYED") {
-      return "not_applicable";
-    }
+    if (!isTerminal(finalState)) return "not_applicable";
     const relayLost = interruptedByRelayLoss(session);
     // Service was delivered, so the default is no refund. Relay loss is the
     // deliberate exception: the session was cut short through no client action.

@@ -12,6 +12,7 @@
  * sources that both declare a member.
  */
 import type { ControlApiStore, LedgerAuditStore, ReconcilerStore } from "./ports.js";
+import type { RecoveryResult } from "./models.js";
 
 interface StoreBackendProcess {
   /** True when this process is deliberately not the writer. */
@@ -24,7 +25,7 @@ interface StoreBackendProcess {
    * leadership boundary rather than on the next write.
    */
   setWritesBlocked(blocked: boolean): Promise<void>;
-  recoverInterruptedOperations(): Promise<{ requests: number; sessions: number }>;
+  recoverInterruptedOperations(): Promise<RecoveryResult>;
   close(): Promise<void>;
 }
 

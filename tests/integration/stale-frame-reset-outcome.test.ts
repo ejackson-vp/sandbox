@@ -299,7 +299,7 @@ describe("a withdrawn stale frame does not strand a READY session", () => {
 
     // The controller restarts: the interrupted request becomes outcome_unknown
     // and the session epoch is bumped. Housekeeping then reconciles the fence.
-    expect(await run.store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+    expect(await run.store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1, orphaned: 0 });
     expect(await run.store.getSession(run.sessionId)).toMatchObject({
       activeRequestId: oldRequestId,
       execEpoch: 2,

@@ -7,6 +7,7 @@
  * tested as hard as the reap cases.
  */
 import { describe, expect, it } from "vitest";
+import { NON_TERMINAL_STATES, TERMINAL_STATES } from "@x402s/shared/protocol";
 import { loadControllerConfig } from "../../controller/src/config.js";
 import {
   workspacePvcReapReason,
@@ -34,7 +35,9 @@ function pvc(overrides: Partial<WorkspacePvcInfo> = {}): WorkspacePvcInfo {
 
 describe("workspace PVC reap decision", () => {
   it("keeps a volume that a non-terminal session owns, whatever its age", () => {
-    for (const state of ["PAID", "PROVISIONING", "READY", "ACTIVE", "SUSPENDING", "SUSPENDED", "RESUMING", "TERMINATING"]) {
+    // Every state the shared vocabulary calls non-terminal, so a state added
+    // there is covered here without editing the list.
+    for (const state of NON_TERMINAL_STATES) {
       expect(
         workspacePvcReapReason({
           pvc: pvc({ createdAt: NOW - 365 * 24 * GRACE }),
@@ -47,7 +50,7 @@ describe("workspace PVC reap decision", () => {
   });
 
   it("reaps a volume whose session is already terminal", () => {
-    for (const state of ["DESTROYED", "EXPIRED", "FAILED"]) {
+    for (const state of TERMINAL_STATES) {
       expect(
         workspacePvcReapReason({
           pvc: pvc({ createdAt: NOW }),

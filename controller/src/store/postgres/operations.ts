@@ -26,6 +26,7 @@ import {
   type ClaimOperationResult,
   type ExecRequestRecord,
   type RawSession,
+  type RecoveryResult,
   type SessionRecord,
 } from "../models.js";
 import { RolledBack, type PgConnection, type Tx } from "./pg.js";
@@ -37,21 +38,64 @@ export class PgOperationRepository {
    * Startup recovery. Runs only while this process holds the writer lock, so two
    * recoveries cannot interleave; the epoch bump is in any case the fence, and a
    * second bump only invalidates frames from a generation that is already gone.
+   *
+   * "Interrupted" means one thing: a session's gate still names a request that
+   * is `pending`. That is the only shape an operation can have while it is in
+   * flight, because `claimOperation` writes the request row and takes the gate in
+   * one transaction. So both writes are scoped to that join:
+   *
+   *   1. fence the request the gate owns (`pending -> outcome_unknown`);
+   *   2. bump the epoch of exactly the sessions that held one;
+   *   3. resolve a `pending` row that no gate owns. Statement 3 cannot see a
+   *      live claim: a row is only visible while a gate owns it, or after the
+   *      gate was cleared without finishing it. Such a row can never be
+   *      delivered or completed, so leaving it `pending` would answer every
+   *      poll with `202` forever. It is resolved without an epoch bump, because
+   *      no gate means no frame of ours is outstanding.
+   *
+   * The old unscoped form marked every `pending` row `outcome_unknown`, which
+   * both lied about operations the controller never delivered and left the
+   * sessions that owned them unbumped, so nothing could ever resolve the row.
    */
-  async recoverInterruptedOperations(): Promise<{ requests: number; sessions: number }> {
+  async recoverInterruptedOperations(): Promise<RecoveryResult> {
     return this.conn.tx(async (tx) => {
       const now = Date.now();
-      const requests = await tx.query(
-        "UPDATE exec_requests SET state = 'outcome_unknown', updated_at = $1 WHERE state = 'pending'",
+      const fenced = await tx.query<{ session_id: string }>(
+        `UPDATE exec_requests r
+            SET state = 'outcome_unknown', updated_at = $1
+           FROM sessions s
+          WHERE s.id = r.session_id
+            AND s.active_request_id = r.id
+            AND r.state = 'pending'
+        RETURNING r.session_id`,
         [now],
       );
-      const sessions = await tx.query(
-        "UPDATE sessions SET exec_epoch = exec_epoch + 1, updated_at = $1 WHERE active_request_id IS NOT NULL",
+      const sessionIds = [...new Set(fenced.rows.map((row) => row.session_id))];
+      const bumped =
+        sessionIds.length === 0
+          ? []
+          : (
+              await tx.query<{ id: string }>(
+                `UPDATE sessions SET exec_epoch = exec_epoch + 1, updated_at = $1
+                  WHERE id = ANY($2::text[])
+                RETURNING id`,
+                [now, sessionIds],
+              )
+            ).rows;
+      const orphaned = await tx.query(
+        `UPDATE exec_requests r
+            SET state = 'outcome_unknown', updated_at = $1
+          WHERE r.state = 'pending'
+            AND NOT EXISTS (
+              SELECT 1 FROM sessions s
+               WHERE s.id = r.session_id AND s.active_request_id = r.id
+            )`,
         [now],
       );
       return {
-        requests: Number(requests.rowCount ?? 0),
-        sessions: Number(sessions.rowCount ?? 0),
+        requests: Number(fenced.rowCount ?? 0),
+        sessions: bumped.length,
+        orphaned: Number(orphaned.rowCount ?? 0),
       };
     });
   }

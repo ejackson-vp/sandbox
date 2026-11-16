@@ -8,20 +8,23 @@
  * read-then-write left is `finalizeTermination`, and it takes an explicit
  * `SELECT … FOR UPDATE` row lock to keep that pair atomic.
  */
-import { SOURCE_STATES, finalStateForReason } from "@x402s/shared/protocol";
+import {
+  NON_TERMINAL_STATE_SQL,
+  SOURCE_STATES,
+  TERMINAL_STATES,
+  TERMINAL_STATE_SQL,
+  finalStateForReason,
+} from "@x402s/shared/protocol";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { cadenceFor } from "../../reconcile-cadence.js";
 import {
   mapSession,
-  NON_TERMINAL_STATE_SQL,
   SESSION_COLUMNS,
   type RawSession,
   type SessionRecord,
   type SessionState,
 } from "../models.js";
 import type { PgConnection, Tx } from "./pg.js";
-
-const TERMINAL = ["EXPIRED", "FAILED", "DESTROYED"];
 
 export class PgSessionRepository {
   constructor(private readonly conn: PgConnection) {}
@@ -90,7 +93,7 @@ export class PgSessionRepository {
     return this.rows(
       `SELECT ${SESSION_COLUMNS} FROM sessions
         WHERE state = ANY($1::text[]) AND pod_name IS NOT NULL`,
-      [TERMINAL],
+      [[...TERMINAL_STATES]],
     );
   }
 
@@ -98,7 +101,7 @@ export class PgSessionRepository {
     return this.rows(
       `SELECT ${SESSION_COLUMNS} FROM sessions
         WHERE state = ANY($1::text[]) AND workspace_pvc IS NOT NULL`,
-      [TERMINAL],
+      [[...TERMINAL_STATES]],
     );
   }
 
@@ -272,6 +275,14 @@ export class PgSessionRepository {
    * The ciphertext clear is in the same transaction as the finalize, so a
    * terminal session never keeps a persisted result behind it. The request rows
    * stay for audit.
+   *
+   * A request that is still `pending` belonged to the operation the session was
+   * running when termination began. Clearing `active_request_id` without it
+   * used to leave that row `pending` with no gate: no gate can deliver or finish
+   * it, so a poll answered `202 pending` for the rest of time. It is resolved
+   * here instead, and to `outcome_unknown` rather than `abandoned`, because the
+   * frame may already have reached the guest: saying it never ran would invite a
+   * duplicate execution.
    */
   async finalizeTermination(id: string): Promise<SessionState | null> {
     return this.conn.tx(async (tx) => {
@@ -291,6 +302,11 @@ export class PgSessionRepository {
       );
       if ((res.rowCount ?? 0) === 0) return null;
       await tx.query(
+        `UPDATE exec_requests SET state = 'outcome_unknown', updated_at = $2
+          WHERE session_id = $1 AND state = 'pending'`,
+        [id, now],
+      );
+      await tx.query(
         "UPDATE exec_requests SET result_envelope = NULL WHERE session_id = $1 AND result_envelope IS NOT NULL",
         [id],
       );
@@ -302,7 +318,7 @@ export class PgSessionRepository {
     const now = Date.now();
     await this.conn.write(
       `UPDATE sessions SET destroy_requested = 1, next_due_ms = $1, updated_at = $2
-        WHERE id = $3 AND state NOT IN ('EXPIRED','FAILED','DESTROYED')`,
+        WHERE id = $3 AND state NOT IN (${TERMINAL_STATE_SQL})`,
       [now, now, id],
     );
   }

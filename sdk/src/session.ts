@@ -2,7 +2,12 @@
  * Session lifecycle: create/attach/checkpoint/resume/destroy.
  */
 import { fromBase64, generateBoxKeyPair, generateNonce, toBase64 } from "@x402s/shared/crypto";
-import type { CreateSessionRequest, CreateSessionResponse, SessionStatus } from "@x402s/shared/protocol";
+import {
+  isTerminal,
+  type CreateSessionRequest,
+  type CreateSessionResponse,
+  type SessionStatus,
+} from "@x402s/shared/protocol";
 import type { ClientRuntime } from "./runtime.js";
 import { sleep } from "./timing.js";
 import {
@@ -150,7 +155,7 @@ export class SessionService {
     while (Date.now() < deadline) {
       try {
         last = await this.rt.status(handle);
-        if (["DESTROYED", "EXPIRED", "FAILED"].includes(last.state)) return last;
+        if (isTerminal(last.state)) return last;
       } catch (err) {
         if (err instanceof SessionExpiredError) return null;
         if (err instanceof SandboxError && err.code === "rate_limited") {

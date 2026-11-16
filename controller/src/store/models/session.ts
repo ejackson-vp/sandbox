@@ -3,8 +3,8 @@
  *
  * `SESSION_COLUMNS`, `RawSession` and `mapSession` are one tuple: a column added
  * to the select must be added to the raw shape and the mapper in the same
- * change. `NON_TERMINAL_STATE_SQL` is here because the due query and the
- * `sessions_due` index are both built from the same list.
+ * change. The state vocabulary is not here: it lives in
+ * `@x402s/shared/protocol`, including the SQL `IN` bodies generated from it.
  */
 import { DEFAULT_RUNTIME, type RuntimeName } from "@x402s/shared/runtimes";
 import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared/protocol";
@@ -62,25 +62,6 @@ export interface SessionRecord {
   nodeName: string | null;
   updatedAt: number;
 }
-
-/**
- * Session states that still need reconcile work. The due query and the
- * `sessions_due` partial index are both built from this list, so the index
- * predicate can never drift away from the query it serves.
- */
-const NON_TERMINAL_STATES = [
-  "PAID",
-  "PROVISIONING",
-  "READY",
-  "ACTIVE",
-  "SUSPENDING",
-  "SUSPENDED",
-  "RESUMING",
-  "TERMINATING",
-] as const;
-
-/** The same list as a SQL `IN` body: `'PAID','PROVISIONING',...`. */
-export const NON_TERMINAL_STATE_SQL = NON_TERMINAL_STATES.map((state) => `'${state}'`).join(",");
 
 export const SESSION_COLUMNS = `
   id, capability_hash, capability_expires_at, client_public_key, client_nonce, client_signer,

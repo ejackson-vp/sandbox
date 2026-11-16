@@ -317,6 +317,15 @@ the container registry.
   `startsWith("global_")` is an exhaustive switch, and
   `tests/unit/control-contract.test.ts` fails the typecheck if either workspace
   declares a copy again.
+- Startup recovery fences only the operation a session's gate owns. It marked
+  every `pending` request row `outcome_unknown` and bumped every session holding
+  a gate, which are different sets: a request row whose gate was cleared (a
+  destroy mid-operation) was reported as an interrupted operation that may have
+  run, and the session that owned it was never bumped, so nothing could ever
+  resolve it. Both writes are now scoped to `sessions.active_request_id = r.id`,
+  the same join relay recovery already used, and a `pending` row no gate owns is
+  resolved in the same pass instead of answering `202 pending` forever.
+  Termination resolves its own in-flight request for the same reason.
 - A relay restart now actually reconnects. The guest URL was a ready relay Pod
   IP, so the replacement Pod's new IP left every supervisor on the shard dialling
   a dead address, and the session survived only in name. The guest address is now

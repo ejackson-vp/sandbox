@@ -10,7 +10,14 @@
  * It is intentionally conservative: an unknown creation time or a non-terminal
  * session means "keep". A wrongly kept plaintext volume is an exposure window; a
  * wrongly deleted volume is data loss for a paid session.
+ *
+ * The session is typed as the two fields this decision reads and nothing more,
+ * so `state` is a `SessionState` and "is it terminal" is answered by the shared
+ * vocabulary. A locally listed set of terminal states would compile fine while
+ * omitting the next one, and the volume for that state would never be reaped.
  */
+import { isTerminal } from "@x402s/shared/protocol";
+import type { SessionRecord } from "./store/models/session.js";
 
 export interface WorkspacePvcInfo {
   name: string;
@@ -24,13 +31,15 @@ export interface WorkspacePvcInfo {
 
 interface PvcReapInput {
   pvc: WorkspacePvcInfo;
-  session: { id: string; state: string } | null;
+  /**
+   * The session row that claims the volume, or null when nothing does. Only the
+   * identity and the state are read; `TERMINATING` is not terminal and still
+   * owns its volume until its cleanup finishes.
+   */
+  session: Pick<SessionRecord, "id" | "state"> | null;
   now: number;
   orphanGraceMs: number;
 }
-
-/** Final states; `TERMINATING` still owns its volume until termination finishes. */
-const TERMINAL_STATES = new Set(["DESTROYED", "EXPIRED", "FAILED"]);
 
 type PvcReapReason = "terminal_session" | "no_session" | "unattributed";
 
@@ -40,7 +49,7 @@ export function workspacePvcReapReason(input: PvcReapInput): PvcReapReason | nul
   // would only spam the metric and log until the finalizer clears.
   if (pvc.deleting) return null;
   if (session) {
-    return TERMINAL_STATES.has(session.state) ? "terminal_session" : null;
+    return isTerminal(session.state) ? "terminal_session" : null;
   }
   // No owner. Wait out the grace period so a session row that is about to be
   // written, or a slow database restore, cannot race the sweep.

@@ -7,7 +7,12 @@
  * row did so before this pass), and TERMINATING + `terminated` decides the
  * final state. Both go through the effect interpreter.
  */
-import { finalStateForReason, terminationEffects, transition } from "@x402s/shared/protocol";
+import {
+  TERMINAL_STATES,
+  finalStateForReason,
+  terminationEffects,
+  transition,
+} from "@x402s/shared/protocol";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { EffectStore, TerminationStore } from "./store/ports.js";
@@ -17,9 +22,23 @@ type TerminationContext = Omit<ReconcilerContext, "store"> & {
 };
 import { RefundService } from "./refunds.js";
 import { workspacePvcReapReason } from "./checkpoint-retention.js";
-import type { SessionRecord } from "./store/models/session.js";
+import type { SessionRecord, SessionState } from "./store/models/session.js";
 import { effectContext, executeEffects, isOk } from "./effects.js";
 import { snapshotOf } from "./session-snapshot.js";
+
+/**
+ * States whose Pod must go.
+ *
+ * Terminal states are reaped because the session is over, and `TERMINATING` is
+ * reaped because its cleanup is already running: it still owns a Pod, and the
+ * sweep must not wait for the finalize that may itself be stuck. Not a terminal
+ * state, so it cannot come from the shared list; derived from it so a terminal
+ * state added there is covered without editing this file.
+ */
+const POD_REAP_STATES: ReadonlySet<SessionState> = new Set<SessionState>([
+  ...TERMINAL_STATES,
+  "TERMINATING",
+]);
 
 export class Termination {
   private readonly refunds: RefundService;
@@ -144,10 +163,9 @@ export class Termination {
     const now = this.ctx.now();
     for (const pod of pods) {
       const session = pod.sessionId ? await this.ctx.store.getSession(pod.sessionId) : null;
-      const terminal =
-        !session || ["DESTROYED", "EXPIRED", "FAILED", "TERMINATING"].includes(session.state);
+      const reap = !session || POD_REAP_STATES.has(session.state);
       const tooOld = pod.createdAt > 0 && now - pod.createdAt > this.ctx.cfg.maxPodAgeMs;
-      if (terminal || tooOld) {
+      if (reap || tooOld) {
         let deleted = true;
         try {
           await this.ctx.provisioner.deletePod(pod.name, 0);
@@ -163,7 +181,7 @@ export class Termination {
           log.warn("orphan_pod_reaped", {
             podName: pod.name,
             sessionId: pod.sessionId || undefined,
-            reason: terminal ? "no_live_session" : "max_age",
+            reason: reap ? "no_live_session" : "max_age",
           });
         }
         if (session && session.state !== "TERMINATING") {

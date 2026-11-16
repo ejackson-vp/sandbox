@@ -4,6 +4,7 @@
  * reservation.
  */
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared/runtime";
+import { isTerminal } from "@x402s/shared/protocol";
 import type { ControllerConfig } from "../config.js";
 import type { Provisioner } from "../k8s.js";
 import type { SessionRecord } from "../store/models/session.js";
@@ -268,7 +269,7 @@ export class CapacityService {
       if (!reservation.sessionId) continue;
       const session = await this.deps.store.getSession(reservation.sessionId);
       if (!session) continue;
-      if (["EXPIRED", "FAILED", "DESTROYED"].includes(session.state) && reservation.state !== "RELEASING") {
+      if (isTerminal(session.state) && reservation.state !== "RELEASING") {
         if (reservation.podName) {
           await this.reservations.beginRelease(reservation.sessionId, reservation.podName);
         } else {

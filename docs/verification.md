@@ -31,12 +31,15 @@ verified), so the run is reproducible offline once the jar is cached.
 | Reservation | no capacity over-reservation, terminal sessions release capacity, `RELEASING` only after the Pod is gone |
 
 The fence is the #19 restart-recovery protocol plus the #88 epoch floor:
-`recoverInterruptedOperations` marks the interrupted request `outcome_unknown`
-and bumps `sessions.exec_epoch` without clearing the gate; `OperationFence`
-publishes that epoch to the relay, releases the gate only from the guest's own
-idle/disconnected status, and the relay refuses a frame below the floor
-(`stale_epoch`) and withdraws a frame it already forwarded but the guest never
-observed. The guest's own high-water check remains as defence in depth.
+`recoverInterruptedOperations` fences the request a session's gate still owns
+(`active_request_id`), marks it `outcome_unknown` and bumps that session's
+`sessions.exec_epoch` without clearing the gate. A `pending` row no gate owns is
+resolved in the same pass, because nothing could ever deliver or finish it and a
+poll would otherwise wait forever. `OperationFence` publishes that epoch to the
+relay, releases the gate only from the guest's own idle/disconnected status, and
+the relay refuses a frame below the floor (`stale_epoch`) and withdraws a frame
+it already forwarded but the guest never observed. The guest's own high-water
+check remains as defence in depth.
 
 The full list, with the meaning and code location of each invariant, is in
 [`verification/README.md`](../verification/README.md).

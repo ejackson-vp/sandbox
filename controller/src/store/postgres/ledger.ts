@@ -26,6 +26,7 @@ import {
   type RefundClaimRequest,
   type UnclaimedLedgerEntry,
 } from "../models.js";
+import { TERMINAL_STATE_SQL } from "@x402s/shared/protocol";
 import { keyPrefix, type ClaimToken } from "@x402s/shared/durable";
 import type { PgConnection } from "./pg.js";
 
@@ -76,7 +77,7 @@ export class PgLedgerRepository {
       // REFUND_PENDING row for it would be pure operator noise (ADR 0013).
       `SELECT l.* FROM payment_ledger l JOIN sessions s ON s.id = l.session_id
         WHERE l.status = 'SETTLED' AND l.source = 'x402' AND s.ready_at IS NULL
-          AND s.state IN ('FAILED','EXPIRED','DESTROYED')
+          AND s.state IN (${TERMINAL_STATE_SQL})
         ORDER BY l.updated_at ASC LIMIT 100`,
     );
   }
@@ -103,7 +104,7 @@ export class PgLedgerRepository {
     return this.many(
       `SELECT l.* FROM payment_ledger l JOIN sessions s ON s.id = l.session_id
         WHERE l.status = 'SETTLED' AND l.source = 'x402'
-          AND s.state IN ('FAILED','EXPIRED','DESTROYED')
+          AND s.state IN (${TERMINAL_STATE_SQL})
           AND (s.termination_reason IN ('failure:relay_lost','relay_lost')
                OR s.failure_code = 'relay_lost')
         ORDER BY l.updated_at ASC LIMIT 100`,

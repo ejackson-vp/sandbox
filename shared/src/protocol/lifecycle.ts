@@ -17,8 +17,6 @@ export type SessionState =
   | "FAILED"
   | "DESTROYED";
 
-export const TERMINAL_STATES: readonly SessionState[] = ["EXPIRED", "FAILED", "DESTROYED"];
-
 /** Every state, for exhaustive checks. */
 export const SESSION_STATES: readonly SessionState[] = [
   "CREATED",
@@ -35,9 +33,73 @@ export const SESSION_STATES: readonly SessionState[] = [
   "DESTROYED",
 ];
 
-export function isTerminal(state: SessionState): boolean {
-  return TERMINAL_STATES.includes(state);
+/**
+ * States with no way forward: the row is finished and only cleanup remains.
+ *
+ * This is the one definition. Everything else that needs the set derives it:
+ * `TERMINAL_STATES` below, `NON_TERMINAL_STATES`, `TerminalState`, the SQL `IN`
+ * bodies, the checkpoint-retention decision, the capacity reaper, the refund
+ * policy and the pod sweep. A copy of this list in another module is how a state
+ * gets added here and forgotten there, which for a retention decision means a
+ * plaintext volume with no owner that nothing will ever delete.
+ *
+ * `as const` keeps the literal union, so `TerminalState` is derived rather than
+ * retyped and `finalStateForReason` cannot return a state that is not in it.
+ */
+const TERMINAL_STATE_NAMES = [
+  "EXPIRED",
+  "FAILED",
+  "DESTROYED",
+] as const satisfies readonly SessionState[];
+
+/** A terminal state, as a type. */
+export type TerminalState = (typeof TERMINAL_STATE_NAMES)[number];
+
+/**
+ * The same list, widened to `SessionState`.
+ *
+ * Widened on purpose: `TERMINAL_STATE_NAMES.includes(state)` only accepts the
+ * three literals, so every caller holding a `SessionState` would need a cast or
+ * `isTerminal`. The type predicate below is the narrowing tool.
+ */
+export const TERMINAL_STATES: readonly SessionState[] = TERMINAL_STATE_NAMES;
+
+const TERMINAL_STATE_SET: ReadonlySet<SessionState> = new Set(TERMINAL_STATE_NAMES);
+
+/**
+ * True when the state is finished. A type predicate, so a caller that branches
+ * on it keeps the narrowed state instead of casting back to `SessionState`.
+ */
+export function isTerminal(state: SessionState): state is TerminalState {
+  return TERMINAL_STATE_SET.has(state);
 }
+
+/**
+ * The complement, derived rather than listed.
+ *
+ * A hand-maintained complement is a list that silently omits a state, and the
+ * due query, the `sessions_due` partial index and every live-session count are
+ * built from it: a state left out is a row nothing ever reconciles again.
+ */
+export const NON_TERMINAL_STATES: readonly SessionState[] = SESSION_STATES.filter(
+  (state) => !isTerminal(state),
+);
+
+/**
+ * A state list as a SQL `IN` body: `'EXPIRED','FAILED','DESTROYED'`.
+ *
+ * The quoting is fine because the values come from the closed union above; a
+ * state can only reach this by being written into `SESSION_STATES`.
+ */
+export function stateListSql(states: readonly SessionState[]): string {
+  return states.map((state) => `'${state}'`).join(",");
+}
+
+/** `TERMINAL_STATES` as a SQL `IN` body, for the queries that filter on it. */
+export const TERMINAL_STATE_SQL = stateListSql(TERMINAL_STATES);
+
+/** `NON_TERMINAL_STATES` as a SQL `IN` body; also the `sessions_due` predicate. */
+export const NON_TERMINAL_STATE_SQL = stateListSql(NON_TERMINAL_STATES);
 
 /** Hard upper bound on any lease, regardless of configuration. */
 export const MAX_LEASE_SECONDS = 3600;

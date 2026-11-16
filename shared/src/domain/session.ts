@@ -5,7 +5,13 @@
  * (reconciler, use cases) builds a SessionSnapshot, asks for a decision, and
  * performs the effects. Property tests exercise the table directly.
  */
-import { type IdlePolicy, type SessionState, isTerminal, MAX_SESSION_LIFETIME_SECONDS } from "../protocol.js";
+import {
+  type IdlePolicy,
+  type SessionState,
+  type TerminalState,
+  isTerminal,
+  MAX_SESSION_LIFETIME_SECONDS,
+} from "../protocol.js";
 import { Err, Ok, type Result } from "../fp.js";
 
 export interface SessionSnapshot {
@@ -23,8 +29,13 @@ export interface SessionSnapshot {
   lastActivityAt: number | null;
 }
 
-/** Terminal states a session can be finalised into. */
-export type FinalState = "EXPIRED" | "FAILED" | "DESTROYED";
+/**
+ * Terminal states a session can be finalised into.
+ *
+ * The domain's name for the shared list, not a second copy of it: a state added
+ * to `TERMINAL_STATES` is finalisable here by construction.
+ */
+export type FinalState = TerminalState;
 
 export type SessionEvent =
   | { type: "payment_settled" }
@@ -355,7 +366,7 @@ export function remainingSeconds(snapshot: SessionSnapshot, now: number): number
 }
 
 /** Terminal state implied by a termination reason. Total over all strings. */
-export function finalStateForReason(reason: string): "EXPIRED" | "FAILED" | "DESTROYED" {
+export function finalStateForReason(reason: string): FinalState {
   if (
     reason.startsWith("lease_expired") ||
     reason.startsWith("suspended_expired") ||
