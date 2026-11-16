@@ -26,13 +26,15 @@ one.
 Three changes, one per hop:
 
 1. **Guest.** A relay link loss cancels and kills the in-flight operation, then
-   reconnects with bounded backoff until the lease ends. It re-sends `hello`
-   with the same session id, client nonce, ephemeral key and token, then
-   republishes its status (idle, surviving epoch high-water mark). Responses are
-   bound to the link the request arrived on, so an aborted operation can never
-   answer on the next link. The workspace, open streams and customer services
-   are untouched. It exits only on lease expiry, an explicit shutdown, or a
-   `401` at the WebSocket handshake (a token retrying cannot fix).
+   reconnects with bounded backoff until the lease ends. The backoff is jittered:
+   a relay restart drops every guest on the shard at once, so an unjittered
+   250 ms doubling sends the whole shard back to the replacement in one herd. It
+   re-sends `hello` with the same session id, client nonce, ephemeral key and
+   token, then republishes its status (idle, surviving epoch high-water mark).
+   Responses are bound to the link the request arrived on, so an aborted
+   operation can never answer on the next link. The workspace, open streams and
+   customer services are untouched. It exits only on lease expiry, an explicit
+   shutdown, or a `401` at the WebSocket handshake (a token retrying cannot fix).
 2. **Relay.** A re-registration on a new process generation is an ordinary
    `POST /internal/register` with the token hash minted at create time; the
    shard claim and hash checks are unchanged. A new socket clears the execution
@@ -105,7 +107,8 @@ of the interrupted request id is `409 outcome_unknown` from the request row.
   session survives and the stale frame still never starts.
 - Cost: the supervisor has a reconnect loop that must be bounded, and the
   controller has one more per-session scan (housekeeping cadence) whose snapshot
-  is the relay generation.
+  is the relay generation. The bound is unchanged by the jitter: the ceiling is
+  still 4 s, and every wait is still clamped to the lease.
 
 ## Residual windows
 
