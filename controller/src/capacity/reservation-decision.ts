@@ -69,6 +69,20 @@ export function reservationFromRow(row: ReservationRow): ReservationRecord {
 
 const DEFAULT_TTL_MS = 120_000;
 
+/**
+ * How long an `ALLOCATED` row may go without naming a session that exists.
+ *
+ * `ALLOCATED` means a session owns the reservation, but the write that says so
+ * happens before the settlement transaction commits, and on a refused settlement
+ * (a duplicate, a lost claim) there is no session at all. Without a deadline the
+ * row is only freed by termination of a session that never existed, which is
+ * how a duplicate completion leaked its reservation for good. The window is
+ * minutes because the only work it covers is one commit: the settlement
+ * transaction clears the deadline as it inserts the session (`confirmSession`),
+ * so the grace only ever applies to a row that no session will own.
+ */
+export const ALLOCATION_GRACE_MS = 300_000;
+
 /** What the caller does with the row it found for this identity. */
 type ExistingOutcome =
   /** A different spec on the same identity: invalid_request, nothing written. */
@@ -85,8 +99,11 @@ interface AdmissionPlan {
   state: "HELD" | "ALLOCATED";
   /** Whether the row must be attached to a session as well as updated. */
   wantsAttach: boolean;
-  /** TTL to write on the row; null for an `ALLOCATED` row. */
-  expiresAt: number | null;
+  /**
+   * The deadline written on the row: the hold TTL for `HELD`, the allocation
+   * grace for `ALLOCATED`. The settlement commit clears it on confirmation.
+   */
+  expiresAt: number;
   outcome: ExistingOutcome;
 }
 
@@ -105,7 +122,7 @@ export function planAdmission(
   const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
   const state: "HELD" | "ALLOCATED" = opts.state ?? (opts.sessionId ? "ALLOCATED" : "HELD");
   const wantsAttach = state === "ALLOCATED" || Boolean(opts.sessionId);
-  const expiresAt = state === "HELD" ? now + ttlMs : null;
+  const expiresAt = state === "HELD" ? now + ttlMs : now + ALLOCATION_GRACE_MS;
   const plan = { state, wantsAttach, expiresAt };
 
   if (existing && existing.state !== "RELEASED") {

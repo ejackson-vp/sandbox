@@ -33,7 +33,8 @@ import { resolveSessionSpec, specHash } from "@x402s/shared/payment";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { registerPaymentRoutes } from "../../controller/src/control-api/payments.js";
 import type { ControlApiDeps } from "../../controller/src/control-api/types.js";
-import type { CapacityService } from "../../controller/src/capacity/service.js";
+import { CapacityService } from "../../controller/src/capacity/service.js";
+import type { Provisioner } from "../../controller/src/k8s.js";
 import { PaymentClaimLostError } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { controllerConfig } from "../helpers/controller-config.js";
@@ -82,6 +83,63 @@ function capacityStub() {
     releaseSession,
     service: { attach, releaseSession } as unknown as CapacityService,
   };
+}
+
+const MiB = 1024 * 1024;
+
+/**
+ * A provisioner with one roomy node: enough for the reservation adapter to
+ * admit, and nothing to call out to. `listWarmPods` is empty so the snapshot is
+ * only the durable rows.
+ */
+function fakeProvisioner(): Provisioner {
+  return {
+    async listNodes() {
+      return [{
+        name: "node-completion",
+        allocatableCpuMillis: 8_000,
+        allocatableMemoryBytes: 16_384 * MiB,
+        allocatableStorageBytes: 102_400 * MiB,
+        labels: { "x402.io/sandbox-pool": "true" },
+        taints: [],
+        ready: true,
+        schedulable: true,
+      }];
+    },
+    async listWarmPods() {
+      return [];
+    },
+    async getPod() {
+      return null;
+    },
+  } as unknown as Provisioner;
+}
+
+/** The real capacity service over the real reservation adapter. */
+function realCapacity(store: PostgresStore): CapacityService {
+  return new CapacityService({ cfg, store, provisioner: fakeProvisioner() });
+}
+
+type StoreOverride = {
+  completeEntitlement?: () => Promise<never>;
+  mergeTimings?: () => Promise<never>;
+};
+
+/**
+ * The real store with one method replaced, for the failures the real adapter
+ * cannot be made to produce on demand. Everything else stays the production
+ * implementation, so the assertion is about the route's behaviour, not a stub's.
+ */
+function storeWith(store: PostgresStore, override: StoreOverride): ControlApiDeps["store"] {
+  const proxy = new Proxy(store, {
+    get(target, prop, receiver) {
+      const replacement = override[prop as keyof StoreOverride];
+      if (replacement) return replacement;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return proxy as unknown as ControlApiDeps["store"];
 }
 
 /**
@@ -370,6 +428,15 @@ describe("a claim lost to a worker that settled it hands back that session", () 
     // The live owner holds the same payment reservation, so freeing it here
     // would hand its capacity to another create while the session is live.
     expect(capacity.releaseSession).not.toHaveBeenCalled();
+    // This request may have rebound the payment's reservation to its own session
+    // id, which was never written. Pointing it back at the winner is what keeps
+    // the allocation grace from expiring the live session's capacity.
+    expect(capacity.attach).toHaveBeenLastCalledWith(
+      paymentKey,
+      winnerId,
+      SPEC_HASH,
+      expect.objectContaining({ tier: "standard" }),
+    );
     expect(store.completeEntitlement).toHaveBeenCalledTimes(1);
   });
 });
@@ -425,5 +492,125 @@ describe("a failure after the session insert rolls the entitlement back", () => 
     expect(
       await sqlRows("SELECT spend FROM payer_budgets WHERE budget_key = $1", [`payer:${payer}`]),
     ).toMatchObject([{ spend: "not-a-number" }]);
+  });
+});
+
+describe("a duplicate completion does not leak its reservation", () => {
+  it("frees the discarded allocation after the grace and leaves the live session's alone", async () => {
+    const store = await freshStore();
+    const firstKey = "7".repeat(64);
+    const firstSession = `sbx_${"7".repeat(24)}`;
+    const capacity = realCapacity(store);
+    const base = await listen({ store, capacity });
+
+    const first = await post(
+      base,
+      `/internal/payment-intents/${firstKey}/complete`,
+      completionBody(firstKey, await claim(store, firstKey), { sessionId: firstSession }),
+    );
+    expect(first.status).toBe(201);
+
+    const secondKey = "8".repeat(64);
+    const secondSession = `sbx_${"8".repeat(24)}`;
+    const duplicate = await post(
+      base,
+      `/internal/payment-intents/${secondKey}/complete`,
+      completionBody(secondKey, await claim(store, secondKey), { sessionId: secondSession }),
+    );
+    expect(duplicate.status).toBe(409);
+
+    // The route binds the payment's reservation to a session id before it
+    // settles, and a duplicate never writes that session. The row must therefore
+    // carry a deadline; without one the reaper skips it forever because there is
+    // no session to terminate.
+    const discarded = await store.reservations.getBySession(secondSession);
+    expect(discarded).toMatchObject({ state: "ALLOCATED", paymentKey: secondKey });
+    expect(discarded?.expiresAt).toBeGreaterThan(Date.now());
+    expect(await store.getSession(secondSession)).toBeNull();
+
+    // The live session's reservation is the control: confirmation clears the
+    // grace, so no later reap can free capacity a running session is using.
+    expect(await store.reservations.getBySession(firstSession)).toMatchObject({
+      state: "ALLOCATED",
+      expiresAt: null,
+    });
+
+    // Inside the grace the duplicate's row still counts: its settlement may in
+    // principle still be in flight.
+    expect((await store.reservations.reapExpired(Date.now() + 1_000)).allocations).toBe(0);
+
+    const reaped = await store.reservations.reapExpired((discarded?.expiresAt ?? 0) + 1);
+    expect(reaped.allocations).toBe(1);
+    expect((await store.reservations.getBySession(secondSession))?.state).toBe("RELEASED");
+    expect((await store.reservations.getBySession(firstSession))?.state).toBe("ALLOCATED");
+  });
+});
+
+describe("a failure after the settlement commits is not a failed create", () => {
+  it("answers 201 and keeps the reservation when the timing write throws", async () => {
+    const store = await freshStore();
+    const paymentKey = "9".repeat(64);
+    const sessionId = `sbx_${"9".repeat(24)}`;
+    const token = await claim(store, paymentKey);
+    // `mergeTimings` runs after the transaction, so it can only fail once the
+    // session is durable. The route must not read that as a rollback.
+    const broken = storeWith(store, {
+      mergeTimings: async () => {
+        throw new Error("timings write failed");
+      },
+    });
+    const capacity = capacityStub();
+    const base = await listen({ store: broken, capacity: capacity.service });
+
+    const res = await post(
+      base,
+      `/internal/payment-intents/${paymentKey}/complete`,
+      completionBody(paymentKey, token, { sessionId, timings: { entitlementMs: 12 } }),
+    );
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ sessionId, state: "PAID", created: true });
+    // The session exists and will be provisioned: releasing its capacity here is
+    // how a live session ends up running with no reservation.
+    expect(capacity.releaseSession).not.toHaveBeenCalled();
+    expect(await store.getSession(sessionId)).toMatchObject({ state: "PAID", paymentKey });
+  });
+});
+
+describe("a claim lost before its owner settles leaves the reservation to the grace", () => {
+  it("answers 409 without freeing a reservation the new owner may be using", async () => {
+    const store = await freshStore();
+    const paymentKey = "a1".repeat(32);
+    const sessionId = `sbx_${"a".repeat(24)}`;
+    const token = await claim(store, paymentKey);
+    // The claim moved to a worker that has not settled yet: the transaction
+    // refuses and the intent is still `claimed`. Releasing would hand capacity
+    // the new owner may already have been admitted to another create.
+    const lost = storeWith(store, {
+      completeEntitlement: async () => {
+        throw new PaymentClaimLostError(paymentKey);
+      },
+    });
+    const capacity = realCapacity(store);
+    const release = vi.spyOn(capacity, "releaseSession");
+    const base = await listen({ store: lost, capacity });
+
+    const res = await post(
+      base,
+      `/internal/payment-intents/${paymentKey}/complete`,
+      completionBody(paymentKey, token, { sessionId }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: "stale_claim" });
+    expect(release).not.toHaveBeenCalled();
+
+    // No session will own this row, so the grace is what frees it.
+    const abandoned = await store.reservations.getBySession(sessionId);
+    expect(abandoned).toMatchObject({ state: "ALLOCATED", paymentKey });
+    expect(await store.getSession(sessionId)).toBeNull();
+    expect(
+      (await store.reservations.reapExpired((abandoned?.expiresAt ?? 0) + 1)).allocations,
+    ).toBe(1);    expect((await store.reservations.getBySession(sessionId))?.state).toBe("RELEASED");
   });
 });

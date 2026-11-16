@@ -22,7 +22,7 @@ describe("store write guard", () => {
       await expect(store.requestDestroy("sbx_missing")).rejects.toThrow(REFUSED);
       await expect(store.markRefundPending("pay_missing", "x")).rejects.toThrow(REFUSED);
       await expect(store.claimPaymentIntent("pay_1", "hash", 60_000)).rejects.toThrow(REFUSED);
-      await expect(store.reservations.reapExpiredHolds(Date.now())).rejects.toThrow(REFUSED);
+      await expect(store.reservations.reapExpired(Date.now())).rejects.toThrow(REFUSED);
     } finally {
       await store.setWritesBlocked(false);
     }

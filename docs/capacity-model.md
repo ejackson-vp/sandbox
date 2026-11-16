@@ -84,7 +84,10 @@ Reservation contribution:
 | `SUSPENDED` | **released** | **retained** |
 | `RELEASED` | ignored | ignored |
 
-Expired `HELD` rows are ignored by the model and reaped by housekeeping.
+Expired `HELD` rows are ignored by the model and reaped by housekeeping. An
+`ALLOCATED` row carries a short grace until the settlement commit confirms it;
+if no session row appears, housekeeping releases it at the deadline (see
+[reservation-lifecycle.md](reservation-lifecycle.md)).
 
 ## Eligibility and placement
 

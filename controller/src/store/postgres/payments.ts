@@ -36,6 +36,7 @@ import {
 } from "../models.js";
 import { advisoryKey, type PgConnection, type Querier, type Tx } from "./pg.js";
 import type { PgBudgetRepository } from "./budgets.js";
+import type { PgReservationRepository } from "./reservations.js";
 import type { PgSessionRepository } from "./sessions.js";
 
 /** A unique violation, the one server error the settlement path maps. */
@@ -54,6 +55,7 @@ export class PgPaymentRepository {
     private readonly conn: PgConnection,
     private readonly sessions: PgSessionRepository,
     private readonly budgets: PgBudgetRepository,
+    private readonly reservations: PgReservationRepository,
     private readonly budgetWindowMs: number,
   ) {}
 
@@ -253,45 +255,14 @@ export class PgPaymentRepository {
         await this.insertPayment(tx, payment, now);
 
         if (duplicate) {
-          // The charge is recorded and refunded; the second session is refused.
-          // A $0 allowlist attempt has nothing to send back, so it is recorded
-          // as refunded for the same reason the mock path is: there is no
-          // provider transfer to wait for.
-          const reason = "duplicate_client_nonce";
-          const refunded = payment.mode === "mock" || payment.source === "allowlist";
-          const refundReference = refunded
-            ? payment.source === "allowlist"
-              ? `allowlist:not-charged:${payment.paymentKey.slice(0, 12)}`
-              : `mock:refund:${payment.paymentKey.slice(0, 12)}:${now.toString(36)}`
-            : null;
-          await tx.query(
-            `INSERT INTO payment_ledger
-               (payment_key, session_id, payer, amount, asset, network, mode, status, reason,
-                refund_tx, settlement_nonce, source, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
-             ON CONFLICT DO NOTHING`,
-            [
-              payment.paymentKey,
-              `duplicate:${payment.paymentKey}`,
-              payment.payer ?? null,
-              payment.amount,
-              payment.asset,
-              payment.network,
-              payment.mode,
-              refunded ? "REFUNDED" : "REFUND_PENDING",
-              reason,
-              refunded ? refundReference : null,
-              payment.settlementNonce ?? null,
-              payment.source ?? "x402",
-              now,
-            ],
-          );          // Owned by this token: a concurrent reclaim cannot have its claim
+          await this.recordDuplicateRefund(tx, payment, now);
+          // Owned by this token: a concurrent reclaim cannot have its claim
           // failed out from under it.
           await tx.query(
             `UPDATE payment_intents SET status = 'failed', reason = $1, claim_token = NULL,
                 claim_expires_at = NULL, updated_at = $2
               WHERE payment_key = $3 AND status = 'claimed' AND claim_token = $4`,
-            [reason, now, paymentKey, claimToken],
+            ["duplicate_client_nonce", now, paymentKey, claimToken],
           );
           return { sessionId: session.id, created: false, duplicateOf: duplicate };
         }
@@ -318,6 +289,10 @@ export class PgPaymentRepository {
           ],
         );
         await this.sessions.insert(tx, { ...session, runtime: session.runtime ?? DEFAULT_RUNTIME });
+        // The reservation the route took before settling becomes this session's
+        // in the same commit: an ALLOCATED row that never names a session is a
+        // refused create, and the reaper frees it once its grace passes.
+        await this.reservations.confirmSession(tx, paymentKey, session.id, now);
 
         // The linearisation point. Zero rows means the token moved while this
         // worker held the row lock's queue slot, so nothing above may commit.
@@ -351,6 +326,47 @@ export class PgPaymentRepository {
       if (isUniqueViolation(err)) throw new PaymentAlreadyRedeemedError(paymentKey);
       throw err;
     }
+  }
+
+  /**
+   * The charge is recorded and refunded; the second session is refused. A $0
+   * allowlist attempt has nothing to send back, so it is recorded as refunded
+   * for the same reason the mock path is: there is no provider transfer to wait
+   * for.
+   */
+  private async recordDuplicateRefund(
+    tx: Tx,
+    payment: PaymentRecord,
+    now: number,
+  ): Promise<void> {
+    const refunded = payment.mode === "mock" || payment.source === "allowlist";
+    const refundReference = refunded
+      ? payment.source === "allowlist"
+        ? `allowlist:not-charged:${payment.paymentKey.slice(0, 12)}`
+        : `mock:refund:${payment.paymentKey.slice(0, 12)}:${now.toString(36)}`
+      : null;
+    await tx.query(
+      `INSERT INTO payment_ledger
+         (payment_key, session_id, payer, amount, asset, network, mode, status, reason,
+          refund_tx, settlement_nonce, source, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
+       ON CONFLICT DO NOTHING`,
+      [
+        payment.paymentKey,
+        `duplicate:${payment.paymentKey}`,
+        payment.payer ?? null,
+        payment.amount,
+        payment.asset,
+        payment.network,
+        payment.mode,
+        refunded ? "REFUNDED" : "REFUND_PENDING",
+        "duplicate_client_nonce",
+        refunded ? refundReference : null,
+        payment.settlementNonce ?? null,
+        payment.source ?? "x402",
+        now,
+      ],
+    );
   }
 
   private async insertPayment(tx: Tx, payment: PaymentRecord, now: number): Promise<void> {

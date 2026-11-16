@@ -260,15 +260,21 @@ export class FakeReservations implements ReservationStore {
     return this.rows.find((row) => row.paymentKey === paymentKey) ?? null;
   }
 
-  async reapExpiredHolds(now: number): Promise<number> {
-    let count = 0;
+  /**
+   * A fake has no session table, so the deadline is its only evidence that a
+   * session never arrived: an `ALLOCATED` row with an expiry is reclaimable, the
+   * same rule the adapter applies with `NOT EXISTS (SELECT 1 FROM sessions)`.
+   */
+  async reapExpired(now: number): Promise<{ holds: number; allocations: number }> {
+    const reaped = { holds: 0, allocations: 0 };
     for (const row of this.rows) {
-      if (row.state === "HELD" && row.expiresAt !== null && row.expiresAt <= now) {
-        row.state = "RELEASED";
-        count += 1;
-      }
+      if (row.expiresAt === null || row.expiresAt > now) continue;
+      if (row.state === "HELD") reaped.holds += 1;
+      else if (row.state === "ALLOCATED") reaped.allocations += 1;
+      else continue;
+      row.state = "RELEASED";
     }
-    return count;
+    return reaped;
   }
 }
 
