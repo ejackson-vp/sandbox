@@ -200,7 +200,6 @@ export function cliContext(
   return {
     values: {},
     positionals: ["create"],
-    apiUrl: "http://localhost:8080",
     json: false,
     quiet: false,
     paymentMode: "mock",

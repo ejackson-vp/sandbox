@@ -1,6 +1,9 @@
 /**
  * Command handlers for the `sandbox` CLI. The registry is keyed by command name;
  * `index.ts` parses arguments and dispatches.
+ *
+ * `HELP`'s `sandbox admin` lines are the same commands `ADMIN_USAGE` in
+ * `allowlist-admin.ts` prints on a bad admin command. Change both, or neither.
  */
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile, stat, mkdtemp, mkdir } from "node:fs/promises";
@@ -9,6 +12,7 @@ import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import {
   SandboxClient,
   type CreateOptions,
+  type OperationError,
   type SessionHandle,
   type SessionTier,
 } from "@x402s/sdk";
@@ -17,13 +21,13 @@ export const HELP = `x402 sandbox sessions
 
 Usage:
   sandbox create [--tier short|standard|extended|long] [--runtime base|python|node]
-                 [--duration 15m]
+                 [--duration 15m] [--no-wait]
                  [--cpu 1] [--memory 1Gi] [--disk 1Gi]
                  [--baseline-cpu 0.25] [--baseline-memory 256Mi]
                  [--idle 5m] [--max-lifetime 8h]
   sandbox exec <session-id> [--timeout 30s] [--env K=V] -- <command> [args...]
   sandbox upload <session-id> <local-path> <remote-path>
-  sandbox download <session-id> <remote-path> <local-path> [--extract]
+  sandbox download <session-id> <remote-path> <local-path> [--extract|--archive]
   sandbox ls <session-id> [path] [--recursive]
   sandbox stat <session-id> <path>
   sandbox status <session-id>
@@ -35,19 +39,20 @@ Usage:
   sandbox http <session-id> <port> <path> [--method GET] [--body text] [--stream]
   sandbox destroy <session-id>
   sandbox run [create options] [--runtime base|python|node] [--file local=remote]
-              [--return remote] -- <command> [args...]
+              [--return remote] [--keep] -- <command> [args...]
                                 # one-shot: create, upload, exec, download, destroy
   sandbox run <file> [create options]   # legacy: run a local .py/.js/.sh file
-  sandbox agent-demo <file>     # same, purchased through @x402/fetch
+  sandbox agent-demo <file>     # same, paid by a generated agent wallet
   sandbox pricing
   sandbox sessions              # locally stored session handles
   sandbox admin capacity        # inspect controller capacity/reservations
-  sandbox admin allowlist       # list free-entitlement wallets
-  sandbox admin allowlist add <address> --label <name> [--max-tier T] [--max-concurrent N]
+  sandbox admin allowlist [list]        # list free-entitlement wallets
+  sandbox admin allowlist add <address> --label <name> [--max-tier short|standard|extended|long] [--max-concurrent N]
   sandbox admin allowlist disable <address>
-  sandbox admin killswitch      # show the create kill switch
+  sandbox admin killswitch [status]     # show the create kill switch
   sandbox admin killswitch enable --reason <text> [--until <iso8601|none>] [--actor <name>]
   sandbox admin killswitch disable [--actor <name>]
+  sandbox version
 
 Common options:
   --api-url <url>               default http://localhost:8080
@@ -81,8 +86,21 @@ function parseCpu(value: string | undefined): number | undefined {
   return Math.round(n * 1000);
 }
 
-function parseDisk(value: string | undefined): number | undefined {
-  return parseMemory(value);
+/** The exit code a caller gets: 124 is a timeout, never a partial success. */
+function exitCodeOf(result: { exitCode: number; timedOut: boolean }): number {
+  return result.timedOut ? 124 : Math.max(0, Math.min(125, result.exitCode));
+}
+
+/** Write captured output, adding the trailing newline the guest may omit. */
+function writeOutput(result: { stdout: string; stderr: string }): void {
+  if (result.stdout) process.stdout.write(result.stdout.endsWith("\n") ? result.stdout : result.stdout + "\n");
+  if (result.stderr) process.stderr.write(result.stderr.endsWith("\n") ? result.stderr : result.stderr + "\n");
+}
+
+/** Print a guest refusal the way every command does, and return the exit code. */
+function guestFailure(result: OperationError): 1 {
+  process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
+  return 1;
 }
 
 const TIER_BY_DURATION: Record<number, SessionTier> = { 60: "short", 300: "standard", 900: "extended", 1800: "long" };
@@ -101,7 +119,7 @@ function parseCreateOptions(values: CommandContext["values"]): CreateOptions {
     ...(durationSeconds === undefined ? {} : { durationSeconds }),
     ...(values.cpu ? { cpuMillis: parseCpu(values.cpu as string) } : {}),
     ...(values.memory ? { memoryMiB: parseMemory(values.memory as string) } : {}),
-    ...(values.disk ? { diskMiB: parseDisk(values.disk as string) } : {}),
+    ...(values.disk ? { diskMiB: parseMemory(values.disk as string) } : {}),
     ...(values["baseline-cpu"]
       ? { baselineCpuMillis: parseCpu(values["baseline-cpu"] as string) }
       : {}),
@@ -154,7 +172,6 @@ async function extractTar(data: Buffer, destination: string): Promise<void> {
 export type CommandContext = {
   values: Record<string, string | boolean | string[] | undefined>;
   positionals: string[];
-  apiUrl: string;
   json: boolean;
   quiet: boolean;
   paymentMode: "mock" | "testnet";
@@ -234,21 +251,17 @@ export const commands: Record<string, (ctx: CommandContext) => Promise<number>> 
         ...(envFromArgs ? { env: envFromArgs } : {}),
         ...(values.timeout ? { timeoutMs: parseDuration(values.timeout as string)! * 1000 } : {}),
       });
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
+      if (!result.ok) return guestFailure(result);
       if (json) {
         process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       } else {
-        if (result.stdout) process.stdout.write(result.stdout.endsWith("\n") ? result.stdout : result.stdout + "\n");
-        if (result.stderr) process.stderr.write(result.stderr.endsWith("\n") ? result.stderr : result.stderr + "\n");
+        writeOutput(result);
         err(
           `exit ${result.exitCode} (${result.durationMs}ms${result.timedOut ? ", timed out" : ""}${result.cancelled ? ", cancelled" : ""})`,
           quiet,
         );
       }
-      return result.timedOut ? 124 : Math.max(0, Math.min(125, result.exitCode));
+      return exitCodeOf(result);
   },
   "upload": async (ctx) => {
     const { positionals, json, client, attach } = ctx;
@@ -266,10 +279,7 @@ export const commands: Record<string, (ctx: CommandContext) => Promise<number>> 
         data = await readFile(local);
       }
       const result = await client.putFile(handle, { path: remote, data, archive });
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
+      if (!result.ok) return guestFailure(result);
       out(`Uploaded ${result.filesWritten} file(s), ${result.bytesWritten} bytes to ${result.path}`, json);
       return 0;
   },
@@ -280,10 +290,7 @@ export const commands: Record<string, (ctx: CommandContext) => Promise<number>> 
       const local = requireArg(positionals[3], "local path");
       const handle = attach(id);
       const result = await client.getFile(handle, remote, Boolean(values.archive) || Boolean(values.extract));
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
+      if (!result.ok) return guestFailure(result);
       const data = Buffer.from(result.dataBase64, "base64");
       if (values.extract) {
         await extractTar(data, local);
@@ -300,10 +307,7 @@ export const commands: Record<string, (ctx: CommandContext) => Promise<number>> 
       const path = positionals[2] ?? ".";
       const handle = attach(id);
       const result = await client.listFiles(handle, path, Boolean(values.recursive));
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
+      if (!result.ok) return guestFailure(result);
       if (json) {
         process.stdout.write(JSON.stringify(result.entries, null, 2) + "\n");
       } else {
@@ -319,10 +323,7 @@ export const commands: Record<string, (ctx: CommandContext) => Promise<number>> 
       const id = requireArg(positionals[1], "session id");
       const path = requireArg(positionals[2], "path");
       const result = await client.statFile(attach(id), path);
-      if (!result.ok) {
-        process.stderr.write(`error: ${result.error?.code}: ${result.error?.message}\n`);
-        return 1;
-      }
+      if (!result.ok) return guestFailure(result);
       process.stdout.write(JSON.stringify(result.entry, null, 2) + "\n");
       return 0;
   },
@@ -517,12 +518,11 @@ async function runFile(
     if (opts.json) {
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
     } else {
-      if (result.stdout) process.stdout.write(result.stdout.endsWith("\n") ? result.stdout : result.stdout + "\n");
-      if (result.stderr) process.stderr.write(result.stderr.endsWith("\n") ? result.stderr : result.stderr + "\n");
+      writeOutput(result);
       process.stdout.write(`\nExit code: ${result.exitCode}\n`);
       process.stdout.write(`Execution: ${(result.durationMs / 1000).toFixed(1)}s\n`);
     }
-    return result.timedOut ? 124 : Math.max(0, Math.min(125, result.exitCode));
+    return exitCodeOf(result);
   } finally {
     if (!opts.keep) {
       const destroyed = await client.destroy(handle).catch(() => null);
@@ -589,8 +589,7 @@ async function runOneShot(ctx: CommandContext): Promise<number> {
       ) + "\n",
     );
   } else {
-    if (result.stdout) process.stdout.write(result.stdout.endsWith("\n") ? result.stdout : result.stdout + "\n");
-    if (result.stderr) process.stderr.write(result.stderr.endsWith("\n") ? result.stderr : result.stderr + "\n");
+    writeOutput(result);
     for (const [remote, local] of Object.entries(written)) err(`Wrote ${remote} -> ${local}`, quiet);
     err(
       `exit ${result.exitCode} (${result.durationMs}ms${result.timedOut ? ", timed out" : ""}` +
@@ -598,7 +597,7 @@ async function runOneShot(ctx: CommandContext): Promise<number> {
       quiet,
     );
   }
-  return result.timedOut ? 124 : Math.max(0, Math.min(125, result.exitCode));
+  return exitCodeOf(result);
 }
 
 function localReturnPath(remote: string): string {
