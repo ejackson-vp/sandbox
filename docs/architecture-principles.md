@@ -152,7 +152,7 @@ not a target: most modules are 100–350 lines, and 550 is the number to aim at.
 The ceiling stays at 650 until the modules above 550 are split, and it never
 goes up. Split by use case or adapter, never by arbitrary line count. Today the
 gap is six modules: `cli/src/commands.ts` (605), `tests/unit/effects.test.ts`
-(597), `guest/supervisor.go` (594), `controller/src/relay/registry.ts` (587),
+(597), `guest/supervisor.go` (594), `controller/src/relay/registry.ts` (517),
 `tests/integration/relay-reconnect.test.ts` (581) and `scripts/control-faults.ts`
 (574). The two controller modules that used to lead that list, `provisioning.ts`
 and `reconciler.ts`, are split; the guard prints the current list, and the
@@ -222,7 +222,7 @@ Next slices:
    hand-rolled check in `scripts/check-structure.mjs`).
 4. Split the six modules that still sit above 550 lines, then lower
    `MAX_LINES` to 550: `cli/src/commands.ts` (605), `tests/unit/effects.test.ts`
-   (597), `guest/supervisor.go` (594), `controller/src/relay/registry.ts` (587),
+   (597), `guest/supervisor.go` (594), `controller/src/relay/registry.ts` (517),
    `tests/integration/relay-reconnect.test.ts` (581) and
    `scripts/control-faults.ts` (574). The two controller modules that used to
    lead this list, `provisioning.ts` and `reconciler.ts`, are done.
