@@ -6,7 +6,7 @@
  * in the in-flight gauge and the duration histogram, because it is the one
  * request that can hold a connection open for a minute.
  */
-import express, { type Request, type Response } from "express";
+import express, { type Request, type RequestHandler, type Response } from "express";
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared/runtime";
 import type { ApiConfig } from "../../config.js";
 import { operationSchema, payloadHashSchema, rejectPlaintextBodies } from "../../schemas.js";
@@ -17,17 +17,18 @@ import { respondControllerError, validRequestId, writeOperation } from "./respon
 export function mountOperationRoutes(
   router: express.Router,
   deps: SessionsDeps,
+  readLimit: RequestHandler,
   authorize: Authorizer,
 ): void {
   // Every operation carries its type inside the sealed envelope. The URL is
   // deliberately opaque: a path cannot change what the guest does.
-  router.post("/v1/sessions/:id/operations", rejectPlaintextBodies, (req, res) =>
+  router.post("/v1/sessions/:id/operations", readLimit, rejectPlaintextBodies, (req, res) =>
     runOperation(req, res, deps, authorize),
   );
 
   // Download/list/stat: the request (path and options) is inside the encrypted
   // envelope too, so the API never learns what is being read.
-  router.get("/v1/sessions/:id/operations", (req, res) => fileGet(req, res, deps, authorize));
+  router.get("/v1/sessions/:id/operations", readLimit, (req, res) => fileGet(req, res, deps, authorize));
 }
 
 async function runOperation(

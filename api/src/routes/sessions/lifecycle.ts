@@ -7,7 +7,7 @@
  * answer rather than `respondControllerError`, because a failed destroy is not
  * something the client can act on and the reason stays in the log.
  */
-import express, { type Request, type Response } from "express";
+import express, { type Request, type RequestHandler, type Response } from "express";
 import { log } from "@x402s/shared/runtime";
 import { toStatus } from "../../status.js";
 import type { Authorizer, SessionsDeps } from "./authorize.js";
@@ -16,11 +16,12 @@ import { respondControllerError } from "./respond.js";
 export function mountLifecycleRoutes(
   router: express.Router,
   deps: SessionsDeps,
+  readLimit: RequestHandler,
   authorize: Authorizer,
 ): void {
-  router.post("/v1/sessions/:id/suspend", (req, res) => suspend(req, res, deps, authorize));
-  router.post("/v1/sessions/:id/resume", (req, res) => resume(req, res, deps, authorize));
-  router.delete("/v1/sessions/:id", (req, res) => destroy(req, res, deps, authorize));
+  router.post("/v1/sessions/:id/suspend", readLimit, (req, res) => suspend(req, res, deps, authorize));
+  router.post("/v1/sessions/:id/resume", readLimit, (req, res) => resume(req, res, deps, authorize));
+  router.delete("/v1/sessions/:id", readLimit, (req, res) => destroy(req, res, deps, authorize));
 }
 
 async function suspend(

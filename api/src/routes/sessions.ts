@@ -16,12 +16,11 @@ import { mountStatusRoutes } from "./sessions/status.js";
 
 export function createSessionsRouter(deps: SessionsDeps): express.Router {
   const router = express.Router();
-  // Before every route, so a route added later cannot forget it.
-  router.use(createReadLimit(deps));
+  const readLimit = createReadLimit(deps);
   const authorize = createAuthorizer(deps);
-  mountStatusRoutes(router, authorize);
-  mountOperationRoutes(router, deps, authorize);
-  mountRequestRoutes(router, deps, authorize);
-  mountLifecycleRoutes(router, deps, authorize);
+  mountStatusRoutes(router, readLimit, authorize);
+  mountOperationRoutes(router, deps, readLimit, authorize);
+  mountRequestRoutes(router, deps, readLimit, authorize);
+  mountLifecycleRoutes(router, deps, readLimit, authorize);
   return router;
 }

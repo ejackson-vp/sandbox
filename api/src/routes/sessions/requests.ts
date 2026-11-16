@@ -5,19 +5,20 @@
  * settled; a client that gives up cancels. Both refuse the same malformed ids
  * with the same code, which is why they sit in one module.
  */
-import express, { type Request, type Response } from "express";
+import express, { type Request, type RequestHandler, type Response } from "express";
 import type { Authorizer, SessionsDeps } from "./authorize.js";
 import { respondControllerError, validRequestId, writeOperation } from "./respond.js";
 
 export function mountRequestRoutes(
   router: express.Router,
   deps: SessionsDeps,
+  readLimit: RequestHandler,
   authorize: Authorizer,
 ): void {
-  router.get("/v1/sessions/:id/requests/:requestId", (req, res) =>
+  router.get("/v1/sessions/:id/requests/:requestId", readLimit, (req, res) =>
     pollOperation(req, res, deps, authorize),
   );
-  router.delete("/v1/sessions/:id/requests/:requestId", (req, res) =>
+  router.delete("/v1/sessions/:id/requests/:requestId", readLimit, (req, res) =>
     cancelOperation(req, res, deps, authorize),
   );
 }
