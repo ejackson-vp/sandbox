@@ -21,7 +21,7 @@ import { warmPoolIdentity } from "./warm-pool-identity.js";
 import { newOpaqueToken, sha256Hex } from "./secrets.js";
 import { guestTokenFor } from "./tokens.js";
 import { pinnedShard, shardClaim } from "./data-plane-shard.js";
-import type { DataPlaneEndpoints } from "./provisioning/endpoints.js";
+import type { DataPlaneEndpoints, Endpoint, ResolvedEndpoints } from "./provisioning/endpoints.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
 import type { WarmPoolStore } from "./store/ports.js";
 
@@ -70,6 +70,22 @@ export async function recycleWarmPod(
     runtime: label.runtime,
     reason: label.reason,
   });
+}
+
+/**
+ * What a claim needs, named rather than positional.
+ *
+ * Relay and proxy used to be adjacent parameters of the same `{ host, port }`
+ * shape, so a caller that swapped them still compiled and every claimed guest
+ * dialled the proxy as its relay. A miss is silent: the claim is delivered and
+ * the pod is relabelled before the guest gives up.
+ */
+export interface WarmClaimRequest {
+  session: SessionRecord;
+  /** This session's relay and proxy, already resolved by the caller. */
+  endpoints: ResolvedEndpoints;
+  /** When the create began, for the timings merge. */
+  begunAt: number;
 }
 
 export class WarmPool {
@@ -130,12 +146,8 @@ export class WarmPool {
     );
   }
 
-  async tryClaim(
-    session: SessionRecord,
-    relayAddr: { host: string; port: number },
-    proxyAddr: { host: string; port: number },
-    provisionBeginAt: number,
-  ): Promise<WarmClaimOutcome> {
+  async tryClaim(req: WarmClaimRequest): Promise<WarmClaimOutcome> {
+    const { session, endpoints: addresses, begunAt: provisionBeginAt } = req;
     const cfg = this.ctx.cfg;
     if (cfg.warmPoolSize === 0) return "miss_disabled";
     // A profile mismatch is a miss, never a claim: the pod's image is decided
@@ -206,10 +218,10 @@ export class WarmPool {
     // addresses are this session's shard already, so they are the fallback when
     // a re-read races a Service update.
     const proxyShard = pinnedShard(cfg, "proxy", session.id);
-    const relay = (await this.endpoints.relayAddress(session.id)) ?? relayAddr;
+    const relay = (await this.endpoints.relayAddress(session.id)) ?? addresses.relay;
     const proxy = proxyShard === null
-      ? proxyAddr
-      : (await this.ctx.serviceAddress(cfg.proxyHeadlessService, proxyShard, cfg.proxyServiceName)) ?? proxyAddr;
+      ? addresses.proxy
+      : (await this.ctx.serviceAddress(cfg.proxyHeadlessService, proxyShard, cfg.proxyServiceName)) ?? addresses.proxy;
     const claim: WarmClaim = {
       sessionId: session.id,
       relayUrl: `ws://${relay.host}:${relay.port}/guest?session=${encodeURIComponent(session.id)}`,
@@ -378,8 +390,8 @@ export class WarmPool {
     opts: {
       target: number;
       maxCreate: number;
-      relayAddr?: { host: string; port: number };
-      proxyAddr?: { host: string; port: number };
+      /** Both addresses, or nothing: a half pair cannot boot a guest. */
+      endpoints?: ResolvedEndpoints;
     },
   ): Promise<number> {
     const cfg = this.ctx.cfg;
@@ -437,7 +449,7 @@ export class WarmPool {
       .gauge("sandbox_warm_pool_pods", "Warm pool pods (live)")
       .set({ profile: this.profile.name }, live);
 
-    if (opts.target <= 0 || !opts.relayAddr || !opts.proxyAddr) return opts.maxCreate;
+    if (opts.target <= 0 || !opts.endpoints) return opts.maxCreate;
 
     let budget = opts.maxCreate;
     const missing = Math.max(0, opts.target - live);
@@ -455,16 +467,13 @@ export class WarmPool {
         });
         break;
       }
-      await this.create(opts.relayAddr, opts.proxyAddr);
+      await this.create(opts.endpoints);
       budget--;
     }
     return budget;
   }
 
-  private async create(
-    relayAddr: { host: string; port: number },
-    proxyAddr: { host: string; port: number },
-  ): Promise<void> {
+  private async create(addresses: { relay: Endpoint; proxy: Endpoint }): Promise<void> {
     const cfg = this.ctx.cfg;
     const warmId = randomBytes(6).toString("hex");
     const poolId = `warm_${warmId}`;
@@ -479,9 +488,9 @@ export class WarmPool {
     // too. A shard with no address leaves the slot for the next pass rather
     // than booting a guest that dials another shard.
     const proxyShard = pinnedShard(cfg, "proxy", poolId);
-    const relay = (await this.endpoints.relayAddress(poolId)) ?? relayAddr;
+    const relay = (await this.endpoints.relayAddress(poolId)) ?? addresses.relay;
     const proxy = proxyShard === null
-      ? proxyAddr
+      ? addresses.proxy
       : await this.ctx.serviceAddress(cfg.proxyHeadlessService, proxyShard, cfg.proxyServiceName);
     if (!relay || !proxy) {
       log.warn("warm_pool_endpoint_unavailable", { poolId });

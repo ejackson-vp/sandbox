@@ -23,6 +23,7 @@ import { join } from "node:path";
 import type { WorkspacePvcInfo } from "./checkpoint-retention.js";
 import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodInfo, WarmPodSpec } from "./k8s.js";
 import { GUEST_TOOLS } from "./k8s.js";
+import type { Endpoint } from "./provisioning/endpoints.js";
 
 interface LocalPod {
   name: string;
@@ -320,11 +321,11 @@ export class LocalProvisioner implements Provisioner {
     name: string,
     shard?: number,
     podPrefix?: string,
-  ): Promise<{ host: string; port: number } | null> {
+  ): Promise<Endpoint | null> {
     return this.getServiceAddress(name, shard, podPrefix);
   }
 
-  async getServiceAddress(name: string, _shard?: number, _podPrefix?: string): Promise<{ host: string; port: number } | null> {
+  async getServiceAddress(name: string, _shard?: number, _podPrefix?: string): Promise<Endpoint | null> {
     // Local process mode has one of each service and no sharding.
     if (name === "relay") return { host: this.opts.relayHost, port: this.opts.relayPort };
     if (name === "egress-proxy") return { host: this.opts.proxyHost, port: this.opts.proxyPort };

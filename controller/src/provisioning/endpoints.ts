@@ -16,6 +16,8 @@ import { guestTokenFor } from "../tokens.js";
 
 export type Endpoint = { host: string; port: number };
 export type EndpointPair = { relay: Endpoint | null; proxy: Endpoint | null };
+/** Both data-plane addresses resolved: what a pod spec or a claim needs. */
+export type ResolvedEndpoints = { relay: Endpoint; proxy: Endpoint };
 
 /** What address resolution needs: placement config plus the Service lookups. */
 interface EndpointRuntime {
@@ -119,7 +121,7 @@ export class DataPlaneEndpoints {
    * deployment without its per-shard Services) defers the create instead of
    * booting a guest that cannot dial.
    */
-  async podEndpoints(session: SessionRecord): Promise<{ relay: Endpoint; proxy: Endpoint } | null> {
+  async podEndpoints(session: SessionRecord): Promise<ResolvedEndpoints | null> {
     const { relay, proxy } = await this.endpointsFor(session.id);
     if (relay && proxy) return { relay, proxy };
 

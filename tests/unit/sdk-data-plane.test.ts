@@ -35,8 +35,19 @@ type Answer = Record<string, unknown> | Error;
 function plane(answers: Answer[]): { dataPlane: DataPlane; sent: Sent[] } {
   const sent: Sent[] = [];
   const rt = {
-    async run(_handle: SessionHandle, operation: { requestId: string }, requestId: string, queueMs: number, timeoutMs?: number) {
-      sent.push({ operation: operation as unknown as Record<string, unknown>, requestId, queueMs, timeoutMs });
+    async run(req: {
+      handle: SessionHandle;
+      operation: { requestId: string };
+      requestId: string;
+      queueMs?: number;
+      timeoutMs?: number;
+    }) {
+      sent.push({
+        operation: req.operation as unknown as Record<string, unknown>,
+        requestId: req.requestId,
+        queueMs: req.queueMs ?? 0,
+        timeoutMs: req.timeoutMs,
+      });
       const answer = answers.shift();
       if (answer instanceof Error) throw answer;
       if (!answer) throw new Error("unexpected operation");

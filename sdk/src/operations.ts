@@ -39,7 +39,14 @@ export class OperationService {
       ...(opts.stdin ? { stdin: opts.stdin } : {}),
       ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
     };
-    return this.rt.run<ExecResult>(handle, operation, requestId, opts.queueMs, opts.timeoutMs, opts.signal);
+    return this.rt.run<ExecResult>({
+      handle,
+      operation,
+      requestId,
+      queueMs: opts.queueMs,
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+    });
   }
 
   async putFile(handle: SessionHandle, opts: FilePutOptions): Promise<FilePutResult | OperationError> {
@@ -62,7 +69,7 @@ export class OperationService {
       ...(opts.archive ? { archive: true } : {}),
       ...(opts.mode ? { mode: opts.mode } : {}),
     };
-    return this.rt.run<FilePutResult>(handle, operation, requestId, opts.queueMs, 30_000);
+    return this.rt.run<FilePutResult>({ handle, operation, requestId, queueMs: opts.queueMs, timeoutMs: 30_000 });
   }
 
   async getFile(
@@ -125,7 +132,7 @@ export class OperationService {
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<TransferResult | OperationError> {
-    return this.rt.run<TransferResult>(handle, operation, requestId, 0, timeoutMs, signal);
+    return this.rt.run<TransferResult>({ handle, operation, requestId, timeoutMs, signal });
   }
 
   getOperation(handle: SessionHandle, requestId: string, waitMs = 20_000): Promise<GuestResult | null> {

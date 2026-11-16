@@ -81,8 +81,7 @@ describe("provisioning relay endpoint", () => {
 
     await provisioning.createPod(
       session(),
-      { host: "10.0.0.1", port: 8443 },
-      { host: "10.0.0.9", port: 3128 },
+      { relay: { host: "10.0.0.1", port: 8443 }, proxy: { host: "10.0.0.9", port: 3128 } },
     );
 
     expect(registerCurrent).toHaveBeenCalledTimes(1);
@@ -134,8 +133,7 @@ describe("provisioning relay endpoint", () => {
 
     await provisioning.createPod(
       session(),
-      { host: "10.0.0.1", port: 8443 },
-      { host: "10.0.0.9", port: 3128 },
+      { relay: { host: "10.0.0.1", port: 8443 }, proxy: { host: "10.0.0.9", port: 3128 } },
     );
 
     expect(createPod.mock.calls[0]?.[0].relayUrl).toBe(
@@ -180,8 +178,7 @@ describe("provisioning relay endpoint", () => {
 
     await provisioning.createPod(
       session(),
-      { host: "10.96.0.7", port: 8443 },
-      { host: "10.0.0.9", port: 3128 },
+      { relay: { host: "10.96.0.7", port: 8443 }, proxy: { host: "10.0.0.9", port: 3128 } },
     );
 
     expect(createPod.mock.calls[0]![0].relayUrl).toBe(

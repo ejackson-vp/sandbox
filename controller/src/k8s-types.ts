@@ -3,6 +3,7 @@
  */
 import type { SessionLimits } from "@x402s/shared/protocol";
 import type { WorkspacePvcInfo } from "./checkpoint-retention.js";
+import type { Endpoint } from "./provisioning/endpoints.js";
 
 export interface SandboxPodSpec {
   sessionId: string;
@@ -119,7 +120,7 @@ export interface Provisioner {
   /** Relabel a warm pod as a claimed sandbox (or update its session id). */
   patchPodLabels(podName: string, labels: Record<string, string | null>): Promise<void>;
   /** Resolve a Service to a dialable endpoint; `shard` selects one replica. */
-  getServiceAddress(name: string, shard?: number, podPrefix?: string): Promise<{ host: string; port: number } | null>;
+  getServiceAddress(name: string, shard?: number, podPrefix?: string): Promise<Endpoint | null>;
   /**
    * Resolve a Service to its ClusterIP, never to an endpoint Pod IP.
    *
@@ -137,7 +138,7 @@ export interface Provisioner {
     name: string,
     shard?: number,
     podPrefix?: string,
-  ): Promise<{ host: string; port: number } | null>;
+  ): Promise<Endpoint | null>;
   /** Capacity planning only; Kubernetes remains the real scheduler. */
   listNodes(): Promise<NodeInfo[]>;
 }

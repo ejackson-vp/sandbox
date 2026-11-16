@@ -164,15 +164,15 @@ export class ClientRuntime extends ClientTransport {
     return this.operations.getOperation(handle, requestId, waitMs);
   }
 
-  run<T extends GuestResult>(
-    handle: SessionHandle,
-    operation: { requestId: string },
-    requestId: string,
-    queueMs = 0,
-    timeoutMs?: number,
-    signal?: AbortSignal,
-  ): Promise<T> {
-    return this.operations.run<T>(handle, operation, requestId, queueMs, timeoutMs, signal);
+  run<T extends GuestResult>(req: {
+    handle: SessionHandle;
+    operation: { requestId: string };
+    requestId: string;
+    queueMs?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<T> {
+    return this.operations.run<T>(req);
   }
 
   runGet<T extends GuestResult>(

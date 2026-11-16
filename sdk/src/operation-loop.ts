@@ -85,15 +85,21 @@ export class OperationChannel {
    * filesystem operations. It keeps its own body because the server's 409
    * handling differs: only a busy queue is retried here, and everything else is
    * surfaced.
+   *
+   * Named fields, not six positionals: `queueMs` and `timeoutMs` were adjacent
+   * numbers, so a caller could swap the busy-queue patience with the guest
+   * deadline and still compile. Both are milliseconds and neither is validated
+   * against the other, so the result is a timeout that behaves like a queue.
    */
-  async run<T extends GuestResult>(
-    handle: SessionHandle,
-    operation: { requestId: string },
-    requestId: string,
-    queueMs = 0,
-    timeoutMs?: number,
-    signal?: AbortSignal,
-  ): Promise<T> {
+  async run<T extends GuestResult>(req: {
+    handle: SessionHandle;
+    operation: { requestId: string };
+    requestId: string;
+    queueMs?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<T> {
+    const { handle, requestId, operation, queueMs = 0, timeoutMs, signal } = req;
     const sealed = await this.seal(handle, operation);
     // Matches the API's waitMs cap: the schema rejects anything above 90 s, which
     // is below the edge proxy's 100 s timeout. A longer command answers 202 and

@@ -17,9 +17,9 @@ import type { RuntimeProfile } from "./config.js";
 import { DEFAULT_RUNTIME_PROFILE, sessionRuntime } from "./config.js";
 import type { WarmPodInfo } from "./k8s.js";
 import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
+import type { ResolvedEndpoints } from "./provisioning/endpoints.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
-import type { SessionRecord } from "./store/models/session.js";
-import { recycleWarmPod, WarmPool, type WarmClaimOutcome } from "./warm-pool.js";
+import { recycleWarmPod, WarmPool, type WarmClaimOutcome, type WarmClaimRequest } from "./warm-pool.js";
 
 /** Pods the whole manager may create per reconcile pass. */
 const MAX_CREATE_PER_PASS = 2;
@@ -123,13 +123,8 @@ export class WarmPoolManager {
    * Returns false whenever no pod was claimed; the caller then takes the cold
    * path. A miss is recorded per profile so the pool can grow next pass.
    */
-  async tryClaim(
-    session: SessionRecord,
-    relayAddr: { host: string; port: number },
-    proxyAddr: { host: string; port: number },
-    provisionBeginAt: number,
-  ): Promise<boolean> {
-    const requested = sessionRuntime(session);
+  async tryClaim(req: WarmClaimRequest): Promise<boolean> {
+    const requested = sessionRuntime(req.session);
     const pool = this.pools.get(requested);
     if (!pool) {
       // Never route an unknown profile to `base`: the session asked for a
@@ -141,7 +136,7 @@ export class WarmPoolManager {
       log.warn("warm_pool_profile_unknown", { runtime: requested.slice(0, 64) });
       return false;
     }
-    const outcome = await pool.tryClaim(session, relayAddr, proxyAddr, provisionBeginAt);
+    const outcome = await pool.tryClaim(req);
     this.record(requested, outcome, this.ctx.now());
     return outcome === "hit";
   }
@@ -368,8 +363,7 @@ export class WarmPoolManager {
     // pods are not replaced from the same budget on the next pass.
     for (const name of this.order) this.maybeShrink(this.state.get(name)!, now);
 
-    let relayAddr: { host: string; port: number } | undefined;
-    let proxyAddr: { host: string; port: number } | undefined;
+    let endpoints: ResolvedEndpoints | undefined;
     // Nothing to create when every pool is drained (the `WARM_POOL_SIZE=0`
     // case): skip the service lookups entirely, as the single pool did.
     const anyWanted = this.order.some((name) => this.state.get(name)!.target > 0);
@@ -377,8 +371,9 @@ export class WarmPoolManager {
       // The guest URL in the warm pod is baked in at boot, so the relay half
       // must be the ClusterIP: a Pod IP would strand the pod when the relay is
       // replaced before it is claimed.
-      relayAddr = (await this.ctx.stableServiceAddress(cfg.relayServiceName)) ?? undefined;
-      proxyAddr = (await this.ctx.serviceAddress(cfg.proxyServiceName)) ?? undefined;
+      const relay = await this.ctx.stableServiceAddress(cfg.relayServiceName);
+      const proxy = await this.ctx.serviceAddress(cfg.proxyServiceName);
+      endpoints = relay && proxy ? { relay, proxy } : undefined;
     }
 
     let createBudget = MAX_CREATE_PER_PASS;
@@ -388,8 +383,7 @@ export class WarmPoolManager {
       createBudget = await pool.reconcile(byProfile.get(name) ?? [], {
         target: st.target,
         maxCreate: createBudget,
-        ...(relayAddr ? { relayAddr } : {}),
-        ...(proxyAddr ? { proxyAddr } : {}),
+        ...(endpoints ? { endpoints } : {}),
       });
       metrics
         .gauge("sandbox_warm_pool_budget", "Warm pool target size")

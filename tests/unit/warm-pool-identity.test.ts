@@ -71,21 +71,19 @@ describe("profile-aware identity", () => {
     const pythonPool = h.manager.poolFor("python");
     const basePool = h.manager.poolFor("base");
     expect(pythonPool?.profile.name).toBe("python");
-    const outcome = await pythonPool!.tryClaim(
-      h.session("base"),
-      { host: "relay", port: 8443 },
-      { host: "proxy", port: 3128 },
-      h.clock.now,
-    );
+    const outcome = await pythonPool!.tryClaim({
+      session: h.session("base"),
+      endpoints: { relay: { host: "relay", port: 8443 }, proxy: { host: "proxy", port: 3128 } },
+      begunAt: h.clock.now,
+    });
     expect(outcome).toBe("miss_profile");
     // And the base pool refuses a python session even though it is the default.
     expect(
-      await basePool!.tryClaim(
-        h.session("python"),
-        { host: "relay", port: 8443 },
-        { host: "proxy", port: 3128 },
-        h.clock.now,
-      ),
+      await basePool!.tryClaim({
+        session: h.session("python"),
+        endpoints: { relay: { host: "relay", port: 8443 }, proxy: { host: "proxy", port: 3128 } },
+        begunAt: h.clock.now,
+      }),
     ).toBe("miss_profile");
   });
 

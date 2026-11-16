@@ -2,6 +2,7 @@ import type { ControllerConfig } from "./config.js";
 import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
 import type { CapacityService } from "./capacity/service.js";
+import type { Endpoint } from "./provisioning/endpoints.js";
 import type { Snapshotter } from "./snapshotter.js";
 import type { ReconcilerStore } from "./store/ports.js";
 
@@ -14,11 +15,11 @@ export interface ReconcilerContext {
   readonly capacity: CapacityService;
   readonly snapshotter: Snapshotter;
   now(): number;
-  serviceAddress(name: string, shard?: number, podPrefix?: string): Promise<{ host: string; port: number } | null>;
+  serviceAddress(name: string, shard?: number, podPrefix?: string): Promise<Endpoint | null>;
   /**
    * ClusterIP-based address for a guest-facing URL. Required, not optional: a
    * caller that could silently fall back to a Pod IP is the failure this seam
    * exists to prevent.
    */
-  stableServiceAddress(name: string, shard?: number, podPrefix?: string): Promise<{ host: string; port: number } | null>;
+  stableServiceAddress(name: string, shard?: number, podPrefix?: string): Promise<Endpoint | null>;
 }

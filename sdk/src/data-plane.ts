@@ -66,14 +66,12 @@ export class DataPlane {
     timeoutMs: number,
     fallback: { code: string; message: string },
   ): Promise<T> {
-    const result = await this.rt.run<T | OperationError>(
+    const result = await this.rt.run<T | OperationError>({
       handle,
       operation,
-      operation.requestId,
-      0,
+      requestId: operation.requestId,
       timeoutMs,
-      undefined,
-    );
+    });
     if (!result.ok) {
       throw new SandboxError(
         result.error?.code ?? fallback.code,

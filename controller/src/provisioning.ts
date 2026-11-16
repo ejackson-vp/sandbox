@@ -22,7 +22,7 @@ import type { WarmPoolManager } from "./warm-pool-manager.js";
 import { createPath, effectContext, executeEffects, isOk } from "./effects.js";
 import type { CreatePath, StartPodRequest } from "./effects.js";
 import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
-import type { EndpointPair, RelayRegistration } from "./provisioning/endpoints.js";
+import type { EndpointPair, RelayRegistration, ResolvedEndpoints } from "./provisioning/endpoints.js";
 import { PodCreation } from "./provisioning/pod-creation.js";
 import { ProvisioningAdmission } from "./provisioning/admission.js";
 import { PodStatus } from "./provisioning/pod-status.js";
@@ -239,7 +239,11 @@ export class Provisioning implements CreatePath {
     const provisionBeginAt = request.provisionBeginAt ?? this.ctx.now();
     if (
       request.warm &&
-      (await this.warm.tryClaim(session, request.relay, request.proxy, provisionBeginAt))
+      (await this.warm.tryClaim({
+        session,
+        endpoints: { relay: request.relay, proxy: request.proxy },
+        begunAt: provisionBeginAt,
+      }))
     ) {
       return true;
     }
@@ -253,8 +257,7 @@ export class Provisioning implements CreatePath {
     const workspacePvc = request.workspacePvc ?? session.workspacePvc ?? undefined;
     const { podName, createStarted, relayGeneration } = await this.createPod(
       session,
-      request.relay,
-      request.proxy,
+      { relay: request.relay, proxy: request.proxy },
       {
         ...(workspacePvc ? { workspacePvc } : {}),
         ...(request.nodeName ? { nodeName: request.nodeName } : {}),
@@ -285,7 +288,7 @@ export class Provisioning implements CreatePath {
     registration: RelayRegistration,
     request: StartPodRequest,
   ): Promise<boolean> {
-    const { podName } = await this.createPod(session, request.relay, request.proxy, {
+    const { podName } = await this.createPod(session, { relay: request.relay, proxy: request.proxy }, {
       ...(session.workspacePvc ? { workspacePvc: session.workspacePvc } : {}),
       resume: true,
       ...(request.nodeName ? { nodeName: request.nodeName } : {}),
@@ -324,8 +327,7 @@ export class Provisioning implements CreatePath {
    */
   async createPod(
     session: SessionRecord,
-    relayAddr: { host: string; port: number },
-    proxyAddr: { host: string; port: number },
+    endpoints: ResolvedEndpoints,
     opts: {
       workspacePvc?: string;
       resume?: boolean;
@@ -333,7 +335,7 @@ export class Provisioning implements CreatePath {
       registration?: RelayRegistration;
     } = {},
   ): Promise<{ podName: string; createStarted: number; relayGeneration: string }> {
-    return this.pods.createPod(session, relayAddr, proxyAddr, opts);
+    return this.pods.createPod(session, endpoints, opts);
   }
 
   /**
