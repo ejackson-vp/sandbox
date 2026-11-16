@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { generateBoxKeyPair } from "@x402s/shared/crypto";
 import { SandboxClient } from "../../sdk/src/client.js";
 import type { SessionHandle } from "../../sdk/src/types.js";
 
@@ -46,6 +47,33 @@ describe("operation lookups after a restart", () => {
     await expect(client().getOperation(handle, "req-never", 0)).rejects.toMatchObject({
       code: "request_not_found",
       status: 404,
+    });
+  });
+});
+
+describe("a refusal the client cannot read", () => {
+  it("names the fallback code when a 409 body is not JSON", async () => {
+    vi.stubGlobal("fetch", async () => new Response("gateway said no", { status: 409 }));
+    const guest = await generateBoxKeyPair();
+
+    await expect(
+      client().exec({ ...handle, guestPublicKey: guest.publicKey }, { command: ["true"] }),
+    ).rejects.toMatchObject({
+      code: "exec_failed",
+      status: 409,
+      message: "gateway said no",
+    });
+  });
+
+  it("keeps the read surface's own fallback on the GET path", async () => {
+    vi.stubGlobal("fetch", async () => new Response("<html>nope</html>", { status: 409 }));
+    const guest = await generateBoxKeyPair();
+
+    await expect(
+      client().getFile({ ...handle, guestPublicKey: guest.publicKey }, "/workspace/a.txt"),
+    ).rejects.toMatchObject({
+      code: "file_operation_failed",
+      status: 409,
     });
   });
 });

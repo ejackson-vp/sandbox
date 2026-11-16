@@ -30,7 +30,7 @@ import type {
   WsSendResult,
 } from "@x402s/shared/protocol";
 import type { ClientRuntime } from "./runtime.js";
-import { sleep } from "./runtime.js";
+import { sleep } from "./timing.js";
 import {
   SandboxError,
   type HttpOptions,
