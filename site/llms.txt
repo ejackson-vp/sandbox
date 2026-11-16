@@ -46,7 +46,7 @@ Use the CLI or the SDK. Do not hand-roll the sealed envelopes, the x402 payment,
 
 - `402` means a price is owed, not that you were charged. Nothing settles until you sign the `PAYMENT-REQUIRED` header and retry with `PAYMENT-SIGNATURE`. One payment buys one session; the same payment replayed returns that session instead of billing again. If you are not the payer, stop and tell the human.
 - `429` with `rate_limited` means slow down. Honour `Retry-After`, retry once, and do not raise parallelism: one foreground operation per session is the rule, and the limits below bound the rest.
-- `429` with `creates_disabled` means the operator has turned new sessions off. Stop. Do not retry, do not re-sign, and do not try the same payment against another session. Wait for the operator to restore it. (This code is reserved for the kill switch and is not returned by the current release; today an emergency stop shows up as a `502` or `503` at the public host.)
+- `429` with `creates_disabled` means the operator has turned new sessions off. Stop. Do not retry, do not re-sign, and do not try the same payment against another session. Wait for the operator to restore it.
 
 ### Install and build
 
@@ -225,7 +225,7 @@ Prices are configuration (`SESSION_TIERS`), not economics. Read `GET /v1/pricing
 | 410 | `lease_expired`, `capability_expired`, `result_expired` | gone |
 | 413 | `payload_too_large` | envelope too big |
 | 429 | `rate_limited` (`scope: payer` or `ip`) | honour `Retry-After` |
-| 429 | `creates_disabled` | reserved: operator has switched new sessions off. Stop, do not retry a payment |
+| 429 | `creates_disabled` | the operator has switched new sessions off. Stop, do not retry a payment |
 | 503 | `control_plane_unavailable`, `provisioning_unavailable` | transient |
 
 Command-level errors (`ok: false`) include `path_outside_workspace`, `quota_exceeded`, `file_too_large`, `unsafe_archive`, `not_found`, `invalid_cwd`, `spawn_failed`, `service_not_found`, `port_in_use`, `service_not_listening`.
