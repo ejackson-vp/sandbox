@@ -29,10 +29,10 @@ row cites it; where it depends on reading code and tests, it says so.
 | Runtime class cannot silently degrade | PASS | startup read of the RuntimeClass, non-microVM handler refuses to serve; fake-apiserver tests. Guard applies when `EXECUTION_MODE=kata` (F-18) |
 | Least-privilege workflow tokens | PASS | job-scoped `permissions`, `contents: read` default |
 | Cilium pod→pod / pod→API / metadata isolation | PASS (Cilium) | packet-level suite green per pull request, plus the anonymous attacker suite |
-| Kata guest→host isolation | **UNVERIFIED** | no run on KVM hardware yet (#44) |
-| Real-mode settled-but-not-provisioned recovery | PARTIAL | API-side chain recovery proven in tests; the controller worker still needs a facilitator lookup (F-19) |
+| Kata guest→host isolation | **PASS** for the tested digests | `docs/isolation-evidence.md`: network 4/4, workload 10/10, warm pool 3/3 on a Talos cluster with handler `kata`, guest kernel 6.18.35 against host 6.18.51. Control `sha256:39c8d2d0…`, guest `sha256:bd5161d7…`. Proves the boundary properties the suite tests. No escape attempt was made and there is no hardware root of trust. The deployed 0.1.31 pair has not been through this run yet |
+| Real-mode settled-but-not-provisioned recovery | PASS (chain path) | The controller's recovery worker proves the transfer from the recorded authorizer, nonce and terms (schema v20, ADR 0014), so debt is written without a client retry. The facilitator lookup remains a fallback for networks with no chain read. Unproven with real funds: no settle has executed |
 | Real-mode refunds executed | PARTIAL | worker and webhook contract, mock-tested only; never moved funds |
-| Chain verdict binds amount and recipient | PARTIAL | nonce use is proven on chain; amount is bound by the preceding verify, and that invariant now has a regression test (F-17) |
+| Chain verdict binds amount and recipient | PASS | F-17 fixed: the verifier reads the nonce's transaction and requires a `Transfer` from the authorizer to `PAY_TO` for at least the price. Residual is the bounded scan window (90,000 blocks), not the trust assumption |
 | Free entitlement cannot be obtained by a non-allowlisted payer | PASS | F-20: check runs after commitment proof, on the proven signer; 100% mutation score |
 | Allowlisted payer cannot exhaust a paid payer's budget | PASS | separate `allow:<address>` budget namespace |
 | Mainnet cannot activate silently | PASS | startup assertions: explicit `NETWORK`, real `PAY_TO`, `FACILITATOR_URL`, on-chain verifier |
@@ -70,7 +70,7 @@ operator reachable, guests run code you would tolerate on a shared node.
 2. Keep `TRUST_PROXY_HOPS=0` unless a proxy you control overwrites
    `X-Forwarded-For` (F-09).
 3. Accept that Kata is unverified here and say so to the tenant.
-4. A human reconciles `REFUND_PENDING` if real settlement is used (F-19).
+4. A human reconciles and executes `REFUND_PENDING` if real settlement is used: the debt is recorded automatically now, but the refund worker only sends through an operator-configured webhook, and it has never moved funds (F-10).
 5. Accept the F-07 residual: a capture of the live challenge *and* its signed
    request, replayed first, is equivalent to the client.
 

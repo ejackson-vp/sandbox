@@ -29,7 +29,7 @@ executed), `theoretical` (no concrete path found).
 | F-16 | — | reviewed | CodeQL `js/missing-rate-limiting` ×10 on controller/relay `/internal` routes | Fixed by shared TokenBucket; query model gap documented; alerts #217/#218 dismissed as false positive |
 | F-17 | Medium | proven | The chain verdict proves the EIP-3009 **nonce was used**, not that this amount reached this address. The safety of that rested on an implicit invariant: the chain was only consulted after a successful `verifyPayment` for the same requirement | **Fixed**: the verifier proves the transfer (authorizer, recipient, amount) from the nonce's transaction; residual is the bounded scan window |
 | F-18 | Low | code-confirmed | The runtime-class guard only runs when `EXECUTION_MODE=kata`. A cluster deployed with the default `dev` skips it, and the only signal is the `executionMode` field in the evidence | Accepted (dev is explicit); healthz now reports the resolved handler in every mode |
-| F-19 | Medium | code-confirmed | Background settlement recovery in the controller still uses the facilitator lookup only, so a settled-but-unentitled payment is recorded as debt only if the client retries the create and the API resolves it from the chain | Open; the client-retry path is the gap |
+| F-19 | Medium | proven | Background settlement recovery in the controller still uses the facilitator lookup only, so a settled-but-unentitled payment is recorded as debt only if the client retries the create and the API resolves it from the chain | **Fixed** (#222, ADR 0014): the worker proves the transfer from the recorded authorizer, nonce and terms; the lookup is a fallback |
 | F-20 | Medium | code-confirmed | The allowlist is a free tier on the public create path. The credential is a long-lived wallet key held by the agent host that runs model-authored code, so a compromised host gets free sessions until the entry is disabled | Accepted with a tier ceiling and a concurrency cap; see below |
 | F-21 | Medium | proven | A facilitator settlement record was trusted on `settled: true` alone: the recovery path granted a session without proving the recipient or the amount, so a payment a payer sent to itself bought a session | **Fixed**: the record must name the recipient it settled to and the amount that moved; see below |
 
@@ -535,8 +535,8 @@ check. A nonce older than the window is `unavailable`, so it withholds rather
 than resolving. The proof has not been exercised against a real provider's
 `eth_getLogs` range cap or a real settle-then-crash.
 
-**Residual:** the controller's background recovery still uses the facilitator
-lookup only (F-19), so the chain answer is not used everywhere it could be.
+**Residual:** the controller's recovery worker used the facilitator lookup only
+until #222; see F-19 for the fix and the terms it now requires.
 
 ### F-18 — the runtime-class guard is conditional on a label
 
@@ -567,9 +567,19 @@ retries, the controller's worker asks the facilitator's settlement lookup, which
 the public testnet facilitator does not expose and CDP does not document, so no
 `REFUND_PENDING` row is written. The money moved and no debt is recorded.
 
-This is the remaining half of F-10: the forward path is fixed, the background
-reconciliation is not. **Fix:** give the worker the same `ChainSettlementVerifier`
-the API uses, keyed on the intent's stored authorizer and nonce.
+This was the remaining half of F-10: the forward path was fixed, the background
+reconciliation was not.
+
+**Fix (#222, ADR 0014):** the worker asks the same chain verifier the API uses,
+keyed on the intent's stored authorizer and nonce, and it now also requires the
+transfer to prove the recorded recipient and amount. Migration v20 adds those two
+columns to `payment_intents`; a pre-v20 row falls back to the facilitator lookup.
+`proven` writes the `REFUND_PENDING` row, `disproven` records nothing, and
+`not-found` or a read error is `unavailable`, which retries on the next pass so
+an outage cannot close the reconciliation window.
+
+**Residual:** the debt is recorded automatically but still executed by the refund
+worker through an operator webhook, and no refund has moved real funds (F-10).
 
 ### F-20 — the allowlist is a free tier on the public create path
 
