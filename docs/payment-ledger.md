@@ -72,18 +72,64 @@ settlement lookup configured the intent stays `claimed` so recovery can find it,
 rather than being failed on an outcome that may have moved money. A plain
 refusal still fails the intent and releases the capacity hold.
 
+`nonce_already_used` is resolved from the chain first, because it is the answer
+that most often means "this payment settled and the previous attempt crashed".
+A disproof (a transfer to another address, a short one, no matching transfer, a
+reverted transaction) is a real refusal and fails the intent. When the chain
+cannot place the nonce (outside the scan window, or unreadable) and no lookup can
+answer, the intent stays `claimed` and the hold stays until its TTL: failing it
+would hide the debt from the recovery worker, which only walks claimed intents.
+
 ## Settlement recovery (settle-then-crash)
 
-Settlement is verified on chain where the deployment can read one. An EIP-3009
-authorisation is settled exactly when its nonce is consumed, so
-`authorizationState(address authorizer, bytes32 nonce)` on the network's USDC
-contract is the answer to "did the money move", independent of what the
-facilitator said (F-10). Set `PAYMENT_RPC_URL` to enable it; the USDC address
-defaults per network (`PAYMENT_USDC_ADDRESS` overrides it). A settled nonce
-grants, an unsettled nonce refuses, and an unreadable answer fails closed
-without granting. The check runs before entitlement on the first attempt and
-first on the recovery path, so a hostile facilitator cannot mint a session by
-answering `success`.
+Settlement is verified on chain where the deployment can read one. A consumed
+EIP-3009 nonce is not by itself a payment: a 1-atomic-unit authorisation and a
+50 000-unit one both use up a nonce. The check proves the transfer instead
+(F-17):
+
+1. `AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)` on the
+   network's USDC contract, filtered on both indexed topics, names the
+   transaction that consumed the nonce.
+2. That transaction's receipt must carry a `Transfer` on the same contract with
+   `from == authorizer`, `to == PAY_TO` and `value >= the amount the server
+   priced`.
+
+Both facts are read from the raw log topics and data, so the verdict is the
+chain's, not an RPC's decoding.
+
+**Window.** `PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS` defaults to 90 000 blocks, which
+is 50 hours at Base's 2 s block time. That covers the failure the window exists
+for: the API settles, stays down for a day or two, and the client retries after
+the restart. The scan runs newest-first in `PAYMENT_SETTLEMENT_SCAN_CHUNK_BLOCKS`
+chunks (default 10 000, the range cap most Base providers apply) and stops at the
+first chunk that knows the nonce, so a normal payment is one `eth_getLogs`. The
+total work per check is capped at 12 calls, so a larger window is reached by
+raising the chunk size to the provider's limit, not by scanning forever; the
+verifier refuses to start if the pair would need more calls than that. Lower the
+chunk size for a stricter provider, at the cost of more calls for the same
+window.
+
+**Verdicts.** Set `PAYMENT_RPC_URL` to enable the check; the USDC address
+defaults per network (`PAYMENT_USDC_ADDRESS` overrides it).
+
+| Chain answer | Meaning | API verdict | Entitlement |
+|---|---|---|---|
+| `proven` | the nonce's transaction transferred at least the price to `PAY_TO` | `settled` | granted |
+| `disproven`: transfer to another recipient | readable receipt, wrong destination | `unsettled` | refused |
+| `disproven`: transfer below the price | readable receipt, short amount | `unsettled` | refused |
+| `disproven`: no matching `Transfer` | readable receipt, no transfer from the authorizer | `unsettled` | refused |
+| `disproven`: transaction reverted | readable receipt, nothing moved | `unsettled` | refused |
+| `not-found` | no `AuthorizationUsed` log in the window | `unavailable` | withheld |
+| read error or unreadable node answer | could not ask | `unavailable` | withheld |
+
+`not-found` is deliberately `unavailable`, not `unsettled`. The check cannot tell
+"never settled" from "settled before the window opened", and calling it
+`unsettled` would turn a paid payment into a permanent refusal that no retry can
+resolve: the nonce never re-enters the window, and no debt is ever recorded.
+`unavailable` withholds without closing the reconciliation window, which is what
+the recovery worker and the facilitator lookup need. The check runs
+before entitlement on the first attempt and first on the recovery path, so a
+hostile facilitator cannot mint a session by answering `success`.
 
 `payment_intents` records the payment requirements at claim time
 (`requirements_json`). A controller housekeeping pass lists intents that have
@@ -463,7 +509,7 @@ a worker owns that claim and may be mid-send.
   `PAYMENT_RPC_URL` for an on-chain check. With neither, testnet still answers
   `409 reconciliation_pending` and the money is only visible to a human who
   reconciles the on-chain transfer. The on-chain check has never run against a
-  live chain in CI: its tests use a fake verifier.
+  live chain in CI: its tests use a fake chain reader.
 - An ambiguous refund outcome (timeout, 5xx, no transaction id) is `unknown`, not
   a failed attempt: the row stays `REFUND_SENDING` and is retried each time its
   lease expires, with the same key, indefinitely. `REFUND_MAX_ATTEMPTS` bounds

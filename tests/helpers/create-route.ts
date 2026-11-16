@@ -23,6 +23,7 @@ import {
 import { TokenBucket } from "../../shared/src/entries/runtime.js";
 import type { SettlementLookup } from "../../shared/src/entries/runtime.js";
 import { createSessionHandler } from "../../api/src/routes/create-session.js";
+import type { ChainSettlementVerifier } from "../../api/src/payments/settlement-verifier.js";
 
 export const CHALLENGE_NONCE = `cn_${"a".repeat(32)}`;
 
@@ -91,6 +92,8 @@ interface CreateResult {
   /** The authorizer and EIP-3009 nonce in the signed header, for verifier assertions. */
   authorizer: `0x${string}`;
   settlementNonce: `0x${string}`;
+  /** The server's own terms: the chain check must be given these, not the body. */
+  terms: { payTo: `0x${string}`; amount: bigint };
 }
 
 /**
@@ -104,9 +107,8 @@ export async function postCreate(
   patch: (ctx: { controller: ControllerStub; body: Record<string, unknown> }) => void = () => undefined,
   opts: {
     settlementLookup?: SettlementLookup;
-    settlementVerifier?: {
-      isSettled(authorizer: `0x${string}`, nonce: `0x${string}`): Promise<boolean>;
-    };
+    /** A fake chain check. Tests must never reach an RPC. */
+    settlementVerifier?: ChainSettlementVerifier;
     resourceServer?: {
       verifyPayment?: (...args: unknown[]) => Promise<unknown>;
       settlePayment?: (...args: unknown[]) => Promise<unknown>;
@@ -216,5 +218,6 @@ export async function postCreate(
     paymentKey: key,
     authorizer,
     settlementNonce,
+    terms: { payTo: REQUIREMENT.payTo as `0x${string}`, amount: BigInt(REQUIREMENT.amount) },
   };
 }

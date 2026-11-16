@@ -1,19 +1,28 @@
 /**
- * On-chain settlement verification (F-10).
+ * Settlement as the create path consumes it (F-10, F-17).
  *
- * The gate that matters: a facilitator answer is not authority. A session is
- * granted only when the EIP-3009 nonce is used on chain, and the same check is
- * what recovers a payment that settled before the API crashed.
+ * The gate that matters: a facilitator answer is not authority, and a used
+ * EIP-3009 nonce is not a payment. A session is granted only when the chain
+ * proves the transfer, and the same check recovers a payment that settled before
+ * the API crashed.
+ *
+ * The verifier's own mechanics (topics, receipts, window, chunking) are in
+ * `settlement-verifier.test.ts`. This file pins the wiring and the verdict
+ * mapping, including the F-17 ordering: a failed verify never reaches the chain.
  */
 import { describe, expect, it, vi } from "vitest";
 import { UnsupportedSettlementLookup } from "@x402s/shared/runtime";
-import {
-  AUTHORIZATION_STATE_ABI,
-  UsdcAuthorizationStateVerifier,
-  usdcAddressFor,
-} from "../../api/src/payments/settlement-verifier.js";
-import { buildSettlementVerifier } from "../../api/src/payments/settlement-confirmation.js";
+import { confirmSettledOnChain } from "../../api/src/payments/settlement-confirmation.js";
 import { postCreate } from "../helpers/create-route.js";
+import {
+  AUTHORIZER,
+  NONCE,
+  RECIPIENT,
+  chainProof,
+  disproven,
+  notFound,
+  proven,
+} from "../helpers/settlement-fixtures.js";
 
 function settledResourceServer(settle: () => Promise<unknown> = async () => ({
   success: true,
@@ -24,73 +33,92 @@ function settledResourceServer(settle: () => Promise<unknown> = async () => ({
   return { verifyPayment: async () => ({ isValid: true }), settlePayment: settle };
 }
 
-describe("chain-verified settlement", () => {
-  it("grants when the settled nonce is confirmed on chain", async () => {
-    const isSettled = vi.fn(async () => true);
-    const result = await postCreate(
-      () => undefined,
-      { settlementVerifier: { isSettled }, resourceServer: settledResourceServer() },
-    );
+/** A create request whose controller, facilitator and chain answers are stubs. */
+async function create(opts: Parameters<typeof postCreate>[1]) {
+  return postCreate(() => undefined, opts);
+}
+
+describe("chain-proven settlement", () => {
+  it("grants when the chain proves the transfer, and checks the server's terms", async () => {
+    const settlementProof = vi.fn(async () => proven());
+    const result = await create({
+      settlementVerifier: { settlementProof },
+      resourceServer: settledResourceServer(),
+    });
 
     expect(result.status).toBe(201);
-    // The check is on the address that signed the payment and the nonce in it,
-    // never on a field the client merely claims.
-    expect(isSettled).toHaveBeenCalledWith(result.authorizer, result.settlementNonce);
+    // The check is on the address that signed the payment, the nonce in it, the
+    // server's recipient and the server's price. Never on a field the client
+    // merely claims.
+    expect(settlementProof).toHaveBeenCalledWith({
+      authorizer: result.authorizer,
+      nonce: result.settlementNonce.toLowerCase(),
+      recipient: result.terms.payTo,
+      amount: result.terms.amount,
+    });
     expect(result.controller.completeIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("does not entrust a chain-settled nonce when verification fails (F-17)", async () => {
-    const isSettled = vi.fn(async () => true);
-    const result = await postCreate(() => undefined, {
-      settlementVerifier: { isSettled },
-      // The chain says this nonce is used, but the payload was never verified
-      // against the server's requirement, so the amount is unbound. The chain
-      // answer must never be consulted for an unverified payload, or a
-      // 1-atomic-unit transfer would buy a session.
-      resourceServer: {
-        verifyPayment: async () => ({ isValid: false, invalidReason: "value_mismatch" }),
-        settlePayment: async () => {
-          throw new Error("settle must not be called for an invalid payload");
-        },
+  it("ignores a recipient or amount in the request body", async () => {
+    const settlementProof = vi.fn(async () => proven());
+    const result = await postCreate(
+      ({ body }) => {
+        // A client that tries to redefine "settled" for itself.
+        body.payTo = "0x9999999999999999999999999999999999999999";
+        body.amount = "1";
       },
-    });
+      { settlementVerifier: { settlementProof }, resourceServer: settledResourceServer() },
+    );
 
-    expect(result.status).toBe(402);
-    expect(isSettled).not.toHaveBeenCalled();
-    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+    expect(result.status).toBe(201);
+    expect(settlementProof).toHaveBeenCalledWith(
+      expect.objectContaining({ recipient: result.terms.payTo, amount: result.terms.amount }),
+    );
+    expect(result.terms.amount).toBeGreaterThan(1n);
   });
 
-  it("refuses a settle the chain has not seen", async () => {
-    const result = await postCreate(
-      () => undefined,
-      {
-        settlementVerifier: { isSettled: async () => false },
-        resourceServer: settledResourceServer(),
-      },
-    );
+  it("refuses a settle the chain positively disproves", async () => {
+    const result = await create({
+      settlementVerifier: chainProof(disproven("transfer_below_price")),
+      resourceServer: settledResourceServer(),
+    });
 
     expect(result.status).toBe(503);
     expect(result.body.error).toBe("payment_unconfirmed");
     expect(result.body.reason).toBe("unsettled");
     expect(result.controller.completeIntent).not.toHaveBeenCalled();
-    // The money may exist, so the intent stays claimed for recovery and the
-    // capacity hold stays until its TTL.
+    // The money exists but is not the payment that was asked for, so the intent
+    // stays claimed and the capacity hold stays until its TTL.
+    expect(result.controller.failIntent).not.toHaveBeenCalled();
+    expect(result.controller.releaseCapacity).not.toHaveBeenCalled();
+  });
+
+  it("withholds, rather than refusing, when the nonce is outside the window", async () => {
+    const result = await create({
+      settlementVerifier: chainProof(notFound()),
+      resourceServer: settledResourceServer(),
+    });
+
+    expect(result.status).toBe(503);
+    expect(result.body.error).toBe("payment_unconfirmed");
+    // The nonce may have settled before the window opened, so this is "could not
+    // place the payment", not "the payment failed". A two-hour outage must not
+    // turn into a permanent refusal with no debt recorded.
+    expect(result.body.reason).toBe("unavailable");
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
     expect(result.controller.failIntent).not.toHaveBeenCalled();
     expect(result.controller.releaseCapacity).not.toHaveBeenCalled();
   });
 
   it("refuses when the verifier errors, rather than granting", async () => {
-    const result = await postCreate(
-      () => undefined,
-      {
-        settlementVerifier: {
-          isSettled: async () => {
-            throw new Error("rpc unavailable");
-          },
+    const result = await create({
+      settlementVerifier: {
+        settlementProof: async () => {
+          throw new Error("rpc unavailable");
         },
-        resourceServer: settledResourceServer(),
       },
-    );
+      resourceServer: settledResourceServer(),
+    });
 
     expect(result.status).toBe(503);
     expect(result.body.error).toBe("payment_unconfirmed");
@@ -98,11 +126,52 @@ describe("chain-verified settlement", () => {
     expect(result.controller.completeIntent).not.toHaveBeenCalled();
   });
 
-  it("leaves the mock path unchanged when no verifier is configured", async () => {
+  it("never reaches the chain when the facilitator rejects the payment (F-17 ordering)", async () => {
+    const settlementProof = vi.fn(async () => proven());
+    const settlePayment = vi.fn(async () => ({ success: true }));
     const result = await postCreate(
       () => undefined,
-      { resourceServer: settledResourceServer() },
+      {
+        settlementVerifier: { settlementProof },
+        resourceServer: {
+          verifyPayment: async () => ({ isValid: false, invalidReason: "invalid_signature" }),
+          settlePayment,
+        },
+      },
     );
+
+    expect(result.status).toBe(402);
+    expect(result.body.error).toBe("payment_invalid:invalid_signature");
+    expect(settlePayment).not.toHaveBeenCalled();
+    // The chain answer would be "proven" here. Making it reachable without a
+    // verify that proves this payer's authorisation is what F-17 was about.
+    expect(settlementProof).not.toHaveBeenCalled();
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+  });
+
+  it("never reaches the chain when the verify call throws", async () => {
+    const settlementProof = vi.fn(async () => proven());
+    const result = await postCreate(
+      () => undefined,
+      {
+        settlementVerifier: { settlementProof },
+        resourceServer: {
+          verifyPayment: async () => {
+            throw new Error("facilitator unavailable");
+          },
+          settlePayment: async () => ({ success: true }),
+        },
+      },
+    );
+
+    expect(result.status).toBe(402);
+    expect(result.body.error).toBe("payment_verify_failed");
+    expect(settlementProof).not.toHaveBeenCalled();
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+  });
+
+  it("leaves the mock path unchanged when no verifier is configured", async () => {
+    const result = await create({ resourceServer: settledResourceServer() });
 
     expect(result.status).toBe(201);
     expect(result.controller.completeIntent).toHaveBeenCalledTimes(1);
@@ -122,7 +191,7 @@ describe("chain-verified settlement", () => {
         // The public testnet facilitator exposes no settlement lookup. Before
         // F-10 this was the dead end that answered 409 reconciliation_pending.
         settlementLookup: new UnsupportedSettlementLookup(),
-        settlementVerifier: { isSettled: async () => true },
+        settlementVerifier: chainProof(proven()),
         resourceServer: settledResourceServer(async () => ({
           success: false,
           errorReason: "nonce_already_used",
@@ -141,7 +210,8 @@ describe("chain-verified settlement", () => {
     );
   });
 
-  it("does not recover when the chain says the nonce is unused", async () => {
+  it("does not recover when the chain positively disproves the payment", async () => {
+    const settlementProof = vi.fn(async () => disproven("transfer_to_another_recipient"));
     const result = await postCreate(
       ({ controller }) => {
         controller.claimIntent = vi.fn(async () => ({
@@ -153,7 +223,7 @@ describe("chain-verified settlement", () => {
       },
       {
         settlementLookup: new UnsupportedSettlementLookup(),
-        settlementVerifier: { isSettled: async () => false },
+        settlementVerifier: { settlementProof },
         resourceServer: settledResourceServer(async () => ({
           success: false,
           errorReason: "nonce_already_used",
@@ -166,18 +236,88 @@ describe("chain-verified settlement", () => {
     expect(result.status).toBe(402);
     expect(result.body.error).toBe("payment_settlement_rejected:nonce_already_used");
     expect(result.controller.completeIntent).not.toHaveBeenCalled();
+    // Recovery checks the recovered intent's own terms, not an empty object.
+    expect(settlementProof).toHaveBeenCalledWith(
+      expect.objectContaining({ recipient: result.terms.payTo, amount: result.terms.amount }),
+    );
   });
-  it("completes when the settle answer is lost but the nonce is on chain", async () => {
-    const isSettled = vi.fn(async () => true);
+
+  it("keeps the intent claimed when the nonce is used but the chain cannot place it", async () => {
     const result = await postCreate(
-      () => undefined,
+      ({ controller }) => {
+        controller.claimIntent = vi.fn(async () => ({
+          status: "claimed" as const,
+          recovered: true,
+          token: "t",
+          expiresAt: 1,
+        }));
+      },
       {
-        settlementVerifier: { isSettled },
-        resourceServer: settledResourceServer(async () => {
-          throw new Error("socket hang up");
-        }),
+        // No settlement lookup: the chain is the only source, and it cannot
+        // place a nonce that may have settled outside the window.
+        settlementLookup: new UnsupportedSettlementLookup(),
+        settlementVerifier: chainProof(notFound()),
+        resourceServer: settledResourceServer(async () => ({
+          success: false,
+          errorReason: "nonce_already_used",
+          transaction: "",
+          network: "mock:local",
+        })),
       },
     );
+
+    expect(result.status).toBe(503);
+    expect(result.body.error).toBe("payment_unconfirmed");
+    expect(result.body.reason).toBe("unavailable");
+    expect(result.body.retryable).toBe(true);
+    // A failed intent is invisible to the recovery worker, which only walks
+    // claimed ones, so the debt would never be recorded.
+    expect(result.controller.failIntent).not.toHaveBeenCalled();
+    expect(result.controller.releaseCapacity).not.toHaveBeenCalled();
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+  });
+
+  it("fails the intent when the nonce is used and the chain disproves the transfer", async () => {
+    const result = await postCreate(
+      ({ controller }) => {
+        controller.claimIntent = vi.fn(async () => ({
+          status: "claimed" as const,
+          recovered: true,
+          token: "t",
+          expiresAt: 1,
+        }));
+      },
+      {
+        settlementLookup: new UnsupportedSettlementLookup(),
+        settlementVerifier: chainProof(disproven("transfer_below_price")),
+        resourceServer: settledResourceServer(async () => ({
+          success: false,
+          errorReason: "nonce_already_used",
+          transaction: "",
+          network: "mock:local",
+        })),
+      },
+    );
+
+    // A readable receipt that does not pay this requirement is a real refusal.
+    expect(result.status).toBe(402);
+    expect(result.body.error).toBe("payment_settlement_rejected:nonce_already_used");
+    expect(result.controller.failIntent).toHaveBeenCalledWith(
+      result.paymentKey,
+      "nonce_already_used",
+    );
+    expect(result.controller.releaseCapacity).toHaveBeenCalled();
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+  });
+
+  it("completes when the settle answer is lost but the chain proves the transfer", async () => {
+    const settlementProof = vi.fn(async () => proven());
+    const result = await create({
+      settlementVerifier: { settlementProof },
+      resourceServer: settledResourceServer(async () => {
+        throw new Error("socket hang up");
+      }),
+    });
 
     // No second settle: the chain answers, so the entitlement completes now
     // instead of the client retrying into payment_in_progress.
@@ -190,16 +330,13 @@ describe("chain-verified settlement", () => {
     );
   });
 
-  it("refuses a lost settle the chain has not seen", async () => {
-    const result = await postCreate(
-      () => undefined,
-      {
-        settlementVerifier: { isSettled: async () => false },
-        resourceServer: settledResourceServer(async () => {
-          throw new Error("socket hang up");
-        }),
-      },
-    );
+  it("refuses a lost settle the chain positively disproves", async () => {
+    const result = await create({
+      settlementVerifier: chainProof(disproven("no_matching_transfer")),
+      resourceServer: settledResourceServer(async () => {
+        throw new Error("socket hang up");
+      }),
+    });
 
     expect(result.status).toBe(402);
     expect(result.body.error).toBe("payment_settle_failed");
@@ -209,79 +346,99 @@ describe("chain-verified settlement", () => {
     expect(result.controller.failIntent).not.toHaveBeenCalled();
   });
 
-  it("completes a settlement_pending answer the chain confirms", async () => {
-    const result = await postCreate(
-      () => undefined,
-      {
-        settlementVerifier: { isSettled: async () => true },
-        resourceServer: settledResourceServer(async () => ({
-          success: false,
-          errorReason: "settlement_pending",
-          transaction: "",
-          network: "mock:local",
-        })),
-      },
-    );
+  it("withholds a lost settle whose nonce is outside the window", async () => {
+    const result = await create({
+      settlementVerifier: chainProof(notFound()),
+      resourceServer: settledResourceServer(async () => {
+        throw new Error("socket hang up");
+      }),
+    });
+
+    expect(result.status).toBe(402);
+    expect(result.body.error).toBe("payment_settle_failed");
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+    expect(result.controller.failIntent).not.toHaveBeenCalled();
+  });
+
+  it("completes a settlement_pending answer the chain proves", async () => {
+    const result = await create({
+      settlementVerifier: chainProof(proven()),
+      resourceServer: settledResourceServer(async () => ({
+        success: false,
+        errorReason: "settlement_pending",
+        transaction: "",
+        network: "mock:local",
+      })),
+    });
 
     expect(result.status).toBe(201);
     expect(result.controller.completeIntent).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("USDC authorizationState verifier", () => {
-  const USDC = usdcAddressFor("eip155:8453")!;
-  const AUTHORIZER = "0x1111111111111111111111111111111111111111" as const;
-  const NONCE = `0x${"a".repeat(64)}` as `0x${string}`;
+describe("chain verdict", () => {
+  const payload = { payload: { authorization: { from: AUTHORIZER, nonce: NONCE } } };
+  const terms = { payTo: RECIPIENT, amount: "50000" };
 
-  it("reads authorizationState on the configured USDC contract", async () => {
-    const readContract = vi.fn(async () => true);
-    const verifier = new UsdcAuthorizationStateVerifier({
-      rpcUrl: "https://rpc.invalid",
-      usdcAddress: USDC,
-      readContract,
-    });
-
-    await expect(verifier.isSettled(AUTHORIZER, NONCE)).resolves.toBe(true);
-    expect(readContract).toHaveBeenCalledWith({
-      address: USDC,
-      abi: AUTHORIZATION_STATE_ABI,
-      functionName: "authorizationState",
-      args: [AUTHORIZER, NONCE],
-    });
+  it("is unavailable without a verifier, so callers fall through to the lookup", async () => {
+    await expect(confirmSettledOnChain(undefined, payload, terms)).resolves.toBe("unavailable");
   });
 
-  it("treats an unreadable answer as an error, not as settlement", async () => {
-    const verifier = new UsdcAuthorizationStateVerifier({
-      rpcUrl: "https://rpc.invalid",
-      usdcAddress: USDC,
-      readContract: async () => "0x1",
-    });
-    await expect(verifier.isSettled(AUTHORIZER, NONCE)).rejects.toThrow(/non-boolean/);
+  it("is unavailable when the payload carries no authorizer or nonce", async () => {
+    const settlementProof = vi.fn(async () => proven());
+    await expect(confirmSettledOnChain({ settlementProof }, { payload: {} }, terms)).resolves.toBe(
+      "unavailable",
+    );
+    expect(settlementProof).not.toHaveBeenCalled();
   });
 
-  it("builds no verifier for the mock path and none without an RPC URL", () => {
-    expect(
-      buildSettlementVerifier({ paymentMode: "mock", network: "mock:local" }),
-    ).toBeUndefined();
-    expect(
-      buildSettlementVerifier({ paymentMode: "testnet", network: "eip155:84532" }),
-    ).toBeUndefined();
+  it("is unavailable when the price is not a positive integer", async () => {
+    const settlementProof = vi.fn(async () => proven());
+    for (const amount of ["", "0", "-1", "50000.5", "1e5"]) {
+      await expect(
+        confirmSettledOnChain({ settlementProof }, payload, { payTo: RECIPIENT, amount }),
+      ).resolves.toBe("unavailable");
+    }
+    expect(settlementProof).not.toHaveBeenCalled();
   });
 
-  it("defaults the contract address per network and honours an override", () => {
-    const built = buildSettlementVerifier({
-      paymentMode: "testnet",
-      network: "eip155:84532",
-      paymentRpcUrl: "https://rpc.invalid",
-    });
-    expect(built).toBeInstanceOf(UsdcAuthorizationStateVerifier);
-    expect(
-      buildSettlementVerifier({
-        paymentMode: "testnet",
-        network: "eip155:84532",
-        paymentRpcUrl: "https://rpc.invalid",
-        paymentUsdcAddress: "0x2222222222222222222222222222222222222222",
-      }),
-    ).toBeInstanceOf(UsdcAuthorizationStateVerifier);
+  it("is unavailable when the recipient is not an address", async () => {
+    const settlementProof = vi.fn(async () => proven());
+    await expect(
+      confirmSettledOnChain({ settlementProof }, payload, { payTo: "", amount: "50000" }),
+    ).resolves.toBe("unavailable");
+    expect(settlementProof).not.toHaveBeenCalled();
+  });
+
+  it("is settled only on a proof", async () => {
+    await expect(confirmSettledOnChain(chainProof(proven()), payload, terms)).resolves.toBe(
+      "settled",
+    );
+  });
+
+  it("is unsettled only on a positive disproof", async () => {
+    await expect(
+      confirmSettledOnChain(chainProof(disproven("transfer_below_price")), payload, terms),
+    ).resolves.toBe("unsettled");
+  });
+
+  it("is unavailable, not unsettled, when the nonce is not in the window", async () => {
+    await expect(confirmSettledOnChain(chainProof(notFound()), payload, terms)).resolves.toBe(
+      "unavailable",
+    );
+  });
+
+  it("is unavailable, never settled, when the verifier throws", async () => {
+    await expect(
+      confirmSettledOnChain(
+        {
+          settlementProof: async () => {
+            throw new Error("rpc unavailable");
+          },
+        },
+        payload,
+        terms,
+      ),
+    ).resolves.toBe("unavailable");
   });
 });

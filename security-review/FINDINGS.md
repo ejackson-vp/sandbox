@@ -25,7 +25,7 @@ executed), `theoretical` (no concrete path found).
 | F-14 | Low | reviewed | CodeQL `js/resource-exhaustion` (`registry.ts:181`) | Bounded; residual |
 | F-15 | Medium | code-confirmed | GitHub Actions and base images pinned by tag, not digest/SHA | **Fixed**: every `uses:` is a 40-character SHA and every `FROM` is `@sha256:`; `scripts/check-deploy-pins.mjs` fails CI on drift between the overlay and the release |
 | F-16 | — | reviewed | CodeQL `js/missing-rate-limiting` ×10 on controller/relay `/internal` routes | Fixed by shared TokenBucket; query model gap documented; alerts #217/#218 dismissed as false positive |
-| F-17 | Medium | code-confirmed | The chain verdict proves the EIP-3009 **nonce was used**, not that this amount reached this address. The safety of that rests on an implicit invariant: the chain is only consulted after a successful `verifyPayment` for the same requirement | Accepted with a test gap; see below |
+| F-17 | Medium | proven | The chain verdict proves the EIP-3009 **nonce was used**, not that this amount reached this address. The safety of that rested on an implicit invariant: the chain was only consulted after a successful `verifyPayment` for the same requirement | **Fixed**: the verifier proves the transfer (authorizer, recipient, amount) from the nonce's transaction; residual is the bounded scan window |
 | F-18 | Low | code-confirmed | The runtime-class guard only runs when `EXECUTION_MODE=kata`. A cluster deployed with the default `dev` skips it, and the only signal is the `executionMode` field in the evidence | Accepted (dev is explicit); healthz now reports the resolved handler in every mode |
 | F-19 | Medium | code-confirmed | Background settlement recovery in the controller still uses the facilitator lookup only, so a settled-but-unentitled payment is recorded as debt only if the client retries the create and the API resolves it from the chain | Open; the client-retry path is the gap |
 | F-20 | Medium | code-confirmed | The allowlist is a free tier on the public create path. The credential is a long-lived wallet key held by the agent host that runs model-authored code, so a compromised host gets free sessions until the entry is disabled | Accepted with a tier ceiling and a concurrency cap; see below |
@@ -517,9 +517,20 @@ chosen nonce would entitle a session worth 50,000 units. That is a single
 refactor away from being live: any new caller that consumes the chain verdict
 directly, or a mis-ordered recovery branch, converts it into free sessions.
 
-**Fix applied:** the invariant is now stated at the call site and pinned by a
-test that a chain-used nonce does not grant when verification has not passed for
-that payload.
+**Fix applied:** the verifier no longer reads `authorizationState`. It finds the
+`AuthorizationUsed(authorizer, nonce)` log, reads that transaction's receipt, and
+requires a `Transfer` on the same USDC contract from the authorizer to the
+configured `PAY_TO` for at least the required amount. The call site also states,
+and a test pins, that the chain is never consulted for a payload that failed
+verification. Verdicts are `proven`, `disproven(reason)` and `not-found`, and
+`not-found` is `unavailable` rather than a refusal so the reconciliation window
+stays open.
+
+**Residual:** the scan covers `PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS` (default
+90,000, about 50 hours on Base) in 10,000-block chunks, capped at 12 queries per
+check. A nonce older than the window is `unavailable`, so it withholds rather
+than resolving. The proof has not been exercised against a real provider's
+`eth_getLogs` range cap or a real settle-then-crash.
 
 **Residual:** the controller's background recovery still uses the facilitator
 lookup only (F-19), so the chain answer is not used everywhere it could be.
