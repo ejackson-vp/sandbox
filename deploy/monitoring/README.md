@@ -203,10 +203,12 @@ or both rules match nothing.
 
 **Warm-pool rules are gated on an enabled pool.** `SandboxWarmPoolEmpty` is
 gated on `sum(sandbox_warm_pool_budget) > 0`, so it stays inactive when
-`WARM_POOL_SIZE=0`, the reference deployment's default. The profile rules are
-traffic-gated instead: with the pool disabled, claims record `miss_disabled`, no
-profile has a non-zero target, and none of the expressions match. Enable the
-pool and set `WARM_POOL_BASE_MIN` below `WARM_POOL_SIZE` before relying on them.
+`WARM_POOL_SIZE=0`, which is still the base `deploy/kubernetes` default. The
+Talos overlay enables a 20-pod pool and reserves 16 of those for `base`
+(`deploy/talos/kustomization.yaml`), so the rules are live there. The profile
+rules are traffic-gated instead: with the pool disabled, claims record
+`miss_disabled`, no profile has a non-zero target, and none of the expressions
+match.
 
 **Profile alerts aggregate per profile, not per session.** They are rate- or
 count-based and held for 15 minutes or longer, so one transient `miss_empty`
@@ -343,11 +345,10 @@ are recorded in the private deployment repository.
 
 - **`reconciliation_pending` is approximate** until the API exports a dedicated
   counter (see [Alert caveats](#alert-caveats)).
-- **Warm-pool rules are active only when the pool is enabled.** The reference
-  deployment's default `WARM_POOL_SIZE=0` keeps them quiet.
-  `WARM_POOL_BASE_MIN` defaults to the whole budget, which leaves no headroom
-  for `python` and `node`; set it below `WARM_POOL_SIZE` before expecting
-  profile misses to grow a pool.
+- **Warm-pool rules are active only when the pool is enabled.** The base
+  `deploy/kubernetes` config keeps them quiet with `WARM_POOL_SIZE=0`;
+  `deploy/talos` sets 20 with `WARM_POOL_BASE_MIN=16`, which leaves 4 slots for
+  `python` and `node` to grow into.
 - **Profile alert thresholds are starting points.** The 20% miss ratio, 20-miss
   volume, three blocked growths and five drains per hour are sized for a small
   pool, not derived from capacity.

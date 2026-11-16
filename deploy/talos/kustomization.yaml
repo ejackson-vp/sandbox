@@ -89,8 +89,19 @@ patches:
       - op: replace
         path: /data/GUEST_IMAGE_DIGEST
         value: sha256:eea680fa3401d6e632f7650590c3ab987ceb8270e55252e6bc194b9cd1ff4f06
-      # Keep most of the warm budget on the default profile. Other profiles
-      # start at zero and grow from observed misses into the remaining slots.
+      # The warm pool: 20 idle pods, the shape this directory's README sizes in
+      # section 1.1 against two 13 GiB nodes (20 x 512 MiB limit), and the pool
+      # the performance numbers in the top-level README were measured on.
+      #
+      # Both keys are set here, and WARM_POOL_SIZE must come with the minimum:
+      # the base ships WARM_POOL_SIZE=0, so setting only WARM_POOL_BASE_MIN
+      # leaves 16 > 0 and the controller refuses to start
+      # (controller/src/config/warm-pool.ts). Keep most of the budget on the
+      # default profile; `python` and `node` start at zero and grow from
+      # observed misses into the remaining 4 slots.
+      - op: replace
+        path: /data/WARM_POOL_SIZE
+        value: "20"
       - op: add
         path: /data/WARM_POOL_BASE_MIN
         value: "16"

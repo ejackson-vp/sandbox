@@ -79,7 +79,7 @@ no availability number has ever been computed from data.
 | Operation latency | `sandbox_exec_duration_seconds`, exported but not alerted on | Proposed: p95 < 500 ms | Yes, once: p50 53 ms, p95 108 ms, p99 216 ms (n=50, existing session) |
 | Ledger divergence | `max by (reason) (sandbox_ledger_divergence) > 0` for 1m, `SandboxLedgerDivergence` | 0, no tolerance | Never seen non-zero, because real settlement has never run. Freshness is one `LEDGER_AUDIT_INTERVAL_MS` (300 s default), so a page can lag the event by five minutes |
 | Cleanup progress | `max by (phase) (sandbox_sessions_stale) >= 3` for 15m, `SandboxSessionsStale` | 0 | No |
-| Warm pool health | `SandboxWarmPoolEmpty`, `...MissPressure`, `...SustainedMisses`, `...UnderTarget`, `...BudgetExhausted`, `...DrainThrash` | No sustained cold starts | No, and all six are inactive at the shipped default `WARM_POOL_SIZE=0` |
+| Warm pool health | `SandboxWarmPoolEmpty`, `...MissPressure`, `...SustainedMisses`, `...UnderTarget`, `...BudgetExhausted`, `...DrainThrash` | No sustained cold starts | No. The base config ships `WARM_POOL_SIZE=0` (the Talos overlay runs 20), and none of the six has fired in a recorded run |
 | Egress volume | `sum(increase(sandbox_egress_bytes_total{scope="global"}[1h]))` > 15 GiB, `SandboxEgressBytesNearCap` | 75% of the 20 GiB/h default | No |
 | Egress refusals | `sum by (scope) (increase(sandbox_egress_limit_total[15m])) > 0`, `SandboxEgressLimitRejections` | 0 | No |
 | Target health | `up{job="sandbox-control"} == 0` for 2m, `SandboxMetricsTargetDown` | 1 | Yes in the sense that the series exists; it has never fired in anger |
@@ -135,8 +135,9 @@ What is configured:
 - `GLOBAL_CONCURRENT_SESSIONS=200`, `PAYER_CONCURRENT_SESSIONS=4`,
   `GLOBAL_CREATES_PER_WINDOW=2000` per one-hour window,
   `PAYER_CREATES_PER_WINDOW=60` (`deploy/kubernetes/03-config.yaml`).
-- `WARM_POOL_SIZE=0` in the shipped config, so the warm pool is off by default
-  and the six warm-pool alerts are inactive.
+- `WARM_POOL_SIZE=0` in the base `deploy/kubernetes` config, so the warm pool is
+  off there; the Talos overlay sets 20 with `WARM_POOL_BASE_MIN=16`, where the
+  six warm-pool alerts are live.
 - `MAX_CONCURRENT_PROVISIONING=0`, which means unlimited.
 - `WARM_POOL_TIER=short`, and the short tier is 0.5 vCPU and 512 MiB
   ([resource-model.md](resource-model.md)).
