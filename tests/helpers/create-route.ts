@@ -162,6 +162,14 @@ export async function postCreate(
     commitmentMessage?: (canonical: ClientCommitmentInput) => ClientCommitmentInput;
     /** Price the requirement from the resolved spec, so a tier is really priced. */
     requirementFor?: (priceUsd: string, spec: { tier: string }) => PaymentRequirements;
+    /**
+     * Re-derive the capability an existing session was issued. Only the replay
+     * and idempotent-completion paths call it, and only a test that wants to
+     * name the replayed token should override it: the default is the production
+     * derivation below, which is what makes a replay judged against the real
+     * HMAC.
+     */
+    recoverCapability?: (key: string, commitment: string, storedHash: string) => string | null;
   } = {},
 ): Promise<CreateResult> {
   const account = opts.account ?? privateKeyToAccount(generatePrivateKey());
@@ -255,6 +263,7 @@ export async function postCreate(
     capabilityFor: (key: string, commitment: string) =>
       mintCapability(CAPABILITY_RING.signing, key, commitment),
     recoverCapability: (key: string, commitment: string, storedHash: string) =>
+      opts.recoverCapability?.(key, commitment, storedHash) ??
       recoverCapabilityFromRing(CAPABILITY_RING, key, commitment, storedHash),
     ipCreateLimiter: new TokenBucket(100, 100),
     createLimiter: new TokenBucket(100, 100),
