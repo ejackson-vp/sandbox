@@ -9,6 +9,7 @@
 import type { Express, Request, Response } from "express";
 import { metrics } from "@x402s/shared/runtime";
 import { budgetReserveSchema } from "../control-api-schemas.js";
+import { invalidRequest } from "../routes/errors.js";
 import type { BudgetLimits } from "../store/budget-decision.js";
 import type { ControlApiDeps } from "./types.js";
 
@@ -29,7 +30,7 @@ export function registerBudgetRoutes(app: Express, deps: ControlApiDeps): void {
   app.post("/internal/budgets/reserve", async (req: Request, res: Response) => {
     const parsed = budgetReserveSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const decision = await deps.store.reserveBudgets(

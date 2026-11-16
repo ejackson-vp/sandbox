@@ -3,6 +3,7 @@ import type { Express, Request, Response } from "express";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import { LifecycleError } from "../reconciler.js";
 import { operationSchema, opLabel } from "../control-api-schemas.js";
+import { invalidRequest } from "../routes/errors.js";
 import { describeSession } from "../session-view.js";
 import type { ControlApiDeps } from "./types.js";
 
@@ -85,7 +86,7 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     const id = String(req.params.id ?? "");
     const parsed = operationSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const { requestId, envelope, op } = parsed.data;

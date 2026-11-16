@@ -12,6 +12,7 @@ import { randomBytes } from "node:crypto";
 import type { Express, Request, Response } from "express";
 import { ChallengeNonceCapacityError } from "../store/models/admin.js";
 import { burnChallengeNonceSchema } from "../control-api-schemas.js";
+import { invalidRequest } from "../routes/errors.js";
 import type { ControlApiDeps } from "./types.js";
 
 export function registerChallengeNonceRoutes(app: Express, deps: ControlApiDeps): void {
@@ -43,7 +44,7 @@ export function registerChallengeNonceRoutes(app: Express, deps: ControlApiDeps)
       paymentKey: (req.body ?? {}).paymentKey,
     });
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     res.json(await deps.store.burnChallengeNonce(parsed.data.nonce, parsed.data.paymentKey));
