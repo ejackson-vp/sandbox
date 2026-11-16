@@ -2,12 +2,38 @@
  * Control API request schemas and metric labels.
  */
 import { z } from "zod";
-import { MAX_LEASE_SECONDS } from "@x402s/shared/protocol";
+import {
+  GUEST_REQUEST_OPS,
+  MAX_LEASE_SECONDS,
+  MAX_SESSION_LIFETIME_SECONDS,
+} from "@x402s/shared/protocol";
 
-const OP_LABELS = new Set(["exec", "transfer", "file.put", "file.get", "file.list", "file.stat"]);
-export function opLabel(op: string | undefined): string {
-  return op && OP_LABELS.has(op) ? op : "other";
+/**
+ * The metric label set: exactly the protocol's operation verbs.
+ *
+ * Derived from the union in `shared/src/protocol/operations.ts` so a new op
+ * cannot reach the wire and miss the metric. The old hand-written set named six
+ * verbs, so the main exec path (which sent `op: "operation"`) and sixteen real
+ * ops were counted under a bucket called "other".
+ */
+export const OP_LABELS: ReadonlySet<string> = new Set(GUEST_REQUEST_OPS);
+
+/**
+ * The `op` label for an operation, or `undefined` when no real verb was named.
+ *
+ * There is no "other" bucket on purpose. The public API cannot see the verb:
+ * it travels inside the sealed envelope, which is the product. Every executor
+ * request therefore arrives with no label, and a bucket for it would mean
+ * "unknown" while looking like a measurement. Omitting the dimension instead
+ * keeps the series honest: `sandbox_exec_duration_seconds` without `op` is the
+ * sealed path, and a per-op series only exists for a caller that genuinely
+ * knows the verb (the fault scripts, tests, and any future route where the op
+ * is not secret).
+ */
+export function opLabel(op: string | undefined): string | undefined {
+  return op && OP_LABELS.has(op) ? op : undefined;
 }
+
 const sessionIdPattern = /^sbx_[0-9a-f]{24}$/;
 
 export const intentClaimSchema = z.object({
@@ -74,8 +100,8 @@ export const createSwitchDisableSchema = z.object({
 });
 
 const idlePolicySchema = z.object({
-  maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
-  suspendedDurationSeconds: z.number().int().min(1).max(28800).optional(),
+  maxIdleSeconds: z.number().int().min(1).max(MAX_SESSION_LIFETIME_SECONDS).optional(),
+  suspendedDurationSeconds: z.number().int().min(1).max(MAX_SESSION_LIFETIME_SECONDS).optional(),
   autoResume: z.boolean().optional(),
 });
 
@@ -84,7 +110,7 @@ export const specSchema = z.object({
   runtime: z.enum(["base", "python", "node"]).optional(),
   durationSeconds: z.number().int().min(1).max(MAX_LEASE_SECONDS),
   idlePolicy: idlePolicySchema.optional(),
-  maxLifetimeSeconds: z.number().int().min(1).max(28800).optional(),
+  maxLifetimeSeconds: z.number().int().min(1).max(MAX_SESSION_LIFETIME_SECONDS).optional(),
   baseline: z
     .object({
       cpuMillis: z.number().int().min(50),

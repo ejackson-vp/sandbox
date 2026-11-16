@@ -220,6 +220,46 @@ export type GuestRequest =
   | WsSendOperation
   | WsCloseOperation;
 
+/** One operation verb, as a string a caller can compare against. */
+export type GuestRequestOp = GuestRequest["op"];
+
+/**
+ * Every verb in the union above, as a runtime value.
+ *
+ * Hand-written lists of ops drift: the controller's metric labels named six of
+ * these twenty-two, so the executor path and sixteen real verbs were counted as
+ * "other". This is a mapped type instead, so the compiler refuses both a
+ * missing key and an extra one, and the set cannot disagree with `GuestRequest`.
+ * It is the one source for any bounded enum keyed by op: metric labels, the
+ * control API, diagnostics.
+ */
+const OP_VERBS: { [K in GuestRequest["op"]]: true } = {
+  exec: true,
+  "file.put": true,
+  "file.get": true,
+  "file.list": true,
+  "file.stat": true,
+  "transfer.init": true,
+  "transfer.chunk": true,
+  "transfer.complete": true,
+  "transfer.status": true,
+  "transfer.read": true,
+  "transfer.cancel": true,
+  "service.start": true,
+  "service.stop": true,
+  "service.list": true,
+  "http.request": true,
+  "http.stream.open": true,
+  "http.stream.read": true,
+  "http.stream.close": true,
+  "ws.open": true,
+  "ws.read": true,
+  "ws.send": true,
+  "ws.close": true,
+};
+
+export const GUEST_REQUEST_OPS = Object.keys(OP_VERBS) as readonly GuestRequestOp[];
+
 export interface FileEntry {
   /** Workspace-relative path. */
   path: string;

@@ -32,6 +32,7 @@ const CONFIG = loadControllerConfig({
   PROXY_TOKEN_SECRET: "proxy-secret-0123456789",
   ROLE: "controller",
   KUBERNETES_ENABLED: "false",
+  ALLOW_INSECURE_DEV: "true",
   DATABASE_URL: testDatabaseUrl("integration"),
 });
 

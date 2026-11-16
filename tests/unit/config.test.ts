@@ -212,6 +212,41 @@ describe("production config guards", () => {
   });
 });
 
+describe("insecure dev switch", () => {
+  it("defaults to false, so an omitted variable refuses the unpinned image", () => {
+    // The controller used to default this to true, which made an unpinned tag
+    // and simulated attestation the silent default. Omitting it now demands a
+    // pinned digest.
+    expect(() =>
+      loadControllerConfig({ ...dev, ALLOW_INSECURE_DEV: undefined }),
+    ).toThrow(/ALLOW_INSECURE_DEV/);
+    const cfg = loadControllerConfig({
+      ...dev,
+      ALLOW_INSECURE_DEV: undefined,
+      GUEST_IMAGE_DIGEST: PINNED,
+    });
+    expect(cfg.allowInsecureDev).toBe(false);
+  });
+
+  it("accepts the dev path when it is explicit", () => {
+    expect(loadControllerConfig(dev).allowInsecureDev).toBe(true);
+  });
+
+  it("refuses real payments with the switch on", () => {
+    expect(() =>
+      loadControllerConfig({
+        ...base,
+        PAYMENT_MODE: "mainnet",
+        NETWORK: "eip155:8453",
+        FACILITATOR_URL: "https://facilitator.example",
+        PAYMENT_RPC_URL: "https://mainnet.base.org",
+        GUEST_IMAGE_DIGEST: PINNED,
+        ALLOW_INSECURE_DEV: "true",
+      }),
+    ).toThrow(/PAYMENT_MODE=mainnet requires ALLOW_INSECURE_DEV=false/);
+  });
+});
+
 describe("transport security", () => {
   const files = {
     TLS_CERT_FILE: "/tls/tls.crt",

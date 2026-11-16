@@ -9,6 +9,7 @@
  * workloads are their own files.
  */
 import { describe, expect, it, vi } from "vitest";
+import { MAX_SESSION_LIFETIME_SECONDS } from "../../shared/src/entries/protocol.js";
 import { fakeClient, SESSION_ID, sessionHandle, sessionStatus } from "./helpers/cli.js";
 import { cliFixture } from "./support/cli-commands.js";
 
@@ -69,11 +70,11 @@ describe("create", () => {
     [{ disk: "1Gi" }, { diskMiB: 1024 }],
     [{ "baseline-cpu": "0.25" }, { baselineCpuMillis: 250 }],
     [{ "baseline-memory": "256Mi" }, { baselineMemoryMiB: 256 }],
-    [{ "max-lifetime": "8h" }, { maxLifetimeSeconds: 28800 }],
+    [{ "max-lifetime": "8h" }, { maxLifetimeSeconds: 8 * 60 * 60 }],
     [{ runtime: "python" }, { runtime: "python" }],
     [
       { idle: "5m" },
-      { idlePolicy: { maxIdleSeconds: 300, suspendedDurationSeconds: 28800, autoResume: false } },
+      { idlePolicy: { maxIdleSeconds: 300, suspendedDurationSeconds: MAX_SESSION_LIFETIME_SECONDS, autoResume: false } },
     ],
     [
       { duration: "15m", cpu: "2", memory: "4Gi", idle: "1m", runtime: "node" },
@@ -82,7 +83,7 @@ describe("create", () => {
         durationSeconds: 900,
         cpuMillis: 2000,
         memoryMiB: 4096,
-        idlePolicy: { maxIdleSeconds: 60, suspendedDurationSeconds: 28800, autoResume: false },
+        idlePolicy: { maxIdleSeconds: 60, suspendedDurationSeconds: MAX_SESSION_LIFETIME_SECONDS, autoResume: false },
         runtime: "node",
       },
     ],

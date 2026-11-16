@@ -6,6 +6,7 @@
  * without code changes; hard caps are enforced regardless.
  */
 import { canonicalJson, sha256Hex } from "./crypto.js";
+import { envBool, envInt } from "./env.js";
 import { formatUsd, parseUsdPrice } from "./money.js";
 import { resolveRuntime } from "./runtimes.js";
 import {
@@ -65,23 +66,77 @@ export interface PlatformLimits {
   allowCustom: boolean;
 }
 
-function int(v: string | undefined, def: number): number {
-  if (v === undefined || v === "") return def;
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : def;
+/**
+ * Default, floor and ceiling for every platform knob.
+ *
+ * These are a contract, not tuning constants: `MAX_*` is what bounds a tenant,
+ * so a value outside the band is a configuration mistake and refuses startup
+ * instead of being coerced. A private parser here used to return the default on
+ * junk (`MAX_DISK_MIB=512x` became 8192 MiB, the loosest workspace the code
+ * allows) and `maxCpuMillis` had no ceiling at all, so a typo widened the
+ * tenant boundary rather than failing at boot.
+ *
+ * Each ceiling is a value the rest of the system can honour. A session above 64
+ * vCPU or 256 GiB of memory cannot be scheduled on any node this design
+ * documents (8 vCPU with ~13 GiB allocatable in `deploy/talos/README.md`), and a
+ * workspace above 256 GiB is more than an order of magnitude past the 8 GiB
+ * volume that deployment sizes per session. A per-stream output above 16 MiB
+ * cannot be returned in one API response (`MAX_BODY_BYTES` defaults to 32 MiB
+ * and base64 inflates by 4/3). A command longer than
+ * `MAX_SESSION_LIFETIME_SECONDS` outlives the session it runs in. A 1 GiB file
+ * is the largest single object a workspace of that ceiling should have to hold,
+ * and the process cap is advisory (the pod cgroup's `pids.max` is the
+ * enforcement), so its ceiling only has to be a number a pid table can hold.
+ */
+export interface PlatformLimitBound {
+  def: number;
+  min: number;
+  max: number;
 }
 
+export const PLATFORM_LIMIT_BOUNDS = {
+  maxLeaseSeconds: { def: MAX_LEASE_SECONDS, min: MIN_LEASE_SECONDS, max: MAX_LEASE_SECONDS },
+  maxCpuMillis: { def: 4000, min: 100, max: 64_000 },
+  maxMemoryMiB: { def: 8192, min: 128, max: 262_144 },
+  maxDiskMiB: { def: 8192, min: 16, max: 262_144 },
+  maxOutputBytes: { def: 256 * 1024, min: 1024, max: 16 * 1024 * 1024 },
+  maxFileBytes: { def: 8 * 1024 * 1024, min: 1024, max: 1024 * 1024 * 1024 },
+  maxCommandSeconds: { def: 300, min: 1, max: MAX_SESSION_LIFETIME_SECONDS },
+  maxProcesses: { def: 256, min: 1, max: 65_536 },
+} as const satisfies Record<keyof Omit<PlatformLimits, "allowCustom">, PlatformLimitBound>;
+
+/** The env variable that sets each bound. One name, one parser, one message. */
+const PLATFORM_LIMIT_ENV: Record<keyof typeof PLATFORM_LIMIT_BOUNDS, string> = {
+  maxLeaseSeconds: "MAX_LEASE_SECONDS",
+  maxCpuMillis: "MAX_CPU_MILLIS",
+  maxMemoryMiB: "MAX_MEMORY_MIB",
+  maxDiskMiB: "MAX_DISK_MIB",
+  maxOutputBytes: "MAX_OUTPUT_BYTES",
+  maxFileBytes: "MAX_FILE_BYTES",
+  maxCommandSeconds: "MAX_COMMAND_SECONDS",
+  maxProcesses: "MAX_PROCESSES",
+};
+
 export function loadPlatformLimits(env: NodeJS.ProcessEnv = process.env): PlatformLimits {
+  /** One field, read through its own bounds, so the pair cannot be mixed up. */
+  const read = <K extends keyof typeof PLATFORM_LIMIT_BOUNDS>(field: K): number => {
+    const { def, min, max } = PLATFORM_LIMIT_BOUNDS[field];
+    const name = PLATFORM_LIMIT_ENV[field];
+    return envInt(env[name], def, min, max, name);
+  };
   return {
-    maxLeaseSeconds: Math.min(MAX_LEASE_SECONDS, int(env.MAX_LEASE_SECONDS, MAX_LEASE_SECONDS)),
-    maxCpuMillis: int(env.MAX_CPU_MILLIS, 4000),
-    maxMemoryMiB: int(env.MAX_MEMORY_MIB, 8192),
-    maxDiskMiB: int(env.MAX_DISK_MIB, 8192),
-    maxOutputBytes: int(env.MAX_OUTPUT_BYTES, 256 * 1024),
-    maxFileBytes: int(env.MAX_FILE_BYTES, 8 * 1024 * 1024),
-    maxCommandSeconds: int(env.MAX_COMMAND_SECONDS, 300),
-    maxProcesses: int(env.MAX_PROCESSES, 256),
-    allowCustom: (env.ALLOW_CUSTOM_DURATIONS ?? "true").toLowerCase() !== "false",
+    maxLeaseSeconds: read("maxLeaseSeconds"),
+    maxCpuMillis: read("maxCpuMillis"),
+    maxMemoryMiB: read("maxMemoryMiB"),
+    maxDiskMiB: read("maxDiskMiB"),
+    maxOutputBytes: read("maxOutputBytes"),
+    maxFileBytes: read("maxFileBytes"),
+    maxCommandSeconds: read("maxCommandSeconds"),
+    maxProcesses: read("maxProcesses"),
+    // Custom sessions used to be enabled by anything except the exact string
+    // "false", so `ALLOW_CUSTOM_DURATIONS=flase` turned them on. envBool reads
+    // an unrecognised value as false, which is the fail-closed direction.
+    allowCustom: envBool(env.ALLOW_CUSTOM_DURATIONS, true),
   };
 }
 
@@ -219,13 +274,17 @@ export function resolveSessionSpec(
     const maxIdleSeconds = Math.trunc(req.idlePolicy.maxIdleSeconds ?? 300);
     const suspendedDurationSeconds = Math.trunc(req.idlePolicy.suspendedDurationSeconds ?? MAX_SESSION_LIFETIME_SECONDS);
     if (maxIdleSeconds < 1 || maxIdleSeconds > MAX_SESSION_LIFETIME_SECONDS) {
-      return { ok: false, code: "invalid_idle_policy", message: "maxIdleSeconds must be between 1 and 28800" };
+      return {
+        ok: false,
+        code: "invalid_idle_policy",
+        message: `maxIdleSeconds must be between 1 and ${MAX_SESSION_LIFETIME_SECONDS}`,
+      };
     }
     if (suspendedDurationSeconds < 1 || suspendedDurationSeconds > MAX_SESSION_LIFETIME_SECONDS) {
       return {
         ok: false,
         code: "invalid_idle_policy",
-        message: "suspendedDurationSeconds must be between 1 and 28800",
+        message: `suspendedDurationSeconds must be between 1 and ${MAX_SESSION_LIFETIME_SECONDS}`,
       };
     }
     idlePolicy = {

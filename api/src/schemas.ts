@@ -3,7 +3,7 @@
  */
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { MAX_LEASE_SECONDS } from "@x402s/shared/protocol";
+import { MAX_LEASE_SECONDS, MAX_SESSION_LIFETIME_SECONDS } from "@x402s/shared/protocol";
 
 
 export const createSchema = z.object({
@@ -28,12 +28,12 @@ export const createSchema = z.object({
   baselineMemoryMiB: z.number().int().min(64).optional(),
   idlePolicy: z
     .object({
-      maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
-      suspendedDurationSeconds: z.number().int().min(1).max(28800).optional(),
+      maxIdleSeconds: z.number().int().min(1).max(MAX_SESSION_LIFETIME_SECONDS).optional(),
+      suspendedDurationSeconds: z.number().int().min(1).max(MAX_SESSION_LIFETIME_SECONDS).optional(),
       autoResume: z.boolean().optional(),
     })
     .optional(),
-  maxLifetimeSeconds: z.number().int().min(1).max(28800).optional(),
+  maxLifetimeSeconds: z.number().int().min(1).max(MAX_SESSION_LIFETIME_SECONDS).optional(),
 });
 
 export const requestIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/);

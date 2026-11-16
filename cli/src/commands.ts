@@ -16,6 +16,7 @@ import {
   type SessionHandle,
   type SessionTier,
 } from "@x402s/sdk";
+import { MAX_SESSION_LIFETIME_SECONDS } from "@x402s/shared/protocol";
 
 export const HELP = `x402 sandbox sessions
 
@@ -130,7 +131,10 @@ function parseCreateOptions(values: CommandContext["values"]): CreateOptions {
       ? {
           idlePolicy: {
             maxIdleSeconds: parseDuration(values.idle as string) ?? 300,
-            suspendedDurationSeconds: 28800,
+            // A parked session lives as long as the platform allows: the CLI
+            // has no flag for this, and the server validates the value against
+            // the same constant, so a raised cap must not need a CLI release.
+            suspendedDurationSeconds: MAX_SESSION_LIFETIME_SECONDS,
             autoResume: false,
           },
         }

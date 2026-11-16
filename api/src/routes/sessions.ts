@@ -172,7 +172,9 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       const out = await deps.controller.operation(session.sessionId, {
         requestId: parsed.data.requestId,
         envelope: parsed.data.envelope,
-        op: "operation",
+        // No `op`: the verb is inside the envelope and this process cannot open
+        // it. Sending a placeholder would label the controller's histogram with
+        // a bucket that means "unknown" (see `opLabel` in the controller).
         waitMs,
         ...(parsed.data.payloadHash ? { payloadHash: parsed.data.payloadHash } : {}),
       });
@@ -232,7 +234,9 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       const out = await deps.controller.operation(session.sessionId, {
         requestId,
         envelope,
-        op: "file.get",
+        // This path carries get, list and stat inside the same envelope, so
+        // naming one of them would mislabel the other two; the controller omits
+        // the `op` dimension when no real verb is known.
         waitMs: 60_000,
         ...(payloadHash ? { payloadHash } : {}),
       });

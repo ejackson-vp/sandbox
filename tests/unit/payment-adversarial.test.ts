@@ -535,11 +535,20 @@ describe("attack 8: configuration that would enable it", () => {
   const mainnet = {
     ...base,
     PAYMENT_MODE: "mainnet",
+    // Real money and the dev switch are mutually exclusive, so a mainnet case
+    // turns it off; the pair itself is the first thing below.
+    ALLOW_INSECURE_DEV: "false",
     NETWORK: "eip155:8453",
     PAY_TO: "0x1111111111111111111111111111111111111111",
     FACILITATOR_URL: "https://facilitator.example.test",
     PAYMENT_RPC_URL: "https://mainnet.base.org",
   };
+
+  it("refuses real payments while the insecure dev switch is on", () => {
+    expect(() => loadConfig({ ...mainnet, ALLOW_INSECURE_DEV: "true" })).toThrow(
+      /PAYMENT_MODE=mainnet requires ALLOW_INSECURE_DEV=false/,
+    );
+  });
 
   it("refuses mainnet with the mock PAY_TO", () => {
     expect(() =>

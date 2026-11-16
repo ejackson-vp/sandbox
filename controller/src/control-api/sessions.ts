@@ -91,13 +91,19 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     const { requestId, envelope, op } = parsed.data;
     const operationStarted = Date.now();
     res.on("finish", () => {
+      // `op` is only present when the caller names a real protocol verb. The
+      // public API forwards the verb inside the envelope it cannot open, so the
+      // normal request here carries no label; see `opLabel`. A missing
+      // dimension is the honest record, and it keeps the cardinality at the
+      // protocol set rather than one bucket for everything unknowable.
       const label = opLabel(op);
+      const opLabels: Record<string, string> = label ? { op: label } : {};
       metrics
         .histogram("sandbox_exec_duration_seconds", "Operation duration (controller view)", LATENCY_BUCKETS)
-        .observe((Date.now() - operationStarted) / 1000, { op: label });
+        .observe((Date.now() - operationStarted) / 1000, opLabels);
       metrics
         .counter("sandbox_exec_total", "Operations by result")
-        .inc({ op: label, result: res.statusCode < 300 ? (res.statusCode === 202 ? "pending" : "ok") : "error" });
+        .inc({ ...opLabels, result: res.statusCode < 300 ? (res.statusCode === 202 ? "pending" : "ok") : "error" });
     });
 
     const session = await store.getSession(id);

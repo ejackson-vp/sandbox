@@ -387,6 +387,11 @@ export class ControllerClient {
     body: {
       requestId: string;
       envelope: string;
+      /**
+       * The operation verb, when the caller genuinely knows it. The sealed
+       * executor routes omit it: the verb is inside the envelope, and the
+       * controller's metric labels only accept a real protocol op.
+       */
       op?: string;
       waitMs?: number;
       /** Client-computed canonical operation hash; see `operationSchema`. */
