@@ -2,7 +2,7 @@
  * Control API request schemas and metric labels.
  */
 import { z } from "zod";
-import { MAX_LEASE_SECONDS } from "@x402s/shared/protocol";
+import { MAX_LEASE_SECONDS, MAX_SESSION_LIFETIME_SECONDS } from "@x402s/shared/protocol";
 
 const OP_LABELS = new Set(["exec", "transfer", "file.put", "file.get", "file.list", "file.stat"]);
 export function opLabel(op: string | undefined): string {
@@ -74,8 +74,8 @@ export const createSwitchDisableSchema = z.object({
 });
 
 const idlePolicySchema = z.object({
-  maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
-  suspendedDurationSeconds: z.number().int().min(1).max(28800).optional(),
+  maxIdleSeconds: z.number().int().min(1).max(MAX_SESSION_LIFETIME_SECONDS).optional(),
+  suspendedDurationSeconds: z.number().int().min(1).max(MAX_SESSION_LIFETIME_SECONDS).optional(),
   autoResume: z.boolean().optional(),
 });
 
@@ -84,7 +84,7 @@ export const specSchema = z.object({
   runtime: z.enum(["base", "python", "node"]).optional(),
   durationSeconds: z.number().int().min(1).max(MAX_LEASE_SECONDS),
   idlePolicy: idlePolicySchema.optional(),
-  maxLifetimeSeconds: z.number().int().min(1).max(28800).optional(),
+  maxLifetimeSeconds: z.number().int().min(1).max(MAX_SESSION_LIFETIME_SECONDS).optional(),
   baseline: z
     .object({
       cpuMillis: z.number().int().min(50),

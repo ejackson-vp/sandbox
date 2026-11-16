@@ -274,13 +274,17 @@ export function resolveSessionSpec(
     const maxIdleSeconds = Math.trunc(req.idlePolicy.maxIdleSeconds ?? 300);
     const suspendedDurationSeconds = Math.trunc(req.idlePolicy.suspendedDurationSeconds ?? MAX_SESSION_LIFETIME_SECONDS);
     if (maxIdleSeconds < 1 || maxIdleSeconds > MAX_SESSION_LIFETIME_SECONDS) {
-      return { ok: false, code: "invalid_idle_policy", message: "maxIdleSeconds must be between 1 and 28800" };
+      return {
+        ok: false,
+        code: "invalid_idle_policy",
+        message: `maxIdleSeconds must be between 1 and ${MAX_SESSION_LIFETIME_SECONDS}`,
+      };
     }
     if (suspendedDurationSeconds < 1 || suspendedDurationSeconds > MAX_SESSION_LIFETIME_SECONDS) {
       return {
         ok: false,
         code: "invalid_idle_policy",
-        message: "suspendedDurationSeconds must be between 1 and 28800",
+        message: `suspendedDurationSeconds must be between 1 and ${MAX_SESSION_LIFETIME_SECONDS}`,
       };
     }
     idlePolicy = {
