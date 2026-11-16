@@ -5,12 +5,12 @@ import type {
   IntentCompletion,
   PaymentIntentStatus,
   SessionSpec,
-  SessionState,
 } from "@x402s/shared/protocol";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { log, metrics } from "@x402s/shared/runtime";
 import { isHeldBy } from "@x402s/shared/durable";
 import { DuplicateEntitlementError, LedgerSettledError, PaymentAlreadyRedeemedError, PaymentClaimLostError, type LedgerStatus } from "../store/models/money.js";
+import { SessionRecord } from "../store/models/session.js";
 import { completeSchema, intentClaimSchema } from "../control-api-schemas.js";
 import { invalidRequest } from "../routes/errors.js";
 import { describeSession } from "../session-view.js";
@@ -198,8 +198,9 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
           ...(body.payment.label ? { label: body.payment.label } : {}),
           ...(body.payment.budgetKey ? { budgetKey: body.payment.budgetKey } : {}),
         },
-        {
+        SessionRecord.newPaidEntitlement({
           id: body.sessionId,
+          paymentKey,
           capabilityHash: body.capabilityHash,
           capabilityExpiresAt: body.capabilityExpiresAt,
           clientPublicKey: body.clientPublicKey,
@@ -208,40 +209,14 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
           tier: spec.tier,
           durationSeconds: spec.durationSeconds,
           limits: spec.limits,
-          state: "PAID" as SessionState,
-          createdAt: now,
-          paidAt: now,
-          readyAt: null,
-          leaseExpiresAt: null,
-          terminatingAt: null,
-          destroyedAt: null,
-          terminationReason: null,
-          failureCode: null,
-          failureMessage: null,
-          attestationJson: null,
-          guestPublicKey: null,
-          paymentKey,
-          podName: null,
+          runtime: spec.runtime,
           runtimeClass: cfg.runtimeClass,
           executionMode: cfg.executionMode,
-          runtime: spec.runtime,
-          relayTokenHash: null,
-          activeRequestId: null,
-          execEpoch: 1,
-          relayPurgedAt: null,
-          destroyRequested: 0,
-          timingsJson: null,
-          idlePolicyJson: spec.idlePolicy ? JSON.stringify(spec.idlePolicy) : null,
+          now,
+          idlePolicy: spec.idlePolicy ?? null,
           maxLifetimeSeconds: spec.maxLifetimeSeconds ?? null,
-          baselineCpuMillis: spec.baseline?.cpuMillis ?? null,
-          baselineMemoryMib: spec.baseline?.memoryMiB ?? null,
-          nodeName: null,
-          suspendedAt: null,
-          resumeCount: 0,
-          lastActivityAt: null,
-          workspacePvc: null,
-          updatedAt: now,
-        },
+          baseline: spec.baseline ?? null,
+        }),
       );
       if (completed.created) {
         if (body.timings) {

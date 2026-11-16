@@ -7,7 +7,13 @@
  * `@x402s/shared/protocol`, including the SQL `IN` bodies generated from it.
  */
 import { DEFAULT_RUNTIME, type RuntimeName } from "@x402s/shared/runtimes";
-import type { SessionLimits, SessionState, SessionTier } from "@x402s/shared/protocol";
+import type {
+  IdlePolicy,
+  SessionBaseline,
+  SessionLimits,
+  SessionState,
+  SessionTier,
+} from "@x402s/shared/protocol";
 
 export type { SessionState };
 
@@ -62,6 +68,97 @@ export interface SessionRecord {
   nodeName: string | null;
   updatedAt: number;
 }
+
+/**
+ * Everything a fresh entitlement knows. The caller states the facts it was
+ * given; every field whose value is an invariant of "newly paid" is set by the
+ * factory below, not by the caller.
+ */
+export interface NewPaidEntitlementInput {
+  id: string;
+  paymentKey: string;
+  capabilityHash: string;
+  capabilityExpiresAt: number;
+  clientPublicKey: string;
+  clientNonce: string;
+  clientSigner?: string | null;
+  tier: SessionTier;
+  durationSeconds: number;
+  limits: SessionLimits;
+  runtime: RuntimeName;
+  /** Isolation handler the controller verified at startup. */
+  runtimeClass: string | null;
+  executionMode: string | null;
+  /** Clock for `createdAt`, `paidAt`, `updatedAt` and the initial activity mark. */
+  now: number;
+  idlePolicy?: IdlePolicy | null;
+  maxLifetimeSeconds?: number | null;
+  baseline?: SessionBaseline | null;
+}
+
+/**
+ * The one construction site for a newly paid row.
+ *
+ * The route that settles a payment and the adapter that inserts the row are
+ * two different modules, and the column list is a third. The fields below are
+ * identical on every fresh entitlement, and they are the ones a transition
+ * reads before anything else: `execEpoch` fences relay work, `destroyRequested`
+ * and `resumeCount` are counters a resumed or destroyed session must not
+ * inherit, and the nulls are what distinguish "not started yet" from "started
+ * and lost". Setting them here means a new column or a changed initial value is
+ * one edit, not five.
+ */
+export const SessionRecord = {
+  newPaidEntitlement(input: NewPaidEntitlementInput): SessionRecord {
+    return {
+      id: input.id,
+      capabilityHash: input.capabilityHash,
+      capabilityExpiresAt: input.capabilityExpiresAt,
+      clientPublicKey: input.clientPublicKey,
+      clientNonce: input.clientNonce,
+      clientSigner: input.clientSigner ?? null,
+      tier: input.tier,
+      durationSeconds: input.durationSeconds,
+      limits: input.limits,
+      state: "PAID",
+      createdAt: input.now,
+      paidAt: input.now,
+      readyAt: null,
+      leaseExpiresAt: null,
+      terminatingAt: null,
+      destroyedAt: null,
+      terminationReason: null,
+      failureCode: null,
+      failureMessage: null,
+      attestationJson: null,
+      guestPublicKey: null,
+      paymentKey: input.paymentKey,
+      podName: null,
+      runtimeClass: input.runtimeClass,
+      executionMode: input.executionMode,
+      runtime: input.runtime,
+      relayTokenHash: null,
+      activeRequestId: null,
+      execEpoch: 1,
+      relayPurgedAt: null,
+      destroyRequested: 0,
+      timingsJson: null,
+      idlePolicyJson: input.idlePolicy ? JSON.stringify(input.idlePolicy) : null,
+      maxLifetimeSeconds: input.maxLifetimeSeconds ?? null,
+      suspendedAt: null,
+      resumeCount: 0,
+      // The adapter used to substitute `createdAt` for a null activity mark, so
+      // that is the value the row has always held. Stating it here makes the
+      // record and the row agree, and keeps the idle clock honest.
+      lastActivityAt: input.now,
+      workspacePvc: null,
+      baselineCpuMillis: input.baseline?.cpuMillis ?? null,
+      baselineMemoryMib: input.baseline?.memoryMiB ?? null,
+      nodeName: null,
+      updatedAt: input.now,
+    };
+  },
+};
 
 export const SESSION_COLUMNS = `
   id, capability_hash, capability_expires_at, client_public_key, client_nonce, client_signer,
