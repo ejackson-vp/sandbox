@@ -186,8 +186,13 @@ cleanup_probe
 
 # --- the suite -------------------------------------------------------------
 
+# `--config vitest.security.config.ts` on purpose. The root config's globalSetup
+# refuses to start without Postgres and its per-test timeout is 60 s; this suite
+# touches no database and every case waits on a real packet, so the root config
+# failed a correctly built cluster before the first probe ran. `make
+# security-network` has always used this config; the gate now matches it.
 GUEST_BINARY="${GUEST_BINARY:-$PWD/guest/bin/x402-guest}" \
-  npx vitest run tests/security \
+  npx vitest run --config vitest.security.config.ts tests/security \
     --reporter=default \
     --reporter=junit \
     --outputFile.junit="$ARTIFACTS/junit.xml" \
@@ -248,6 +253,19 @@ fi
 
 record_commit="${GITHUB_SHA:-local}"
 record_run="${GITHUB_RUN_ID:-local}"
+
+# What the cluster actually ran, as opposed to what the release intended to
+# promote. The expected digests above are an assertion about the tested images;
+# these are read from the objects that served the traffic, so the artifact says
+# which of the two a failure belonged to.
+observed_control_image="$(kubectl_do -n "$NAMESPACE" get deploy api -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+observed_control_id="$(kubectl_do -n "$NAMESPACE" get pods -l app=api -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || true)"
+observed_guest_image="$(kubectl_do -n "$NAMESPACE" get configmap control-config -o jsonpath='{.data.GUEST_IMAGE}' 2>/dev/null || true)"
+observed_guest_digest="$(kubectl_do -n "$NAMESPACE" get configmap control-config -o jsonpath='{.data.GUEST_IMAGE_DIGEST}' 2>/dev/null || true)"
+observed_guest_id="$(kubectl_do -n sandbox-workloads get pods -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || true)"
+summary "- Observed control: \`${observed_control_image:-unknown}\` (${observed_control_id:-no imageID})"
+summary "- Observed guest: \`${observed_guest_image:-unknown}@${observed_guest_digest:-unknown}\` (${observed_guest_id:-no imageID})"
+
 if ! node - "$ARTIFACTS/tested-images.json" <<NODE
 const { writeFileSync } = require("node:fs");
 writeFileSync(
@@ -259,6 +277,14 @@ writeFileSync(
       images: {
         control: { local: ${CONTROL_IMG@Q}, expected: ${EXPECT_CONTROL_IMAGE@Q}, digest: ${EXPECT_CONTROL_DIGEST@Q} },
         guest: { local: ${GUEST_IMG@Q}, expected: ${EXPECT_GUEST_IMAGE@Q}, digest: ${EXPECT_GUEST_DIGEST@Q} },
+      },
+      observed: {
+        control: { image: ${observed_control_image@Q}, imageId: ${observed_control_id@Q} },
+        guest: {
+          image: ${observed_guest_image@Q},
+          digest: ${observed_guest_digest@Q},
+          podImageId: ${observed_guest_id@Q},
+        },
       },
       suite: "tests/security",
       commit: ${record_commit@Q},

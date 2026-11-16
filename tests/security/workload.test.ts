@@ -19,7 +19,7 @@ import { join } from "node:path";
 import type { SessionStatus } from "../../shared/src/entries/protocol.js";
 import { SandboxClient, FileSessionStore } from "../../sdk/src/index.js";
 import { createSessionPayment, requestChallenge } from "../helpers/x402.js";
-import { clusterAvailable, deleteQuietly, kubectl, kubectlJson, kubectlTry } from "./kubectl.js";
+import { clusterAvailable, deleteQuietly, deployConfig, kubectl, kubectlJson, kubectlTry } from "./kubectl.js";
 
 const API = process.env.API_URL ?? "http://localhost:8080";
 
@@ -144,8 +144,12 @@ describe.skipIf(!available)("workload hardening (real cluster)", () => {
 
     const container = spec.containers[0];
     // The cluster must run the digest the controller verified, never a floating
-    // tag. #4/#49 close the moved-tag window; this assertion enforces it.
-    expect(container.image).toMatch(/^x402-sandbox\/guest@sha256:[0-9a-f]{64}$/);
+    // tag. #4/#49 close the moved-tag window; this assertion enforces it, and
+    // compares against the deployment's own pinned reference rather than the
+    // kind default repository (`x402-sandbox/guest` vs a released
+    // `ghcr.io/…/sandbox-guest`).
+    expect(container.image).toMatch(/@sha256:[0-9a-f]{64}$/);
+    expect(container.image).toBe(configuredGuestImageRef());
     expect(container.securityContext.privileged).toBe(false);
     expect(container.securityContext.allowPrivilegeEscalation).toBe(false);
     expect(container.securityContext.readOnlyRootFilesystem).toBe(true);
@@ -450,6 +454,19 @@ spec:
     expect(wrongCap.status).toBe(404);
   }, 180_000);
 });
+
+/**
+ * The image reference the deployment pins, from the controller's ConfigMap.
+ *
+ * Mirrors `imageRefFor` in `controller/src/runtime-profiles.ts`: a configured
+ * digest wins over a tag, so the pod must carry `repo@sha256:…` for whichever
+ * repository this deployment was built from.
+ */
+function configuredGuestImageRef(): string {
+  const image = deployConfig("GUEST_IMAGE");
+  const digest = deployConfig("GUEST_IMAGE_DIGEST");
+  return /^sha256:[0-9a-f]{64}$/.test(digest) ? `${image.replace(/:[^/:]+$/, "")}@${digest}` : image;
+}
 
 function storeSessionsFor(sessionId: string): number {
   const pods = kubectl([

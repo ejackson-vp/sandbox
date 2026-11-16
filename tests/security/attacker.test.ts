@@ -33,7 +33,7 @@ import { join } from "node:path";
 import { FileSessionStore, SandboxClient, type SessionHandle } from "../../sdk/src/index.js";
 import { mintProxyToken } from "../../controller/src/tokens.js";
 import { dataPlaneShard } from "../../controller/src/data-plane-shard.js";
-import { applyYaml, clusterAvailable, deleteQuietly, kubectl } from "./kubectl.js";
+import { applyYaml, clusterAvailable, deleteQuietly, kubectl, serviceEndpoint } from "./kubectl.js";
 import { probePod, runProbes, type ProbeCase } from "./probe.js";
 import {
   API,
@@ -313,15 +313,7 @@ describe.skipIf(!available)("anonymous attacker (real cluster)", () => {
       "--timeout=180s",
     ]);
 
-    const proxyIp = kubectl([
-      "-n",
-      "sandbox-system",
-      "get",
-      "svc",
-      "egress-proxy",
-      "-o",
-      "jsonpath={.spec.clusterIP}",
-    ]);
+    const proxyIp = serviceEndpoint("egress-proxy");
     const nodeIp = kubectl([
       "get",
       "nodes",

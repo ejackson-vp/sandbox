@@ -12,24 +12,14 @@
 import http from "node:http";
 import net from "node:net";
 import { spawn } from "node:child_process";
-import { TcpRouter } from "../helpers/tcp-router.js";
-import { CONTEXT, kubectl } from "./kubectl.js";
+import { CONTEXT, deployConfig } from "./kubectl.js";
 
 export const API = process.env.API_URL ?? "http://localhost:8080";
 export const API_URL = new URL(API);
 
-/** A value the deployment was configured with, read from the live ConfigMap. */
-export function deployConfig(key: string): string {
-  return kubectl([
-    "-n",
-    "sandbox-system",
-    "get",
-    "configmap",
-    "control-config",
-    "-o",
-    `jsonpath={.data.${key}}`,
-  ]).trim();
-}
+// `deployConfig` lives with the other cluster reads now that the workload suite
+// needs the same value; re-exported so this file's importers are unchanged.
+export { deployConfig };
 
 /** The payment mode the deployed API advertises, or "" when it is unreachable. */
 export async function apiHealth(): Promise<{ ok: boolean; paymentMode: string } | null> {
@@ -75,19 +65,19 @@ export function randomBase64(): string {
 }
 
 /**
- * A single forwarding hop in front of the API: one client path, many
- * connections, which is what a NAT or a reverse proxy looks like from the
- * server. `TcpRouter` is the existing test helper for exactly that.
+ * The single path the client already uses to reach the API.
+ *
+ * `API` is reached through one forwarding hop in every deployment: a kind port
+ * mapping, a `kubectl port-forward`, or the public tunnel. A second listener on
+ * this machine adds nothing to the property under test (the limiter keys on one
+ * peer either way) and cannot carry the burst: macOS caps the accept queue at
+ * 128 (`kern.ipc.somaxconn`), so a 180-connection burst to a local Node listener
+ * is reset before the API is involved (measured: 52/180 `ECONNRESET`, exactly
+ * 128 accepted, for HTTP and raw TCP alike). That reset is the runner, and it
+ * made this case report a forwarder failure instead of the limiter's answer.
  */
 export async function singlePathProxy(): Promise<{ url: string; close(): Promise<void> }> {
-  const router = new TcpRouter();
-  const upstream = Number(API_URL.port || (API_URL.protocol === "https:" ? 443 : 80));
-  router.setUpstream(upstream);
-  const port = await router.listen();
-  return {
-    url: `${API_URL.protocol}//127.0.0.1:${port}`,
-    close: () => router.close(),
-  };
+  return { url: API, close: async () => undefined };
 }
 
 /**

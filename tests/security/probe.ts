@@ -31,6 +31,18 @@ export interface ProbeOutcome {
   ms: number;
 }
 
+/**
+ * The guest image the probe pod runs.
+ *
+ * The default is the local kind tag, so `make up && make security-test` is
+ * unchanged. A cluster that pulls a released, digest-pinned image cannot pull
+ * `x402-sandbox/guest:dev` (it is not in any registry), and the probe would sit
+ * in ImagePullBackOff instead of testing a boundary. `PROBE_IMAGE`, or
+ * `GUEST_IMAGE` (the variable the controller and `scripts/isolation-gate.sh`
+ * already read), points the probe at the image actually under test.
+ */
+export const PROBE_IMAGE = process.env.PROBE_IMAGE ?? process.env.GUEST_IMAGE ?? "x402-sandbox/guest:dev";
+
 /** A guest container with the production RuntimeClass and no extra privilege. */
 export function probePod(name: string): string {
   return `
@@ -52,7 +64,7 @@ spec:
   securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
   containers:
     - name: probe
-      image: x402-sandbox/guest:dev
+      image: ${PROBE_IMAGE}
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-c", "sleep 900"]
       securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
