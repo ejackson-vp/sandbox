@@ -19,7 +19,7 @@ import type { KubeConfig } from "@kubernetes/client-node";
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadControllerConfig, makeProvisioner, makeRelayClient, verifyRuntimeClass, type ControllerConfig, type RuntimeClassCheck } from "./config.js";
-import { openStore } from "./store-backend.js";
+import { PostgresStore } from "./store/postgres/store.js";
 import type { StoreBackend } from "./store/backend.js";
 import { createControlApi } from "./control-api.js";
 import { createRelay, notifyControllerReady, type RelayServer } from "./relay.js";
@@ -137,7 +137,17 @@ export async function start(): Promise<ControllerProcess> {
   const leadership: Leadership = cfg.leaderElection
     ? makeLeaseLeadership(cfg)
     : new SoloLeadership(cfg.leaderIdentity);
-  const store: StoreBackend = await openStore(cfg, { writer: leadership.isLeader() });
+  // Postgres is the only store backend. It is opened here, not behind a
+  // factory: the composition root is the only place that knows the adapter, and
+  // a module wrapping one constructor call only hid which database this process
+  // talks to. `DATABASE_URL` is required, and config parsing has already refused
+  // a config without it. The `writer` argument is the leadership decision: a
+  // replica without the lease opens read-only, which on Postgres means it takes
+  // no advisory lock and migrates nothing.
+  const store: StoreBackend = await PostgresStore.open(cfg.databaseUrl, {
+    writer: leadership.isLeader(),
+    budgetWindowMs: cfg.budgetWindowMs,
+  });
   // Periodic, not a scrape-time read: the audit scans `payment_intents`, which
   // cost about 1.3 s per scrape at 10M intents on every replica. The sampler
   // reads on its own timer and the scrape renders the last sample plus its age,
