@@ -17,6 +17,10 @@
  *    code. Response bodies are parsed for the protocol's own refusal fields
  *    (`isValid`, `success`, `errorReason`) and never quoted into a log line or
  *    an exception, because a facilitator echo can contain the payment payload.
+ *  - **A retry is jittered.** Verify and supported are retried by every API
+ *    replica at once when a facilitator is down, so the delay is sampled from
+ *    `[0, min(cap, base * 2 ** n)]` rather than nailed to the closed form. See
+ *    `@x402s/shared/runtime`'s `backoffMs`.
  *
  * The wire contract is x402 v2: `POST {base}/verify` and `POST {base}/settle`
  * with `{ x402Version, paymentPayload, paymentRequirements }`. The CDP
@@ -33,7 +37,7 @@ import type {
   VerifyResponse,
 } from "@x402/core/types";
 import { z } from "zod";
-import { log } from "@x402s/shared/runtime";
+import { backoffMs, log } from "@x402s/shared/runtime";
 import type { ApiConfig } from "../config.js";
 import {
   cdpFacilitatorAuth,
@@ -93,14 +97,23 @@ export interface FacilitatorClientOptions {
   /** Retries for `verify` and `getSupported` only. Settle is never retried. */
   retries?: number;
   retryBaseMs?: number;
+  /**
+   * Ceiling on the retry delay. The loop had none: with the default two
+   * retries the delay is 200ms and 400ms, so this only bites when an operator
+   * raises `retries`.
+   */
+  retryMaxMs?: number;
   /** Test seams. */
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
+  /** Uniform source for the retry jitter. Defaults to `Math.random`. */
+  random?: () => number;
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_RETRIES = 2;
 const DEFAULT_RETRY_BASE_MS = 200;
+const DEFAULT_RETRY_MAX_MS = 5_000;
 /** A control-plane body is small; anything larger is not a facilitator answer. */
 const MAX_BODY_BYTES = 256 * 1024;
 
@@ -115,8 +128,10 @@ export class X402FacilitatorClient implements FacilitatorClient {
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly retryBaseMs: number;
+  private readonly retryMaxMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: (() => number) | undefined;
 
   constructor(options: FacilitatorClientOptions) {
     // Trailing slashes are trimmed with a loop, not `/\/+$/`: a regex over an
@@ -129,8 +144,10 @@ export class X402FacilitatorClient implements FacilitatorClient {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retries = options.retries ?? DEFAULT_RETRIES;
     this.retryBaseMs = options.retryBaseMs ?? DEFAULT_RETRY_BASE_MS;
+    this.retryMaxMs = options.retryMaxMs ?? DEFAULT_RETRY_MAX_MS;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.sleep = options.sleep ?? ((ms) => delay(ms));
+    this.random = options.random;
   }
 
   async verify(
@@ -212,7 +229,16 @@ export class X402FacilitatorClient implements FacilitatorClient {
     let lastError: unknown;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (attempt > 0) {
-        await this.sleep(this.retryBaseMs * 2 ** (attempt - 1));
+        // Jittered: every API replica restarts against the same facilitator, so
+        // an unjittered retry sends the whole fleet back in one wave while it is
+        // still failing. The ceiling is new: the loop had none.
+        await this.sleep(
+          backoffMs(
+            { baseDelayMs: this.retryBaseMs, maxDelayMs: this.retryMaxMs },
+            attempt - 1,
+            this.random ? { random: this.random } : {},
+          ),
+        );
       }
       const url = new URL(`${this.baseUrl}/${operation}`);
       // `supported` is a read: x402 v2 serves it as `GET`, and both the mock

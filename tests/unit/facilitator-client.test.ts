@@ -162,6 +162,29 @@ describe("facilitator client", () => {
     expect(running.requests).toHaveLength(3);
   });
 
+  it("samples the retry delay under the ceiling instead of nailing it", async () => {
+    // Every API replica restarts against the same facilitator, so the delay has
+    // to move: this asserts the loop really consumes the sampled value, and
+    // that a raised retry count cannot walk past the ceiling.
+    const sleeps: number[] = [];
+    running = await fakeFacilitator((_req, res) => json(res, 503, { error: "busy" }));
+    const client = new X402FacilitatorClient({
+      baseUrl: running.url,
+      retries: 3,
+      retryBaseMs: 1_000,
+      retryMaxMs: 2_000,
+      random: () => 0.5,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    await expect(client.verify(PAYLOAD, REQUIREMENTS)).rejects.toBeInstanceOf(FacilitatorError);
+    // Ceilings 1000, 2000, 4000 clamped to 2000; half of each at the 0.5 sample.
+    expect(sleeps).toEqual([500, 1_000, 1_000]);
+    expect(running.requests).toHaveLength(4);
+  });
+
   it("recovers a 5xx verify on the retry", async () => {
     let calls = 0;
     running = await fakeFacilitator((_req, res) => {
