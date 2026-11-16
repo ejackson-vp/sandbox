@@ -7,7 +7,7 @@
  * against the session row, and a token signed by a retired key id is refused
  * before that compare so retiring a key takes effect immediately.
  */
-import type { Request, Response } from "express";
+import type { Request, RequestHandler, Response } from "express";
 import { ringAcceptsToken, safeEqualHex, sha256Hex } from "@x402s/shared/crypto";
 import { log, recordAuthFailure, recordRateLimited } from "@x402s/shared/runtime";
 import type { ApiConfig } from "../../config.js";
@@ -22,15 +22,33 @@ export interface SessionsDeps {
 /** Resolves the session behind the capability, or writes the refusal and returns null. */
 export type Authorizer = (req: Request, res: Response) => Promise<SessionView | null>;
 
-export function createAuthorizer(deps: SessionsDeps): Authorizer {
+/**
+ * The read limit for the whole session surface, as middleware.
+ *
+ * It was the first lines of `createAuthorizer`, which meant the limit was a
+ * convention inside a helper: invisible at the mount site, and invisible to a
+ * reviewer asking "is this route limited?". Mounted once on the router it is
+ * true for every route by construction, including ones added later, and it is
+ * the shape a reader and a static analyser both look for.
+ */
+export function createReadLimit(deps: SessionsDeps): RequestHandler {
   const readLimiter = new RateLimiter(deps.config.readRateBurst, deps.config.readRateRefill);
-
-  return async (req, res) => {
+  return (req, res, next) => {
     if (!readLimiter.take(req.ip ?? "unknown")) {
       recordRateLimited("read");
+      // The header, not a body field: the SDK reads Retry-After off a failed
+      // transport call, and the body shape is asserted by the admission tests.
+      const key = req.ip ?? "unknown";
+      res.setHeader("Retry-After", String(readLimiter.retryAfterSeconds(key)));
       res.status(429).json({ error: "rate_limited" });
-      return null;
+      return;
     }
+    next();
+  };
+}
+
+export function createAuthorizer(deps: SessionsDeps): Authorizer {
+  return async (req, res) => {
     const capability = readCapability(req, res);
     if (capability === null) return null;
     const session = await loadSession(deps.controller, req, res);

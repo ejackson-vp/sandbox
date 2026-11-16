@@ -8,7 +8,7 @@
  * three shared answers live in `./sessions/respond.ts`.
  */
 import express from "express";
-import { createAuthorizer, type SessionsDeps } from "./sessions/authorize.js";
+import { createAuthorizer, createReadLimit, type SessionsDeps } from "./sessions/authorize.js";
 import { mountLifecycleRoutes } from "./sessions/lifecycle.js";
 import { mountOperationRoutes } from "./sessions/operations.js";
 import { mountRequestRoutes } from "./sessions/requests.js";
@@ -16,6 +16,8 @@ import { mountStatusRoutes } from "./sessions/status.js";
 
 export function createSessionsRouter(deps: SessionsDeps): express.Router {
   const router = express.Router();
+  // Before every route, so a route added later cannot forget it.
+  router.use(createReadLimit(deps));
   const authorize = createAuthorizer(deps);
   mountStatusRoutes(router, authorize);
   mountOperationRoutes(router, deps, authorize);
