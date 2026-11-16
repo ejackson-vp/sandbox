@@ -11,6 +11,7 @@ import type {
   ExecRequestRecord,
   IntentAttribution,
   IntentClaimResult,
+  IssuedChallengeNonce,
   LedgerStatus,
   PaymentIntentRecord,
   PaymentLedgerRecord,
@@ -253,7 +254,7 @@ export interface ControlApiStore {
     nonce: string,
     ttlMs: number,
     maxActive: number,
-  ): Promise<{ nonce: string; expiresAt: number }>;
+  ): Promise<IssuedChallengeNonce>;
   burnChallengeNonce(nonce: string, paymentKey: string): Promise<ChallengeBurnResult>;
   /** Durable per-payer and global create budget (#48). */
   reserveBudgets(

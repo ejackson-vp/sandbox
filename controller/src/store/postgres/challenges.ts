@@ -17,6 +17,7 @@
 import {
   ChallengeNonceCapacityError,
   type ChallengeBurnResult,
+  type IssuedChallengeNonce,
 } from "../models/admin.js";
 import type { PgConnection } from "./pg.js";
 
@@ -39,7 +40,7 @@ export class PgChallengeNonceRepository {
     now: number,
     ttlMs: number,
     maxActive: number,
-  ): Promise<{ nonce: string; expiresAt: number }> {
+  ): Promise<IssuedChallengeNonce> {
     await this.maybePrune(now);
     const expiresAt = now + ttlMs;
     if (maxActive > 0) {

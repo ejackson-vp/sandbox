@@ -20,10 +20,11 @@ import { formatUsd } from "@x402s/shared/money";
 import type {
   CreateSessionRequest,
   CreateSessionResponse,
+  IntentCompletion,
   SessionSpec,
 } from "@x402s/shared/protocol";
 import { log, metrics } from "@x402s/shared/runtime";
-import { ControllerError, type IntentCompletion } from "../controller-client.js";
+import { ControllerError } from "../controller-client.js";
 import { createResponseFrom } from "../status.js";
 import {
   json,
@@ -166,7 +167,10 @@ export async function completeEntitlement(
     // controllers fold the view into the completion; older ones need the
     // lookup.
     const winner =
-      completion.session ?? (await deps.controller.getSession(completion.sessionId).catch(() => null));
+      completion.session ??
+      (completion.sessionId
+        ? await deps.controller.getSession(completion.sessionId).catch(() => null)
+        : null);
     if (!winner) {
       log.error("entitlement_missing_after_idempotent_completion", {
         sessionId: completion.sessionId,

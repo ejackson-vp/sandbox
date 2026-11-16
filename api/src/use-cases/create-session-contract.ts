@@ -14,10 +14,11 @@ import type { PaymentRequirements } from "@x402/core/types";
 import type { decodePaymentSignatureHeader } from "@x402/core/http";
 import type { x402ResourceServer } from "@x402/core/server";
 import type { CreateSessionRequest, SessionSpec } from "@x402s/shared/protocol";
+import type { CapacityDecision } from "@x402s/shared/protocol";
 import type { SettlementLookup } from "@x402s/shared/runtime";
 import type { RateLimiter } from "../admission.js";
 import type { ApiConfig } from "../config.js";
-import type { CapacityDecision, ControllerClient, SessionView } from "../controller-client.js";
+import type { ControllerClient, SessionView } from "../controller-client.js";
 import type { ChainSettlementVerifier } from "@x402s/shared/settlement";
 import { createResponseFrom } from "../status.js";
 

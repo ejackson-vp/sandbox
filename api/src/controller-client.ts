@@ -5,7 +5,15 @@
 import { readFileSync } from "node:fs";
 import { Agent, fetch as undiciFetch } from "undici";
 import type {
+  AllowlistDecision,
+  BudgetDecision,
+  CapacityDecision,
+  ChallengeBurnResult,
+  CreateSwitchState,
   EntitlementRequest,
+  IntentClaimResult,
+  IntentCompletion,
+  IssuedChallengeNonce,
   SessionSpec,
   SessionState,
   SessionTier,
@@ -33,80 +41,6 @@ export class ControllerError extends Error {
   }
 }
 
-type IntentClaim =
-  | { status: "claimed"; recovered: boolean; token: string; expiresAt: number }
-  | { status: "settled"; sessionId: string }
-  | { status: "in_progress" }
-  | { status: "failed"; reason?: string }
-  | { status: "mismatch" };
-
-/** Server-issued single-use challenge value (#47). */
-interface ChallengeNonce {
-  nonce: string;
-  expiresAt: number;
-}
-
-/**
- * Why a nonce burn did not succeed. Mirrors the controller's
- * `ChallengeBurnResult`; declared here because the API does not import the
- * controller workspace.
- */
-type ChallengeBurnStatus = "burned" | "replay" | "expired" | "unknown" | "reused";
-
-/**
- * Durable create-budget decision (#48). Mirrors the controller's
- * `BudgetDecision`; the API does not import the controller workspace.
- */
-interface BudgetRemaining {
-  payerCreates: number | null;
-  payerSpend: string | null;
-  /** null means unlimited (the corresponding limit is 0). */
-  payerConcurrent: number | null;
-  globalCreates: number;
-  globalConcurrent: number | null;
-}
-
-export type BudgetDecision =
-  | { ok: true; remaining: BudgetRemaining; windowResetsAt: number }
-  | {
-      ok: false;
-      scope: string;
-      retryAfterSeconds: number;
-      remaining: BudgetRemaining;
-      windowResetsAt: number;
-    };
-
-/**
- * The allowlist answer (ADR 0013). Mirrors the controller's `AllowlistDecision`;
- * the API does not import the controller workspace.
- */
-export type AllowlistDecision =
-  | { allowed: true; label: string; maxTier: SessionTier; maxConcurrent: number }
-  | { allowed: false; reason: string };
-
-/**
- * The create kill switch (schema v21). Mirrors the controller's
- * `CreateSwitchState`; `enabled` is already the effective answer, expiry
- * included.
- */
-export interface CreateSwitchStatus {
-  enabled: boolean;
-  reason: string;
-  actor: string;
-  changedAt: number | null;
-  expiresAt: number | null;
-  expired: boolean;
-}
-
-export type CapacityDecision =
-  | { admitted: true; nodeId: string; reservation: { nodeId: string } }
-  | {
-      admitted: false;
-      reason: string;
-      retryable: boolean;
-      requested: { cpuMillicores: number; memoryBytes: number; storageBytes: number };
-    };
-
 interface CompleteIntentBody extends EntitlementRequest {
   /** Ownership token returned by the intent claim; required to settle. */
   claimToken: string;
@@ -116,18 +50,6 @@ interface CompleteIntentBody extends EntitlementRequest {
     paymentSettleMs?: number;
     entitlementMs?: number;
   };
-}
-
-export interface IntentCompletion {
-  sessionId: string;
-  state: SessionState;
-  created?: boolean;
-  /**
-   * Controller session view folded into the completion. Present on newer
-   * controllers; absent on older ones, which keeps the API's fallback
-   * `getSession` working.
-   */
-  session?: ControllerSessionView;
 }
 
 export class ControllerClient {
@@ -243,18 +165,22 @@ export class ControllerClient {
      * without the API's request (F-19).
      */
     attribution?: { authorizer?: string; settlementNonce?: string | null },
-  ): Promise<IntentClaim> {
+  ): Promise<IntentClaimResult> {
     const res = await this.raw("/internal/payment-intents/claim", {
       method: "POST",
       body: JSON.stringify({ paymentKey, specHash, staleMs, requirements, ...attribution }),
     });
     // A body of literal `null` is valid JSON, so `.catch` does not catch it and
     // `body.status` would throw a TypeError instead of a ControllerError.
-    const body = ((await res.json().catch(() => ({}))) ?? {}) as IntentClaim & { status?: string };
-    if (res.ok) return body as IntentClaim;
+    const body = ((await res.json().catch(() => ({}))) ?? {}) as IntentClaimResult & {
+      status?: string;
+    };
+    if (res.ok) return body as IntentClaimResult;
     if (res.status === 409) {
       if (body.status === "in_progress") return { status: "in_progress" };
-      if (body.status === "failed") return { status: "failed", reason: (body as { reason?: string }).reason };
+      if (body.status === "failed") {
+        return { status: "failed", reason: (body as { reason?: string | null }).reason ?? null };
+      }
       if (body.status === "mismatch") return { status: "mismatch" };
     }
     throw new ControllerError(res.status, "intent_claim_failed", `intent claim failed (${res.status})`, body);
@@ -317,8 +243,8 @@ export class ControllerClient {
    * should refuse for rather than wait on. A missing or malformed answer throws
    * `ControllerError`, and the caller fails closed.
    */
-  async readCreateSwitch(): Promise<CreateSwitchStatus> {
-    const answer = await this.call<{ switch?: CreateSwitchStatus }>(
+  async readCreateSwitch(): Promise<CreateSwitchState> {
+    const answer = await this.call<{ switch?: CreateSwitchState }>(
       "/internal/create-switch",
       {},
       5_000,
@@ -337,8 +263,8 @@ export class ControllerClient {
   /* ---------------- challenge nonces (#47) ---------------- */
 
   /** Mint the single-use value that goes into the 402 challenge. */
-  async issueChallengeNonce(): Promise<ChallengeNonce> {
-    return this.call<ChallengeNonce>("/internal/challenge-nonces", {
+  async issueChallengeNonce(): Promise<IssuedChallengeNonce> {
+    return this.call<IssuedChallengeNonce>("/internal/challenge-nonces", {
       method: "POST",
       body: JSON.stringify({}),
     }, 5_000);
@@ -349,8 +275,8 @@ export class ControllerClient {
    * it is the crash-recovery retry. A transport failure is surfaced so the
    * caller can refuse rather than accept an unproven freshness value.
    */
-  async burnChallengeNonce(nonce: string, paymentKey: string): Promise<{ status: ChallengeBurnStatus }> {
-    return this.call<{ status: ChallengeBurnStatus }>(
+  async burnChallengeNonce(nonce: string, paymentKey: string): Promise<ChallengeBurnResult> {
+    return this.call<ChallengeBurnResult>(
       `/internal/challenge-nonces/${encodeURIComponent(nonce)}/burn`,
       { method: "POST", body: JSON.stringify({ paymentKey }) },
       5_000,

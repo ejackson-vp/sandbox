@@ -1,13 +1,15 @@
 /**
  * Capacity vocabulary. All quantities are integers: millicores, bytes and
  * epoch milliseconds. No floats, no Kubernetes objects, no I/O.
+ *
+ * `ResourceVector` and `AdmissionRejectionReason` are the shared declarations:
+ * they cross the internal surface, where the API parses a refusal's `reason`
+ * and forwards it, so a new member has to be classified there before it can be
+ * emitted here.
  */
+import type { AdmissionRejectionReason, ResourceVector } from "@x402s/shared/protocol";
 
-export interface ResourceVector {
-  cpuMillicores: number;
-  memoryBytes: number;
-  storageBytes: number;
-}
+export type { AdmissionRejectionReason, ResourceVector };
 
 export const ZERO_RESOURCES: ResourceVector = {
   cpuMillicores: 0,
@@ -133,16 +135,7 @@ export interface SandboxResourceRequest {
   tolerations?: readonly string[];
 }
 
-export type AdmissionRejectionReason =
-  | "invalid_request"
-  | "no_nodes"
-  | "no_eligible_nodes"
-  | "node_affinity_unavailable"
-  | "insufficient_cpu"
-  | "insufficient_memory"
-  | "insufficient_storage"
-  | "runtime_profile_unavailable";
-
+/** The plan the scheduler admitted against; the API only needs the node. */
 interface ReservationPlan {
   nodeId: string;
   baseline: ResourceVector;

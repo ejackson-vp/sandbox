@@ -6,6 +6,7 @@ import express, { type Request, type Response } from "express";
 import { z } from "zod";
 import { specSchema } from "../control-api-schemas.js";
 import type { CapacityService } from "./service.js";
+import { toCapacityDecision } from "./wire.js";
 
 export function createCapacityRouter(capacity: CapacityService): express.Router {
   const router = express.Router();
@@ -21,7 +22,7 @@ export function createCapacityRouter(capacity: CapacityService): express.Router 
       res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
       return;
     }
-    res.json(await capacity.preflight(parsed.data.spec));
+    res.json(toCapacityDecision(await capacity.preflight(parsed.data.spec)));
   });
 
   router.post("/capacity/holds", async (req: Request, res: Response) => {
@@ -35,7 +36,7 @@ export function createCapacityRouter(capacity: CapacityService): express.Router 
       parsed.data.specHash,
       parsed.data.spec,
     );
-    res.status(admission.admitted ? 200 : 409).json(admission);
+    res.status(admission.admitted ? 200 : 409).json(toCapacityDecision(admission));
   });
 
   router.delete("/capacity/holds/:paymentKey", (req: Request, res: Response) => {

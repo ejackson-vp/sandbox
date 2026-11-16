@@ -17,9 +17,8 @@
  * path; only an affirmative answer from the controller grants.
  */
 import { sha256Hex } from "@x402s/shared/crypto";
-import type { SessionSpec } from "@x402s/shared/protocol";
+import type { AllowlistDecision, SessionSpec } from "@x402s/shared/protocol";
 import { log, metrics } from "@x402s/shared/runtime";
-import type { AllowlistDecision } from "../controller-client.js";
 import {
   admissionUnavailable,
   type CreateSessionResult,
