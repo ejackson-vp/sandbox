@@ -1,10 +1,13 @@
 /**
  * The create kill switch, as the API sees it (schema v21).
  *
- * This is the first thing the create use case does, before the spec is priced,
+ * This runs once the body has been validated, and before the price is built,
  * before a challenge is issued, before any capacity hold, intent claim or
- * settlement. Two reasons for that position:
+ * settlement. That position is deliberate:
  *
+ *  - a request that is wrong gets its 400 whatever the switch says. Refusing a
+ *    malformed body with "try again shortly" would be a lie, and it hides the
+ *    client's bug behind an operator's incident;
  *  - a caller must not be charged for a create the operator has stopped, and
  *    must not be handed a 402 challenge its payment cannot be used against, so
  *    the refusal has to precede both;

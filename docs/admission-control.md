@@ -175,10 +175,13 @@ process. The controller owns it (`create_switch`, schema v21, one row pinned to
 `id = 1`); the API reads it over `GET /internal/create-switch` before it does any
 payment or capacity work, so there is no second copy to go stale.
 
-**What a refusal looks like.** The create use case checks the switch first, before
-the spec is priced, before a 402 challenge is minted, before any capacity hold,
-intent claim or settlement. A caller is neither charged nor handed a challenge
-its payment could never be used against:
+**What a refusal looks like.** The request is validated before the switch is
+read: a body that could never succeed is a `400` while the switch is on, off or
+unreadable, because answering "try again later" to a request that is itself wrong
+would be a lie. Once the body is valid, the switch is checked before the price is
+built, before a 402 challenge is minted, before any capacity hold, intent claim or
+settlement. A caller is neither charged nor handed a challenge its payment could
+never be used against:
 
 ```json
 { "error": "creates_disabled", "retryable": true,

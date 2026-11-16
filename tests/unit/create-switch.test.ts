@@ -15,6 +15,11 @@
  *    admitting creates while the store holding the switch is unreachable is the
  *    failure this control exists to prevent.
  *
+ * The order is pinned too: the request is validated before the switch is read,
+ * so a body that could never succeed is a `400` whether the switch is on, off or
+ * unreadable. Telling a caller to retry later when the request itself is wrong is
+ * the dishonest answer.
+ *
  * The live-session half is in this file too, because "creates are off" must not
  * be confused with "the service is off": an existing session still executes.
  */
@@ -44,6 +49,20 @@ function switchOn(reason = REASON) {
     expired: false,
   };
 }
+
+/**
+ * Bodies that must be a `400` whatever the switch says.
+ *
+ * Two layers, both exercised: `tier: 42` never reaches the use case because the
+ * route's schema refuses it, and `durationSeconds: 60` on a `standard` tier
+ * parses but is refused by spec resolution inside the use case. The second one
+ * is the regression this file pins: it used to be answered with the switch's
+ * 503.
+ */
+const MALFORMED_BODIES: ReadonlyArray<Record<string, unknown>> = [
+  { tier: 42 },
+  { durationSeconds: 60 },
+];
 
 /** A facilitator that works, so a refusal is the switch's doing. */
 const settledResourceServer = {
@@ -121,6 +140,46 @@ describe("create kill switch", () => {
 
     expect(result.body).toMatchObject({ message: CREATES_DISABLED_MESSAGE });
     expect(CREATES_DISABLED_MESSAGE).toContain("existing sessions are unaffected");
+  });
+
+  it("answers a malformed body with 400 while the switch is on", async () => {
+    for (const malformed of MALFORMED_BODIES) {
+      const result = await postCreate(
+        ({ controller, body }) => {
+          controller.readCreateSwitch = vi.fn(async () => switchOn());
+          Object.assign(body, malformed);
+        },
+        { resourceServer: settledResourceServer },
+      );
+
+      expect(result.status).toBe(400);
+      // Validation comes first, so the switch is not even consulted.
+      expect(result.controller.readCreateSwitch).not.toHaveBeenCalled();
+      // And nothing that could move money or capacity ran.
+      expect(result.controller.holdCapacity).not.toHaveBeenCalled();
+      expect(result.controller.claimIntent).not.toHaveBeenCalled();
+      expect(result.controller.completeIntent).not.toHaveBeenCalled();
+      expect(result.payment402).not.toHaveBeenCalled();
+    }
+  });
+
+  it("answers a malformed body with 400 even when the switch cannot be read", async () => {
+    const result = await postCreate(
+      ({ controller, body }) => {
+        controller.readCreateSwitch = vi.fn(async () => {
+          throw new Error("store unavailable");
+        });
+        body.durationSeconds = 60;
+      },
+      { resourceServer: settledResourceServer },
+    );
+
+    // The request's own fault, not an outage: 400, not a retry-later 503.
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: "tier_duration_mismatch" });
+    expect(result.controller.readCreateSwitch).not.toHaveBeenCalled();
+    expect(result.controller.holdCapacity).not.toHaveBeenCalled();
+    expect(result.payment402).not.toHaveBeenCalled();
   });
 
   it("admits the normal paid path when the switch is off", async () => {
