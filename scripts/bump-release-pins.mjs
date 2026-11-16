@@ -42,7 +42,7 @@ import {
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const USAGE = [
   "usage: node scripts/bump-release-pins.mjs --version X.Y.Z --guest-digest sha256:<64 hex>",
-  "         [--profile-digest name=sha256:<64 hex> ...] [--root <dir>]",
+  "         [--guest-version X.Y.Z] [--profile-digest name=sha256:<64 hex> ...] [--root <dir>]",
 ].join("\n");
 
 /**
@@ -50,8 +50,24 @@ const USAGE = [
  * file, returns the new text, so the failure modes are unit-testable without a
  * checkout or a filesystem.
  */
-export function bumpReleasePins({ overlay, map, kyverno, version, guestDigest, profileDigests }) {
+export function bumpReleasePins({
+  overlay,
+  map,
+  kyverno,
+  version,
+  guestVersion = null,
+  guestDigest,
+  profileDigests,
+}) {
   const release = tagVersion(version);
+  // The guest may lag by one release and normally does. A guest image stamps
+  // the commit it was built from into a label, so the digest of the release
+  // being cut cannot exist until after the commit that pins it, and a tree can
+  // never contain its own digest. `--guest-version` names the guest that was
+  // actually promoted, which on a control-only release is the previous one.
+  const guestRelease = guestVersion === null || guestVersion === undefined
+    ? release
+    : tagVersion(guestVersion);
   const digests = normaliseProfileDigests(profileDigests);
   if (!DIGEST.test(String(guestDigest ?? ""))) {
     throw new Error(`guest digest ${guestDigest} is not a sha256:<64 hex> digest`);
@@ -79,7 +95,7 @@ export function bumpReleasePins({ overlay, map, kyverno, version, guestDigest, p
   }
 
   const guestImage = withoutTag(current.guestImage);
-  const overlayWithImages = setGuestImage(overlay, guestImage, release);
+  const overlayWithImages = setGuestImage(overlay, guestImage, guestRelease);
   const overlayWithDigest = setGuestDigest(overlayWithImages, guestDigest);
   const overlayWithProfiles = setProfileDigests(overlayWithDigest, current.profiles, digests);
   const nextOverlay = setControlTag(overlayWithProfiles, release);
@@ -94,7 +110,7 @@ export function bumpReleasePins({ overlay, map, kyverno, version, guestDigest, p
         ...(currentMap.talos ?? {}),
         release,
         control: release,
-        guest: release,
+        guest: guestRelease,
         guestDigest,
         profiles: Object.fromEntries(profileNames.map((name) => [name, digests[name]])),
       },
@@ -104,7 +120,7 @@ export function bumpReleasePins({ overlay, map, kyverno, version, guestDigest, p
   ).concat("\n");
 
   const nextKyverno = setAllowlist(kyverno, {
-    release,
+    release: guestRelease,
     guestImage,
     guestDigest,
     profileNames,
@@ -148,9 +164,9 @@ export function bumpTree(root, options) {
   return JSON.parse(bumped.map).talos;
 }
 
-/** `--version`, `--guest-digest`, repeated `--profile-digest`, optional `--root`. */
+/** `--version`, `--guest-digest`, optional `--guest-version`, repeated `--profile-digest`, `--root`. */
 export function parseBumpArgs(argv) {
-  const options = { version: null, guestDigest: null, profileDigests: {}, root: DEFAULT_ROOT };
+  const options = { version: null, guestVersion: null, guestDigest: null, profileDigests: {}, root: DEFAULT_ROOT };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const take = (name) => {
@@ -163,6 +179,10 @@ export function parseBumpArgs(argv) {
       options.version = take(arg);
     } else if (arg.startsWith("--version=")) {
       options.version = arg.slice("--version=".length);
+    } else if (arg === "--guest-version") {
+      options.guestVersion = take(arg);
+    } else if (arg.startsWith("--guest-version=")) {
+      options.guestVersion = arg.slice("--guest-version=".length);
     } else if (arg === "--guest-digest") {
       options.guestDigest = take(arg);
     } else if (arg.startsWith("--guest-digest=")) {

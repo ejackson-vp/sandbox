@@ -267,6 +267,24 @@ describe("bumpReleasePins", () => {
     });
   }
 
+  it("pins a lagging guest when --guest-version names the promoted one", () => {
+    // A guest image stamps its build commit into a label, so the digest of the
+    // release being cut cannot exist until after the commit that pins it. A
+    // control-only release therefore names the guest that was actually
+    // promoted, and the map must say so rather than claim the new release.
+    const bumped = bump({ guestVersion: "0.1.30" });
+    const talos = parseTalos(bumped.overlay);
+    const map = JSON.parse(bumped.map).talos;
+
+    expect(talos.controlTag).toBe("0.1.31");
+    expect(talos.guestTag).toBe("0.1.30");
+    expect(talos.guestDigest).toBe(NEXT);
+    expect(map).toMatchObject({ release: "0.1.31", control: "0.1.31", guest: "0.1.30" });
+    // Still refuses a guest from the future, which is the failure the check
+    // exists for.
+    expect(() => bump({ guestVersion: "0.1.32" })).toThrow(/ahead of/);
+  });
+
   it("moves the overlay, the release map and the allowlist to one release", () => {
     const bumped = bump();
     const talos = parseTalos(bumped.overlay);
