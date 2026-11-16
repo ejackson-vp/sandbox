@@ -151,6 +151,7 @@ spec:
       # hold the old pod (and its stale admin connections) open for the default
       # 30s during a replacement.
       terminationGracePeriodSeconds: 10
+      priorityClassName: sandbox-critical
       enableServiceLinks: false
       automountServiceAccountToken: false
       nodeSelector:

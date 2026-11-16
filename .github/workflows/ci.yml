@@ -412,7 +412,11 @@ jobs:
             exit 0
           fi
 
-          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          # No `--depth` here: the checkout already has full history, and a
+          # shallow fetch of the base branch removes the merge base that the
+          # three-dot diff needs. That failed every branch the moment `main`
+          # moved ahead of it.
+          git fetch --no-tags origin "${BASE_REF}"
           changed="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
           matched="$(printf '%s\n' "${changed}" | grep -E "${pattern}" || true)"
 

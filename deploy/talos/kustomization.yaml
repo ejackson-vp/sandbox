@@ -1,9 +1,9 @@
-# Talos overlay — the homelab deployment.
+# Talos overlay — the reference deployment.
 #
 #   kubectl kustomize deploy/talos   # render
 #
-# In the homelab this path is reconciled by Flux (apps/sandbox/release.yaml),
-# not applied by hand.
+# In a Flux-managed deployment this path is reconciled from a private
+# repository, not applied by hand.
 #
 # Builds on deploy/kata (microVM isolation) and adds what a real, non-kind
 # cluster needs: published images, a real guest image reference, and the public

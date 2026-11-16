@@ -74,9 +74,9 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   const app = express();
   app.disable("x-powered-by");
   // 0 = off. Set to 1 only where the API is reachable through exactly one
-  // reverse proxy (the homelab's Tailscale L7 proxy), so `req.ip` is the real
-  // client instead of the proxy pod — otherwise every remote client shares one
-  // per-IP limiter bucket.
+  // reverse proxy (the reference deployment's Tailscale L7 proxy), so `req.ip`
+  // is the real client instead of the proxy pod — otherwise every remote
+  // client shares one per-IP limiter bucket.
   app.set("trust proxy", config.trustProxyHops > 0 ? config.trustProxyHops : false);
 
   const settlementLookup: SettlementLookup =

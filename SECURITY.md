@@ -33,7 +33,7 @@ Out of scope:
 - findings that require cluster-admin or node compromise; on Talos that is
   equivalent to cluster compromise and is documented in
   [security-guarantees.md](docs/security-guarantees.md)
-- denial of service against a single-operator homelab deployment
+- denial of service against a single-operator deployment
 
 ## Safe harbour
 

@@ -1,0 +1,44 @@
+# Priority classes for a shared cluster.
+#
+# A two-node deployment runs sandboxes on the same nodes as etcd, Postgres and
+# the control plane, because there is nowhere else to put them. That makes one
+# question load-bearing: when a node runs out of memory, which pod loses?
+#
+# Without a class, everything is priority 0 and the kubelet resolves pressure by
+# QoS and by usage relative to request. A guest that balloons to its 512 MiB
+# limit can therefore cause an eviction that lands anywhere, including on
+# Postgres or the controller.
+#
+# Two classes make that ordering explicit:
+#
+#   sandbox-critical  Postgres, the API, the controller, the relay, the egress
+#                     proxy and the facilitator. These may preempt a tenant.
+#   sandbox-tenant    Every sandbox and warm-pool pod. Negative, so a tenant is
+#                     always the first thing evicted or preempted, never the last.
+#
+# etcd and the apiserver are static pods and are not scheduled through these
+# classes. Protecting them is a kubelet reservation question (`systemReserved`,
+# `evictionHard`), not a PriorityClass one, and is documented in
+# deploy/talos/README.md.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: sandbox-critical
+value: 100000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >-
+  Control-plane-adjacent workloads (Postgres, API, controller, relay, egress
+  proxy, facilitator). Outranks tenant sandboxes so a busy guest cannot evict
+  the parts of the service that keep paid sessions alive.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: sandbox-tenant
+value: -1000
+globalDefault: false
+preemptionPolicy: Never
+description: >-
+  Sandbox and warm-pool pods. Below the default priority, so a tenant is evicted
+  before any unclassified workload on the same node.

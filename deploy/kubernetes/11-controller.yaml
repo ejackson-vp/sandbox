@@ -42,6 +42,7 @@ spec:
       annotations:
         reloader.stakater.com/auto: "true"
     spec:
+      priorityClassName: sandbox-critical
       enableServiceLinks: false
       serviceAccountName: sandbox-controller
       nodeSelector:
