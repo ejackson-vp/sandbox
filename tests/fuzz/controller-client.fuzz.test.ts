@@ -116,6 +116,7 @@ describe("controller client", () => {
       ["failIntent", () => client.failIntent("a".repeat(64), "reason")],
       ["reserveBudget", () => client.reserveBudget(null, "1")],
       ["issueChallengeNonce", () => client.issueChallengeNonce()],
+      ["readCreateSwitch", () => client.readCreateSwitch()],
       [
         "burnChallengeNonce",
         () => client.burnChallengeNonce(`cn_${"0".repeat(32)}`, "a".repeat(64)),
