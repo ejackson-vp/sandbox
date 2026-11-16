@@ -4,16 +4,15 @@ name: ci
 # the same commit, with nothing to deduplicate them. Coverage re-ran the
 # integration suite in one of those, so a branch push drove the 62
 # SIGSTOP/socket tests four times (#145). Feature branches are now covered by
-# `pull_request` alone; `push` is main and tags. `workflow_call` stays for
-# release.yml.
+# `pull_request` alone; `push` is main and tags. There is no `workflow_call`
+# trigger: release.yml inlines the suite rather than calling this file, because
+# the reusable-workflow call intermittently produced a zero-job callee run.
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
-  # Required so release.yml can gate image publishing on the test suite.
-  workflow_call:
 
 # One group per head branch. `github.head_ref` is only set on `pull_request`;
 # `ref_name` covers main pushes, tags and dispatch.
@@ -90,16 +89,11 @@ jobs:
           path: coverage/
           retention-days: 14
 
-  # The standalone `postgres contract` job is gone: `unit` now runs the same
-  # suite against Postgres 17, under coverage, so a second job proved the same
-  # adapters twice. `npm run test:store-contract` remains for running it alone
-  # against a local container. It was never in the required-check set
-  # (`unit`, `integration (local guest)`, `markdownlint`, `internal links`), so
-  # removing it changes no branch protection.
-
-  # The same contract `unit` runs under coverage, as a named required check.
-  # Branch protection lists `postgres contract`, so removing the job without
-  # updating protection blocks every merge. Keep it until protection changes.
+  # The store contract repeats a suite `unit` already runs under coverage, but
+  # this job is the named required check `postgres contract`, so deleting it
+  # without changing branch protection blocks every merge. It also owns one
+  # thing `unit` does not: the restore drill. `npm run test:store-contract` and
+  # `npm run test:restore-drill` remain the way to run either step alone.
   postgres-contract:
     name: postgres contract
     runs-on: ubuntu-latest
