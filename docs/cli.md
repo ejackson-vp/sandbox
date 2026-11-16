@@ -94,7 +94,18 @@ sandbox admin allowlist                    # wallets that get a free session
 sandbox admin allowlist add 0xabc… --label owner-agent \
   --max-tier long --max-concurrent 2       # default tier standard, 1 concurrent
 sandbox admin allowlist disable 0xabc…     # immediate; re-add to re-enable
+
+sandbox admin killswitch                   # is it on, who set it, why, until when
+sandbox admin killswitch enable --reason "payments: double-settling" \
+  --until 2026-11-16T08:00:00Z             # omit --until, or pass none, for "until disabled"
+sandbox admin killswitch disable           # immediate
 ```
+
+The kill switch refuses new creates with `503 creates_disabled` and touches no
+live session. The reason, the actor (`--actor`, default `$USER`) and the
+timestamp are stored on the row, so `status` answers "who stopped it and why"
+without the logs. See
+[admission-control.md](admission-control.md#create-kill-switch-emergency-stop).
 
 The allowlist is a trust boundary: a listed address gets a $0 session at or
 below `--max-tier`, up to `--max-concurrent` live free sessions, with its budget

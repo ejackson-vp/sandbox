@@ -20,6 +20,8 @@ import { mintCapability, recoverCapability } from "@x402s/shared/crypto";
 import { MOCK_NETWORK, MockExactServerScheme } from "@x402s/shared/payment";
 import type { SessionSpec } from "@x402s/shared/protocol";
 import {
+  CREATE_REFUSALS_TOTAL,
+  CREATES_DISABLED_GAUGE,
   HttpSettlementLookup,
   LATENCY_BUCKETS,
   ReadinessCache,
@@ -125,6 +127,11 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   metrics.histogram("sandbox_session_create_duration_seconds", "Create request duration", LATENCY_BUCKETS);
   metrics.counter("sandbox_sessions_created_total", "Session create requests by outcome");
   metrics.counter("sandbox_sessions_total", "Sessions created by entitlement source");
+  // The kill switch: registered before first use so a scrape taken while the
+  // switch is off reads 0 rather than an absent family, and a refusal counter
+  // that starts at zero is what an alert rule can rate against.
+  metrics.gauge(CREATES_DISABLED_GAUGE, "1 when new session creates are refused by the kill switch");
+  metrics.counter(CREATE_REFUSALS_TOTAL, "Create requests refused by the kill switch path");
   // Registered here, not on first use, so a scrape before the first allowlist
   // consultation shows a zero instead of an absent family. The free tier has no
   // volume ceiling, so its counters are the only place a shared wallet shows up.

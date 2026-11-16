@@ -69,9 +69,20 @@ interface ControllerStub {
   releaseCapacity: ReturnType<typeof vi.fn>;
   failIntent: ReturnType<typeof vi.fn>;
   getSession: ReturnType<typeof vi.fn>;
+  readCreateSwitch: ReturnType<typeof vi.fn>;
   wake: ReturnType<typeof vi.fn>;
   healthz: ReturnType<typeof vi.fn>;
 }
+
+/** The switch off, with the operator fields empty: no row has been written. */
+export const SWITCH_OFF = {
+  enabled: false as const,
+  reason: "",
+  actor: "",
+  changedAt: null,
+  expiresAt: null,
+  expired: false,
+};
 
 function admittingController(): ControllerStub {
   return {
@@ -98,6 +109,7 @@ function admittingController(): ControllerStub {
     releaseCapacity: vi.fn(async () => undefined),
     failIntent: vi.fn(async () => undefined),
     getSession: vi.fn(async () => null),
+    readCreateSwitch: vi.fn(async () => SWITCH_OFF),
     wake: vi.fn(async () => undefined),
     healthz: vi.fn(async () => ({ ok: true })),
   };
@@ -170,6 +182,8 @@ export async function postCreate(
      * HMAC.
      */
     recoverCapability?: (key: string, commitment: string, storedHash: string) => string | null;
+    /** Send no PAYMENT-SIGNATURE header: the unpaid quote path. */
+    unpaid?: boolean;
   } = {},
 ): Promise<CreateResult> {
   const account = opts.account ?? privateKeyToAccount(generatePrivateKey());
@@ -273,7 +287,8 @@ export async function postCreate(
     {
       body,
       ip: "127.0.0.1",
-      header: (name: string) => (name.toLowerCase() === "payment-signature" ? header : undefined),
+      header: (name: string) =>
+        opts.unpaid || name.toLowerCase() !== "payment-signature" ? undefined : header,
       on: () => undefined,
     } as never,
     response as never,

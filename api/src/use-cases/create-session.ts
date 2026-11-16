@@ -8,6 +8,10 @@
  * entitlement completion. Every branch, every side effect and the order in
  * which they happen match the handler this was extracted from.
  *
+ * The first thing it does is the kill switch check (`create-session-switch.ts`):
+ * an operator's refusal must land before the price, the challenge, the capacity
+ * hold, the intent claim and the settlement, and it must not need any of them.
+ *
  * It returns a discriminated result instead of touching the socket, so the
  * ordering of payment and capacity side effects is testable without an Express
  * response.
@@ -25,6 +29,7 @@ import {
 } from "./create-session-contract.js";
 import { allowlistPaymentKey, resolveAllowance } from "./create-session-allowlist.js";
 import { completeEntitlement } from "./create-session-completion.js";
+import { refuseWhenCreatesDisabled } from "./create-session-switch.js";
 import {
   admitPayer,
   burnChallenge,
@@ -54,6 +59,11 @@ export async function createSession(
   input: CreateSessionInput,
 ): Promise<CreateSessionResult> {
   const { body, sourceIp, receivedAt } = input;
+  // The kill switch first: nothing below may run, and no challenge may be
+  // issued, while an operator has stopped new creates.
+  const refused = await refuseWhenCreatesDisabled(deps);
+  if (refused) return refused;
+
   const resolution = resolveSessionSpec(body, deps.config.tiers, deps.config.platformLimits);
   if (!resolution.ok) {
     return json(400, { error: resolution.code, message: resolution.message });

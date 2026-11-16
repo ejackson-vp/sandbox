@@ -222,6 +222,7 @@ const SHARED_LAYERS = [
         "metrics-http.ts",
         "http-metrics.ts",
         "runtime-metrics.ts",
+        "admission-metrics.ts",
         "request-metrics.ts",
         "rate-limit.ts",
         "readiness.ts",

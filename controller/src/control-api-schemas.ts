@@ -56,6 +56,23 @@ export const burnChallengeNonceSchema = z.object({
   paymentKey: z.string().regex(/^[0-9a-f]{64}$/),
 });
 
+/**
+ * Enable the create kill switch (schema v21).
+ *
+ * `reason` is what the next operator reads at 2am, so it is required and
+ * bounded; `actor` is the operator's own name, never a credential; `until` is an
+ * ISO 8601 instant with an offset, or absent/null for "until disabled".
+ */
+export const createSwitchEnableSchema = z.object({
+  reason: z.string().trim().min(1).max(280),
+  actor: z.string().trim().min(1).max(64),
+  until: z.string().datetime({ offset: true }).nullish(),
+});
+
+export const createSwitchDisableSchema = z.object({
+  actor: z.string().trim().min(1).max(64),
+});
+
 const idlePolicySchema = z.object({
   maxIdleSeconds: z.number().int().min(1).max(28800).optional(),
   suspendedDurationSeconds: z.number().int().min(1).max(28800).optional(),

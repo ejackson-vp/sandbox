@@ -26,6 +26,7 @@ import { createCapacityRouter } from "./capacity/routes.js";
 import { registerAllowlistRoutes } from "./control-api/allowlist.js";
 import { registerBudgetRoutes } from "./control-api/budgets.js";
 import { registerChallengeNonceRoutes } from "./control-api/challenges.js";
+import { registerCreateSwitchRoutes } from "./control-api/create-switch.js";
 import { registerPaymentRoutes } from "./control-api/payments.js";
 import { registerSessionRoutes } from "./control-api/sessions.js";
 import type { ControlApiDeps } from "./control-api/types.js";
@@ -187,6 +188,8 @@ export function createControlApi(deps: ControlApiDeps): express.Express {
   registerBudgetRoutes(app, deps);
 
   registerAllowlistRoutes(app, deps);
+
+  registerCreateSwitchRoutes(app, deps);
 
   registerSessionRoutes(app, deps);
 

@@ -2,9 +2,9 @@
 
 > Benchmark tooling and raw results live in the [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench) repository; paths below refer to that repo.
 
-Status: two-bucket admission, a durable per-payer and global create budget, and
-global capacity admission are implemented; the burst matrix and
-constrained-capacity results are measured on the local kind rig. Guest-image admission is a Kyverno policy shipped in
+Status: two-bucket admission, a durable per-payer and global create budget, the
+create kill switch and global capacity admission are implemented; the burst
+matrix and constrained-capacity results are measured on the local kind rig. Guest-image admission is a Kyverno policy shipped in
 [deploy/kubernetes/kyverno](../deploy/kubernetes/kyverno/README.md), verified by
 a documented cluster check rather than by CI.
 
@@ -152,6 +152,90 @@ one burst at a boundary. The in-memory bucket is what smooths that, which is why
 it stays in front. Metrics: `sandbox_budget_rejections_total{scope}` in the
 controller, `sandbox_rate_limited_total{scope="payer_budget"|"global_budget"}` in
 the API.
+
+## Create kill switch (emergency stop)
+
+During a payment or abuse incident an operator needs to stop **new** creates in
+seconds without touching sessions that are already running and already paid for.
+The create kill switch does that. It is one durable row, not an environment
+variable:
+
+```bash
+sandbox admin killswitch enable --reason "payments: facilitator double-settling (INC-431)" \
+  --until 2026-11-16T08:00:00Z
+sandbox admin killswitch status
+sandbox admin killswitch disable
+```
+
+**Why a row.** An env var needs a rollout, and a rollout during an incident is
+the thing you cannot afford: it restarts the API, and it stops reads for live
+sessions while it happens. A row is flipped by one authenticated request, takes
+effect on the next create on every API replica, and survives a restart of either
+process. The controller owns it (`create_switch`, schema v21, one row pinned to
+`id = 1`); the API reads it over `GET /internal/create-switch` before it does any
+payment or capacity work, so there is no second copy to go stale.
+
+**What a refusal looks like.** The create use case checks the switch first, before
+the spec is priced, before a 402 challenge is minted, before any capacity hold,
+intent claim or settlement. A caller is neither charged nor handed a challenge
+its payment could never be used against:
+
+```json
+{ "error": "creates_disabled", "retryable": true,
+  "message": "payments: facilitator double-settling (INC-431)" }
+```
+
+`message` is the operator's `--reason`, or a default that says creates are
+paused and existing sessions are unaffected. The status is `503`.
+
+**What it does not do.** It refuses `POST /v1/sessions` and nothing else. Session
+status, operations (exec, transfer, file access), suspend/resume, destroy and
+lease expiry all work exactly as before, through the same routes and the same
+store. The refusal is in the create use case, not in a middleware, so there is no
+path from a live session through it.
+
+**A missing row means off.** Every database that upgrades through v21 has no
+row, and an older build that never wrote one behaves as it always did. A **read
+error means refused**: the API answers `503 admission_unavailable` (retryable)
+rather than admitting sessions while the store that holds the switch is
+unreachable, because a session admitted during an incident cannot be undone
+without refunding it. That is a deliberate choice, and it is the reason for the
+deployment order below.
+
+**Deployment order.** The switch route arrives with the controller. Deploy the
+controller before the API: a new API talking to an old controller cannot read the
+switch and therefore refuses creates. An old API talking to a new controller does
+not consult the switch at all, so it is open until it is replaced.
+
+**Expiry.** `--until` is an ISO 8601 instant; omitted or `none` means "until
+disabled". The expiry is evaluated on read against the reader's clock, so the
+switch turns itself off with no worker, no cron and no second write. `status`
+still shows the reason, the actor, when it was set and when it expired, and
+`expired: true` says the row lapsed rather than being disabled. An `--until` in
+the past is refused by the CLI, by the controller route and by the store: a row
+that says "on" and behaves off is the one shape `status` cannot explain.
+
+**Audit.** The row stores the operator's `--reason` (1-280 characters), an
+`--actor` string that defaults to `$USER`, and the timestamp of the write. The
+actor is a name, not a credential: the credential is the existing
+`CONTROLLER_ADMIN_TOKEN`, and there is no second token to leak. `status` shows
+all three.
+
+| Metric | Type | Labels | Read it as |
+| --- | --- | --- | --- |
+| `sandbox_creates_disabled` | gauge | none | `1` while new creates are refused. Published by the API on every switch read and by the controller when an operator reads or flips it, so a flip shows up without create traffic |
+| `sandbox_create_refusals_total` | counter | `error="creates_disabled"\|"admission_unavailable"` | creates refused by `error` code. Split by the code to tell "an operator stopped it" from "the switch could not be read" |
+
+Neither family carries the reason or the actor: one is free text and the other is
+a name, and a metric label is a bad place for either. The reason is in the
+response body and on the row; the refusal is in the API log
+(`create_refused_disabled`, `create_switch_unreadable`).
+
+**At 2am.** If creates have to stop, run `enable` with a reason you would be
+happy to read tomorrow, set `--until` so it cannot outlive the incident, check
+`sandbox_creates_disabled` and the `creates_disabled` refusals to confirm the API
+agrees, and remember that live sessions are still running and still need their
+lease expiry to do its job.
 
 ## Allowlist volume (detection, not a ceiling)
 

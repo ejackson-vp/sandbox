@@ -24,6 +24,9 @@ import {
   type AllowlistEntryInput,
   type ChallengeBurnResult,
   type ClaimedRefund,
+  type CreateSwitchState,
+  type CreateSwitchWrite,
+  type CreateSwitchWriteResult,
   type IntentAttribution,
   type LedgerStatus,
   type PaymentRecord,
@@ -48,6 +51,7 @@ import { PgLedgerRepository } from "./ledger.js";
 import { PgLedgerAuditRepository } from "./ledger-audit.js";
 import { PgAllowlistRepository } from "./allowlist.js";
 import { PgChallengeNonceRepository } from "./challenges.js";
+import { PgCreateSwitchRepository } from "./create-switch.js";
 import { PgOperationRepository } from "./operations.js";
 import { PgReservationRepository } from "./reservations.js";
 import { checkPostgresHealth } from "./health.js";
@@ -75,6 +79,7 @@ export class PostgresStore implements StoreBackend {
   private readonly ledgerAudit: PgLedgerAuditRepository;
   private readonly challengeRepo: PgChallengeNonceRepository;
   private readonly allowlistRepo: PgAllowlistRepository;
+  private readonly createSwitchRepo: PgCreateSwitchRepository;
   private readonly operations: PgOperationRepository;
   private readonly budgetRepo: PgBudgetRepository;
 
@@ -86,6 +91,7 @@ export class PostgresStore implements StoreBackend {
     this.ledgerAudit = new PgLedgerAuditRepository(conn);
     this.challengeRepo = new PgChallengeNonceRepository(conn);
     this.allowlistRepo = new PgAllowlistRepository(conn);
+    this.createSwitchRepo = new PgCreateSwitchRepository(conn);
     this.operations = new PgOperationRepository(conn);
     this.reservations = new PgReservationRepository(conn);
   }
@@ -208,6 +214,19 @@ export class PostgresStore implements StoreBackend {
 
   disableAllowlist(address: string, now: number): Promise<boolean> {
     return this.allowlistRepo.disable(address, now);
+  }
+
+  /* ---------------- create kill switch (v21) ---------------- */
+
+  readCreateSwitch(nowMs: number): Promise<CreateSwitchState> {
+    return this.createSwitchRepo.read(nowMs);
+  }
+
+  writeCreateSwitch(
+    input: CreateSwitchWrite,
+    nowMs: number,
+  ): Promise<CreateSwitchWriteResult> {
+    return this.createSwitchRepo.write(input, nowMs);
   }
 
   pruneChallengeNonces(): Promise<number> {

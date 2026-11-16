@@ -45,6 +45,9 @@ Usage:
   sandbox admin allowlist       # list free-entitlement wallets
   sandbox admin allowlist add <address> --label <name> [--max-tier T] [--max-concurrent N]
   sandbox admin allowlist disable <address>
+  sandbox admin killswitch      # show the create kill switch
+  sandbox admin killswitch enable --reason <text> [--until <iso8601|none>] [--actor <name>]
+  sandbox admin killswitch disable [--actor <name>]
 
 Common options:
   --api-url <url>               default http://localhost:8080
