@@ -22,7 +22,9 @@ interface MetricsResponse {
 type MetricsNext = (err?: unknown) => void;
 
 const HTTP_REQUESTS_TOTAL = "sandbox_http_requests_total";
+const HTTP_REQUESTS_TOTAL_HELP = "HTTP requests by route template, method and status";
 const HTTP_REQUEST_DURATION = "sandbox_http_request_duration_seconds";
+const HTTP_REQUEST_DURATION_HELP = "HTTP request duration by route template and method";
 
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
 
@@ -42,12 +44,8 @@ export function routeTemplate(req: MetricsRequest): string {
 
 /** Register the HTTP families so a scrape before the first request still prints them at zero. */
 export function registerHttpMetrics(registry: MetricsRegistry = metrics): void {
-  registry.counter(HTTP_REQUESTS_TOTAL, "HTTP requests by route template, method and status");
-  registry.histogram(
-    HTTP_REQUEST_DURATION,
-    "HTTP request duration by route template and method",
-    LATENCY_BUCKETS,
-  );
+  registry.counter(HTTP_REQUESTS_TOTAL, HTTP_REQUESTS_TOTAL_HELP);
+  registry.histogram(HTTP_REQUEST_DURATION, HTTP_REQUEST_DURATION_HELP, LATENCY_BUCKETS);
 }
 
 function observeHttpRequest(
@@ -57,17 +55,13 @@ function observeHttpRequest(
   status: number,
   durationSeconds: number,
 ): void {
-  registry.counter(HTTP_REQUESTS_TOTAL, "HTTP requests by route template, method and status").inc({
+  registry.counter(HTTP_REQUESTS_TOTAL, HTTP_REQUESTS_TOTAL_HELP).inc({
     route,
     method,
     status: String(status),
   });
   registry
-    .histogram(
-      HTTP_REQUEST_DURATION,
-      "HTTP request duration by route template and method",
-      LATENCY_BUCKETS,
-    )
+    .histogram(HTTP_REQUEST_DURATION, HTTP_REQUEST_DURATION_HELP, LATENCY_BUCKETS)
     .observe(durationSeconds, { route, method });
 }
 
