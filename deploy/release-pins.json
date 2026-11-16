@@ -14,11 +14,11 @@
   "talos": {
     "release": "0.1.34",
     "control": "0.1.34",
-    "guest": "0.1.33",
-    "guestDigest": "sha256:933a53e00a6e813f0e7a3c56bf066ee1560f9949ba21c59c982788f0ee8d6d63",
+    "guest": "0.1.34",
+    "guestDigest": "sha256:5ed54d91f71829d8dd418caa4b208d86ba8699c1889c089eac9d8198b60b0630",
     "profiles": {
-      "python": "sha256:ea95c0568678ce8e0dce66f1a9c87fbdb3742ce5330b82805c71f4be85dddcfd",
-      "node": "sha256:55a16d77369752be249dbbf7072f75a68dbad7b2a0c26b6b9f9381d30afe827e"
+      "python": "sha256:220b7f9af2a24b560f8e2fbb48927b2b0d724929a10d81e5cc67d729949ec7f4",
+      "node": "sha256:0909b96b96ff89ff1790040e0675090044c60dd01ce02176f396718fb45db58a"
     }
   }
 }
