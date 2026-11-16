@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Agent, fetch as undiciFetch } from "undici";
 import type { RelayStateSnapshot, WarmClaim } from "@x402s/shared/protocol";
+import { backoffMs } from "@x402s/shared/runtime";
 import { dataPlaneShard, shardHost } from "./data-plane-shard.js";
 
 export interface RelayClientTlsOptions {
@@ -77,6 +78,10 @@ interface RegistrationResult {
   generation: string;
   attempts: number;
 }
+
+/** First registration retry, and the ceiling it doubles to. */
+const REGISTRATION_BASE_DELAY_MS = 100;
+const REGISTRATION_MAX_DELAY_MS = 1_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -295,7 +300,6 @@ export class RelayClient {
     opts: RegistrationOptions = {},
   ): Promise<RegistrationResult> {
     const deadline = Date.now() + (opts.deadlineMs ?? 10_000);
-    let delay = 100;
     let attempt = 0;
     let lastError: Error | undefined;
 
@@ -337,8 +341,14 @@ export class RelayClient {
         opts.onRetry?.(attempt, lastError);
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
+        // Sampled under the ceiling: a relay replacement makes every session on
+        // the shard re-register at once, and an unjittered 100/200/400/800/1s
+        // ladder walks the whole shard back into the replacement in step.
+        const delay = backoffMs(
+          { baseDelayMs: REGISTRATION_BASE_DELAY_MS, maxDelayMs: REGISTRATION_MAX_DELAY_MS },
+          attempt - 1,
+        );
         await sleep(Math.min(delay, remaining));
-        delay = Math.min(delay * 2, 1_000);
       }
     }
 

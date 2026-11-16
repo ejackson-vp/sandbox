@@ -24,6 +24,7 @@ import {
   LATENCY_BUCKETS,
   ReadinessCache,
   UnsupportedSettlementLookup,
+  backoffMs,
   httpMetricsMiddleware,
   log,
   metrics,
@@ -45,18 +46,27 @@ import { createCatalogueRouter } from "./routes/catalogue.js";
 import { createPaymentRequiredWriter } from "./payments/payment-required.js";
 import { ALLOWLIST_DECISIONS_TOTAL } from "./use-cases/create-session-allowlist.js";
 
+/**
+ * Wait for a dependency to answer, on a sampled exponential delay.
+ *
+ * Every API replica starts at once after a rollout and calls the same
+ * facilitator. An unjittered 250/500/1000/2000/5000 ladder puts the whole fleet
+ * on one schedule against a dependency that is still coming up, so the delay is
+ * sampled from `[0, min(5000, 250 * 2 ** n)]` and clamped to what is left of the
+ * budget.
+ */
 async function retry<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let lastErr: unknown;
-  let delay = 250;
-  while (Date.now() < deadline) {
+  for (let attempt = 0; Date.now() < deadline; attempt += 1) {
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
       log.warn("dependency_not_ready", { dependency: label, error: (err as Error).message });
-      await new Promise((r) => setTimeout(r, delay));
-      delay = Math.min(delay * 2, 5000);
+      const remaining = deadline - Date.now();
+      const delay = backoffMs({ baseDelayMs: 250, maxDelayMs: 5_000 }, attempt);
+      await new Promise((r) => setTimeout(r, Math.min(delay, Math.max(0, remaining))));
     }
   }
   throw new Error(`${label} did not become available: ${(lastErr as Error)?.message ?? "timeout"}`);
