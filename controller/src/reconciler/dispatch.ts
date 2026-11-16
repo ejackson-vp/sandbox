@@ -13,7 +13,7 @@
  */
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared/runtime";
 import { runBounded } from "../bounded-queue.js";
-import type { SessionRecord } from "../store/models.js";
+import type { SessionRecord } from "../store/models/session.js";
 
 /** The scheduler knobs dispatch needs, and nothing else. */
 interface DispatchRuntime {

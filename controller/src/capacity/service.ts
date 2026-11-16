@@ -6,7 +6,7 @@
 import { LATENCY_BUCKETS, metrics } from "@x402s/shared/runtime";
 import type { ControllerConfig } from "../config.js";
 import type { Provisioner } from "../k8s.js";
-import type { SessionRecord } from "../store/models.js";
+import type { SessionRecord } from "../store/models/session.js";
 import type { CapacityStore } from "../store/ports.js";
 import { admitCapacity } from "./admission.js";
 import { availableOnNode, placementCandidates } from "./placement.js";

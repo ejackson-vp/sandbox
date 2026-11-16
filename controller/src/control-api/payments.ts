@@ -5,13 +5,7 @@ import type { PaymentIntentStatus, SessionSpec, SessionState } from "@x402s/shar
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { log, metrics } from "@x402s/shared/runtime";
 import { isHeldBy } from "@x402s/shared/durable";
-import {
-  DuplicateEntitlementError,
-  LedgerSettledError,
-  PaymentAlreadyRedeemedError,
-  PaymentClaimLostError,
-  type LedgerStatus,
-} from "../store/models.js";
+import { DuplicateEntitlementError, LedgerSettledError, PaymentAlreadyRedeemedError, PaymentClaimLostError, type LedgerStatus } from "../store/models/money.js";
 import { completeSchema, intentClaimSchema } from "../control-api-schemas.js";
 import { describeSession } from "../session-view.js";
 import type { ControlApiDeps } from "./types.js";

@@ -11,7 +11,7 @@
  * decides *when* a row becomes eligible, the budget decides *how many* rows
  * one pass may dispatch.
  */
-import type { SessionState } from "./store/models.js";
+import type { SessionState } from "./store/models/session.js";
 
 /**
  * Fallback for a state missing from the table (including terminal states,

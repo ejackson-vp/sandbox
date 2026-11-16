@@ -53,7 +53,7 @@ import {
   type ExternalOutcome,
   type RetryPolicy,
 } from "@x402s/shared/durable";
-import type { PaymentLedgerRecord } from "./store/models.js";
+import type { PaymentLedgerRecord } from "./store/models/money.js";
 import type { RefundWorkerStore } from "./store/ports.js";
 
 export interface RefundRequest {

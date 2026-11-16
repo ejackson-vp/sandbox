@@ -22,7 +22,7 @@ import {
   type RelayStateSnapshot,
 } from "@x402s/shared/protocol";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
-import type { SessionRecord } from "../store/models.js";
+import type { SessionRecord } from "../store/models/session.js";
 import { snapshotOf } from "../session-snapshot.js";
 import { sessionTimings } from "../session-timings.js";
 import { effectContext, executeEffects, isOk } from "../effects.js";

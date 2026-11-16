@@ -49,7 +49,7 @@ import {
   type ChainVerdict,
 } from "@x402s/shared/settlement";
 import type { PaymentMode } from "@x402s/shared/protocol";
-import type { PaymentIntentRecord } from "./store/models.js";
+import type { PaymentIntentRecord } from "./store/models/money.js";
 import type { SettlementRecoveryStore } from "./store/ports.js";
 import type { RefundOutcome, RefundService } from "./refunds.js";
 

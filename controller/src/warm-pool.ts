@@ -26,7 +26,7 @@ import type { ReconcilerContext } from "./reconciler-context.js";
 import type { WarmPoolStore } from "./store/ports.js";
 
 type WarmPoolContext = Omit<ReconcilerContext, "store"> & { store: WarmPoolStore };
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 
 /**
  * Why a claim did or did not happen.

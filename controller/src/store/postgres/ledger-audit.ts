@@ -26,7 +26,8 @@ import type {
   LiveRefundClaim,
   SessionLifetimeSnapshot,
 } from "../../ledger-audit.js";
-import { NON_TERMINAL_STATE_SQL, type IntentStatus, type LedgerStatus } from "../models.js";
+import type { IntentStatus, LedgerStatus } from "../models/money.js";
+import { NON_TERMINAL_STATE_SQL } from "../models/session.js";
 import type { PgConnection } from "./pg.js";
 
 interface PaymentAuditRow {

@@ -18,7 +18,7 @@ import { DEFAULT_RUNTIME_PROFILE, sessionRuntime } from "./config.js";
 import type { WarmPodInfo } from "./k8s.js";
 import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 import { recycleWarmPod, WarmPool, type WarmClaimOutcome } from "./warm-pool.js";
 
 /** Pods the whole manager may create per reconcile pass. */

@@ -10,7 +10,7 @@ import { log, metrics } from "@x402s/shared/runtime";
 import type { CapacityService } from "../capacity/service.js";
 import type { Provisioner } from "../k8s.js";
 import { sessionTimings } from "../session-timings.js";
-import type { SessionRecord } from "../store/models.js";
+import type { SessionRecord } from "../store/models/session.js";
 import type { ProvisioningStore } from "../store/ports.js";
 
 type PodStatusStore = Pick<ProvisioningStore, "mergeTimings" | "requestTermination" | "setNodeName">;

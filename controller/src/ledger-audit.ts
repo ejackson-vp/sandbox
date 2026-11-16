@@ -41,7 +41,7 @@
  * three paths is not auditable here.
  */
 import { MAX_SESSION_LIFETIME_SECONDS, type SessionState } from "@x402s/shared/protocol";
-import type { IntentStatus, LedgerStatus } from "./store/models.js";
+import type { IntentStatus, LedgerStatus } from "./store/models/money.js";
 
 /**
  * The closed set of divergence labels. Every member is a gauge sample on every

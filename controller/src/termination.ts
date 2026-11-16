@@ -17,7 +17,7 @@ type TerminationContext = Omit<ReconcilerContext, "store"> & {
 };
 import { RefundService } from "./refunds.js";
 import { workspacePvcReapReason } from "./checkpoint-retention.js";
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 import { effectContext, executeEffects, isOk } from "./effects.js";
 import { snapshotOf } from "./session-snapshot.js";
 

@@ -18,7 +18,7 @@
 import { log } from "@x402s/shared/runtime";
 import type { Provisioner } from "../k8s.js";
 import type { RelayRecovery } from "../relay-recovery.js";
-import type { SessionRecord } from "../store/models.js";
+import type { SessionRecord } from "../store/models/session.js";
 import type { ReconcilerStore } from "../store/ports.js";
 
 /** The narrow view of the shell that lease enforcement is allowed to use. */

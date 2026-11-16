@@ -11,7 +11,7 @@
  * still throws: the column is written by this service with `JSON.stringify` of
  * a filtered number map, so a parse failure is a bug, not an input.
  */
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 
 export function sessionTimings(
   session: Pick<SessionRecord, "timingsJson">,

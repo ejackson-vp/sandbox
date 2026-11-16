@@ -17,7 +17,8 @@
  * method rather than three copies of an if-statement.
  */
 import { log, metrics } from "@x402s/shared/runtime";
-import type { PaymentLedgerRecord, SessionRecord, SessionState } from "./store/models.js";
+import type { PaymentLedgerRecord } from "./store/models/money.js";
+import type { SessionRecord, SessionState } from "./store/models/session.js";
 import type { RefundStore } from "./store/ports.js";
 
 export type RefundOutcome = "refunded" | "pending" | "not_applicable";

@@ -32,7 +32,7 @@ import type { ControllerConfig } from "./config.js";
 import type { RelayClient } from "./relay-client.js";
 import type { OperationFence } from "./operation-fence.js";
 import type { RelayRecoveryStore } from "./store/ports.js";
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 
 /**
  * Bound on sessions inspected per pass; the scan runs at housekeeping cadence.

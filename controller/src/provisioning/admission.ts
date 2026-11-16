@@ -19,7 +19,7 @@ import {
 } from "../config.js";
 import type { Provisioner } from "../k8s.js";
 import type { RelayClient } from "../relay-client.js";
-import type { SessionRecord } from "../store/models.js";
+import type { SessionRecord } from "../store/models/session.js";
 import { sessionTimings } from "../session-timings.js";
 import type { ProvisioningStore } from "../store/ports.js";
 

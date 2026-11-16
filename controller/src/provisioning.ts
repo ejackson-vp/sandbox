@@ -15,7 +15,7 @@
 import { lifetimeExpired, transition } from "@x402s/shared/protocol";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import { sessionRuntime } from "./config.js";
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 import { snapshotOf } from "./session-snapshot.js";
 import { sessionTimings } from "./session-timings.js";
 import type { WarmPoolManager } from "./warm-pool-manager.js";

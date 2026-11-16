@@ -7,7 +7,7 @@
  * Implementations must be idempotent; the reconciler may retry a transition
  * after a crash.
  */
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 
 export interface Snapshotter {
   /** Capture the session's checkpoint. Called before compute is released. */
