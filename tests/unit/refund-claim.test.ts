@@ -407,6 +407,8 @@ describe("refund worker", () => {
       retryBaseMs: 1000,
       claimLeaseMs: 30_000,
       limit: 10,
+      // The schedule is what this case asserts: pin the jitter to the ceiling.
+      retryRandom: () => 1,
       now: () => clock.now,
     };
 

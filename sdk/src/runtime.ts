@@ -13,7 +13,7 @@ import type { GuestResult, SessionStatus } from "@x402s/shared/protocol";
 import { createPayer, type Payer } from "./payment.js";
 import { OperationChannel } from "./operation-loop.js";
 import { ClientTransport } from "./transport.js";
-import { sleep } from "./timing.js";
+import { pollUntil } from "./timing.js";
 import type { FileSessionStore } from "./session-store.js";
 import {
   SandboxError,
@@ -84,76 +84,73 @@ export class ClientRuntime extends ClientTransport {
     const deadline = Date.now() + timeoutMs;
     let last: SessionStatus | undefined;
     let lastTransportError: unknown;
-    let polls = 0;
-    while (Date.now() < deadline) {
-      try {
-        last = await this.status(handle);
-        lastTransportError = undefined;
-      } catch (err) {
-        if (err instanceof SandboxError) {
-          if (err.code === "rate_limited") {
-            await sleep(250);
-            continue;
-          }
+    const ready = await pollUntil<SessionStatus>(
+      deadline,
+      async () => {
+        let next: SessionStatus;
+        try {
+          next = await this.status(handle);
+        } catch (err) {
+          // A rate limit is a wait, not a failure: `pollUntil` reads it as one
+          // and honours the `Retry-After` the limiter sent.
+          if (err instanceof SandboxError && err.code === "rate_limited") throw err;
           // A restarting API can answer 502/503 before its routes are live.
           // Retry server-side failures, but surface real client errors.
-          if (err.status !== undefined && err.status >= 500) {
-            lastTransportError = err;
-            await sleep(polls++ < 8 ? 75 : 200);
-            continue;
+          if (err instanceof SandboxError && !(err.status !== undefined && err.status >= 500)) {
+            throw err;
           }
-          throw err;
+          // The API may be restarting or briefly unreachable. Treat transport
+          // failures as retryable so callers can wait through a control-plane
+          // restart instead of surfacing a transient "fetch failed".
+          lastTransportError = err;
+          return undefined;
         }
-        // The API may be restarting or briefly unreachable. Treat transport
-        // failures as retryable so callers can wait through a control-plane
-        // restart instead of surfacing a transient "fetch failed".
-        lastTransportError = err;
-        await sleep(polls++ < 8 ? 75 : 200);
-        continue;
-      }
-      if (last.state === "READY" || last.state === "ACTIVE") break;
-      if (last.state === "EXPIRED" || last.state === "DESTROYED") {
-        throw new SessionExpiredError(`session is ${last.state}`);
-      }
-      if (last.state === "FAILED" || last.state === "TERMINATING") {
-        throw new SandboxError(
-          "session_failed",
-          `session ended before it became ready (${last.state}${last.failure ? `: ${last.failure.code}` : ""})`,
-        );
-      }
-      await sleep(polls++ < 8 ? 75 : 200);
-    }
-    if (!last) {
-      if (lastTransportError) throw lastTransportError;
+        last = next;
+        lastTransportError = undefined;
+        if (next.state === "READY" || next.state === "ACTIVE") return next;
+        if (next.state === "EXPIRED" || next.state === "DESTROYED") {
+          throw new SessionExpiredError(`session is ${next.state}`);
+        }
+        if (next.state === "FAILED" || next.state === "TERMINATING") {
+          throw new SandboxError(
+            "session_failed",
+            `session ended before it became ready (${next.state}${next.failure ? `: ${next.failure.code}` : ""})`,
+          );
+        }
+        return undefined;
+      },
+      { fastMs: 75, slowMs: 200, fastPolls: 8 },
+    );
+    if (!ready) {
+      // A rate limit never becomes the reported failure: the deadline is, and it
+      // says the sandbox did not arrive in time rather than blaming the limiter.
+      if (!last && lastTransportError) throw lastTransportError;
       throw new SandboxError("ready_timeout", "sandbox did not become ready in time");
     }
-    if (last.state !== "READY" && last.state !== "ACTIVE") {
-      throw new SandboxError("ready_timeout", "sandbox did not become ready in time");
-    }
-    if (!last.attestation || !last.guestPublicKey) {
+    if (!ready.attestation || !ready.guestPublicKey) {
       throw new SandboxError("missing_attestation", "READY session did not provide attestation evidence");
     }
 
-    const mode = last.executionMode ?? "dev";
-    const verdict = verifyAttestation(last.attestation, {
+    const mode = ready.executionMode ?? "dev";
+    const verdict = verifyAttestation(ready.attestation, {
       mode,
       allowInsecureDev: this.allowInsecureDev,
       expectedSessionId: handle.sessionId,
       expectedClientNonce: handle.clientNonce,
       expectedClientPublicKey: toBase64(handle.clientPublicKey),
-      maxEvidenceAgeMs: last.durationSeconds * 1000 + 300_000,
+      maxEvidenceAgeMs: ready.durationSeconds * 1000 + 300_000,
       ...(this.expectedMeasurement ? { allowedMeasurements: [this.expectedMeasurement] } : {}),
     });
     if (!verdict.ok) {
       throw new SandboxError("attestation_rejected", `attestation rejected: ${verdict.code} (${verdict.message})`);
     }
-    handle.guestPublicKey = fromBase64(last.guestPublicKey);
+    handle.guestPublicKey = fromBase64(ready.guestPublicKey);
     if (handle.guestPublicKey.length !== 32) {
       throw new SandboxError("invalid_guest_key", "guest public key has an invalid length");
     }
-    handle.status = last;
+    handle.status = ready;
     this.persist(handle);
-    return last;
+    return ready;
   }
 
   getOperation(
