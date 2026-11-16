@@ -3,7 +3,7 @@ import { loadConfig } from "../../api/src/config.js";
 import {
   DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS,
   DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS,
-} from "../../api/src/payments/settlement-verifier.js";
+} from "../../shared/src/entries/settlement.js";
 
 const base = {
   PAYMENT_MODE: "mock",

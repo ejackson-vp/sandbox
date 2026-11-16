@@ -23,7 +23,7 @@ import {
 import { TokenBucket } from "../../shared/src/entries/runtime.js";
 import type { SettlementLookup } from "../../shared/src/entries/runtime.js";
 import { createSessionHandler } from "../../api/src/routes/create-session.js";
-import type { ChainSettlementVerifier } from "../../api/src/payments/settlement-verifier.js";
+import type { ChainSettlementVerifier } from "../../shared/src/entries/settlement.js";
 
 export const CHALLENGE_NONCE = `cn_${"a".repeat(32)}`;
 

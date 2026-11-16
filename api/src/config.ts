@@ -8,7 +8,7 @@
  *    settings entirely.
  *  - `testnet` settles a documented testnet network (Base Sepolia by default).
  *  - `mainnet` moves real money and has no default at all: it must be requested
- *    explicitly, `NETWORK` must be in `MAINNET_ALLOWED_NETWORKS`, `PAY_TO` must
+ *    explicitly, `NETWORK` must be in `SETTLEABLE_MAINNET_NETWORKS`, `PAY_TO` must
  *    be a real address, `FACILITATOR_URL` must be set, and an on-chain verifier
  *    (`PAYMENT_RPC_URL`) must be configured. Every check fails closed, so no
  *    single flag can silently turn on real payments.
@@ -20,7 +20,11 @@ import {
   type CapabilityKeyRing,
 } from "@x402s/shared/crypto";
 import {
+  MAINNET_NETWORKS,
   MOCK_NETWORK,
+  SETTLEABLE_MAINNET_NETWORKS,
+  TESTNET_NETWORK,
+  TESTNET_NETWORKS,
   loadPlatformLimits,
   loadTiers,
   type PlatformLimits,
@@ -28,21 +32,12 @@ import {
 } from "@x402s/shared/payment";
 import type { PaymentMode } from "@x402s/shared/protocol";
 import { DEFAULT_METRICS_PORT } from "@x402s/shared/runtime";
-import {
-  DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS,
-  DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS,
-  usdcAddressFor,
-} from "./payments/settlement-verifier.js";
+import { parseChainReadSettings } from "@x402s/shared/settlement";
 
 /**
- * Networks this build can settle on mainnet. One entry, because `server.ts`
- * registers exactly one EVM scheme: Solana is in the detection set below so it
- * is refused with a useful message rather than registered as an EVM network.
+ * The network sets live in `@x402s/shared/payment`, because the controller
+ * validates the same NETWORK value and the two processes must agree.
  */
-const MAINNET_ALLOWED_NETWORKS = new Set(["eip155:8453"]);
-/** Any mainnet id, including one this build has no scheme for. */
-const MAINNET_NETWORKS = new Set(["eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"]);
-const TESTNET_NETWORKS = new Set(["eip155:84532", "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"]);
 const MOCK_PAY_TO = "0x0000000000000000000000000000000000000402";
 
 export interface ApiConfig {
@@ -158,18 +153,18 @@ function parsePayment(
     );
   }
   const requestedNetwork =
-    env.NETWORK ?? (paymentMode === "mock" ? MOCK_NETWORK : "eip155:84532");
+    env.NETWORK ?? (paymentMode === "mock" ? MOCK_NETWORK : TESTNET_NETWORK);
 
   if (paymentMode !== "mainnet" && MAINNET_NETWORKS.has(requestedNetwork)) {
     throw new Error(
       `refusing to start: ${requestedNetwork} is a mainnet network; real money requires PAYMENT_MODE=mainnet (no silent mainnet activation)`,
     );
   }
-  if (paymentMode === "mainnet" && !MAINNET_ALLOWED_NETWORKS.has(requestedNetwork)) {
+  if (paymentMode === "mainnet" && !SETTLEABLE_MAINNET_NETWORKS.has(requestedNetwork)) {
     // This includes the Solana mainnet id: the build registers no Solana scheme,
     // so accepting it here would start a process that cannot settle anything.
     throw new Error(
-      `PAYMENT_MODE=mainnet requires NETWORK in the mainnet allowlist (${[...MAINNET_ALLOWED_NETWORKS].join(", ")}), got ${requestedNetwork}`,
+      `PAYMENT_MODE=mainnet requires NETWORK in the mainnet allowlist (${[...SETTLEABLE_MAINNET_NETWORKS].join(", ")}), got ${requestedNetwork}`,
     );
   }
   if (paymentMode === "testnet" && !TESTNET_NETWORKS.has(requestedNetwork)) {
@@ -249,50 +244,20 @@ function parseChainVerification(
   | "paymentSettlementLookbackBlocks"
   | "paymentSettlementScanChunkBlocks"
 > {
-  // The scan is bounded on every path, including the mock one, so a
-  // misconfigured deployment cannot ask for an unbounded `eth_getLogs`: the
-  // window is capped here and the number of calls per verification is capped in
-  // the verifier.
-  const paymentSettlementLookbackBlocks = int(
-    env.PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS,
-    DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS,
-    1,
-    1_000_000,
-  );
-  const paymentSettlementScanChunkBlocks = int(
-    env.PAYMENT_SETTLEMENT_SCAN_CHUNK_BLOCKS,
-    DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS,
-    1,
-    1_000_000,
-  );
-  const scan = { paymentSettlementLookbackBlocks, paymentSettlementScanChunkBlocks };
-  // The mock scheme has no chain, so a mock deployment ignores the setting
-  // rather than refusing to start because a dev box has one exported.
-  if (paymentMode === "mock") return scan;
-  const rpcUrl = (env.PAYMENT_RPC_URL ?? "").trim();
-  if (rpcUrl.length === 0) {
-    return scan;
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(rpcUrl);
-  } catch {
-    throw new Error("PAYMENT_RPC_URL must be an absolute http(s) URL");
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("PAYMENT_RPC_URL must be an absolute http(s) URL");
-  }
-  const override = (env.PAYMENT_USDC_ADDRESS ?? "").trim();
-  if (override.length > 0 && !/^0x[0-9a-fA-F]{40}$/.test(override)) {
-    throw new Error("PAYMENT_USDC_ADDRESS must be a 20-byte EVM address");
-  }
-  const usdcAddress = (override || usdcAddressFor(network)) as `0x${string}` | undefined;
-  if (!usdcAddress) {
-    throw new Error(
-      `PAYMENT_RPC_URL requires a known USDC address for ${network}; set PAYMENT_USDC_ADDRESS`,
-    );
-  }
-  return { paymentRpcUrl: rpcUrl, paymentUsdcAddress: usdcAddress, ...scan };
+  const settings = parseChainReadSettings(env, {
+    mock: paymentMode === "mock",
+    network,
+  });
+  return {
+    // The scan bounds are on every path, including mock, so a misconfigured
+    // deployment cannot ask for an unbounded `eth_getLogs`. The verifier also
+    // caps the calls per check.
+    paymentSettlementLookbackBlocks: settings.lookbackBlocks,
+    paymentSettlementScanChunkBlocks: settings.chunkBlocks,
+    ...(settings.rpcUrl
+      ? { paymentRpcUrl: settings.rpcUrl, paymentUsdcAddress: settings.usdcAddress }
+      : {}),
+  };
 }
 
 function parseCredentials(

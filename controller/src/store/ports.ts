@@ -6,6 +6,7 @@ import type {
   ClaimOperationResult,
   ClaimedRefund,
   ExecRequestRecord,
+  IntentAttribution,
   IntentClaimResult,
   LedgerStatus,
   PaymentIntentRecord,
@@ -232,7 +233,7 @@ export interface ControlApiStore {
     paymentKey: string,
     specHashValue: string,
     staleMs: number,
-    requirementsJson?: string | null,
+    attribution?: IntentAttribution,
   ): Promise<IntentClaimResult>;
   /**
    * Decide whether a proven payer address gets a free session (ADR 0013).

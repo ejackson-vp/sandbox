@@ -24,6 +24,7 @@ import {
   type AllowlistEntryInput,
   type ChallengeBurnResult,
   type ClaimedRefund,
+  type IntentAttribution,
   type LedgerStatus,
   type PaymentRecord,
   type RefundClaimRequest,
@@ -155,9 +156,9 @@ export class PostgresStore implements StoreBackend {
     paymentKey: string,
     specHashValue: string,
     staleMs: number,
-    requirementsJson: string | null = null,
+    attribution: IntentAttribution = {},
   ) {
-    return this.payments.claimPaymentIntent(paymentKey, specHashValue, staleMs, requirementsJson);
+    return this.payments.claimPaymentIntent(paymentKey, specHashValue, staleMs, attribution);
   }
 
   getPaymentIntent(paymentKey: string) {

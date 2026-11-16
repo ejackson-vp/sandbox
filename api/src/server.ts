@@ -36,7 +36,7 @@ import { createConnectionLimiter } from "./connection-limit.js";
 import { ControllerClient } from "./controller-client.js";
 import { buildSettlementVerifier } from "./payments/settlement-confirmation.js";
 import { createFacilitatorClient } from "./payments/facilitator-client.js";
-import type { ChainSettlementVerifier } from "./payments/settlement-verifier.js";
+import type { ChainSettlementVerifier } from "@x402s/shared/settlement";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 import { createSessionHandler } from "./routes/create-session.js";

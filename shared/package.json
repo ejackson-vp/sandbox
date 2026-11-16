@@ -39,6 +39,10 @@
     "./durable": {
       "types": "./dist/entries/durable.d.ts",
       "default": "./dist/entries/durable.js"
+    },
+    "./settlement": {
+      "types": "./dist/entries/settlement.d.ts",
+      "default": "./dist/entries/settlement.js"
     }
   },
   "scripts": {
@@ -46,7 +50,8 @@
   },
   "dependencies": {
     "@x402/core": "^2.30.0",
-    "libsodium-wrappers": "^0.8.4"
+    "libsodium-wrappers": "^0.8.4",
+    "viem": "^2.57.16"
   },
   "devDependencies": {}
 }

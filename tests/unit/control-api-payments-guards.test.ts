@@ -320,3 +320,57 @@ describe("the by-nonce lookup only accepts a whole nonce", () => {
     expect(res.body).toMatchObject({ error: "not_found" });
   });
 });
+
+describe("the claim route records what chain recovery needs (F-19)", () => {
+  const REQUIREMENTS = {
+    network: "eip155:84532",
+    scheme: "exact",
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    amount: "50000",
+    payTo: PAY_TO,
+  };
+
+  it("stores the proven authorizer and the EIP-3009 nonce on the intent", async () => {
+    const store = await freshStore();
+    const paymentKey = "2".repeat(64);
+    const base = await listen({ store, capacity: admittingCapacity().service });
+
+    const res = await post(base, "/internal/payment-intents/claim", {
+      paymentKey,
+      specHash: SPEC_HASH,
+      requirements: REQUIREMENTS,
+      authorizer: CLIENT_SIGNER,
+      settlementNonce: SETTLEMENT_NONCE,
+    });
+
+    expect(res.status).toBe(200);
+    // Settlement recovery proves the transfer with exactly these values, and
+    // it runs after the API's request is gone.
+    expect(await store.getPaymentIntent(paymentKey)).toMatchObject({
+      authorizer: CLIENT_SIGNER,
+      settlementNonce: SETTLEMENT_NONCE,
+    });
+  });
+
+  it("accepts a null nonce from the free allowlist path", async () => {
+    const store = await freshStore();
+    const paymentKey = "3".repeat(64);
+    const base = await listen({ store, capacity: admittingCapacity().service });
+
+    // The free path sends `settlementNonce: null`; a rejected claim would turn a
+    // $0 entitlement into a 400.
+    const res = await post(base, "/internal/payment-intents/claim", {
+      paymentKey,
+      specHash: SPEC_HASH,
+      requirements: REQUIREMENTS,
+      authorizer: CLIENT_SIGNER,
+      settlementNonce: null,
+    });
+
+    expect(res.status).toBe(200);
+    expect(await store.getPaymentIntent(paymentKey)).toMatchObject({
+      authorizer: CLIENT_SIGNER,
+      settlementNonce: null,
+    });
+  });
+});

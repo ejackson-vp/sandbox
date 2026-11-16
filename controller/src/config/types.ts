@@ -218,6 +218,25 @@ export interface ControllerConfig {
   globalConcurrentSessions: number;
   /** Payment mode stamped on ledger rows written by settlement recovery. */
   paymentMode: PaymentMode;
+  /**
+   * Network this controller settles on. The chain read applies only to intents
+   * whose recorded requirements name it (F-19, ADR 0014).
+   */
+  paymentNetwork: string;
+  /**
+   * JSON-RPC endpoint for the fail-closed chain read in settlement recovery.
+   * Unset on mock and on a testnet without an RPC; mainnet requires it.
+   */
+  paymentRpcUrl?: string;
+  /** USDC contract holding the EIP-3009 authorisations. Defaults per network. */
+  paymentUsdcAddress?: `0x${string}`;
+  /**
+   * Blocks behind head to scan for the settlement log, and blocks per
+   * `eth_getLogs`. The API parses the same keys, so both processes cover the
+   * same reconciliation window (ADR 0014).
+   */
+  paymentSettlementLookbackBlocks: number;
+  paymentSettlementScanChunkBlocks: number;
   /** Facilitator base URL for settlement lookup; empty disables recovery's lookup. */
   facilitatorUrl: string;
   /**

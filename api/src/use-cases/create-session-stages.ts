@@ -308,6 +308,7 @@ export async function claimPaymentIntent(
   specDigest: string,
   requirement: PaymentRequirements,
   commitment: string,
+  attribution: { authorizer: string; settlementNonce: string | null },
 ): Promise<Ok<{ token: string; recovered: boolean }> | Failed> {
   const claim = await deps.controller.claimIntent(key, specDigest, deps.config.intentStaleMs, {
     network: requirement.network,
@@ -315,7 +316,7 @@ export async function claimPaymentIntent(
     asset: requirement.asset,
     amount: requirement.amount,
     payTo: requirement.payTo,
-  });
+  }, attribution);
   if (claim.status === "in_progress") {
     return {
       ok: false,

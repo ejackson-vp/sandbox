@@ -19,6 +19,7 @@ were rejected, and the cost we accepted.
 | [0011](0011-durable-external-calls.md) | Durable external calls are claimed, fenced and deduped | accepted |
 | [0012](0012-guest-reconnects-after-relay-loss.md) | A guest reconnects after a relay link loss | accepted |
 | [0013](0013-free-entitlement-from-proven-address.md) | A proven address gets a free session from a stable allowlist | accepted |
+| [0014](0014-chain-verified-settlement-recovery.md) | Settlement recovery reads the chain, not only the facilitator | accepted |
 
 ## Writing a record
 

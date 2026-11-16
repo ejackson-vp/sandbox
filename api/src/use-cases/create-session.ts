@@ -12,7 +12,7 @@
  * ordering of payment and capacity side effects is testable without an Express
  * response.
  */
-import { sha256Hex } from "@x402s/shared/crypto";
+import { sha256Hex, settlementNonce } from "@x402s/shared/crypto";
 import { resolveSessionSpec, specHash } from "@x402s/shared/payment";
 import { log } from "@x402s/shared/runtime";
 import { recoverSettlement } from "../payments/settlement-confirmation.js";
@@ -101,7 +101,12 @@ export async function createSession(
   const hold = await holdCapacity(deps, ledgerKey, specDigest, spec);
   if (!hold.ok) return hold.result;
 
-  const claimed = await claimPaymentIntent(deps, ledgerKey, specDigest, requirement, commitment);
+  const claimed = await claimPaymentIntent(deps, ledgerKey, specDigest, requirement, commitment, {
+    authorizer,
+    // A free allowlist session is not an EIP-3009 settlement: it has no nonce
+    // the chain could answer for, and the ledger row is written with none.
+    settlementNonce: free ? null : settlementNonce(payload),
+  });
   if (!claimed.ok) return claimed.result;
   const { token: claimToken, recovered } = claimed.value;
   const timings: PaymentTimings = { verifyMs: 0, settleMs: 0 };

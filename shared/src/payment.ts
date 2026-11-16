@@ -34,6 +34,29 @@ export const MOCK_SCHEME = "exact";
 export const MOCK_ASSET = "mock:usdc";
 export const MOCK_ASSET_DECIMALS = 6;
 export const TESTNET_NETWORK = "eip155:84532" as Network;
+/** Base mainnet: the one mainnet network this build can settle on. */
+export const MAINNET_NETWORK = "eip155:8453" as Network;
+export const SOLANA_MAINNET_NETWORK = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+export const SOLANA_TESTNET_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
+
+/**
+ * Mainnet networks this build can settle on. One entry, because the server
+ * registers exactly one EVM scheme. `MAINNET_NETWORKS` is the wider detection
+ * set (it includes Solana) so a misspelled mode is refused with a useful
+ * message rather than registered as an EVM network.
+ *
+ * The API and the controller read these same sets, so a mainnet network can
+ * never be accepted by one process and refused by the other.
+ */
+export const SETTLEABLE_MAINNET_NETWORKS: ReadonlySet<string> = new Set([MAINNET_NETWORK]);
+export const MAINNET_NETWORKS: ReadonlySet<string> = new Set([
+  MAINNET_NETWORK,
+  SOLANA_MAINNET_NETWORK,
+]);
+export const TESTNET_NETWORKS: ReadonlySet<string> = new Set([
+  TESTNET_NETWORK,
+  SOLANA_TESTNET_NETWORK,
+]);
 
 /** EIP-712 domain used by the mock authorization. chainId 0 = no chain. */
 export const MOCK_EIP712_DOMAIN = {

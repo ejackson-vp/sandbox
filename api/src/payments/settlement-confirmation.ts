@@ -30,12 +30,15 @@
 import type { PaymentRequirements } from "@x402/core/types";
 import { paymentAuthorizer, settlementNonce } from "@x402s/shared/crypto";
 import { log } from "@x402s/shared/runtime";
-import type { ApiConfig } from "../config.js";
 import {
-  UsdcSettlementVerifier,
-  usdcAddressFor,
+  buildChainSettlementVerifier,
+  redactSettlementError,
+  settlementTerms,
+  settlementVerdict,
   type ChainSettlementVerifier,
-} from "./settlement-verifier.js";
+  type ChainVerdict,
+} from "@x402s/shared/settlement";
+import type { ApiConfig } from "../config.js";
 
 /** The settlement a recovery resolved, in the shape completion consumes. */
 export interface RecoveredSettlement {
@@ -56,8 +59,6 @@ export type SettlementResolution =
   /** Neither source could answer. Withhold and let recovery try again. */
   | { status: "unknown" };
 
-export type ChainVerdict = "settled" | "unsettled" | "unavailable";
-
 /** What the chain must prove, from the requirement the server priced. */
 export type SettlementTerms = Pick<PaymentRequirements, "payTo" | "amount">;
 
@@ -70,52 +71,14 @@ export function buildSettlementVerifier(
   config: Pick<ApiConfig, "paymentMode" | "network" | "paymentRpcUrl" | "paymentUsdcAddress"> &
     Partial<Pick<ApiConfig, "paymentSettlementLookbackBlocks" | "paymentSettlementScanChunkBlocks">>,
 ): ChainSettlementVerifier | undefined {
-  // The mock scheme has no chain: a nonce it accepts is never used on one. Run
-  // the verifier there and every mock payment would be refused, so the mock
-  // path ignores an RPC URL entirely.
-  if (config.paymentMode === "mock" || !config.paymentRpcUrl) return undefined;
-  const usdcAddress = config.paymentUsdcAddress ?? usdcAddressFor(config.network);
-  if (!usdcAddress) {
-    throw new Error(
-      `no default USDC address for network ${config.network}; set PAYMENT_USDC_ADDRESS`,
-    );
-  }
-  return new UsdcSettlementVerifier({
+  return buildChainSettlementVerifier({
+    mock: config.paymentMode === "mock",
+    network: config.network,
     rpcUrl: config.paymentRpcUrl,
-    usdcAddress,
-    ...(config.paymentSettlementLookbackBlocks !== undefined
-      ? { lookbackBlocks: config.paymentSettlementLookbackBlocks }
-      : {}),
-    ...(config.paymentSettlementScanChunkBlocks !== undefined
-      ? { chunkBlocks: config.paymentSettlementScanChunkBlocks }
-      : {}),
+    usdcAddress: config.paymentUsdcAddress,
+    lookbackBlocks: config.paymentSettlementLookbackBlocks,
+    chunkBlocks: config.paymentSettlementScanChunkBlocks,
   });
-}
-
-/** The server's terms as the chain check needs them, or null when unusable. */
-function chainTerms(terms: SettlementTerms): { recipient: `0x${string}`; amount: bigint } | null {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(terms.payTo)) return null;
-  let amount: bigint;
-  try {
-    amount = BigInt(terms.amount);
-  } catch {
-    return null;
-  }
-  // A free entitlement never reaches here; a non-positive price would make any
-  // transfer, including a zero one, satisfy `value >= amount`.
-  if (amount <= 0n) return null;
-  return { recipient: terms.payTo as `0x${string}`, amount };
-}
-
-/**
- * A chain error can quote the RPC call it made, which carries the authorizer and
- * the nonce. Both are receipt-shaped, so every hex value is redacted before it
- * reaches a log line: the error class is enough to diagnose a failure.
- */
-function redactHex(message: unknown): string {
-  return typeof message === "string"
-    ? message.replace(/0x[0-9a-fA-F]+/g, "0x<redacted>")
-    : "unknown error";
 }
 
 /** Ask the chain. Never throws: an error is `unavailable`, which fails closed. */
@@ -128,36 +91,33 @@ export async function confirmSettledOnChain(
   const authorizer = paymentAuthorizer(payload);
   const nonce = settlementNonce(payload);
   if (!authorizer || !nonce) return "unavailable";
-  const priced = chainTerms(terms);
+  const priced = settlementTerms(terms);
   if (!priced) {
     // The answer, not the values: an address or an amount is not a log field.
     log.warn("chain_settlement_terms_unusable");
     return "unavailable";
   }
-  try {
-    const proof = await verifier.settlementProof({
-      authorizer,
-      nonce: nonce as `0x${string}`,
-      recipient: priced.recipient,
-      amount: priced.amount,
-    });
-    if (proof.verdict === "proven") return "settled";
-    if (proof.verdict === "disproven") {
-      // The reason is a category, never an address or an amount.
-      log.warn("chain_settlement_disproven", { reason: proof.reason });
-      return "unsettled";
-    }
-    // The nonce is not in the window. It may have settled before it opened, so
-    // this is "could not place the payment", not "the payment failed".
-    log.warn("chain_settlement_not_in_window");
-    return "unavailable";
-  } catch (err) {
-    // Never the full authorizer or nonce: a log line must not be a receipt.
-    log.warn("chain_settlement_verification_failed", {
-      error: redactHex(err instanceof Error ? err.message : err),
-    });
-    return "unavailable";
-  }
+  return settlementVerdict(
+    verifier,
+    { authorizer, nonce: nonce as `0x${string}`, ...priced },
+    {
+      onDisproven: (reason) => {
+        // The reason is a category, never an address or an amount.
+        log.warn("chain_settlement_disproven", { reason });
+      },
+      onNotFound: () => {
+        // The nonce is not in the window. It may have settled before it opened,
+        // so this is "could not place the payment", not "the payment failed".
+        log.warn("chain_settlement_not_in_window");
+      },
+      onError: (err) => {
+        // Never the full authorizer or nonce: a log line must not be a receipt.
+        log.warn("chain_settlement_verification_failed", {
+          error: redactSettlementError(err instanceof Error ? err.message : err),
+        });
+      },
+    },
+  );
 }
 
 /** Whether anything can resolve an ambiguous settlement for this deployment. */

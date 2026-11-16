@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS payment_intents (
   claim_token TEXT,
   claim_expires_at BIGINT,
   requirements_json TEXT,
+  authorizer TEXT,
+  settlement_nonce TEXT,
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL
 );
@@ -276,6 +278,17 @@ const LADDER: ReadonlyArray<{ from: number; sql: string }> = [
             address TEXT PRIMARY KEY, label TEXT NOT NULL, max_tier TEXT NOT NULL,
             max_concurrent INTEGER NOT NULL, created_at BIGINT NOT NULL, disabled_at BIGINT);
           ALTER TABLE payment_ledger ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'x402';`,
+  },
+  {
+    // Chain-verified settlement recovery (F-19, ADR 0014). The controller
+    // records who authorised the payment and its EIP-3009 nonce at claim time,
+    // so a settle-then-crash is resolvable by proving the transfer on chain
+    // instead of depending on a facilitator lookup the network may not expose.
+    // Nullable and additive: a row claimed before this step keeps NULL and
+    // recovery falls back to the lookup, which is the behaviour it had.
+    from: 20,
+    sql: `ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS authorizer TEXT;
+          ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS settlement_nonce TEXT;`,
   },
 ];
 

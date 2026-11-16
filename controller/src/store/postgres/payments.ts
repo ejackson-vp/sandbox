@@ -27,6 +27,7 @@ import {
   mapIntent,
   PaymentAlreadyRedeemedError,
   PaymentClaimLostError,
+  type IntentAttribution,
   type IntentClaimResult,
   type LedgerStatus,
   type PaymentIntentRecord,
@@ -75,13 +76,16 @@ export class PgPaymentRepository {
     paymentKey: string,
     specHashValue: string,
     staleMs: number,
-    requirementsJson: string | null = null,
+    attribution: IntentAttribution = {},
   ): Promise<IntentClaimResult> {
     const now = Date.now();
     const lease = claimLease(asClaimToken(randomBytes(16).toString("hex")), now, staleMs);
     const token = lease.token;
     const expiresAt = leaseExpiresAt(lease);
     const ageCutoff = now - staleMs;
+    const requirementsJson = attribution.requirementsJson ?? null;
+    const authorizer = attribution.authorizer ?? null;
+    const settlementNonce = attribution.settlementNonce ?? null;
 
     return this.conn.tx(async (tx) => {
       const existing = await this.readIntent(tx, paymentKey);
@@ -98,13 +102,18 @@ export class PgPaymentRepository {
           return { status: "in_progress" };
         }
         const reclaimed = await tx.query(
+          // COALESCE, never overwrite: a retry from a newer API backfills the
+          // attribution columns on a row claimed before they existed, and the
+          // same payment always carries the same nonce (F-19).
           `UPDATE payment_intents
               SET status = 'claimed', reason = NULL, claim_token = $1,
-                  claim_expires_at = $2, updated_at = $3
+                  claim_expires_at = $2, updated_at = $3,
+                  authorizer = COALESCE(authorizer, $6),
+                  settlement_nonce = COALESCE(settlement_nonce, $7)
             WHERE payment_key = $4 AND status = 'claimed'
               AND ((claim_expires_at IS NOT NULL AND claim_expires_at <= $3) OR updated_at <= $5)
             RETURNING claim_token`,
-          [token, expiresAt, now, paymentKey, ageCutoff],
+          [token, expiresAt, now, paymentKey, ageCutoff, authorizer, settlementNonce],
         );
         if ((reclaimed.rowCount ?? 0) === 0) return this.classify(tx, paymentKey);
         return { status: "claimed", recovered: true, token, expiresAt };
@@ -113,11 +122,12 @@ export class PgPaymentRepository {
       const inserted = await tx.query(
         `INSERT INTO payment_intents
            (payment_key, status, session_id, spec_hash, reason, claim_token,
-            claim_expires_at, requirements_json, created_at, updated_at)
-         VALUES ($1, 'claimed', NULL, $2, NULL, $3, $4, $5, $6, $6)
+            claim_expires_at, requirements_json, authorizer, settlement_nonce,
+            created_at, updated_at)
+         VALUES ($1, 'claimed', NULL, $2, NULL, $3, $4, $5, $6, $7, $8, $8)
          ON CONFLICT (payment_key) DO NOTHING
          RETURNING claim_token`,
-        [paymentKey, specHashValue, token, expiresAt, requirementsJson, now],
+        [paymentKey, specHashValue, token, expiresAt, requirementsJson, authorizer, settlementNonce, now],
       );
       if ((inserted.rowCount ?? 0) === 0) {
         // Another worker created the row between the read and the insert.
