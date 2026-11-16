@@ -297,6 +297,18 @@ export class RelayRegistry {
   }
 
   /**
+   * Deliver one failure to every waiter on this entry, then forget them.
+   *
+   * The link is gone, so nobody is going to answer them. Repeated for a reset,
+   * a detach and a session destroy, which differ only in the code the controller
+   * must see: a link loss is `outcome_unknown`, a destroy is terminal.
+   */
+  private failPending(entry: Entry, code: RelayFailureCode, message: string): void {
+    for (const pending of entry.pending.values()) pending.waiter?.({ error: code, message });
+    entry.pending.clear();
+  }
+
+  /**
    * End a guest connection with a TCP reset, not a WebSocket close. A close
    * frame is ordered after every frame already queued on the socket, so the
    * guest would still read them; a reset discards unread bytes. The guest
@@ -317,10 +329,7 @@ export class RelayRegistry {
     const socket = entry.socket;
     entry.ws = null;
     entry.socket = null;
-    for (const pending of entry.pending.values()) {
-      pending.waiter?.({ error: "guest_disconnected", message: "guest disconnected" });
-    }
-    entry.pending.clear();
+    this.failPending(entry, "guest_disconnected", "guest disconnected");
     const resets = this.metrics.counter(
       "sandbox_relay_connection_resets_total",
       "Guest link terminations after an epoch withdrawal, by mechanism",
@@ -521,10 +530,7 @@ export class RelayRegistry {
     if (!entry || entry.ws !== ws) return;
     entry.ws = null;
     entry.socket = null;
-    for (const pending of entry.pending.values()) {
-      pending.waiter?.({ error: "guest_disconnected", message: "guest disconnected" });
-    }
-    entry.pending.clear();
+    this.failPending(entry, "guest_disconnected", "guest disconnected");
   }
 
   /** Record a guest disconnect with a bounded close-reason label. */
@@ -542,10 +548,7 @@ export class RelayRegistry {
     } catch {
       /* ignore */
     }
-    for (const pending of entry.pending.values()) {
-      pending.waiter?.({ error: "session_destroyed", message: "session destroyed" });
-    }
-    entry.pending.clear();
+    this.failPending(entry, "session_destroyed", "session destroyed");
     this.entries.delete(sessionId);
     return true;
   }
@@ -562,21 +565,24 @@ export class RelayRegistry {
 
   private prune(entry: Entry): void {
     const now = Date.now();
-    for (const [id, value] of entry.responses) {
-      if (now - value.at > this.opts.responseTtlMs) entry.responses.delete(id);
+    this.expire(entry.responses, now);
+    this.expire(entry.errors, now);
+  }
+
+  /**
+   * Drop expired entries, then the oldest until the cache fits.
+   *
+   * `Map` iterates in insertion order, so "oldest" is the first key and the
+   * eviction is the same one a sorted-by-`at` list would pick.
+   */
+  private expire<V extends { at: number }>(cache: Map<string, V>, now: number): void {
+    for (const [id, value] of cache) {
+      if (now - value.at > this.opts.responseTtlMs) cache.delete(id);
     }
-    for (const [id, value] of entry.errors) {
-      if (now - value.at > this.opts.responseTtlMs) entry.errors.delete(id);
-    }
-    while (entry.responses.size > MAX_CACHED_RESPONSES) {
-      const oldest = entry.responses.keys().next().value;
+    while (cache.size > MAX_CACHED_RESPONSES) {
+      const oldest = cache.keys().next().value;
       if (oldest === undefined) break;
-      entry.responses.delete(oldest);
-    }
-    while (entry.errors.size > MAX_CACHED_RESPONSES) {
-      const oldest = entry.errors.keys().next().value;
-      if (oldest === undefined) break;
-      entry.errors.delete(oldest);
+      cache.delete(oldest);
     }
   }
 }

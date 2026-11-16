@@ -162,6 +162,30 @@ export class RelayClient {
     return undiciFetch(`${baseUrl}${path}`, request) as unknown as Promise<Response>;
   }
 
+  /**
+   * One call against the replica that owns `sessionId`.
+   *
+   * Every session-scoped control route is `/internal/<id>/<action>` on that
+   * session's shard, so the three parts that must agree (the encoded id in the
+   * path, the shard's base URL, and the per-route timeout) are decided here
+   * instead of at each call site.
+   */
+  private sessionCall<T>(
+    sessionId: string,
+    action: string,
+    init: RequestInit = {},
+    timeoutMs?: number,
+    opts: { reuse?: boolean } = {},
+  ): Promise<T> {
+    return this.call<T>(
+      `/internal/${encodeURIComponent(sessionId)}${action}`,
+      init,
+      timeoutMs,
+      opts,
+      this.baseFor(sessionId),
+    );
+  }
+
   private async call<T>(
     path: string,
     init: RequestInit = {},
@@ -325,13 +349,7 @@ export class RelayClient {
   }
 
   async state(sessionId: string, opts: { reuse?: boolean } = {}): Promise<RelayStateSnapshot> {
-    return this.call<RelayStateSnapshot>(
-      `/internal/${encodeURIComponent(sessionId)}/state`,
-      {},
-      undefined,
-      opts,
-      this.baseFor(sessionId),
-    );
+    return this.sessionCall<RelayStateSnapshot>(sessionId, "/state", {}, undefined, opts);
   }
 
   /**
@@ -348,15 +366,13 @@ export class RelayClient {
     epoch: number,
   ): Promise<{ result: "ok" | "unknown"; withdrawn: number; reset: boolean }> {
     try {
-      const body = await this.call<{ withdrawn?: unknown; reset?: unknown }>(
-        `/internal/${encodeURIComponent(sessionId)}/epoch`,
+      const body = await this.sessionCall<{ withdrawn?: unknown; reset?: unknown }>(
+        sessionId,
+        "/epoch",
         {
           method: "POST",
           body: JSON.stringify({ epoch }),
         },
-        undefined,
-        {},
-        this.baseFor(sessionId),
       );
       return {
         result: "ok",
@@ -372,10 +388,10 @@ export class RelayClient {
   }
 
   async request(sessionId: string, id: string, envelope: string, deadlineMs: number, epoch = 0): Promise<void> {
-    await this.call(`/internal/${encodeURIComponent(sessionId)}/request`, {
+    await this.sessionCall(sessionId, "/request", {
       method: "POST",
       body: JSON.stringify({ id, envelope, deadlineMs, epoch }),
-    }, 60_000, {}, this.baseFor(sessionId));
+    }, 60_000);
   }
 
   async response(sessionId: string, id: string, waitMs: number): Promise<RelayResponse> {
@@ -407,36 +423,30 @@ export class RelayClient {
   }
 
   async cancel(sessionId: string, id: string): Promise<void> {
-    await this.call(`/internal/${encodeURIComponent(sessionId)}/cancel`, {
+    await this.sessionCall(sessionId, "/cancel", {
       method: "POST",
       body: JSON.stringify({ id }),
-    }, undefined, {}, this.baseFor(sessionId));
+    });
   }
 
   async shutdown(sessionId: string, reason: string): Promise<void> {
-    await this.call(`/internal/${encodeURIComponent(sessionId)}/shutdown`, {
+    await this.sessionCall(sessionId, "/shutdown", {
       method: "POST",
       body: JSON.stringify({ reason }),
-    }, undefined, {}, this.baseFor(sessionId));
+    });
   }
 
   /** Send a claim to a warm (unleased) guest over its pooled relay entry. */
   async claim(poolSessionId: string, claim: WarmClaim): Promise<void> {
-    await this.call(`/internal/${encodeURIComponent(poolSessionId)}/claim`, {
+    await this.sessionCall(poolSessionId, "/claim", {
       method: "POST",
       body: JSON.stringify({ claim }),
-    }, undefined, {}, this.baseFor(poolSessionId));
+    });
   }
 
   async purge(sessionId: string): Promise<void> {
     try {
-      await this.call(
-        `/internal/${encodeURIComponent(sessionId)}`,
-        { method: "DELETE" },
-        undefined,
-        {},
-        this.baseFor(sessionId),
-      );
+      await this.sessionCall(sessionId, "", { method: "DELETE" });
     } catch (err) {
       if (err instanceof RelayUnavailableError && err.status === 404) return;
       throw err;

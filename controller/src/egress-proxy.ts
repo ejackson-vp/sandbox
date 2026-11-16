@@ -98,6 +98,23 @@ export function parseAuthority(authority: string): ParsedAuthority | null {
   return null;
 }
 
+/**
+ * End a refused CONNECT.
+ *
+ * `end()` flushes the status line; the `destroy` is a backstop for a peer that
+ * never reads it, unref'd so a hostile connection cannot hold the event loop
+ * open. Same on every refusal path, including a failed upstream dial, because a
+ * client that gets no status line retries against a proxy that may be healthy.
+ */
+function refuseSocket(socket: Duplex, status: number, reason: string): void {
+  if (!socket.writable) {
+    socket.destroy();
+    return;
+  }
+  socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
+  setTimeout(() => socket.destroy(), 1_000).unref();
+}
+
 function isIpLiteral(host: string): boolean {
   return net.isIP(host) !== 0;
 }
@@ -229,14 +246,7 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
         host: host ? host.slice(0, 100) : undefined,
         ...(session ? { sessionId: session } : {}),
       });
-      if (clientSocket.writable) {
-        clientSocket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
-        // end() flushes; destroy is only a backstop for a hostile peer that
-        // never reads. unref keeps it out of the event loop's liveness set.
-        setTimeout(() => clientSocket.destroy(), 1_000).unref();
-      } else {
-        clientSocket.destroy();
-      }
+      refuseSocket(clientSocket, status, reason);
     };
 
     const auth = req.headers["proxy-authorization"];
@@ -406,12 +416,7 @@ export function createEgressProxy(opts: EgressProxyOptions): EgressProxy {
       if (tunnelled) return;
       detach();
       lease.release();
-      if (clientSocket.writable) {
-        clientSocket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
-        setTimeout(() => clientSocket.destroy(), 1_000).unref();
-      } else {
-        clientSocket.destroy();
-      }
+      refuseSocket(clientSocket, 502, "Bad Gateway");
     };
     upstream.once("error", onConnectError);
 
