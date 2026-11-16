@@ -208,7 +208,6 @@ const FUNCTION_BASELINE = new Map([
   ["controller/src/relay/http.ts::registerRelayControlRoutes", [222, "eleven relay control routes in one registration"]],
   ["tests/integration/support/api-harness.ts::startHarness", [207, "boots API, controller, facilitator and store for one test"]],
   ["scripts/control-faults.ts::lifecycleRestart", [206, "fault script: seed, kill, wait for convergence, report"]],
-  ["api/src/server.ts::createApp", [200, "middleware, facilitator, routes and probes in one composition root"]],
   ["controller/src/control-api.ts::createControlApi", [178, "mounts every internal route group behind auth and metrics"]],
   ["controller/src/refund-worker.ts::run", [173, "one pass: gauges, claim, send, record, settle"]],
   ["controller/src/provisioning/readiness.ts::awaitReady", [170, "poll loop over warm claim, pod ready, relay and evidence"]],
