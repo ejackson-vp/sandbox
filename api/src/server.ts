@@ -10,8 +10,7 @@
  *    durable payment intent + UNIQUE payment key),
  *  - the API never logs bodies, headers or payment payloads.
  */
-import express, { type NextFunction, type Request, type Response } from "express";
-import { ZodError } from "zod";
+import express, { type Response } from "express";
 import { x402ResourceServer } from "@x402/core/server";
 import type { Network, PaymentRequirements } from "@x402/core/types";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
@@ -41,6 +40,7 @@ import { createFacilitatorClient } from "./payments/facilitator-client.js";
 import type { ChainSettlementVerifier } from "@x402s/shared/settlement";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
+import { errorBackstop } from "./routes/errors.js";
 import { createSessionHandler } from "./routes/create-session.js";
 import { ALLOWLIST_DECISIONS_TOTAL } from "./use-cases/create-session-allowlist.js";
 
@@ -342,25 +342,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
 
   app.use(createSessionsRouter({ config, controller }));
 
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    // Every current route uses safeParse and answers 400 itself. This is the
-    // backstop for a handler that throws a schema error instead: a validation
-    // failure is a client error, never a 500.
-    if (err instanceof ZodError) {
-      res.status(400).json({ error: "invalid_request", issues: err.issues });
-      return;
-    }
-    if (err.name === "PayloadTooLargeError" || (err as { type?: string }).type === "entity.too.large") {
-      res.status(413).json({ error: "payload_too_large" });
-      return;
-    }
-    if (err.name === "SyntaxError") {
-      res.status(400).json({ error: "invalid_json" });
-      return;
-    }
-    log.error("unhandled_error", { error: err.message });
-    res.status(500).json({ error: "internal_error" });
-  });
+  app.use(errorBackstop);
 
   return app;
 }

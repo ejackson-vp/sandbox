@@ -40,12 +40,13 @@ import {
   recoveryAvailable,
   recoverSettlement,
 } from "../payments/settlement-confirmation.js";
-import { createResponseFrom } from "../status.js";
 import {
+  admissionUnavailable,
+  failAfterReleasingHold,
   json,
   paymentRequired,
   rejectCapacity,
-  rejectRetiredCapabilityKey,
+  replayedSession,
   type CreateSessionResult,
   type CreateSessionUseCaseDeps,
   type Failed,
@@ -71,7 +72,7 @@ export async function quoteWithoutPayment(
     preflight = await deps.controller.preflightCapacity(spec);
   } catch (err) {
     log.error("capacity_preflight_failed", { error: (err as Error).message });
-    return json(503, { error: "admission_unavailable", retryable: true, message: "try again shortly" });
+    return admissionUnavailable("try again shortly");
   }
   if (!preflight.admitted) return rejectCapacity(preflight);
   return paymentRequired(requirement, "payment_required");
@@ -238,14 +239,7 @@ export async function reserveBudget(
     budget = await deps.controller.reserveBudget(payerKey, amountAtomic);
   } catch (err) {
     log.error("budget_reservation_failed", { error: (err as Error).message });
-    return {
-      ok: false,
-      result: json(503, {
-        error: "admission_unavailable",
-        retryable: true,
-        message: "try again shortly; no payment was taken",
-      }),
-    };
+    return { ok: false, result: admissionUnavailable("try again shortly; no payment was taken") };
   }
   if (!budget.ok) {
     const globalScope = budget.scope.startsWith("global_");
@@ -285,10 +279,7 @@ export async function holdCapacity(
     hold = await deps.controller.holdCapacity(key, specDigest, spec);
   } catch (err) {
     log.error("capacity_hold_failed", { error: (err as Error).message });
-    return {
-      ok: false,
-      result: json(503, { error: "admission_unavailable", retryable: true, message: "try again shortly" }),
-    };
+    return { ok: false, result: admissionUnavailable("try again shortly") };
   }
   if (!hold.admitted) return { ok: false, result: rejectCapacity(hold) };
   return { ok: true, value: hold };
@@ -322,18 +313,18 @@ export async function claimPaymentIntent(
     };
   }
   if (claim.status === "failed") {
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: paymentRequired(requirement, `payment_intent_failed:${claim.reason ?? "unknown"}`),
-    };
+    return failAfterReleasingHold(
+      deps,
+      key,
+      paymentRequired(requirement, `payment_intent_failed:${claim.reason ?? "unknown"}`),
+    );
   }
   if (claim.status === "mismatch") {
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: json(409, { error: "spec_mismatch", message: "this payment was made for a different session spec" }),
-    };
+    return failAfterReleasingHold(
+      deps,
+      key,
+      json(409, { error: "spec_mismatch", message: "this payment was made for a different session spec" }),
+    );
   }
   if (claim.status === "settled") {
     // A replay must not leave a fresh provisional hold behind. This only
@@ -344,16 +335,7 @@ export async function claimPaymentIntent(
       return { ok: false, result: json(409, { error: "entitlement_missing", sessionId: claim.sessionId }) };
     }
     log.info("payment_idempotent_replay", { sessionId: claim.sessionId, paymentKeyPrefix: key.slice(0, 12) });
-    // The token may have been signed before a rotation: re-derive the one that
-    // matches the stored hash rather than signing a new one.
-    const replayCapability = deps.recoverCapability(key, commitment, session.capabilityHash);
-    if (!replayCapability) {
-      return { ok: false, result: rejectRetiredCapabilityKey(session.sessionId) };
-    }
-    return {
-      ok: false,
-      result: json(200, createResponseFrom(session, replayCapability, session.limits)),
-    };
+    return { ok: false, result: replayedSession(deps, key, commitment, session) };
   }
   return { ok: true, value: { token: claim.token, recovered: claim.recovered } };
 }
@@ -435,15 +417,14 @@ export async function verifyAndSettle(
       .observe(timings.verifyMs / 1000);
   } catch (err) {
     log.warn("payment_verify_error", { error: (err as Error).message });
-    await deps.controller.releaseCapacity(key);
-    return { ok: false, result: paymentRequired(requirement, "payment_verify_failed") };
+    return failAfterReleasingHold(deps, key, paymentRequired(requirement, "payment_verify_failed"));
   }
   if (!verify.isValid) {
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: paymentRequired(requirement, `payment_invalid:${verify.invalidReason ?? "unknown"}`),
-    };
+    return failAfterReleasingHold(
+      deps,
+      key,
+      paymentRequired(requirement, `payment_invalid:${verify.invalidReason ?? "unknown"}`),
+    );
   }
 
   try {
@@ -451,11 +432,11 @@ export async function verifyAndSettle(
     if (!health.ok) throw new Error("controller unhealthy");
   } catch {
     await deps.controller.failIntent(key, "control_plane_unavailable").catch(() => undefined);
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: json(503, { error: "provisioning_unavailable", message: "try again later; no payment was taken" }),
-    };
+    return failAfterReleasingHold(
+      deps,
+      key,
+      json(503, { error: "provisioning_unavailable", message: "try again later; no payment was taken" }),
+    );
   }
 
   let settle;
@@ -541,14 +522,11 @@ export async function verifyAndSettle(
       return { ok: false, result: paymentRequired(requirement, "payment_settle_failed") };
     }
     await deps.controller.failIntent(key, settle.errorReason ?? "settlement_rejected").catch(() => undefined);
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: paymentRequired(
-        requirement,
-        `payment_settlement_rejected:${settle.errorReason ?? "unknown"}`,
-      ),
-    };
+    return failAfterReleasingHold(
+      deps,
+      key,
+      paymentRequired(requirement, `payment_settlement_rejected:${settle.errorReason ?? "unknown"}`),
+    );
   }
 
   // The facilitator said settled. On a chain that is a claim about a nonce, so

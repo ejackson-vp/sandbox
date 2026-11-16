@@ -6,7 +6,9 @@
  * carries the requirement and error the 402 encoder needs, because issuing the
  * challenge nonce is the caller's job; everything else is a status, optional
  * headers and a JSON body. Keeping the vocabulary in one module lets the stages
- * and the orchestrator share it without importing each other.
+ * and the orchestrator share it without importing each other. That is also why
+ * the one side effect an answer can carry, releasing an abandoned capacity
+ * hold, lives here rather than in the stage that happened to need it first.
  */
 import type { PaymentRequirements } from "@x402/core/types";
 import type { decodePaymentSignatureHeader } from "@x402/core/http";
@@ -15,8 +17,9 @@ import type { CreateSessionRequest, SessionSpec } from "@x402s/shared/protocol";
 import type { SettlementLookup } from "@x402s/shared/runtime";
 import type { RateLimiter } from "../admission.js";
 import type { ApiConfig } from "../config.js";
-import type { CapacityDecision, ControllerClient } from "../controller-client.js";
+import type { CapacityDecision, ControllerClient, SessionView } from "../controller-client.js";
 import type { ChainSettlementVerifier } from "@x402s/shared/settlement";
+import { createResponseFrom } from "../status.js";
 
 /** What the use case needs from the process. No `res`, no headers. */
 export interface CreateSessionUseCaseDeps {
@@ -100,6 +103,52 @@ export function paymentRequired(
   error: string,
 ): CreateSessionResult {
   return { kind: "payment_required", requirement, error };
+}
+
+/**
+ * "The control plane could not answer, and no money moved."
+ *
+ * The quote, the budget reservation, the capacity hold, the allowlist lookup
+ * and the kill switch all fail closed into this shape with a message of their
+ * own, so the shape is written once and the caller supplies the reason the
+ * client is told.
+ */
+export function admissionUnavailable(message: string): CreateSessionResult {
+  return json(503, { error: "admission_unavailable", retryable: true, message });
+}
+
+/**
+ * Undo the provisional capacity hold, then answer.
+ *
+ * A refusal that keeps its hold squats on capacity the payment never bought, so
+ * every abandoned claim goes through here instead of repeating the pair. Being
+ * in this module is deliberate: the stages must not import each other.
+ */
+export async function failAfterReleasingHold(
+  deps: CreateSessionUseCaseDeps,
+  key: string,
+  result: CreateSessionResult,
+): Promise<Failed> {
+  await deps.controller.releaseCapacity(key);
+  return { ok: false, result };
+}
+
+/**
+ * The answer to a replay: the session the first attempt created, with its
+ * capability re-derived from the same payment.
+ *
+ * A token signed by a key no longer in the ring is refused rather than replaced:
+ * a freshly signed one would look valid and then fail every request.
+ */
+export function replayedSession(
+  deps: Pick<CreateSessionUseCaseDeps, "recoverCapability">,
+  key: string,
+  commitment: string,
+  session: SessionView,
+): CreateSessionResult {
+  const capability = deps.recoverCapability(key, commitment, session.capabilityHash);
+  if (!capability) return rejectRetiredCapabilityKey(session.sessionId);
+  return json(200, createResponseFrom(session, capability, session.limits));
 }
 
 export function rejectCapacity(

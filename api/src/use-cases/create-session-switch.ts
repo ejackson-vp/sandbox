@@ -20,6 +20,7 @@
 import { CREATE_REFUSALS_TOTAL, log, metrics, publishCreateSwitch } from "@x402s/shared/runtime";
 import type { CreateSwitchStatus } from "../controller-client.js";
 import {
+  admissionUnavailable,
   json,
   type CreateSessionResult,
   type CreateSessionUseCaseDeps,
@@ -65,11 +66,9 @@ export async function refuseWhenCreatesDisabled(
     // No payment was taken and no challenge was issued: this runs before both.
     log.error("create_switch_unreadable", { error: (err as Error).message });
     countRefusal("admission_unavailable");
-    return json(503, {
-      error: "admission_unavailable",
-      retryable: true,
-      message: "the create switch could not be read; try again shortly, no payment was taken",
-    });
+    return admissionUnavailable(
+      "the create switch could not be read; try again shortly, no payment was taken",
+    );
   }
 
   publishCreateSwitch(metrics, state.enabled);

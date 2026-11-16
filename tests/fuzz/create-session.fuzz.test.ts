@@ -16,10 +16,9 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import express, { type NextFunction, type Request, type Response } from "express";
+import express from "express";
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ZodError } from "zod";
 import { fuzzSeed } from "./seeds.js";
 import {
   DEFAULT_TIERS,
@@ -30,6 +29,7 @@ import {
 import { parseUsdPrice } from "@x402s/shared/money";
 import { TokenBucket } from "@x402s/shared/runtime";
 import { createSessionHandler } from "../../api/src/routes/create-session.js";
+import { errorBackstop } from "../../api/src/routes/errors.js";
 import { createSchema, rejectPlaintextBodies } from "../../api/src/schemas.js";
 import type { RateLimiter } from "../../api/src/admission.js";
 import type { ApiConfig } from "../../api/src/config.js";
@@ -108,9 +108,9 @@ const servers: Server[] = [];
 
 /**
  * Mount the production middleware order: body parser, plaintext guard, handler,
- * and the same backstop `api/src/server.ts` puts after it. Without the backstop
+ * and the real backstop `api/src/server.ts` puts after it. Without the backstop
  * a thrown handler would answer 500 with an HTML body, so "never 5xx" would be
- * unfalsifiable.
+ * unfalsifiable, and a copy of it here could drift from the one that ships.
  */
 function startApp(
   options: {
@@ -157,21 +157,7 @@ function startApp(
       ipCreateLimiter: ipLimiter,
     }),
   );
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    if (err instanceof ZodError) {
-      res.status(400).json({ error: "invalid_request", issues: err.issues });
-      return;
-    }
-    if ((err as { type?: string }).type === "entity.too.large") {
-      res.status(413).json({ error: "payload_too_large" });
-      return;
-    }
-    if (err.name === "SyntaxError") {
-      res.status(400).json({ error: "invalid_json" });
-      return;
-    }
-    res.status(500).json({ error: "internal_error" });
-  });
+  app.use(errorBackstop);
   const server = http.createServer(app);
   servers.push(server);
   return new Promise((resolve) => {

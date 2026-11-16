@@ -27,7 +27,7 @@ import { ControllerError, type IntentCompletion } from "../controller-client.js"
 import { createResponseFrom } from "../status.js";
 import {
   json,
-  rejectRetiredCapabilityKey,
+  replayedSession,
   type CreateSessionResult,
   type CreateSessionUseCaseDeps,
   type PaymentPayload,
@@ -57,7 +57,17 @@ interface CompletionContext {
   allowance?: { label: string; budgetKey: string };
 }
 
-/** The settlement the payment facilitator reported, if any. */
+/**
+ * The money moved and there is no session to hand back. The client is told to
+ * contact support, not to pay again, so the receipt is the whole recovery path.
+ */
+function settledWithoutSession(): CreateSessionResult {
+  return json(503, {
+    error: "provisioning_unavailable",
+    message: "payment settled; contact support with your receipt",
+  });
+}
+
 /**
  * Map a failed `completeIntent` to an answer. A lost capacity race keeps the
  * settled payment recoverable, and a 409 that names a session means a
@@ -82,18 +92,11 @@ async function completeFailure(
     const detail = err.detail as { sessionId?: string } | undefined;
     if (detail?.sessionId) {
       const existing = await deps.controller.getSession(detail.sessionId).catch(() => null);
-      if (existing) {
-        const replayCapability = deps.recoverCapability(key, commitment, existing.capabilityHash);
-        if (!replayCapability) return rejectRetiredCapabilityKey(existing.sessionId);
-        return json(200, createResponseFrom(existing, replayCapability, existing.limits));
-      }
+      if (existing) return replayedSession(deps, key, commitment, existing);
     }
   }
   log.error("entitlement_creation_failed", { error: (err as Error).message });
-  return json(503, {
-    error: "provisioning_unavailable",
-    message: "payment settled; contact support with your receipt",
-  });
+  return settledWithoutSession();
 }
 
 /**
@@ -169,18 +172,13 @@ export async function completeEntitlement(
         sessionId: completion.sessionId,
         paymentKeyPrefix: key.slice(0, 12),
       });
-      return json(503, {
-        error: "provisioning_unavailable",
-        message: "payment settled; contact support with your receipt",
-      });
+      return settledWithoutSession();
     }
     log.info("payment_idempotent_completion", {
       sessionId: winner.sessionId,
       paymentKeyPrefix: key.slice(0, 12),
     });
-    const replayCapability = deps.recoverCapability(key, commitment, winner.capabilityHash);
-    if (!replayCapability) return rejectRetiredCapabilityKey(winner.sessionId);
-    return json(200, createResponseFrom(winner, replayCapability, winner.limits));
+    return replayedSession(deps, key, commitment, winner);
   }
   metrics
     .counter("sandbox_sessions_total", "Sessions created by entitlement source")
