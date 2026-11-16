@@ -202,7 +202,6 @@ const FUNCTION_BASELINE = new Map([
   ["api/src/use-cases/create-session-stages.ts::claimPaymentIntent", [65, "the intent claim: replay, mismatch, in-progress and settled"]],
   ["controller/src/settlement-config.ts::parseSettlement", [52, "the payment network rules, one per refusal"]],
   ["tests/unit/store-contract/suite.ts::describeStoreContract", [532, "one suite over every store port, one case per method, on one fixture"]],
-  ["controller/src/control-api/payments.ts::registerPaymentRoutes", [390, "eight internal payment routes in one registration"]],
   ["controller/src/egress-proxy.ts::createEgressProxy", [372, "the CONNECT path inline: verify, admit, resolve, dial, splice"]],
   ["controller/src/control-api/sessions.ts::registerSessionRoutes", [313, "seven internal session routes in one registration"]],
   ["controller/src/main.ts::start", [291, "three boot phases: config and lease, listeners, reconciler"]],
