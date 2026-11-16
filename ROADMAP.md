@@ -10,8 +10,7 @@ The issue tracker is the detailed, file-level backlog. This list keeps the order
 of risk.
 
 **Current gate: production-ready core (#117).** It closes the store, relay,
-checkpoint, settlement, admission and latency gaps before Stage 2. The runtime
-catalog does not start until that gate is met.
+checkpoint, settlement, admission and latency gaps.
 
 1. **Keep the trust baseline current.** Operation and payment-intent fencing
    (#19/#20), the relay restart window (#17), the Kubernetes digest guard (#4),
@@ -31,46 +30,38 @@ catalog does not start until that gate is met.
 4. **Relay state out of process.** One in-memory relay pod loses pending
    ciphertext on restart. Redis or NATS with per-session queues and TTLs,
    ciphertext only. (#24)
-5. **One-shot run and a runtime catalog.** Stage 1 shipped: `run()` is a client
-   composition and the public `runtime` noun is frozen to `base`. Stage 2 adds
-   one common base image plus system-defined runtime profiles, selected at warm
-   claim so the base image and warm pool stay shared. Arbitrary OCI images are
-   not part of this step; start only after #117.
+5. **One-shot run and a runtime catalog.** Shipped: `run()` is a client
+   composition, and the public `runtime` noun is `base`, `python` or `node`,
+   published from `guest/profiles/runtime-images.conf` by
+   `release-profiles.yml`. Arbitrary OCI images are not part of this step.
 
 ## Cross-cutting
 
-- **Observability:** a scrape-ready contract on a private port (#37) and a
-  lightweight metrics/alerting stack (#38). Log correlation is #28.
-- **Verification:** the cluster fault matrix (#39), the lifecycle and payment
-  state machines (#40), nightly model checks (#73) and protocol fuzzing (#41).
-  The model must also cover the epoch fence (#75). Release isolation evidence
-  is #44.
+- **Observability:** the scrape contract (#37) and the SLO alert set (#38) are
+  shipped; propagating `requestId` across API, controller and relay is #28.
+- **Verification:** the cluster fault matrix (#39), the state-machine model and
+  its nightly run (#40, #73), epoch fencing in the model (#75) and protocol
+  fuzzing (#41) are shipped. Release isolation evidence is #44.
 
 ## Later
 
-- **Memory snapshot and restore.** Suspend/resume is disk-only today, and a
-  restored snapshot must reseed identity, entropy and network state. (#52, #53)
 - **Encrypted checkpoint storage.** Checkpoint PVCs are plaintext today, which
   puts suspended session files in the node and storage trust domain. (#32)
-- **Real settlement reconciliation and refunds.** Mock mode auto-refunds
-  terminal-before-`READY` sessions. Testnet/mainnet need facilitator webhooks or
-  an on-chain refund worker before money is real. (#31)
-- **Signing verification at admission.** A Kyverno policy now pins the guest
-  repository and digest ([deploy/kubernetes/kyverno](deploy/kubernetes/kyverno/README.md)).
-  It does not verify the Sigstore bundle produced by the release workflow, and it
-  has only been reviewed, not executed against a cluster. (#30)
-- **HTTP/2 and gRPC workloads.** The guest supports HTTP/1.1, SSE and a polled
-  WebSocket; gRPC and HTTP/2 are not available today. (#55)
-- **Elastic warm pool.** Scale the pool from in-flight demand instead of a fixed
-  size, with a min/max, rate cap and scale-to-zero grace. (#54)
-- **Publish `@x402s/sdk` to npm.** The package is a workspace build today; a
-  public release makes the SDK usable without cloning the repo. (#33)
-- **Secret rotation.** Add key ids and dual-key verification so capabilities and
-  controller tokens can rotate without draining live sessions. (#61)
-- **Incident runbooks.** Egress abuse, orphan storage and relay compromise need
-  detect/contain/recover procedures, not just alerts. (#60)
+- **Rehearse the incident runbooks.** Egress abuse, orphan Pod/PVC cleanup, relay
+  compromise and secret rotation each have a runbook under `docs/runbooks/`, and
+  none has been walked through against a live failure; the
+  [tabletop script](docs/runbooks/tabletop.md) has never been run. (#60)
 - **Docs site.** Only if it can be generated from `docs/` without becoming a
   second source of truth.
+
+## Closed as not planned
+
+Decided against on 2026-11-11: memory snapshot and restore (#52, #53), HTTP/2
+and gRPC workloads (#55) and publishing `@x402s/sdk` to npm (#33). Each stays
+listed as a limitation in `README.md` and `docs/`. The elastic warm pool (#54)
+closed with them, but its useful half shipped: the pool sizes from observed
+misses inside a fixed budget (`docs/warm-pool.md`), and only the predictive
+autoscaler was dropped.
 
 ## Out of scope
 

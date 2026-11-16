@@ -14,14 +14,14 @@ Each command, and what it deliberately leaves out:
 
 | Command | Covers |
 | --- | --- |
-| `npm test` | `tests/unit` and `tests/property` with `--fileParallelism`. Fast, hermetic, the same set the badge measures. |
+| `npm test` | `tests/unit` and `tests/property` with `--fileParallelism`. Fast, hermetic, and the largest set that needs no cluster or guest binary. |
 | `npm run test:unit` | `tests/unit`: store, controller, API and CLI behaviour on Postgres. |
 | `npm run test:property` | `tests/property`: `fast-check` invariants. |
 | `npm run test:portable` | `tests/transfers`, `tests/workloads`, `tests/compatibility`. No cluster; the browser case skips without its image. |
 | `make verify` | Build, typecheck, structure lint, unit, property, portable, `go test`, `go vet`. What a reviewer runs. |
 | `make test` | `tests/unit` plus `tests/integration` against a real guest binary. Needs `make guest` first. |
 | `make security-test` | `tests/security`. Needs a kind cluster with Cilium (`make up`). |
-| `npm run mutation` | Stryker against `shared/src/payment.ts`, `controller/src/control-api/payments.ts` and `sdk/src/transfers.ts`. Slow, nightly, needs `DATABASE_URL`. |
+| `npm run mutation` | Stryker against `shared/src/payment.ts`, `controller/src/control-api/payments.ts`, `sdk/src/transfers.ts` and `api/src/use-cases/create-session-allowlist.ts`. Slow, nightly, needs `DATABASE_URL`. |
 
 `npm test` deliberately excludes `tests/integration` and `tests/security`: both
 need a guest binary or a live cluster, so including them is what made `npm test`
@@ -29,9 +29,8 @@ fail on a fresh clone. `fileParallelism` is opt-in per script for the same
 reason: the global default in `vitest.config.ts` stays serial because the
 integration suite SIGSTOPs a real guest process and the security suite drives
 real sockets, and running those files concurrently flakes (#128, #145). The unit
-and property files share no process, port or fixture, so they parallelise: 915
-tests in ~4 s instead of ~24 s, verified three times under
-`--sequence.shuffle`.
+and property files share no process, port or fixture, so they parallelise:
+`npm test` runs 1,796 tests in ~13 s, against ~120 s with the files serialised.
 
 Coverage covers the shipped TypeScript (`shared`, `sdk`, `api`, `controller`,
 `cli`), not tests. Three suites are measured and merged, because coverage is a
@@ -45,11 +44,10 @@ different floor. `scripts/go-coverage.sh` merges one `-coverpkg=./...` profile
 per package and gates the total (29.0% on 2026-11-13, floor 26%);
 `scripts/go-fuzz-coverage.sh` replays each fuzz target's seed corpus and the
 corpus a short fuzz run grows, so "we fuzz it" carries a number per target
-instead of meaning "it did not crash". CI uploads both profiles. Neither is a
-required check yet: `go coverage` runs with `continue-on-error` inside
-`integration (local guest)`, and `go fuzz coverage` lives in the `fuzz` job,
-which is not required, so a regression is visible without blocking a merge until
-they have held for a few weeks.
+instead of meaning "it did not crash". CI uploads both profiles. `go coverage`
+gates `integration (local guest)`, which is a required check, so a floor miss
+blocks a merge; `go fuzz coverage` lives in the `fuzz` job, which is not
+required, so a regression there is visible without blocking.
 
 `scripts/coverage-merge.mjs` takes the maximum hit count per line, function and
 branch across every report. It is the only place a total the whole set reaches
@@ -193,7 +191,7 @@ DATABASE_URL=postgres://postgres:pg@127.0.0.1:55432/sandbox npm run mutation
 ```
 
 It needs Postgres because it forks vitest, and the global setup refuses to start
-without it. It mutates three modules where a survivor is a real bug rather than
+without it. It mutates four modules where a survivor is a real bug rather than
 a style opinion:
 
 | File | What a survivor means |
@@ -201,12 +199,13 @@ a style opinion:
 | `shared/src/payment.ts` | Pricing, asset or validity-window validation is not pinned; a wrong mock scheme passes the suite. |
 | `controller/src/control-api/payments.ts` | A money route answers the same with a changed status, hash or claim check, so a client can be served twice or not at all. |
 | `sdk/src/transfers.ts` | Resume, chunk bounds or digest verification can change without a test noticing a truncated or corrupted transfer. |
+| `api/src/use-cases/create-session-allowlist.ts` | The free-entitlement check flips "not allowed" into "allowed", or the derived key or budget namespace changes, and a session is granted without payment (ADR 0013). |
 
 `stryker.config.mjs` limits `testFiles` to `tests/unit`, `tests/fuzz` and
 `tests/transfers`: integration and security need a guest binary or a cluster, so
 they would cost minutes per mutant and are out of scope. `coverageAnalysis:
 "perTest"` records which test reached which line in the dry run, so a mutant
-only re-runs those tests instead of all ~1100.
+only re-runs those tests instead of all ~1,700.
 
 The report is the point, not the number. The HTML report is written to
 `reports/mutation/index.html` (git-ignored), and the nightly
@@ -217,12 +216,11 @@ do not chase the percentage. A `// Stryker disable next-line <Mutator>: <why>`
 comment is the last resort for a mutant that is provably equivalent, and it
 needs the reason, because the next reader cannot re-derive it.
 
-`thresholds.break` is `null`, so the job reports and does not fail. That is
-deliberate for the first landing: there is no baseline yet, and a `break` set
-today would either block every pull request or claim a floor the suite has not
-earned. Once a few nightly runs exist, watch the trend and set `break` to
-`low` (60), the point where it means "the suite stopped asserting" instead of
-"the code changed".
+`thresholds.break` is `60`, set at `low` rather than just under the current
+score, so the nightly lane fails when the suite stops asserting instead of when
+somebody changes one branch. A non-zero exit also covers a crash, a compile error
+or a failing test, which is the signal that the harness itself broke. An
+equivalent survivor is expected and is listed in the pull request that owns it.
 
 ## Rules
 
