@@ -1,0 +1,50 @@
+# Two ClusterIP Services: one in front of the receiver, one in front of the
+# Hermes gateway's webhook listener. Neither is published outside the cluster.
+#
+# The second Service exists because the Hermes Deployment declares no Service at
+# all, and the receiver addresses the agent by DNS, not by pod IP. It selects the
+# existing `app: hermes` pod; nothing about the Hermes Deployment changes to make
+# the Service resolve.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-alert-receiver
+  namespace: hermes
+  labels:
+    app: hermes-alert-receiver
+    app.kubernetes.io/part-of: hermes
+spec:
+  # ClusterIP only. The only caller is Alertmanager in the `monitoring`
+  # namespace, and the NetworkPolicy in this directory admits that namespace and
+  # nothing else.
+  type: ClusterIP
+  selector:
+    app: hermes-alert-receiver
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# The Hermes gateway's webhook listener. The port is the one the gateway binds
+# when `platforms.webhook` is enabled (WEBHOOK_PORT / extra.port); it is not the
+# 8765 `gateway` containerPort the Deployment declares, which nothing listens on.
+#
+# Target by number, not name: the Hermes Deployment does not name this port, and
+# adding a name there is optional (see README.md).
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-webhook
+  namespace: hermes
+  labels:
+    app: hermes
+    app.kubernetes.io/part-of: hermes
+spec:
+  type: ClusterIP
+  selector:
+    app: hermes
+  ports:
+    - name: webhook
+      port: 8644
+      targetPort: 8644
+      protocol: TCP

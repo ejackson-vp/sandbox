@@ -1,0 +1,56 @@
+# Alertmanager configuration for the Hermes alert receiver.
+#
+# This is the receiver half of the contract: an Alertmanager route that POSTs
+# every notification to deploy/monitoring/alert-receiver, plus the payload shape
+# it produces. Nothing else in the monitoring contract names a receiver; the SLO
+# rules deliberately carry none, so an evaluator that sends nothing keeps working
+# (the reference deployment runs vmalert with -notifier.blackhole, which is why no alert has
+# ever reached the agent).
+#
+# What this file assumes:
+#   - the receiver Deployment and Service from ../../alert-receiver/ are applied
+#     in namespace `hermes`;
+#   - a copy of `alertmanager-token` from the receiver's Secret is mounted into
+#     this Alertmanager as /etc/alertmanager/secrets/alertmanager-token;
+#   - Alertmanager runs in the `monitoring` namespace, which is the only
+#     namespace the receiver's NetworkPolicy admits.
+#
+# Replace the existing `route:`/`receivers:` blocks in your alertmanager.yml
+# rather than pasting a second document into it: Alertmanager allows exactly one
+# route tree and a flat list of receivers.
+route:
+  receiver: hermes-agent
+
+  # One notification per alert group, not per alert. The receiver further
+  # splits the batch: fingerprints already delivered inside its cooldown are
+  # dropped, and only the rest reach the agent.
+  group_by: ["alertname", "namespace", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+
+  # Reminder cadence while an alert stays firing. It is deliberately longer than
+  # the receiver's 900 s dedupe window: an Alertmanager repeat should re-prompt
+  # the agent, and would be swallowed if it arrived inside the window.
+  repeat_interval: 4h
+
+receivers:
+  - name: hermes-agent
+    webhook_configs:
+      - url: http://hermes-alert-receiver.hermes.svc.cluster.local:8080/alerts
+        send_resolved: true
+        # Matches the receiver's own cap. A larger group is truncated here, and
+        # again in the receiver, which is the only bound a hand-written POST
+        # cannot raise.
+        max_alerts: 20
+        http_config:
+          authorization:
+            type: Bearer
+            # A file, never a literal: an inline token would sit in this
+            # ConfigMap and in the Alertmanager UI. The Secret key and the file
+            # name are both `alertmanager-token`, so the mount needs no `items`.
+            credentials_file: /etc/alertmanager/secrets/alertmanager-token
+# The payload this receiver is called with is Alertmanager's v4 notification
+# document; payload.schema.json next to this file is the accepted shape, and
+# example-payload.json is a real one. The fields the receiver reads are
+# `status` and, per alert, `status`, `labels`, `annotations`, `startsAt`,
+# `endsAt`, `generatorURL` and `fingerprint`.

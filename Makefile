@@ -156,6 +156,11 @@ test-workloads:
 test-portable:
 	npm run test:portable
 
+# The alert webhook receiver's own suite: node:test, no dependencies, no
+# cluster. It is the only test that covers the deploy/ tree.
+test-alert-receiver:
+	npm run test:alert-receiver
+
 # A dump nobody restored is a guess. DUMP is a real artifact (`pg_dump -Fc`,
 # optionally openssl-encrypted, as the homelab CronJob writes them). The script
 # decrypts if BACKUP_ENCRYPTION_KEY is set, restores into a scratch database it
@@ -190,7 +195,7 @@ test-integration: cli guest
 	GUEST_BINARY=$(PWD)/guest/bin/x402-guest npx vitest run tests/integration
 
 # Everything a reviewer can run without a cluster.
-verify: build typecheck lint-structure test-unit test-property test-portable test-go vet-go
+verify: build typecheck lint-structure test-unit test-property test-portable test-alert-receiver test-go vet-go
 
 # Exhaustive-over-interleavings check of the session lifecycle, payment intent,
 # single-operation slot and capacity reservation. TLC is pinned; the first run

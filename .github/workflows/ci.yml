@@ -72,6 +72,10 @@ jobs:
       # one release. Offline on purpose: a registry digest cannot be re-derived
       # from a tag deterministically, so the committed map is the link.
       - run: node scripts/check-deploy-pins.mjs
+      # The alert webhook receiver is the only tested code under deploy/. Its
+      # suite is node:test with no dependencies, so it costs a second and needs
+      # no cluster.
+      - run: npm run test:alert-receiver
       # The published profile set is guest/profiles/runtime-images.conf; the
       # release workflow builds exactly those and nothing else.
       - run: ./guest/check-profiles.sh

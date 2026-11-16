@@ -13,13 +13,15 @@ is cluster-specific and lives in the private deployment repository under
 
 | Part | Where | Why |
 | --- | --- | --- |
-| Scrape list, SLO rules, dashboard JSON, metric/SLO docs | **here** — `deploy/monitoring/contract/` | Tied to app metric names; portable to any Prometheus-compatible stack |
+| Scrape list, SLO rules, dashboard JSON, alerting contract, metric/SLO docs | **here** — `deploy/monitoring/contract/` | Tied to app metric names; portable to any Prometheus-compatible stack |
 | VMSingle, vmalert, Grafana, namespace, NetworkPolicies, scrape-config mirror | `apps/sandbox-monitoring/` in the private deployment repository | Cluster decisions: storage class, retention, resources, image pins |
 | Flux ordering | `apps/sandbox-monitoring{,-namespace,-contract}.yaml` in the private deployment repository | Namespace → contract → stack, so a fresh cluster cannot deadlock |
 
-Nothing in this directory creates a workload. `kubectl apply -k
-deploy/monitoring/contract` produces three ConfigMaps in the `monitoring`
-namespace and nothing else.
+Nothing in `contract/` creates a workload. `kubectl apply -k
+deploy/monitoring/contract` produces four ConfigMaps in the `monitoring`
+namespace and nothing else. The one workload in this directory,
+[`alert-receiver/`](alert-receiver/README.md), is applied separately into the
+`hermes` namespace because that is where the agent it delivers to lives.
 
 ## Scrape contract
 
@@ -59,7 +61,9 @@ a family to catch an id-shaped label before it reaches storage.
 | [`contract/prometheus-scrape.yaml`](contract/prometheus-scrape.yaml) | The scrape job, bare-list form for `additionalScrapeConfigs` |
 | [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Twenty-one SLO rules, portable Prometheus/vmalert rule file |
 | [`contract/grafana-dashboard.json`](contract/grafana-dashboard.json) | `Sandbox control plane`, uid `sandbox-control-plane` |
-| [`contract/kustomization.yaml`](contract/kustomization.yaml) | Renders the three ConfigMaps, namespace `monitoring` |
+| [`contract/alerting/README.md`](contract/alerting/README.md) | The Alertmanager receiver that points at the Hermes agent: payload, auth, dedupe, the agent's instruction |
+| [`alert-receiver/README.md`](alert-receiver/README.md) | The receiver Deployment and Service in `hermes`, and the exact Hermes-side patch |
+| [`contract/kustomization.yaml`](contract/kustomization.yaml) | Renders the four ConfigMaps, namespace `monitoring` |
 | [`contract/README.md`](contract/README.md) | How to consume the ConfigMaps, including with an existing Prometheus |
 
 ## Runtime profiles and the warm pool

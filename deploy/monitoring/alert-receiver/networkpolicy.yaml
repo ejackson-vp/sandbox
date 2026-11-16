@@ -1,0 +1,84 @@
+# Ingress to the receiver is the `monitoring` namespace only, egress is the
+# Hermes webhook port and cluster DNS. Nothing else.
+#
+# The first policy selects only the receiver pod, so it adds a deny for that pod
+# without touching any other workload in `hermes`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hermes-alert-receiver
+  namespace: hermes
+  labels:
+    app.kubernetes.io/part-of: hermes
+spec:
+  podSelector:
+    matchLabels:
+      app: hermes-alert-receiver
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              # The automatic namespace label, so the policy does not depend on
+              # a hand-applied one. Alertmanager must run in `monitoring`; if it
+              # runs somewhere else, add that namespace here and nothing else.
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: hermes
+      ports:
+        - protocol: TCP
+          port: 8644
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# The Hermes gateway's webhook port takes a signed request from the receiver and
+# nothing else.
+#
+# This policy changes the Hermes pod from default-allow ingress to an allow-list,
+# so read the scope note before applying it:
+#   - 8644 is the only port opened, and only to the receiver pod.
+#   - The dashboard (127.0.0.1:55757) and the gateway API server
+#     (127.0.0.1:8642) bind loopback. `kubectl port-forward` dials those inside
+#     the pod's network namespace, so that traffic never crosses the pod's veth
+#     and is not governed by this policy. The same is true of signal-cli's
+#     loopback listener.
+#   - Anything else that reached this pod over its pod IP stops working. Today
+#     that is nothing: the only listeners are loopback, plus 8644 once the
+#     webhook platform is enabled.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hermes-webhook-from-receiver
+  namespace: hermes
+  labels:
+    app: hermes
+    app.kubernetes.io/part-of: hermes
+spec:
+  podSelector:
+    matchLabels:
+      app: hermes
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: hermes-alert-receiver
+      ports:
+        - protocol: TCP
+          port: 8644

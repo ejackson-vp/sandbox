@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-alert-receiver
+  namespace: hermes
+  labels:
+    app: hermes-alert-receiver
+    app.kubernetes.io/part-of: hermes
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  # Recreate, not RollingUpdate: the dedupe window is in memory, so two pods
+  # during a rollout would each deliver the same alert to the agent.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hermes-alert-receiver
+  template:
+    metadata:
+      labels:
+        app: hermes-alert-receiver
+        app.kubernetes.io/part-of: hermes
+    spec:
+      # The receiver talks to the Hermes pod over HTTP and reads nothing from the
+      # API server. No ServiceAccount, no Role, no RoleBinding, and no token to
+      # steal.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: receiver
+          # Upstream image on purpose: the program is a single stdlib file from
+          # the ConfigMap below, so there is no image of our own to build, scan
+          # or keep current. Digest matches Dockerfile.control's node:26-alpine.
+          image: node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/app/server.mjs"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            # Node wants a writable TMPDIR; the root filesystem is read-only.
+            - name: TMPDIR
+              value: /tmp
+            # The Service in front of the Hermes pod. The route name is part of
+            # the contract; it matches `platforms.webhook.extra.routes.alerts`
+            # in the Hermes config. See contract/alerting/README.md.
+            - name: HERMES_WEBHOOK_URL
+              value: http://hermes-webhook.hermes.svc.cluster.local:8644/webhooks/alerts
+            # Anti-flap window. Alertmanager's repeat_interval is the reminder
+            # cadence; this is the floor between two deliveries for one
+            # fingerprint. Keep it below repeat_interval or the reminder is
+            # swallowed.
+            - name: DEDUPE_COOLDOWN_SECONDS
+              value: "900"
+            # Alertmanager -> receiver shared secret.
+            - name: ALERTMANAGER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-alert-receiver
+                  key: alertmanager-token
+            # Present only while a rotation is in progress; see the rotation
+            # steps in contract/alerting/README.md.
+            - name: ALERTMANAGER_TOKEN_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-alert-receiver
+                  key: alertmanager-token-previous
+                  optional: true
+            # receiver -> Hermes HMAC secret. The same key is mounted into the
+            # Hermes Deployment as HERMES_WEBHOOK_SECRET.
+            - name: HERMES_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-alert-receiver
+                  key: hermes-webhook-secret
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              # One small JSON body per alert notification. The cap is a blast
+              # radius, not a sizing exercise.
+              cpu: 200m
+              memory: 96Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - name: app
+              mountPath: /app/server.mjs
+              subPath: server.mjs
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: app
+          configMap:
+            name: hermes-alert-receiver-src
+            defaultMode: 0444
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Mi

@@ -1,0 +1,32 @@
+# The alert webhook receiver for the Hermes agent.
+#
+#   kubectl kustomize deploy/monitoring/alert-receiver   # render only
+#
+# This is the runnable half of deploy/monitoring/contract/alerting: the
+# Alertmanager receiver contract lives there, the workload lives here, and the
+# workload lands in the `hermes` namespace next to the agent rather than in
+# `sandbox-system`. It is deliberately not part of deploy/kubernetes, which
+# renders the sandbox control plane.
+#
+# The Secret is not in this kustomization. `secret.example.yaml` documents the
+# two keys; create the real one from your secret store first (see README.md).
+#
+# The receiver is one dependency-free file mounted from a ConfigMap, run by the
+# upstream node image. There is no image to build, publish or pin beyond the
+# base image digest in deployment.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hermes
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+
+configMapGenerator:
+  # The hash suffix is load-bearing: the file is mounted by subPath, which never
+  # updates in a running pod, so a content change has to roll the Deployment.
+  - name: hermes-alert-receiver-src
+    files:
+      - server.mjs

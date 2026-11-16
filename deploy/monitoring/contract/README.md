@@ -10,6 +10,7 @@ retention period and no PVC.
 | [`prometheus-scrape.yaml`](prometheus-scrape.yaml) | Scrape job and targets, bare-list form |
 | [`rules/sandbox-slo.yaml`](rules/sandbox-slo.yaml) | Nineteen SLO rules, portable Prometheus rule file |
 | [`grafana-dashboard.json`](grafana-dashboard.json) | `sandbox-control-plane`, uid `sandbox-control-plane` |
+| [`alerting/`](alerting/README.md) | The Alertmanager receiver that delivers alerts to the Hermes agent, and the agent's instruction |
 | [`README.md`](../README.md) | Metric names, SLO meanings, alert caveats |
 
 The runnable stack — VMSingle, vmalert, Grafana, namespace, NetworkPolicies,
@@ -23,17 +24,23 @@ kubectl kustomize deploy/monitoring/contract
 kubectl apply -k deploy/monitoring/contract    # needs the `monitoring` namespace
 ```
 
-That creates three ConfigMaps in `monitoring`:
+That creates four ConfigMaps in `monitoring`:
 
 | ConfigMap | Key | Consumer |
 | --- | --- | --- |
 | `sandbox-scrape-config` | `sandbox-scrape-configs.yaml` | any Prometheus (`additionalScrapeConfigs`, bare list) |
 | `vmalert-rules` | `sandbox-slo.yaml` | vmalert (`-rule=.../*.yaml`) or Prometheus (`rule_files`) |
 | `grafana-dashboard-sandbox` | `sandbox-control-plane.json` | Grafana file provider |
+| `alertmanager-hermes-receiver` | `alertmanager.yaml` | Alertmanager (`--config.file`), only where one exists |
 
 The names are stable because the operator's monitoring stack mounts them by
 name. They are not a claim that you must run vmalert or Grafana: mount the files
 wherever your own stack reads rules and dashboards.
+
+The Alertmanager ConfigMap is inert until a stack runs Alertmanager. The reference deployment
+does not: it evaluates with `-notifier.blackhole`, so the rules produce `ALERTS`
+series and deliver nothing. See [`alerting/README.md`](alerting/README.md) for
+the receiver, the payload contract and the Hermes-side change delivery needs.
 
 ## Using it with an existing Prometheus
 

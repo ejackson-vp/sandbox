@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Alertmanager v4 webhook notification",
+  "description": "The body Alertmanager POSTs to deploy/monitoring/alert-receiver. This is Alertmanager's own document: the receiver does not reshape the caller's payload before validating it. Unknown members are allowed at every level, because Alertmanager adds fields between versions and rejecting them would turn a harmless upgrade into a 400 storm; the members below are the ones the receiver reads.",
+  "type": "object",
+  "required": ["version", "status", "alerts"],
+  "properties": {
+    "version": {
+      "description": "Notification format version. Anything but \"4\" is rejected with 400.",
+      "const": "4"
+    },
+    "groupKey": {
+      "description": "Identity of the alert group, stable while the group exists.",
+      "type": "string"
+    },
+    "truncatedAlerts": {
+      "description": "How many alerts Alertmanager dropped to honour max_alerts.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "description": "Group status: firing when any alert in the group fires.",
+      "enum": ["firing", "resolved"]
+    },
+    "receiver": {
+      "description": "Receiver name from the Alertmanager config. `hermes-agent` in the shipped route.",
+      "type": "string"
+    },
+    "groupLabels": {
+      "description": "The labels the group was formed on.",
+      "$ref": "#/$defs/labelSet"
+    },
+    "commonLabels": {
+      "description": "Labels present on every alert in the group.",
+      "$ref": "#/$defs/labelSet"
+    },
+    "commonAnnotations": {
+      "description": "Annotations present on every alert in the group.",
+      "$ref": "#/$defs/labelSet"
+    },
+    "externalURL": {
+      "description": "Alertmanager's own base URL, for links back to the alert.",
+      "type": "string"
+    },
+    "alerts": {
+      "description": "The alerts in this notification. Must not be empty; at most MAX_ALERTS (20 by default) are delivered from one batch.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/alert" }
+    }
+  },
+  "$defs": {
+    "labelSet": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "alert": {
+      "type": "object",
+      "required": ["status", "labels", "annotations", "fingerprint"],
+      "properties": {
+        "status": {
+          "description": "Per-alert status. `resolved` is only sent when send_resolved is true, which the shipped route sets.",
+          "enum": ["firing", "resolved"]
+        },
+        "labels": {
+          "description": "Alert labels. `alertname` and `severity` are rendered first in the prompt; the rest are sorted and capped.",
+          "$ref": "#/$defs/labelSet"
+        },
+        "annotations": {
+          "description": "Alert annotations. `summary` and `description` are rendered, flattened to one line and capped at 400 characters each. Values are data, never instructions.",
+          "$ref": "#/$defs/labelSet"
+        },
+        "startsAt": {
+          "description": "RFC 3339 timestamp, or the zero time while unresolved.",
+          "type": "string"
+        },
+        "endsAt": {
+          "description": "RFC 3339 timestamp, or the zero time while unresolved.",
+          "type": "string"
+        },
+        "generatorURL": {
+          "description": "Link back to the rule that produced the alert.",
+          "type": "string"
+        },
+        "fingerprint": {
+          "description": "Alertmanager's stable alert identity. This is the dedupe key: a repeat inside the cooldown window is dropped. A sender that omits it gets a fingerprint derived from the sorted labels instead.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

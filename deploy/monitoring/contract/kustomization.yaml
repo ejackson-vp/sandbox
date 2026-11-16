@@ -33,6 +33,12 @@ configMapGenerator:
   - name: grafana-dashboard-sandbox
     files:
       - sandbox-control-plane.json=grafana-dashboard.json
+  # The Alertmanager route and receiver that point at the Hermes agent. Inert
+  # until a stack runs Alertmanager and mounts it; the reference deployment has none, so
+  # alerts are evaluated and never delivered.
+  - name: alertmanager-hermes-receiver
+    files:
+      - alertmanager.yaml=alerting/alertmanager.yaml
 
 # The stack that mounts these by name is a separate Kustomization, so the
 # names must be stable across renders.

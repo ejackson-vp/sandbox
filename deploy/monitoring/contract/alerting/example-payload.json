@@ -1,0 +1,41 @@
+{
+  "version": "4",
+  "groupKey": "{}/{severity=\"warning\"}:{alertname=\"SandboxCreateP95High\", namespace=\"sandbox-system\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "hermes-agent",
+  "groupLabels": {
+    "alertname": "SandboxCreateP95High",
+    "namespace": "sandbox-system",
+    "severity": "warning"
+  },
+  "commonLabels": {
+    "alertname": "SandboxCreateP95High",
+    "namespace": "sandbox-system",
+    "severity": "warning",
+    "role": "api"
+  },
+  "commonAnnotations": {
+    "summary": "Sandbox create p95 is above 500 ms"
+  },
+  "externalURL": "http://vmalert.monitoring.svc.cluster.local:8880",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "SandboxCreateP95High",
+        "namespace": "sandbox-system",
+        "role": "api",
+        "severity": "warning"
+      },
+      "annotations": {
+        "summary": "Sandbox create p95 is above 500 ms",
+        "description": "sandbox_create_duration_seconds p95 is 0.81 s over the last 10m, above the 0.5 s objective."
+      },
+      "startsAt": "2026-11-15T20:04:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://vmalert.monitoring.svc.cluster.local:8880/vmalert/alert?group_id=1&alert_id=2",
+      "fingerprint": "5d8f2a1c4b7e9d03"
+    }
+  ]
+}
