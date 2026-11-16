@@ -202,13 +202,25 @@ delivery. Until the rules and the dashboard panel existed, an operator could not
 see that state at all without querying the store by hand; now it is visible to
 someone who is already looking at the dashboard.
 
-The reference deployment moved while this review was being written. vmalert
-there points at an Alertmanager whose single route ends in an agent in the
-`hermes` namespace, not a pager, and no delivery through it is recorded here. So
-the gate's "Alerts reach a human" FAIL still stands, for the reason that matters
-at 2am: there is no evidence that a firing rule reaches a person, and the last
-hop is software deciding whether to message one. Treat the rules as visible and
-delivery as unproven until a delivery is written down in the launch checklist.
+The reference deployment now has an Alertmanager whose single route ends in an
+agent in the `hermes` namespace, not in a pager. One delivery through it has
+been recorded: a synthetic alert posted to Alertmanager's v2 API was grouped,
+forwarded to the authenticated receiver, admitted by the agent's webhook
+listener, turned into an agent turn in 11.3 s with one model call, and answered
+with a message sent to the operator's Signal. So the chain works from rule to a
+human-readable message.
+
+What that does not prove is the thing the gate cares about. The last hop is
+software deciding whether to message a person: an agent that is wedged, out of
+budget, or having a bad day can stay silent, and the only signal that it did is
+the absence of a message nobody is waiting for. There is no direct pager path
+that bypasses it.
+
+The gate's "Alerts reach a human" therefore stays FAIL, with the reason narrowed
+and written down: delivery to the agent is proven once, delivery to a person
+depends on that agent, and no resolve or repeat interval has been observed. The
+first operational fix is a deadman path that messages the operator when the
+agent or the receiver is unhealthy, not another notification route.
 
 The role selectors that kept two relay rules from ever matching are fixed (see
 section 3). Four families that a real incident needs are not implemented at all:
