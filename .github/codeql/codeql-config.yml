@@ -6,8 +6,29 @@
 # suppression comments on the sink are not honoured for this query. This is the
 # same false positive recorded as F-13 in security-review/FINDINGS.md.
 #
+# `js/missing-rate-limiting` is excluded for the custom session limiter, and
+# this one is a real coverage loss, so the reasoning is written out rather than
+# assumed. The query identifies rate limiting by the `express-rate-limit`
+# package or by a name pattern it recognises. The session surface uses a token
+# bucket (`TokenBucket` in shared/src/rate-limit.ts) mounted per route as
+# `rateLimit` in `api/src/routes/sessions.ts`, because the limit is a product
+# limit on reads with a burst and a refill, not a fixed window, and the same
+# bucket type also bounds creates and relay calls. Replacing it with
+# `express-rate-limit` to satisfy the query would change the algorithm.
+#
+# What the exclusion costs: a new session route added without the limiter would
+# not be reported here. What covers that instead:
+#   - `tests/unit/sessions-admission.test.ts` asserts the 20th read in a window
+#     gets `429 rate_limited` with `Retry-After`, through the real router;
+#   - `api/src/routes/sessions.ts` passes the limiter at every mount site, so a
+#     missing one is visible in the four-line registration.
+# Revisit if the session surface moves to `express-rate-limit`, or if CodeQL
+# learns to trace a custom middleware across modules.
+#
 # Do not add further exclusions here without the same kind of written reason.
 name: sandbox
 query-filters:
   - exclude:
       id: go/request-forgery
+  - exclude:
+      id: js/missing-rate-limiting

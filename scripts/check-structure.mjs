@@ -2,11 +2,13 @@
  * Structural guardrail: keep modules reviewable.
  *
  * This is intentionally a blunt line-count check, not a style linter. It is a
- * backstop against the god files this refactor removed; the real rules live in
- * docs/architecture-principles.md.
+ * backstop against the god files this refactor removed, and against the god
+ * functions it left behind. It ratchets file length and, one level down,
+ * function length. The real rules live in docs/architecture-principles.md.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, posix, relative } from "node:path";
+import { functionSpans } from "./function-spans.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 // Ratchet: 550 is the budget; the ceiling is still 650 because six modules sit
@@ -158,6 +160,267 @@ if (offenders.length + unused.length + grew.length + shrank.length > 0) {
     }
   }
   if (BASELINE.size > 0) printBaseline();
+  process.exit(1);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Function length                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The function budget.
+ *
+ * The file check above counted files, and it passed on `api/src/server.ts`,
+ * which was 267 lines with 200 of them in `createApp`. Splitting a god file
+ * into a god function moved the problem inside the module and the guard called
+ * it fixed, so the same ratchet runs one level down: no function over
+ * `FUNCTION_BUDGET` lines unless it is pinned, and a pinned count may only go
+ * down.
+ *
+ * `FUNCTION_MAX_LINES` is the ceiling a *new* function has to stay under. The
+ * check cannot fail on it separately, because anything over it is already over
+ * the budget and has to be pinned, which this file does not accept for new code.
+ */
+const FUNCTION_BUDGET = 50;
+const FUNCTION_MAX_LINES = 80;
+
+/**
+ * The over-budget functions, pinned to the exact line count each one is at.
+ *
+ * Same rules as `BASELINE`: an unpinned function over the budget fails, a
+ * pinned one may not grow, a pinned one may not shrink without the pin being
+ * lowered in the same change, and the entry is deleted once the function fits.
+ * Keys are `path::name` so a failure names the function as well as the file.
+ *
+ * The reason is part of the entry, not decoration. A function is allowed to sit
+ * above the budget only when the reason names the distinct things it does, so
+ * the next reader knows where to split it. "It is long" is not a reason and
+ * gets the entry deleted instead.
+ */
+const FUNCTION_BASELINE = new Map([
+  ["tests/unit/deploy-config.test.ts::podEnvs", [66, "resolves secret and field refs for one rendered workload"]],
+  ["api/src/use-cases/create-session-stages.ts::claimPaymentIntent", [65, "the intent claim: replay, mismatch, in-progress and settled"]],
+  ["controller/src/settlement-config.ts::parseSettlement", [52, "the payment network rules, one per refusal"]],
+  ["tests/unit/store-contract/suite.ts::describeStoreContract", [532, "one suite over every store port, one case per method, on one fixture"]],
+  ["controller/src/control-api/payments.ts::registerPaymentRoutes", [390, "eight internal payment routes in one registration"]],
+  ["controller/src/egress-proxy.ts::createEgressProxy", [372, "the CONNECT path inline: verify, admit, resolve, dial, splice"]],
+  ["controller/src/control-api/sessions.ts::registerSessionRoutes", [313, "seven internal session routes in one registration"]],
+  ["controller/src/main.ts::start", [291, "three boot phases: config and lease, listeners, reconciler"]],
+  ["controller/src/egress-proxy.ts::handleConnect", [275, "one tunnel from token to splice, defined inside the factory"]],
+  ["controller/src/relay/http.ts::registerRelayControlRoutes", [222, "eleven relay control routes in one registration"]],
+  ["tests/integration/support/api-harness.ts::startHarness", [207, "boots API, controller, facilitator and store for one test"]],
+  ["scripts/control-faults.ts::lifecycleRestart", [206, "fault script: seed, kill, wait for convergence, report"]],
+  ["controller/src/control-api.ts::createControlApi", [178, "mounts every internal route group behind auth and metrics"]],
+  ["controller/src/refund-worker.ts::run", [174, "one pass: gauges, claim, send, record, settle"]],
+  ["controller/src/provisioning/readiness.ts::awaitReady", [170, "poll loop over warm claim, pod ready, relay and evidence"]],
+  ["tests/helpers/create-route.ts::postCreate", [168, "builds a signed payment, posts it, asserts the answer"]],
+  ["shared/src/tiers.ts::resolveSessionSpec", [168, "tier lookup, limit merge and six refusal paths"]],
+  ["controller/src/warm-pool.ts::tryClaim", [157, "pick, reserve, address and register one warm pod"]],
+  ["controller/src/effects.ts::executeEffect", [157, "the effect switch, one case per session effect"]],
+  ["tests/property/warm-pool-claims.test.ts::harness", [159, "fixture: config, clock, pool and claim doubles"]],
+  ["tests/helpers/warm-pool-harness.ts::harness", [154, "fixture: config, clock, pods and the delete log"]],
+  ["tests/unit/create-path.test.ts::harness", [136, "fixture: store, provisioner, relay and settle doubles"]],
+  ["shared/src/domain/session.ts::transition", [135, "the lifecycle switch, one case per state and event family"]],
+  ["controller/src/k8s-pod.ts::buildPod", [132, "the pod spec: containers, probes, volumes, security"]],
+  ["controller/src/store/postgres/payments.ts::completeEntitlement", [132, "one transaction: intent, session insert, reservation"]],
+  ["api/src/mock-facilitator.ts::createMockFacilitator", [127, "sqlite nonce store plus the four facilitator routes"]],
+  ["controller/src/relay/ws.ts::handleGuestConnection", [127, "hello, decode, dispatch, reply and close for one socket"]],
+  ["api/src/use-cases/create-session.ts::createSession", [124, "validate, switch, claim, verify, settle, complete"]],
+  ["guest/transfers.go::init", [124, "transfer validation: id, direction, size and path"]],
+  ["sdk/src/payment.ts::createPayer", [124, "builds the payer: client, address, signer and its methods"]],
+  ["cli/src/index.ts::main", [123, "arg parsing, early commands and dispatch"]],
+  ["scripts/fault-scenarios/relay-kill.ts::relayKill", [123, "seed, kill the relay, wait for convergence, report"]],
+  ["tests/unit/helpers/warm-pool-fixtures.ts::harness", [122, "fixture: config, clock, pods and deletes"]],
+  ["api/src/use-cases/create-session-completion.ts::completeEntitlement", [123, "the durable half: claim, create, settle, respond"]],
+  ["guest/main.go::runWarm", [119, "warm boot: env, relay, register, serve loop"]],
+  ["tests/integration/relay-reconnect.test.ts::scenario", [117, "boot relay and guest, drop the link, assert reconnect"]],
+  ["sdk/src/payment.ts::createSession", [115, "the paid create: 402, sign, retry with the header"]],
+  ["guest/main.go::runSession", [114, "session boot: limits, supervisor, relay, shutdown"]],
+  ["guest/supervisor.go::handleRequest", [113, "frame dispatch: slot, decrypt, route, encrypt, reply"]],
+  ["shared/src/attestation.ts::verifyAttestation", [111, "parse, version, freshness, PCR and signature checks"]],
+  ["cli/src/allowlist-admin.ts::runAdmin", [108, "admin commands: list, add, remove, revoke"]],
+  ["controller/src/reconciler.ts::constructor", [105, "wires the clock guard and every bounded sub-policy"]],
+  ["controller/src/relay.ts::createRelay", [104, "registers metrics, the registry and both control route groups"]],
+  ["controller/src/lifecycle.ts::resume", [103, "guard, reserve, PVC, pod, transition, register"]],
+  ["tests/helpers/lifecycle-harness.ts::harness", [103, "fixture: fake store, provisioner and pod logs"]],
+  ["controller/src/ledger-audit-sampler.ts::createLedgerAuditSampler", [102, "the sampler closure: limits, clock and the audit pass"]],
+  ["controller/src/relay-recovery.ts::reconcileSession", [102, "one session: lease, registry, reset and metric"]],
+  ["guest/transfers_fuzz_test.go::FuzzTransferFraming", [102, "fuzz target: seed corpus plus the framing checks"]],
+  ["guest/internal/files/archive.go::extractTarReader", [101, "tar in: entry checks, path resolve, write"]],
+  ["tests/integration/relay-restart.test.ts::scenario", [101, "two relays, a guest and a restart window"]],
+  ["controller/src/operation-fence.ts::reconcile", [100, "clears and holds fenced sessions in one pass"]],
+  ["tests/helpers/reconciler-harness.ts::harness", [96, "fixture: tick store, clock and the effect log"]],
+  ["examples/node-http-service/workload.ts::main", [95, "the example end to end: create, run, fetch, destroy"]],
+  ["tests/helpers/transfer-guest.ts::respond", [95, "the transfer operation switch for the fake guest"]],
+  ["guest/internal/canonical/canonical.go::write", [94, "canonical JSON: one case per Go type"]],
+  ["tests/unit/support/leadership-fence-harness.ts::openWedgeWorld", [94, "opens the store, the lease and two would-be leaders"]],
+  ["tests/unit/relay-recovery.test.ts::harness", [93, "fixture: sessions, registry and clock"]],
+  ["sdk/src/transfers.ts::download", [89, "open, read chunks, verify the hash, write"]],
+  ["guest/internal/runner/runner.go::Execute", [88, "run one command: limits, capture, timeout, result"]],
+  ["tests/helpers/session-control-api.ts::startSessionControlApi", [88, "fresh store, seed and two listeners"]],
+  ["controller/src/warm-pool.ts::reconcile", [87, "target, create, delete and surplus in one pass"]],
+  ["tests/integration/stale-frame-reset-outcome.test.ts::scenario", [87, "relay, guest, stale frame and the reset assertions"]],
+  ["guest/internal/files/archive_test.go::TestArchiveRejectsUnsafeEntries", [86, "table of hostile tar entries"]],
+  ["controller/src/reconciler.ts::tick", [85, "the phase order: lease, cleanup, readiness, dispatch"]],
+  ["sdk/src/transfers.ts::upload", [84, "hash, chunk, send, finalise"]],
+  ["tests/helpers/guest.ts::start", [84, "boots the relay and the guest for one test"]],
+  ["guest/internal/files/archive.go::TarToFile", [80, "tar out: entry header, body, close"]],
+  ["shared/src/payment.ts::validate", [80, "the mock scheme's payload checks, one per refusal"]],
+  ["guest/transfers.go::complete", [79, "finalise: hash, size, move, reply"]],
+  ["scripts/capacity-demo.ts::main", [79, "the capacity demo: create, occupy, exhaust, report"]],
+  ["sdk/src/data-plane.ts::openWebSocket", [79, "open operation, upgrade, attach the readers"]],
+  ["examples/python-data-processing/workload.ts::main", [78, "the python example end to end"]],
+  ["controller/src/main.ts::checkRuntimeClass", [77, "reads the node's runtime classes and refuses a mismatch"]],
+  ["guest/cmd/netprobe/main.go::runProbe", [77, "dial, measure and classify one probe"]],
+  ["sdk/src/session.ts::create", [77, "keys, spec, post, store the handle"]],
+  ["shared/src/runtime-metrics.ts::registerRuntimeMetrics", [77, "registers each process metric family"]],
+  ["guest/supervisor_fuzz_test.go::FuzzSupervisorDecrypt", [76, "fuzz target: keys, frames and the decrypt checks"]],
+  ["tests/unit/runtime-contract.test.ts::post", [76, "builds the app and posts one create body"]],
+  ["sdk/src/runtime.ts::waitForReady", [72, "poll loop with backoff and transport retry"]],
+  ["controller/src/store/postgres/reservations.ts::admitWithin", [74, "admission inside a transaction: hold, upsert, verdict"]],
+  ["tests/helpers/fake-apiserver.ts::reply", [73, "the fake API server's route switch"]],
+  ["scripts/control-faults.ts::relayPause", [72, "fault script: seed, pause the relay, report"]],
+  ["scripts/lifecycle-portability.ts::main", [72, "the portability demo: pin, cordon, resume"]],
+  ["sdk/src/run.ts::runOnce", [72, "validate, exec, poll, return the result"]],
+  ["controller/src/control-api/create-switch.ts::registerCreateSwitchRoutes", [71, "read and write of the create kill switch"]],
+  ["sdk/src/data-plane.ts::openHttpStream", [71, "open operation, chunked body, reader closures"]],
+  ["tests/unit/effects.test.ts::harness", [70, "fixture: recording runtime and one session"]],
+  ["api/src/use-cases/create-session-settlement.ts::resolveRefusedSettle", [68, "settle refusals: verify, decide, respond"]],
+  ["cli/src/commands.ts::runOneShot", [68, "the one-shot command path and its messages"]],
+  ["tests/unit/payer-allowlist-store.test.ts::seedSession", [68, "inserts one session with its reservation"]],
+  ["api/src/config.ts::loadConfig", [67, "composes the config from its parsers, one section each"]],
+  ["controller/src/store/postgres/operations.ts::claimOperation", [67, "the claim statement, its conflict cases and the result"]],
+  ["controller/src/warm-pool-manager.ts::reconcile", [66, "normalise, list, create and delete warm pods"]],
+  ["controller/src/warm-pool.ts::create", [64, "create one warm pod: spec, admit, track"]],
+  ["controller/src/provisioning/pod-creation.ts::createPod", [65, "pod create: spec, admit, register, record"]],
+  ["controller/src/provisioning.ts::provisionWithSlot", [66, "admission in front of the create transition"]],
+  ["api/src/payments/facilitator-client.ts::send", [74, "one facilitator call with timeout, retry and parse"]],
+  ["controller/src/settlement-recovery.ts::chainAnswer", [64, "asks the chain verifier and maps the verdict"]],
+  ["controller/src/store/postgres/payments.ts::claimPaymentIntent", [64, "the intent claim statement and its outcomes"]],
+  ["guest/internal/runner/service.go::StartService", [64, "spawn, probe, register and log one service"]],
+  ["guest/transfers_fuzz_test.go::FuzzChunkDecode", [64, "fuzz target: chunk framing and the hash checks"]],
+  ["scripts/fault-scenarios/relay-create-restart.ts::relayCreateRestart", [64, "seed, restart the relay mid-create, report"]],
+  ["guest/internal/files/archive.go::tarPath", [63, "lstat, read, header and entry for one path"]],
+  ["controller/src/local-provisioner.ts::createPod", [61, "in-memory pod: create, start, track"]],
+  ["tests/integration/restore-drill.test.ts::seedSource", [61, "seeds the source database for the restore drill"]],
+  ["guest/internal/files/files.go::List", [60, "walk, stat and map the entries"]],
+  ["controller/src/relay/ws.ts::attachGuestUpgrade", [59, "upgrade, token check, dispatch"]],
+  ["controller/src/relay-client.ts::registerCurrent", [64, "registration with the generation precondition and retry"]],
+  ["controller/src/session-view.ts::describeSession", [59, "the view: row, relay, pod and timings"]],
+  ["controller/src/store/budget-decision.ts::decideBudget", [59, "the verdict: caps, spend and window"]],
+  ["guest/services.go::startService", [59, "validate, spawn, probe, reply"]],
+  ["tests/helpers/session-control-api.ts::response", [59, "the fake controller's answer script"]],
+  ["tests/unit/effects.test.ts::recordingRuntime", [59, "records each runtime call"]],
+  ["tests/unit/relay-registration.test.ts::startFakeRelay", [59, "the fake relay's two routes"]],
+  ["api/src/config.ts::parsePayment", [69, "the payment-mode rules, one per refusal"]],
+  ["controller/src/reconciler/lease-health.ts::enforce", [58, "probe, classify and escalate one session"]],
+  ["tests/security/attacker-helpers.ts::slowloris", [58, "opens sockets slowly and measures the refusal"]],
+  ["api/src/connection-limit.ts::createConnectionLimiter", [57, "the limiter closure and its refusals"]],
+  ["controller/src/settlement-recovery.ts::run", [57, "list stale intents, ask the chain, record"]],
+  ["controller/src/local-provisioner.ts::createWarmPod", [56, "in-memory warm pod: dirs, spec, track"]],
+  ["controller/src/store/postgres/sessions.ts::insert", [55, "the column list and its parameters"]],
+  ["controller/src/k8s.ts::createWarmPod", [54, "build and apply the warm pod spec"]],
+  ["controller/src/leadership.ts::acquireWithRetry", [55, "retries the lease until the deadline"]],
+  ["controller/src/leadership.ts::bindLeadership", [59, "binds the acquire retries and the lease callbacks"]],
+  ["controller/src/provisioning.ts::startProvisionPod", [57, "start the pod and register the relay"]],
+  ["controller/src/store/models/session.ts::mapSession", [54, "row to record, one field per column"]],
+  ["scripts/lifecycle-faults.ts::main", [54, "the lifecycle fault demo"]],
+  ["tests/fuzz/create-session.fuzz.test.ts::startApp", [54, "builds the app under test from fuzz options"]],
+  ["controller/src/store/postgres/reservations.ts::resume", [53, "re-acquires the hold inside one transaction"]],
+  ["guest/streams.go::openStream", [53, "target, dial, stream, close"]],
+  ["tests/helpers/session-control-api.ts::seed", [53, "inserts one session per seeded state"]],
+  ["tests/unit/payer-budget.test.ts::seedLiveSession", [53, "inserts a live session and its reservation"]],
+  ["api/src/config.ts::parseCredentials", [52, "the admin token and the capability key ring"]],
+  ["controller/src/k8s.ts::createPod", [52, "build and apply the session pod spec"]],
+  ["examples/node-http-service/faults.ts::main", [52, "the example's fault walkthrough"]],
+  ["guest/internal/attest/attest.go::BuildEvidence", [52, "assembles the dev evidence document"]],
+  ["guest/supervisor.go::serve", [52, "the link loop with reconnect"]],
+  ["guest/websockets.go::openWS", [52, "target, upgrade, poll loop"]],
+  ["tests/integration/relay-reconnect.test.ts::sessionRecord", [52, "one session row for the fixture"]],
+  ["tests/unit/sdk-runtime.test.ts::readyStatus", [52, "a signed ready status for the fixture"]],
+  ["controller/src/reconciler/dispatch.ts::run", [51, "bounded concurrency over one phase"]],
+  ["scripts/control-faults.ts::provisioningKill", [51, "fault script: seed, kill provisioning, report"]],
+  ["tests/helpers/tls.ts::makeTestPki", [51, "generates the CA, relay and client certificates"]],
+  ["tests/integration/relay-restart.test.ts::sessionRecord", [51, "one session row for the fixture"]],
+  ["tests/integration/stale-frame-reset-outcome.test.ts::sessionRecord", [51, "one session row for the fixture"]],
+]);
+
+function printFunctionBaseline() {
+  console.error(`function baseline (over ${FUNCTION_BUDGET} lines, pinned to the exact count):`);
+  for (const [key, [lines, reason]] of [...FUNCTION_BASELINE].sort((a, b) => b[1][0] - a[1][0])) {
+    console.error(`  ${lines}\t${key}  ${reason}`);
+  }
+}
+
+const fnOffenders = [];
+const fnUnused = [];
+const fnGrew = [];
+const fnShrank = [];
+const fnSeen = new Set();
+
+for (const path of sources(ROOT)) {
+  const rel = relative(ROOT, path);
+  const lang = path.endsWith(".go") ? "go" : "ts";
+  for (const { name, lines, startLine } of functionSpans(readFileSync(path, "utf8"), lang)) {
+    const key = `${rel}::${name}`;
+    const pinned = FUNCTION_BASELINE.get(key);
+    fnSeen.add(key);
+    if (pinned === undefined) {
+      if (lines > FUNCTION_BUDGET) fnOffenders.push({ key, lines, startLine });
+    } else if (lines <= FUNCTION_BUDGET) {
+      // Fixed: the entry goes in the same change, exactly like the file map.
+      fnUnused.push({ key, lines, pinned: pinned[0] });
+    } else if (lines > pinned[0]) {
+      fnGrew.push({ key, lines, pinned: pinned[0] });
+    } else if (lines < pinned[0]) {
+      fnShrank.push({ key, lines, pinned: pinned[0] });
+    }
+  }
+}
+for (const [key, [lines]] of FUNCTION_BASELINE) {
+  if (!fnSeen.has(key)) fnUnused.push({ key, lines: 0, pinned: lines });
+}
+
+if (fnOffenders.length + fnUnused.length + fnGrew.length + fnShrank.length > 0) {
+  if (fnOffenders.length > 0) {
+    console.error(
+      `functions over ${FUNCTION_BUDGET} lines that are not in FUNCTION_BASELINE (split them):`,
+    );
+    for (const { key, lines, startLine } of fnOffenders.sort((a, b) => b.lines - a.lines)) {
+      console.error(`  ${lines}\t${key} (starts line ${startLine})`);
+    }
+    if (fnOffenders.some((fn) => fn.lines > FUNCTION_MAX_LINES)) {
+      console.error(
+        `  a new function over the ${FUNCTION_MAX_LINES}-line ceiling is not eligible for an entry at all: split it by use case first`,
+      );
+    }
+  }
+  if (fnGrew.length > 0) {
+    console.error(
+      "FUNCTION_BASELINE functions that grew (the pinned count may only go down; split the function):",
+    );
+    for (const { key, lines, pinned } of fnGrew.sort((a, b) => b.lines - a.lines)) {
+      console.error(`  ${key}: ${lines} lines now, baselined at ${pinned}`);
+    }
+  }
+  if (fnShrank.length > 0) {
+    console.error(
+      "FUNCTION_BASELINE functions that shrank (lower the pinned count; delete the entry once it fits):",
+    );
+    for (const { key, lines, pinned } of fnShrank.sort((a, b) => b.lines - a.lines)) {
+      console.error(`  ${key}: ${lines} lines now, baselined at ${pinned}`);
+    }
+  }
+  if (fnUnused.length > 0) {
+    console.error(
+      "FUNCTION_BASELINE entries at or under budget (delete them, the ratchet only shrinks):",
+    );
+    for (const { key, lines, pinned } of fnUnused.sort((a, b) => b.pinned - a.pinned)) {
+      const now = lines === 0 ? "gone or no longer counted" : `${lines} lines now`;
+      console.error(`  ${key}: ${now}, baselined at ${pinned}`);
+    }
+  }
+  if (FUNCTION_BASELINE.size > 0) printFunctionBaseline();
   process.exit(1);
 }
 
@@ -411,6 +674,8 @@ if (
 
 console.log(
   `structure ok: every module is <= ${MAX_LINES} lines (${BASELINE.size} baselined); ` +
+    `no function over the ${FUNCTION_BUDGET}-line budget is unpinned ` +
+    `(${FUNCTION_BASELINE.size} baselined, ceiling ${FUNCTION_MAX_LINES}); ` +
     `${modules.length} shared modules layered, ` +
     `${entryOwners.size} symbols over ${sharedEntries.length} entries, no root barrel`,
 );

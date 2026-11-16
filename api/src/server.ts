@@ -1,7 +1,7 @@
 /**
- * Public x402-protected API.
+ * Public x402-protected API: the composition root.
  *
- * Invariants enforced here:
+ * Invariants enforced by what is mounted here:
  *  - no accounts, no API keys, no cookies; access to a purchased session uses a
  *    short-lived possession capability whose SHA-256 hash is all the server keeps,
  *  - plaintext commands and file contents are never accepted: the only payload
@@ -9,79 +9,20 @@
  *  - one settled payment creates at most one session (facilitator nonce +
  *    durable payment intent + UNIQUE payment key),
  *  - the API never logs bodies, headers or payment payloads.
+ *
+ * The phases live next door in `boot/`, because this function used to be 200
+ * lines and 75% of the file: `boot/payment-surface.ts` builds the facilitator,
+ * settle and verify half, `boot/metrics.ts` registers the families,
+ * `boot/http-shell.ts` is the middleware and the probes, and `boot/routes.ts`
+ * mounts the routes in the order they have to be mounted. What is left here is
+ * the order itself.
  */
 import express from "express";
-import { x402ResourceServer } from "@x402/core/server";
-import type { Network, PaymentRequirements } from "@x402/core/types";
-import { ExactEvmScheme } from "@x402/evm/exact/server";
-import { mintCapability, recoverCapability } from "@x402s/shared/crypto";
-import { MOCK_NETWORK, MockExactServerScheme } from "@x402s/shared/payment";
-import type { SessionSpec } from "@x402s/shared/protocol";
-import {
-  CREATE_REFUSALS_TOTAL,
-  CREATES_DISABLED_GAUGE,
-  HttpSettlementLookup,
-  LATENCY_BUCKETS,
-  ReadinessCache,
-  UnsupportedSettlementLookup,
-  backoffMs,
-  httpMetricsMiddleware,
-  log,
-  metrics,
-  registerRequestMetrics,
-  type SettlementLookup,
-} from "@x402s/shared/runtime";
-import type { ApiConfig } from "./config.js";
-import { RateLimiter } from "./admission.js";
-import { createConnectionLimiter } from "./connection-limit.js";
-import { ControllerClient } from "./controller-client.js";
-import { buildSettlementVerifier } from "./payments/settlement-confirmation.js";
-import { createFacilitatorClient } from "./payments/facilitator-client.js";
-import type { ChainSettlementVerifier } from "@x402s/shared/settlement";
-import { rejectPlaintextBodies } from "./schemas.js";
-import { createSessionsRouter } from "./routes/sessions.js";
-import { errorBackstop } from "./routes/errors.js";
-import { createSessionHandler } from "./routes/create-session.js";
-import { createCatalogueRouter } from "./routes/catalogue.js";
-import { createPaymentRequiredWriter } from "./payments/payment-required.js";
-import { ALLOWLIST_DECISIONS_TOTAL } from "./use-cases/create-session-allowlist.js";
-
-/**
- * Wait for a dependency to answer, on a sampled exponential delay.
- *
- * Every API replica starts at once after a rollout and calls the same
- * facilitator. An unjittered 250/500/1000/2000/5000 ladder puts the whole fleet
- * on one schedule against a dependency that is still coming up, so the delay is
- * sampled from `[0, min(5000, 250 * 2 ** n)]` and clamped to what is left of the
- * budget.
- */
-async function retry<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  let lastErr: unknown;
-  for (let attempt = 0; Date.now() < deadline; attempt += 1) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      log.warn("dependency_not_ready", { dependency: label, error: (err as Error).message });
-      const remaining = deadline - Date.now();
-      const delay = backoffMs({ baseDelayMs: 250, maxDelayMs: 5_000 }, attempt);
-      await new Promise((r) => setTimeout(r, Math.min(delay, Math.max(0, remaining))));
-    }
-  }
-  throw new Error(`${label} did not become available: ${(lastErr as Error)?.message ?? "timeout"}`);
-}
-
-interface ApiDeps {
-  config: ApiConfig;
-  controller: ControllerClient;
-  /** Injectable for tests: bypasses HTTP facilitator setup. */
-  resourceServer?: x402ResourceServer;
-  /** Injectable for tests. */
-  settlementLookup?: SettlementLookup;
-  /** Injectable for tests: bypasses the viem client. */
-  settlementVerifier?: ChainSettlementVerifier;
-}
+import { createPaymentSurface } from "./boot/payment-surface.js";
+import { applyMiddleware, mountProbes } from "./boot/http-shell.js";
+import { mountRoutes } from "./boot/routes.js";
+import { registerApiMetrics } from "./boot/metrics.js";
+import type { ApiDeps } from "./boot/deps.js";
 
 export async function createApp(deps: ApiDeps): Promise<express.Express> {
   const { config, controller } = deps;
@@ -89,197 +30,16 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   app.disable("x-powered-by");
   // 0 = off. Set to 1 only where the API is reachable through exactly one
   // reverse proxy (the reference deployment's Tailscale L7 proxy), so `req.ip`
-  // is the real client instead of the proxy pod — otherwise every remote
-  // client shares one per-IP limiter bucket.
+  // is the real client instead of the proxy pod, otherwise every remote client
+  // shares one per-IP limiter bucket.
   app.set("trust proxy", config.trustProxyHops > 0 ? config.trustProxyHops : false);
 
-  const settlementLookup: SettlementLookup =
-    deps.settlementLookup ??
-    (config.paymentMode === "mock"
-      ? new HttpSettlementLookup(config.facilitatorUrl)
-      : new UnsupportedSettlementLookup());
-
-  // F-10: a chain read is authoritative and needs no facilitator answer, so it
-  // replaces the unsupported lookup for EVM networks. Absent here, the previous
-  // behaviour is unchanged.
-  const settlementVerifier = deps.settlementVerifier ?? buildSettlementVerifier(config);
-
-  const resourceServer =
-    deps.resourceServer ??
-    (() => {
-      // The deployment's own port: bounded timeouts, retries only on the reads,
-      // and CDP bearer auth when a key pair is configured.
-      const s = new x402ResourceServer(createFacilitatorClient(config));
-      return s;
-    })();
-
-  if (!deps.resourceServer) {
-    if (config.paymentMode === "mock") {
-      resourceServer.register(MOCK_NETWORK, new MockExactServerScheme());
-    } else {
-      // Testnet and mainnet register the same scheme against the configured
-      // network, so enabling mainnet is a configuration change, not a code
-      // change: Base Sepolia today, Base mainnet when PAYMENT_MODE=mainnet.
-      resourceServer.register(config.network as Network, new ExactEvmScheme());
-    }
-  }
-  await retry(
-    () => resourceServer.initialize(),
-    Number(process.env.FACILITATOR_INIT_TIMEOUT_MS ?? 60_000),
-    "facilitator initialization",
-  );
-
-  // Register metric families eagerly so a scrape is useful before the first
-  // event. HTTP/auth/rate-limit families live in shared so every role has the
-  // same names.
-  registerRequestMetrics(metrics);
-  metrics.histogram("sandbox_payment_verify_duration_seconds", "Facilitator payment verification", LATENCY_BUCKETS);
-  metrics.histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS);
-  metrics.histogram("sandbox_session_create_duration_seconds", "Create request duration", LATENCY_BUCKETS);
-  metrics.counter("sandbox_sessions_created_total", "Session create requests by outcome");
-  metrics.counter("sandbox_sessions_total", "Sessions created by entitlement source");
-  // The kill switch: registered before first use so a scrape taken while the
-  // switch is off reads 0 rather than an absent family, and a refusal counter
-  // that starts at zero is what an alert rule can rate against.
-  metrics.gauge(CREATES_DISABLED_GAUGE, "1 when new session creates are refused by the kill switch");
-  metrics.counter(CREATE_REFUSALS_TOTAL, "Create requests refused by the kill switch path");
-  // Registered here, not on first use, so a scrape before the first allowlist
-  // consultation shows a zero instead of an absent family. The free tier has no
-  // volume ceiling, so its counters are the only place a shared wallet shows up.
-  metrics.counter(ALLOWLIST_DECISIONS_TOTAL, "Allowlist entitlement decisions by outcome");
-
-  const resourceInfo = {
-    url: `${config.publicBaseUrl}/v1/sessions`,
-    description: "A temporary Linux sandbox session purchased with x402",
-    mimeType: "application/json",
-    serviceName: "x402 sandbox sessions",
-  };
-
-  // Payment requirements are built per price (tiers have different prices).
-  const requirementCache = new Map<string, PaymentRequirements>();
-  const requirementFor = async (priceUsd: string, spec: SessionSpec): Promise<PaymentRequirements> => {
-    const key = `${priceUsd}|${spec.tier}|${spec.durationSeconds}`;
-    const cached = requirementCache.get(key);
-    if (cached) return cached;
-    const built = await resourceServer.buildPaymentRequirements({
-      scheme: "exact",
-      network: config.network as Network,
-      payTo: config.payTo,
-      price: priceUsd,
-      maxTimeoutSeconds: 300,
-      extra: { tier: spec.tier, durationSeconds: spec.durationSeconds },
-    });
-    const requirement = built[0];
-    if (!requirement) throw new Error("failed to build payment requirements");
-    requirementCache.set(key, requirement);
-    return requirement;
-  };
-
-  // Coarse per-IP guard before the payment is decoded, then a per-payer bucket
-  // once the payload is available. The per-payer limit is the product limit;
-  // the IP limit only bounds unauthenticated abuse.
-  const ipCreateLimiter = new RateLimiter(config.createIpRateBurst, config.createIpRateRefill);
-  const createLimiter = new RateLimiter(config.createRateBurst, config.createRateRefill);
-
-  // Counts every request by route template, method and status. Added before
-  // the body parser so a malformed body is still attributed to its route.
-  app.use(httpMetricsMiddleware(metrics));
-  // Concurrent-request cap, before the body parser so a refused request costs
-  // no parse. Probes are exempt inside the limiter: a saturated client must not
-  // be able to fail readiness.
-  app.use(
-    createConnectionLimiter({
-      maxPerClient: config.maxConnectionsPerClient,
-      maxGlobal: config.maxConnectionsGlobal,
-    }).middleware,
-  );
-  app.use(express.json({ limit: config.maxBodyBytes }));
-  app.use((req, res, next) => {
-    const started = Date.now();
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.on("finish", () => {
-      log.info("request", {
-        method: req.method,
-        path: req.path,
-        status: res.statusCode,
-        durationMs: Date.now() - started,
-        ip: req.ip,
-      });
-    });
-    next();
-  });
-
-  // One fresh, single-use challenge per 402 (#47).
-  const payment402 = createPaymentRequiredWriter({ controller, resourceServer, resourceInfo });
-
-  // Bound to the payment *and* the client commitment: the same receipt with a
-  // different client key derives a different capability. Signed with the
-  // current key of the ring; see docs/runbooks/secret-rotation.md.
-  const capabilityFor = (key: string, commitment: string): string =>
-    mintCapability(config.capabilityKeys.signing, key, commitment);
-
-  // A replay must hand back the token the client already holds, which may have
-  // been signed by the previous key. Null means no key in the ring can produce
-  // the stored hash, i.e. the signing key was retired too early.
-  const recoverCapabilityFor = (key: string, commitment: string, storedHash: string): string | null =>
-    recoverCapability(config.capabilityKeys, key, commitment, storedHash);
-
-  app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, paymentMode: config.paymentMode, network: config.network });
-  });
-
-  // Readiness: the API holds no durable state, so its dependency is the
-  // controller (which in turn checks the store, relay and provisioner). Do not
-  // forward the controller's component detail: /readyz is reachable through the
-  // ingress, while the controller's report is cluster-internal.
-  const readiness = new ReadinessCache({
-    controller: async () => {
-      try {
-        const report = await controller.readiness();
-        return report.ok ? { ok: true } : { ok: false, reason: "not_ready" };
-      } catch {
-        return { ok: false, reason: "unreachable" };
-      }
-    },
-  });
-
-  app.get("/readyz", async (_req, res) => {
-    const report = await readiness.check();
-    res.status(report.ok ? 200 : 503).json(report);
-  });
-
-  // Aggregate metrics are published on the private METRICS_PORT listener, not
-  // here: the ingress routes `/` to this port, so a public /metrics would leak
-  // operational data to the tailnet.
-
-  // Read-only catalogue: what this deployment sells and what it runs.
-  app.use(createCatalogueRouter(config));
-
-  /* ---------------------------------------------------------------- */
-  /* Create session (x402 protected)                                   */
-  /* ---------------------------------------------------------------- */
-  app.post(
-    "/v1/sessions",
-    rejectPlaintextBodies,
-    createSessionHandler({
-      config,
-      controller,
-      resourceServer,
-      settlementLookup,
-      settlementVerifier,
-      requirementFor,
-      payment402,
-      capabilityFor,
-      recoverCapability: recoverCapabilityFor,
-      ipCreateLimiter,
-      createLimiter,
-    }),
-  );
-
-  app.use(createSessionsRouter({ config, controller }));
-
-  app.use(errorBackstop);
-
+  // Registered before the first route exists, so a scrape is useful before the
+  // first event.
+  const surface = await createPaymentSurface(deps);
+  registerApiMetrics();
+  applyMiddleware(app, config);
+  mountProbes(app, config, controller);
+  mountRoutes(app, deps, surface);
   return app;
 }
