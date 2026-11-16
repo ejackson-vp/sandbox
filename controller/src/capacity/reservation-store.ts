@@ -69,5 +69,10 @@ export interface ReservationStore {
   listReleasing(): Promise<ReservationRecord[]>;
   getBySession(sessionId: string): Promise<ReservationRecord | null>;
   getByPayment(paymentKey: string): Promise<ReservationRecord | null>;
-  reapExpiredHolds(now: number): Promise<number>;
+  /**
+   * Release every row whose deadline passed: an expired `HELD`, and an
+   * `ALLOCATED` row whose session does not exist. Counts are returned per kind
+   * so the recovery metric can tell a stale hold from a leaked allocation.
+   */
+  reapExpired(now: number): Promise<{ holds: number; allocations: number }>;
 }

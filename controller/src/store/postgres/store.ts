@@ -86,14 +86,21 @@ export class PostgresStore implements StoreBackend {
   private constructor(private readonly conn: PgConnection, budgetWindowMs: number) {
     this.sessions = new PgSessionRepository(conn);
     this.budgetRepo = new PgBudgetRepository(conn);
-    this.payments = new PgPaymentRepository(conn, this.sessions, this.budgetRepo, budgetWindowMs);
+    const reservations = new PgReservationRepository(conn);
+    this.reservations = reservations;
+    this.payments = new PgPaymentRepository(
+      conn,
+      this.sessions,
+      this.budgetRepo,
+      reservations,
+      budgetWindowMs,
+    );
     this.ledgerRepo = new PgLedgerRepository(conn);
     this.ledgerAudit = new PgLedgerAuditRepository(conn);
     this.challengeRepo = new PgChallengeNonceRepository(conn);
     this.allowlistRepo = new PgAllowlistRepository(conn);
     this.createSwitchRepo = new PgCreateSwitchRepository(conn);
     this.operations = new PgOperationRepository(conn);
-    this.reservations = new PgReservationRepository(conn);
   }
 
   static async open(url: string, options: PostgresStoreOptions = {}): Promise<PostgresStore> {

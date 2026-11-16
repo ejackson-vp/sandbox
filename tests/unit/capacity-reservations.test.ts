@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { freshStore } from "../helpers/test-store.js";
 import { availableOnNode } from "../../controller/src/capacity/placement.js";
+import { ALLOCATION_GRACE_MS } from "../../controller/src/capacity/reservation-decision.js";
 import { holdsCompute, type CapacitySnapshot, type SandboxResourceRequest } from "../../controller/src/capacity/types.js";
 
 const MiB = 1024 * 1024;
@@ -215,6 +216,39 @@ describe("durable capacity reservations", () => {
     }
   });
 
+  it("expires an ALLOCATED reservation whose session never materialised", async () => {
+    const store = await freshStore();
+    try {
+      const now = Date.now();
+      const attached = await store.reservations.admit(snapshot(now), request(), {
+        sessionId: "sbx_never_written",
+        specHash: "f".repeat(64),
+        state: "ALLOCATED",
+      });
+      expect(attached.admitted).toBe(true);
+      expect((await store.reservations.getBySession("sbx_never_written"))?.expiresAt).toBe(
+        now + ALLOCATION_GRACE_MS,
+      );
+
+      // Inside the grace the row still belongs to a settlement in flight.
+      expect((await store.reservations.reapExpired(now + 1_000)).allocations).toBe(0);
+      expect((await store.reservations.getBySession("sbx_never_written"))?.state).toBe("ALLOCATED");
+
+      const reaped = await store.reservations.reapExpired(now + ALLOCATION_GRACE_MS + 1);
+      expect(reaped.allocations).toBe(1);
+      expect(reaped.holds).toBe(0);
+      expect((await store.reservations.getBySession("sbx_never_written"))?.state).toBe("RELEASED");
+
+      // The capacity that was never used is admitted again.
+      expect((await store.reservations.admit(snapshot(now), request(), {
+        sessionId: "sbx_reuser",
+        state: "ALLOCATED",
+      })).admitted).toBe(true);
+    } finally {
+      await store.close();
+    }
+  });
+
   it("keeps compute charged when an active session enters RELEASING", async () => {
     const store = await freshStore();
     try {
@@ -317,7 +351,9 @@ describe("durable capacity reservations", () => {
         ttlMs: 5_000,
       });
       expect(hold.admitted).toBe(true);
-      expect(await store.reservations.reapExpiredHolds(now + 6_000)).toBeGreaterThanOrEqual(1);
+      const reaped = await store.reservations.reapExpired(now + 6_000);
+      expect(reaped.holds).toBeGreaterThanOrEqual(1);
+      expect(reaped.allocations).toBe(0);
       expect((await store.reservations.getByPayment("c".repeat(64)))?.state).toBe("RELEASED");
 
       const rehold = await store.reservations.admit(snapshot(now + 6_000), request(), {

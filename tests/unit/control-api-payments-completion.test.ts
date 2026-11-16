@@ -33,7 +33,8 @@ import { resolveSessionSpec, specHash } from "@x402s/shared/payment";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { registerPaymentRoutes } from "../../controller/src/control-api/payments.js";
 import type { ControlApiDeps } from "../../controller/src/control-api/types.js";
-import type { CapacityService } from "../../controller/src/capacity/service.js";
+import { CapacityService } from "../../controller/src/capacity/service.js";
+import type { Provisioner } from "../../controller/src/k8s.js";
 import { PaymentClaimLostError } from "../../controller/src/store/models.js";
 import type { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { controllerConfig } from "../helpers/controller-config.js";
@@ -82,6 +83,41 @@ function capacityStub() {
     releaseSession,
     service: { attach, releaseSession } as unknown as CapacityService,
   };
+}
+
+const MiB = 1024 * 1024;
+
+/**
+ * A provisioner with one roomy node: enough for the reservation adapter to
+ * admit, and nothing to call out to. `listWarmPods` is empty so the snapshot is
+ * only the durable rows.
+ */
+function fakeProvisioner(): Provisioner {
+  return {
+    async listNodes() {
+      return [{
+        name: "node-completion",
+        allocatableCpuMillis: 8_000,
+        allocatableMemoryBytes: 16_384 * MiB,
+        allocatableStorageBytes: 102_400 * MiB,
+        labels: { "x402.io/sandbox-pool": "true" },
+        taints: [],
+        ready: true,
+        schedulable: true,
+      }];
+    },
+    async listWarmPods() {
+      return [];
+    },
+    async getPod() {
+      return null;
+    },
+  } as unknown as Provisioner;
+}
+
+/** The real capacity service over the real reservation adapter. */
+function realCapacity(store: PostgresStore): CapacityService {
+  return new CapacityService({ cfg, store, provisioner: fakeProvisioner() });
 }
 
 /**
@@ -425,5 +461,56 @@ describe("a failure after the session insert rolls the entitlement back", () => 
     expect(
       await sqlRows("SELECT spend FROM payer_budgets WHERE budget_key = $1", [`payer:${payer}`]),
     ).toMatchObject([{ spend: "not-a-number" }]);
+  });
+});
+
+describe("a duplicate completion does not leak its reservation", () => {
+  it("frees the discarded allocation after the grace and leaves the live session's alone", async () => {
+    const store = await freshStore();
+    const firstKey = "7".repeat(64);
+    const firstSession = `sbx_${"7".repeat(24)}`;
+    const capacity = realCapacity(store);
+    const base = await listen({ store, capacity });
+
+    const first = await post(
+      base,
+      `/internal/payment-intents/${firstKey}/complete`,
+      completionBody(firstKey, await claim(store, firstKey), { sessionId: firstSession }),
+    );
+    expect(first.status).toBe(201);
+
+    const secondKey = "8".repeat(64);
+    const secondSession = `sbx_${"8".repeat(24)}`;
+    const duplicate = await post(
+      base,
+      `/internal/payment-intents/${secondKey}/complete`,
+      completionBody(secondKey, await claim(store, secondKey), { sessionId: secondSession }),
+    );
+    expect(duplicate.status).toBe(409);
+
+    // The route binds the payment's reservation to a session id before it
+    // settles, and a duplicate never writes that session. The row must therefore
+    // carry a deadline; without one the reaper skips it forever because there is
+    // no session to terminate.
+    const discarded = await store.reservations.getBySession(secondSession);
+    expect(discarded).toMatchObject({ state: "ALLOCATED", paymentKey: secondKey });
+    expect(discarded?.expiresAt).toBeGreaterThan(Date.now());
+    expect(await store.getSession(secondSession)).toBeNull();
+
+    // The live session's reservation is the control: confirmation clears the
+    // grace, so no later reap can free capacity a running session is using.
+    expect(await store.reservations.getBySession(firstSession)).toMatchObject({
+      state: "ALLOCATED",
+      expiresAt: null,
+    });
+
+    // Inside the grace the duplicate's row still counts: its settlement may in
+    // principle still be in flight.
+    expect((await store.reservations.reapExpired(Date.now() + 1_000)).allocations).toBe(0);
+
+    const reaped = await store.reservations.reapExpired((discarded?.expiresAt ?? 0) + 1);
+    expect(reaped.allocations).toBe(1);
+    expect((await store.reservations.getBySession(secondSession))?.state).toBe("RELEASED");
+    expect((await store.reservations.getBySession(firstSession))?.state).toBe("ALLOCATED");
   });
 });

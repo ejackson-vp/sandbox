@@ -106,9 +106,9 @@ describe("reservation fault recovery", () => {
       specHash: "b".repeat(64),
       ttlMs: 10_000,
     })).admitted).toBe(true);
-    expect(await store.reservations.reapExpiredHolds(now + 5_000)).toBe(0);
+    expect((await store.reservations.reapExpired(now + 5_000)).holds).toBe(0);
     expect((await store.reservations.getByPayment("b".repeat(64)))?.state).toBe("HELD");
-    expect(await store.reservations.reapExpiredHolds(now + 11_000)).toBe(1);
+    expect((await store.reservations.reapExpired(now + 11_000)).holds).toBe(1);
     expect((await store.reservations.getByPayment("b".repeat(64)))?.state).toBe("RELEASED");
   });
 });

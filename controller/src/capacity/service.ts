@@ -253,12 +253,23 @@ export class CapacityService {
     return this.reservations.pinNode(sessionId, nodeId);
   }
 
+  /**
+   * A stale hold is ordinary; an allocation that never named a session is a
+   * create that failed after taking capacity (a duplicate, a lost claim), so the
+   * two are counted apart. Neither carries an id or a key.
+   */
+  private recordReaped(reaped: { holds: number; allocations: number }): void {
+    const counter = metrics.counter(
+      "sandbox_reservation_recovery_total",
+      "Reservations recovered or expired",
+    );
+    if (reaped.holds > 0) counter.inc({ kind: "expired_hold" }, reaped.holds);
+    if (reaped.allocations > 0) counter.inc({ kind: "expired_allocation" }, reaped.allocations);
+  }
+
   async reap(): Promise<void> {
     const now = Date.now();
-    const expired = await this.reservations.reapExpiredHolds(now);
-    if (expired > 0) {
-      metrics.counter("sandbox_reservation_recovery_total", "Reservations recovered or expired").inc({ kind: "expired_hold" }, expired);
-    }
+    this.recordReaped(await this.reservations.reapExpired(now));
     // Each iteration now awaits, so a reservation can move between the read of
     // the snapshot and the write below. The write is still the model's answer
     // for the state it saw, and the one case that matters is already covered:

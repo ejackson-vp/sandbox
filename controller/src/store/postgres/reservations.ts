@@ -132,14 +132,15 @@ export class PgReservationRepository implements ReservationStore {
     request: SandboxResourceRequest,
     nodeId: string,
     now: number,
+    expiresAt: number,
   ): Promise<void> {
     await tx.query(
       `UPDATE reservations
           SET payment_key = $1, session_id = $2, spec_hash = $3, node_id = $4, state = 'ALLOCATED',
               baseline_cpu_millis = $5, baseline_memory_bytes = $6, baseline_storage_bytes = $7,
               peak_cpu_millis = $8, peak_memory_bytes = $9, peak_storage_bytes = $10,
-              expires_at = NULL, updated_at = $11
-        WHERE id = $12`,
+              expires_at = $11, updated_at = $12
+        WHERE id = $13`,
       [
         opts.paymentKey ?? null,
         opts.sessionId ?? null,
@@ -151,6 +152,9 @@ export class PgReservationRepository implements ReservationStore {
         request.peak.cpuMillicores,
         request.peak.memoryBytes,
         request.peak.storageBytes,
+        // The grace, not NULL: this row is written before the session that owns
+        // it exists. `confirmSession` drops it inside the settlement commit.
+        expiresAt,
         now,
         id,
       ],
@@ -203,7 +207,7 @@ export class PgReservationRepository implements ReservationStore {
     if (existing) {
       await this.updateHeld(tx, id, request, decision.nodeId, now, plan.expiresAt, opts.specHash ?? null);
       if (plan.wantsAttach) {
-        await this.attach(tx, id, opts, request, decision.nodeId, now);
+        await this.attach(tx, id, opts, request, decision.nodeId, now, plan.expiresAt);
       }
     } else {
       await tx.query(
@@ -448,12 +452,74 @@ export class PgReservationRepository implements ReservationStore {
     return (res.rowCount ?? 0) > 0;
   }
 
-  async reapExpiredHolds(now: number): Promise<number> {
-    const res = await this.conn.write(
-      `UPDATE reservations SET state = 'RELEASED', updated_at = $1
-        WHERE state = 'HELD' AND expires_at IS NOT NULL AND expires_at <= $1`,
+  /**
+   * The session row was inserted in this transaction: bind the payment's
+   * reservation to it and drop the grace, in the same commit.
+   *
+   * This is what makes "an `ALLOCATED` row names a session that exists" hold
+   * under a crash. The route binds the payment to a session id before settling,
+   * so a duplicate or a lost claim leaves a row pointing at a session that never
+   * commits; `reapExpired` frees that row after the grace. Doing the confirm in
+   * the settlement transaction means a row that *did* commit can never be freed:
+   * the session and the ownership change are one write.
+   *
+   * The `NOT EXISTS` is a guard, not a normal path: the session id is new, so no
+   * other row can hold it unless a crashed attempt bound the same id to another
+   * payment. Skipping the write there leaves the collision to the grace rather
+   * than failing a settlement that has already done its work.
+   */
+  async confirmSession(
+    tx: Tx,
+    paymentKey: string,
+    sessionId: string,
+    now: number,
+  ): Promise<boolean> {
+    const res = await tx.query(
+      `UPDATE reservations r
+          SET session_id = $1, expires_at = NULL, updated_at = $2
+        WHERE r.payment_key = $3
+          AND r.state = 'ALLOCATED'
+          AND NOT EXISTS (
+                SELECT 1 FROM reservations o
+                 WHERE o.session_id = $1 AND o.id <> r.id)`,
+      [sessionId, now, paymentKey],
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  /**
+   * Free the rows whose deadline passed: an expired hold, and an allocation
+   * whose session never materialised.
+   *
+   * The second case is the one that used to leak. `ALLOCATED` promises a session
+   * owns the row, but the promise is written before the commit that makes it
+   * true, so a refused settlement leaves a row that no session will ever
+   * terminate. The grace in `expires_at` bounds how long that can be true. A row
+   * that *did* commit has `expires_at` cleared by `confirmSession`, so it is
+   * never matched here even if a reaper runs at the same instant.
+   */
+  async reapExpired(now: number): Promise<{ holds: number; allocations: number }> {
+    const res = await this.conn.write<{ holds: number; allocations: number }>(
+      `WITH expired AS (
+         SELECT id, state FROM reservations r
+          WHERE r.expires_at IS NOT NULL
+            AND r.expires_at <= $1
+            AND (r.state = 'HELD'
+                 OR (r.state = 'ALLOCATED'
+                     AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = r.session_id)))
+       ), released AS (
+         UPDATE reservations r
+            SET state = 'RELEASED', pod_name = NULL, updated_at = $1
+           FROM expired e
+          WHERE r.id = e.id
+         RETURNING e.state AS prior_state
+       )
+       SELECT count(*) FILTER (WHERE prior_state = 'HELD')::int AS holds,
+              count(*) FILTER (WHERE prior_state = 'ALLOCATED')::int AS allocations
+         FROM released`,
       [now],
     );
-    return Number(res.rowCount ?? 0);
+    const row = res.rows[0];
+    return { holds: row?.holds ?? 0, allocations: row?.allocations ?? 0 };
   }
 }

@@ -221,7 +221,7 @@ const FUNCTION_BASELINE = new Map([
   ["tests/unit/create-path.test.ts::harness", [136, "fixture: store, provisioner, relay and settle doubles"]],
   ["shared/src/domain/session.ts::transition", [135, "the lifecycle switch, one case per state and event family"]],
   ["controller/src/k8s-pod.ts::buildPod", [132, "the pod spec: containers, probes, volumes, security"]],
-  ["controller/src/store/postgres/payments.ts::completeEntitlement", [132, "one transaction: intent, session insert, reservation"]],
+  ["controller/src/store/postgres/payments.ts::completeEntitlement", [105, "one transaction: intent, session insert, reservation confirm"]],
   ["api/src/mock-facilitator.ts::createMockFacilitator", [127, "sqlite nonce store plus the four facilitator routes"]],
   ["controller/src/relay/ws.ts::handleGuestConnection", [127, "hello, decode, dispatch, reply and close for one socket"]],
   ["api/src/use-cases/create-session.ts::createSession", [124, "validate, switch, claim, verify, settle, complete"]],

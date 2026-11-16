@@ -8,17 +8,35 @@ Status: implemented in `controller/src/capacity/reservations.ts`.
 HELD ──attach──► ALLOCATED ──suspend──► SUSPENDED ──resume──► ALLOCATED
   │                   │                       │
   │                   └──terminate────────────┴──► RELEASING ──► RELEASED
-  └──expire/fail──► RELEASED
+  └──expire/fail──► RELEASED      ALLOCATED with no session row ──grace──► RELEASED
 ```
 
 | State | Compute | Storage | Meaning |
 |---|---|---|---|
 | `HELD` | reserved | reserved | paid-intent provisional hold |
-| `ALLOCATED` | reserved | reserved | owned by a paid session |
+| `ALLOCATED` | reserved | reserved | owned by a paid session (or waiting for its commit) |
 | `SUSPENDED` | released | retained | checkpointed, no Pod |
 | `RELEASING` (from `ALLOCATED`) | reserved | reserved | Pod deletion requested; wait for confirmation |
 | `RELEASING` (from `SUSPENDED`) | released | retained | no Pod to wait for; wait for release confirmation |
 | `RELEASED` | none | none | terminal |
+
+The invariant `ALLOCATED` states: **the row names a session that exists.** The
+write that says so happens before the settlement transaction commits, so the
+invariant is enforced at the commit, not at the attach:
+
+- `attachToSession` writes `expires_at = now + ALLOCATION_GRACE_MS` (5 minutes)
+  alongside `state = 'ALLOCATED'`.
+- `completeEntitlement` calls `confirmSession` inside the same transaction that
+  inserts the session: it points the row at that session and clears
+  `expires_at`.
+- `reapExpired` releases an `ALLOCATED` row whose `expires_at` passed **and**
+  whose `session_id` has no row in `sessions`.
+
+So a create that settled has no deadline left on its allocation, and an
+allocation that never became a session cannot outlive the grace. A duplicate
+completion, a lost claim and a crash between attach and commit all take the
+second path; before the grace existed, the row was skipped by the reaper
+forever because there was no session to terminate.
 
 `RELEASING` is deliberately conservative for a reservation that came from an
 active session: Kubernetes `deletePod` returns before the Pod and its cgroup are
@@ -38,7 +56,8 @@ so `RELEASING` with no `pod_name` is a release that already returned compute
 - unique `payment_key`, `session_id` and `warm_id` where present,
 - `node_id`, `pod_name`,
 - baseline and peak vectors,
-- `expires_at` for holds,
+- `expires_at`: the deadline of a `HELD` hold, or the grace of an `ALLOCATED`
+  row whose settlement commit has not confirmed it yet,
 - `created_at` / `updated_at`.
 
 `SCHEMA_VERSION` is 10. Migrations are additive and transactional: payment
@@ -77,6 +96,7 @@ from a single source.
 | Crash point | Recovery |
 |---|---|
 | after `HELD` insert, before settlement | hold expires (`CAPACITY_HOLD_TTL_MS`, default 120 s) and is reaped |
+| after `attachToSession`, before the settlement commits | allocation grace (`ALLOCATION_GRACE_MS`, 300 s) passes with no session row, and the reaper releases it |
 | after settlement, before entitlement | payment intent recovery reuses the hold through `completeIntent` |
 | after `ALLOCATED`, before Pod | the reconciler provisions from the durable reservation |
 | while `SUSPENDING` | reconcile finishes the checkpoint; reservation moves to `SUSPENDED` |
@@ -86,7 +106,8 @@ from a single source.
 
 `reap()` runs in housekeeping:
 
-1. expire stale `HELD` rows,
+1. release stale `HELD` rows, and `ALLOCATED` rows whose `expires_at` passed and
+   whose session row does not exist,
 2. for `RELEASING`, query the Pod; confirm release when absent/terminal,
 3. count reservations stuck in `RELEASING` for more than 60 s as leaks.
 
@@ -122,8 +143,9 @@ can reject, not over-admit).
 
 - `RELEASED` rows are terminal and ignored.
 - `HELD` has an expiry.
-- `ALLOCATED` is released only on termination; a session without a Pod is
-  failed by the existing provisioning timeout.
+- `ALLOCATED` is released on termination, or, when its session never
+  materialised, by the grace. A confirmed allocation has `expires_at = NULL`, so
+  the grace cannot free a live session's capacity.
 - `RELEASING` is constrained by Pod observation; a release from `SUSPENDED`
   names no Pod and is confirmed on the next housekeeping tick.
 - The capacity demo asserts `reservations.total === 0` after destroying both
