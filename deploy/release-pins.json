@@ -12,13 +12,13 @@
     "tree deployed 0.1.30 images and nothing noticed."
   ],
   "talos": {
-    "release": "0.1.32",
-    "control": "0.1.32",
-    "guest": "0.1.31",
-    "guestDigest": "sha256:eea680fa3401d6e632f7650590c3ab987ceb8270e55252e6bc194b9cd1ff4f06",
+    "release": "0.1.33",
+    "control": "0.1.33",
+    "guest": "0.1.32",
+    "guestDigest": "sha256:d66635e2b3ba3b105706790ceba07539c19ab55b4b5c4d2696eaf79a9060c10e",
     "profiles": {
-      "python": "sha256:b1eea6a0c8f0c63f9f5ad35a87462d066ed6f2b5d913eb1024427964e5827ac5",
-      "node": "sha256:9e7f07506729961972d75b0c7b9f5bfec12d67dd3f025ecc833445a9de0341c2"
+      "python": "sha256:647164dec8e7ff8f62b752eb8d7df9e81b7a88ede1e2ac9db6064415a2df5e36",
+      "node": "sha256:499535828adce829a0703c9ecc64f1fb8efd0c3d9e41cc822a8fc3bf0a7580ae"
     }
   }
 }

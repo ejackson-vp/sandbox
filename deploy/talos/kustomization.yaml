@@ -61,7 +61,7 @@ resources:
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: 0.1.32
+    newTag: 0.1.33
   # 0.1.30 runs two relay shards and fixes the warm pool's relay addressing:
   # it now follows RELAY_GUEST_ADDRESS instead of always dialling a ClusterIP.
   # The guest below is the 0.1.30 build from the same tag. Do not move one
@@ -82,13 +82,13 @@ patches:
     patch: |-
       - op: replace
         path: /data/GUEST_IMAGE
-        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.31
+        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.32
       # Index digest of the release above. The controller pulls
       # `repo@sha256:…` whenever a digest is set (dev mode or not), so a moved
       # tag cannot change what runs inside the sandbox.
       - op: replace
         path: /data/GUEST_IMAGE_DIGEST
-        value: sha256:eea680fa3401d6e632f7650590c3ab987ceb8270e55252e6bc194b9cd1ff4f06
+        value: sha256:d66635e2b3ba3b105706790ceba07539c19ab55b4b5c4d2696eaf79a9060c10e
       # The warm pool: 20 idle pods, the shape this directory's README sizes in
       # section 1.1 against two 13 GiB nodes (20 x 512 MiB limit), and the pool
       # the performance numbers in the top-level README were measured on.
@@ -107,7 +107,7 @@ patches:
         value: "16"
       - op: add
         path: /data/RUNTIME_PROFILES
-        value: '{"python":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:b1eea6a0c8f0c63f9f5ad35a87462d066ed6f2b5d913eb1024427964e5827ac5"},"node":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:9e7f07506729961972d75b0c7b9f5bfec12d67dd3f025ecc833445a9de0341c2"}}'
+        value: '{"python":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:647164dec8e7ff8f62b752eb8d7df9e81b7a88ede1e2ac9db6064415a2df5e36"},"node":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:499535828adce829a0703c9ecc64f1fb8efd0c3d9e41cc822a8fc3bf0a7580ae"}}'
       - op: replace
         path: /data/PUBLIC_BASE_URL
         value: https://sandbox.example.ts.net
