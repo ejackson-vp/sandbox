@@ -144,7 +144,11 @@ describe("ledger audit", () => {
     fc.assert(
       fc.property(
         fc.array(balancedIntent, { maxLength: 8 }),
-        fc.array(fc.stringMatching(/^0x[0-9a-f]{4,12}$/), { maxLength: 6 }),
+        // Unique: two claims sharing a settlement nonce are a real finding
+        // (`duplicate_refund_claim`), so a generator that may repeat one is
+        // testing the rule it claims to have excluded. Seed 1808431481 found
+        // this with ["0xbd2e","0xbd2e"].
+        fc.uniqueArray(fc.stringMatching(/^0x[0-9a-f]{4,12}$/), { maxLength: 6 }),
         fc.array(session, { maxLength: 6 }),
         (intents, nonces, sessions) => {
           const repaired: IntentLedgerSnapshot[] = intents.map((row) => {

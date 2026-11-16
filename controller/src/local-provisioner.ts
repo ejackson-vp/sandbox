@@ -7,9 +7,18 @@
  * NOT provide Kubernetes isolation. It is never selected when
  * KUBERNETES_ENABLED=true.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
+/** Stopped ("T") or running state of a pid, via ps. Empty on error. */
+function processStateOf(pid: number): string {
+  try {
+    return execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim()[0] ?? "";
+  } catch {
+    return "";
+  }
+}
+
 import { join } from "node:path";
 import type { WorkspacePvcInfo } from "./checkpoint-retention.js";
 import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodInfo, WarmPodSpec } from "./k8s.js";
@@ -330,7 +339,22 @@ export class LocalProvisioner implements Provisioner {
   signalPod(podName: string, signal: NodeJS.Signals): boolean {
     const pod = this.pods.get(podName);
     if (!pod || pod.proc.exitCode !== null) return false;
-    return pod.proc.kill(signal);
+    const sent = pod.proc.kill(signal);
+    const pid = pod.proc.pid;
+    if (!sent || signal !== "SIGSTOP" || !pid) return sent;
+    // SIGSTOP is asynchronous: kill returns once the signal is queued, not once
+    // the guest has stopped. A caller that forwards a frame immediately after
+    // can race the delivery, and the guest executes a frame the test believes is
+    // still unread. This hook exists to make "forwarded but not yet observed"
+    // deterministic, so it is only useful once the stop is observable. Poll for
+    // state T and fail closed on timeout rather than report a stop that did not
+    // happen.
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      if (processStateOf(pid) === "T") return true;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+    throw new Error(`guest ${podName} did not stop within 2s of SIGSTOP`);
   }
 
   diagnostics(podName: string): string | undefined {
