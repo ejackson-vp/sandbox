@@ -236,6 +236,99 @@ Building the same images locally, for a quick check before a tag:
 `build-profiles.sh` only produces local `:dev` tags. It never pushes, and it
 never creates a release tag.
 
+## Deploying a release
+
+A tag deploys the overlay in the commit it points at, not the overlay in the
+release notes. That is why the pins have to move before the tag: v0.1.31 was cut
+from a tree whose overlay still said 0.1.30, so deploying the tag by tag alone
+ran the previous release and the private deployment had to override the images
+by hand.
+
+### 1. Move the pins, then tag
+
+One command rewrites the three files that name a release:
+
+```bash
+npm run release:bump-pins -- --version 0.1.32 \
+  --guest-digest sha256:... \
+  --profile-digest python=sha256:... \
+  --profile-digest node=sha256:...
+```
+
+The inputs are the version and the index digests (`digests` job output for
+control and guest, `profile-images.json` for a profile). There is no registry
+lookup inside the script: a build-time registry answer is not reproducible. It
+writes `deploy/talos/kustomization.yaml`, `deploy/release-pins.json` and the
+Kyverno allowlist, then runs the checks CI runs against the result, and writes
+nothing if they disagree. A profile in `RUNTIME_PROFILES` that is not given a
+digest is an error, not a silent carry-over from the previous release.
+
+Commit that, then check the tag you are about to cut:
+
+```bash
+node scripts/check-deploy-pins.mjs --tag v0.1.32
+```
+
+`release.yml` runs the same check on every tag build and fails before building
+when the tree names a different release. It is offline by design: the overlay
+and the release map are compared to `github.ref_name`, and the digest enters
+only through the map, because a digest cannot be derived from a tag without the
+registry. One thing remains outside any unit test: that the pinned digest is the
+digest the version tag actually serves. Confirm it after promotion, from a
+machine with registry access:
+
+```bash
+docker buildx imagetools inspect ghcr.io/<owner>/<repo>-guest:0.1.32 \
+  --format '{{.Manifest.Digest}}'
+```
+
+### 2. Apply cluster-scoped objects before the workloads
+
+`kubectl apply -k` follows the order in
+[`deploy/kubernetes/kustomization.yaml`](../deploy/kubernetes/kustomization.yaml),
+which lists every cluster-scoped object before the workloads. Do not reorder it,
+and do not roll images ahead of it:
+
+1. Cluster-scoped objects: the `sandbox-controller-nodes` and
+   `sandbox-controller-runtimeclasses` ClusterRoles and their bindings, the
+   `sandbox-critical` and `sandbox-tenant` PriorityClasses, and the `x402-sandbox`
+   RuntimeClass.
+2. Namespaced prerequisites: the namespaces, the controller ServiceAccount and
+   its Roles, the Secrets, Postgres.
+3. Workloads: api, controller, relay, egress proxy, facilitator.
+4. Only then, if you moved images separately, confirm the rollout.
+
+The controller fails closed on purpose. With `EXECUTION_MODE=kata` it reads the
+RuntimeClass named by `RUNTIME_CLASS` before it accepts a session and refuses to
+start when the read is denied or the handler is not a microVM one
+(`controller/src/config/kubernetes.ts`). Moving the image before the
+`sandbox-controller-runtimeclasses` ClusterRole therefore crashloops the
+controller: the 403 is the guard working, not a bad image. The other two fail
+earlier in the chain: a pod that names a PriorityClass that does not exist is
+rejected by the API server at admission, and a pod whose `runtimeClassName` has
+no RuntimeClass never starts.
+
+If you must move an image on its own (an emergency rollback, for example), apply
+the cluster-scoped objects first and prove the read succeeds before touching the
+Deployment:
+
+```bash
+kubectl apply -f deploy/kubernetes/01-runtimeclass.yaml \
+  -f deploy/kubernetes/04-priorityclasses.yaml -f deploy/kubernetes/04-rbac.yaml
+
+# A ClusterRole without its binding grants nothing: check the subject, not the role.
+kubectl auth can-i get runtimeclasses \
+  --as system:serviceaccount:sandbox-system:sandbox-controller          # yes
+kubectl get runtimeclass x402-sandbox -o jsonpath='{.handler}{"\n"}'    # kata
+kubectl get priorityclass sandbox-critical sandbox-tenant
+```
+
+Then let the image roll and watch the controller start rather than crashloop:
+
+```bash
+kubectl -n sandbox-system rollout status deploy/controller --timeout=180s
+```
+
 ## What a failed scan leaves behind
 
 | Job | Result on a scan failure |

@@ -33,7 +33,9 @@
     "test:coverage": "vitest run tests/unit tests/property --coverage --fileParallelism",
     "mutation": "stryker run",
     "lint:structure": "node scripts/check-structure.mjs && node scripts/check-singletons.mjs",
-    "coupling": "node scripts/coupling.mjs"
+    "coupling": "node scripts/coupling.mjs",
+    "deploy:pins": "node scripts/check-deploy-pins.mjs",
+    "release:bump-pins": "node scripts/bump-release-pins.mjs"
   },
   "devDependencies": {
     "@stryker-mutator/core": "^10.1.1",

@@ -162,12 +162,24 @@ controller cannot verify it. See
 | `ghcr.io/ejackson-vp/sandbox-control` | api, controller, relay, egress proxy, facilitator |
 | `ghcr.io/ejackson-vp/sandbox-guest` | the sandbox runtime that runs inside the microVM |
 
-Bump `newTag` in `kustomization.yaml` and `GUEST_IMAGE` together, and update
-`deploy/release-pins.json` and the Kyverno allowlist in the same change. They are
-one release, and `scripts/check-deploy-pins.mjs` fails the build when the overlay,
-the map and the allowlist name different ones. That check exists because this overlay once shipped
-control 0.1.30 with guest 0.1.25: both tags resolved, and the deployed pair
-silently lacked the relay reconnect fix ADR 0012 relies on.
+Bump the control tag, `GUEST_IMAGE`, the digests and
+`deploy/release-pins.json` in one step, and the Kyverno allowlist with them:
+
+```bash
+npm run release:bump-pins -- --version 0.1.32 \
+  --guest-digest sha256:... \
+  --profile-digest python=sha256:... \
+  --profile-digest node=sha256:...
+```
+
+They are one release, and `scripts/check-deploy-pins.mjs` fails the build when
+the overlay, the map and the allowlist name different ones, or when a tag names
+a release the tree does not pin. That check exists because this overlay once
+shipped control 0.1.30 with guest 0.1.25: both tags resolved, and the deployed
+pair silently lacked the relay reconnect fix ADR 0012 relies on. It exists a
+second time because v0.1.31 was cut from a tree that still said 0.1.30, so the
+tag deployed the previous release. See
+[release-process.md](../../docs/release-process.md#deploying-a-release).
 
 `GUEST_IMAGE_DIGEST` is set from the release output and the controller refuses
 to start with the dev placeholder when `KUBERNETES_ENABLED=true` (the cluster

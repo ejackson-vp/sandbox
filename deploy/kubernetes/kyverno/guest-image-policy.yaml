@@ -88,9 +88,11 @@ spec:
     # ---------------------------------------------------------------- #
     # 2. The digest is the released one.                                #
     # ---------------------------------------------------------------- #
-    # Update this list in the same change as GUEST_IMAGE_DIGEST /
-    # RUNTIME_PROFILES in deploy/talos/kustomization.yaml. A missing entry is
-    # a rejected pod, not a silently unpinned one.
+    # Update this list with the release, not by hand:
+    # `npm run release:bump-pins -- --version <release> ...` rewrites it from the
+    # same inputs as GUEST_IMAGE_DIGEST / RUNTIME_PROFILES in
+    # deploy/talos/kustomization.yaml. A missing entry is a rejected pod, not a
+    # silently unpinned one.
     #
     # scripts/check-deploy-pins.mjs compares this set against the release map
     # (deploy/release-pins.json), so a digest that moves in one place and not

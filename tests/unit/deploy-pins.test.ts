@@ -12,9 +12,13 @@ import { describe, expect, it } from "vitest";
 import {
   checkDeployPins,
   comparePins,
+  compareTag,
+  parseArgs,
   parseKyvernoAdmitted,
   parseTalos,
+  tagVersion,
 } from "../../scripts/check-deploy-pins.mjs";
+import { bumpReleasePins } from "../../scripts/bump-release-pins.mjs";
 
 const BASE = "sha256:" + "1".repeat(64);
 const PYTHON = "sha256:" + "2".repeat(64);
@@ -69,6 +73,53 @@ function kyvernoYaml(digests: string[] = [BASE, PYTHON, NODE]): string {
 
 function drift(talos: string, admitted = kyvernoYaml()): string[] {
   return comparePins(pins(), parseTalos(talos), parseKyvernoAdmitted(admitted));
+}
+
+const NEXT = "sha256:" + "4".repeat(64);
+const NEXT_PYTHON = "sha256:" + "5".repeat(64);
+const NEXT_NODE = "sha256:" + "6".repeat(64);
+
+/** Shaped like deploy/release-pins.json, comment included. */
+function mapJson(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify(
+    {
+      _comment: ["fixture"],
+      talos: {
+        release: "0.1.30",
+        control: "0.1.30",
+        guest: "0.1.30",
+        guestDigest: BASE,
+        profiles: { python: PYTHON, node: NODE },
+        ...overrides,
+      },
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * Shaped like the Kyverno policy: a `value:` list of quoted ghcr digest
+ * references, each preceded by a comment, which is what the bump script
+ * rewrites and what `parseKyvernoAdmitted` reads.
+ */
+function kyvernoPolicy(digests: string[] = [BASE, PYTHON, NODE]): string {
+  const indent = "                      ";
+  const entries = digests
+    .map((digest, index) => `${indent}# entry ${index}\n${indent}- "ghcr.io/example/guest@${digest}"`)
+    .join("\n");
+  return [
+    "        foreach:",
+    '          - list: "request.object.spec.[containers, initContainers][]"',
+    "            deny:",
+    "              conditions:",
+    "                any:",
+    '                  - key: "{{ element.image }}"',
+    "                    operator: AnyNotIn",
+    "                    value:",
+    entries,
+    "",
+  ].join("\n");
 }
 
 describe("parseTalos", () => {
@@ -143,6 +194,115 @@ describe("comparePins", () => {
     const errors = drift(talosYaml(), kyvernoYaml([OLD, PYTHON, NODE]));
     expect(errors.join("\n")).toMatch(/released digest .* is not in the allowlist/);
     expect(errors.join("\n")).toMatch(/allowlist carries .* which no release map entry records/);
+  });
+});
+
+describe("parseArgs", () => {
+  it("takes --tag as a pair or with =, and rejects a call it cannot read", () => {
+    // The release workflow passes github.ref_name here, so a typo must be a
+    // usage error rather than a run that quietly checks nothing.
+    expect(parseArgs(["--tag", "v0.1.31"])).toEqual({ ref: "v0.1.31" });
+    expect(parseArgs(["--tag=v0.1.31"])).toEqual({ ref: "v0.1.31" });
+    expect(parseArgs([])).toEqual({ ref: null });
+    expect(() => parseArgs(["--tag"])).toThrow(/--tag needs a value/);
+    expect(() => parseArgs(["--verbose"])).toThrow(/unknown argument/);
+  });
+});
+
+describe("compareTag", () => {
+  it("accepts a tag whose release the tree already pins", () => {
+    expect(compareTag(pins(), parseTalos(talosYaml()), "v0.1.30")).toEqual([]);
+    // The `v` is optional here so a rehearsal against a branch name cannot pass
+    // by accident; a branch is not a version and must fail loudly.
+    expect(tagVersion("v0.1.30")).toBe("0.1.30");
+    expect(() => tagVersion("main")).toThrow(/not a version tag/);
+  });
+
+  it("catches v0.1.31 cut from a tree that still pins 0.1.30", () => {
+    // The live failure this exists for: the tag, its overlay and its release map
+    // were internally consistent at 0.1.30, so every committed-consistency check
+    // passed and the tag deployed the previous release. Deploying by tag alone
+    // ran old code until the images were overridden by hand.
+    const errors = compareTag(pins(), parseTalos(talosYaml()), "v0.1.31").join("\n");
+    expect(errors).toMatch(/records release 0\.1\.30, but this build is cutting 0\.1\.31/);
+    expect(errors).toMatch(/control tag 0\.1\.30 is not this tag's release 0\.1\.31/);
+    expect(errors).toMatch(/guest tag 0\.1\.30 is not this tag's release 0\.1\.31/);
+    expect(errors).toMatch(/would deploy the 0\.1\.30 control image/);
+  });
+
+  it("names only the image that lags when the other one moved", () => {
+    const errors = compareTag(
+      pins({ release: "0.1.31", control: "0.1.31" }),
+      parseTalos(talosYaml({ control: "0.1.31", guest: "0.1.30" })),
+      "v0.1.31",
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/guest tag 0\.1\.30 is not this tag's release 0\.1\.31/);
+  });
+});
+
+describe("bumpReleasePins", () => {
+  function bump(overrides: Record<string, unknown> = {}) {
+    return bumpReleasePins({
+      overlay: talosYaml(),
+      map: mapJson(),
+      kyverno: kyvernoPolicy(),
+      version: "0.1.31",
+      guestDigest: NEXT,
+      profileDigests: { python: NEXT_PYTHON, node: NEXT_NODE },
+      ...overrides,
+    });
+  }
+
+  it("moves the overlay, the release map and the allowlist to one release", () => {
+    const bumped = bump();
+    const talos = parseTalos(bumped.overlay);
+    const map = JSON.parse(bumped.map).talos;
+
+    expect(talos.controlTag).toBe("0.1.31");
+    expect(talos.guestTag).toBe("0.1.31");
+    expect(talos.guestDigest).toBe(NEXT);
+    expect(talos.profiles).toEqual({
+      python: { image: "ghcr.io/example/guest", digest: NEXT_PYTHON },
+      node: { image: "ghcr.io/example/guest", digest: NEXT_NODE },
+    });
+    expect(map).toMatchObject({
+      release: "0.1.31",
+      control: "0.1.31",
+      guest: "0.1.31",
+      guestDigest: NEXT,
+      profiles: { python: NEXT_PYTHON, node: NEXT_NODE },
+    });
+    expect(parseKyvernoAdmitted(bumped.kyverno)).toEqual([NEXT, NEXT_PYTHON, NEXT_NODE]);
+
+    // The point of the command: what it writes passes the checks a release
+    // runs, including the tag check, without a second edit.
+    expect(comparePins(map, talos, parseKyvernoAdmitted(bumped.kyverno))).toEqual([]);
+    expect(compareTag(map, talos, "v0.1.31")).toEqual([]);
+  });
+
+  it("refuses to leave a profile at the previous release", () => {
+    // A base image bumped with one profile left behind is the 0.1.30/0.1.25
+    // shape again, one image at a time.
+    expect(() => bump({ profileDigests: { python: NEXT_PYTHON } })).toThrow(
+      /missing --profile-digest node/,
+    );
+  });
+
+  it("refuses a profile the overlay does not pin, and a tag for a digest", () => {
+    expect(() =>
+      bump({ profileDigests: { python: NEXT_PYTHON, node: NEXT_NODE, bun: NEXT } }),
+    ).toThrow(/no bun entry/);
+    expect(() => bump({ guestDigest: "0.1.31" })).toThrow(/not a sha256/);
+    expect(() => bump({ version: "main" })).toThrow(/not a version tag/);
+  });
+
+  it("writes nothing when the Kyverno allowlist shape changed", () => {
+    // The regex that finds the allowlist is load-bearing: a silent miss would
+    // leave admission rejecting every guest pod the bump just pinned.
+    expect(() =>
+      bump({ kyverno: "        value:\n          - \"x402-sandbox/guest@sha256:...\"\n" }),
+    ).toThrow(/could not find the guest-image allowlist/);
   });
 });
 

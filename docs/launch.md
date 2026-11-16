@@ -52,12 +52,28 @@ cannot be done on the laptop.
      --body '["self-hosted","linux","x64","sandbox-isolation"]'
    ```
 
-5. Cut a release from a clean `main` and watch the gate:
+5. Move the deployment pins to the version you are about to cut, commit, then
+   tag. The tag deploys the overlay in its own commit, so a tag cut from a tree
+   that still pins the previous release deploys the previous release; the
+   release workflow fails the build in that case.
 
    ```bash
+   npm run release:bump-pins -- --version 0.1.31 \
+     --guest-digest sha256:... \
+     --profile-digest python=sha256:... \
+     --profile-digest node=sha256:...
+
+   node scripts/check-deploy-pins.mjs --tag v0.1.31
+
+   git commit -am "chore(deploy): pin 0.1.31" && git push
    git tag -a v0.1.31 -m v0.1.31 && git push origin v0.1.31
    gh run watch --workflow release.yml
    ```
+
+   The digests come from the build that produces the release: the `digests` job
+   output of a rehearsal dispatch against the branch (`promote` refuses a
+   non-version ref, so nothing is published). See
+   [release-process.md](release-process.md#1-move-the-pins-then-tag).
 
 **Check:** the `isolation` job is green, the release body has no
 "suites were not run" banner, and `tested-images.json` names the same control and
@@ -132,10 +148,14 @@ neither has been exercised with real funds.
    kubectl apply -k deploy/overlays/throwbox
    ```
 
-   Apply this before rolling the controller, not after: the runtime-class guard
-   fails closed, and the new `sandbox-controller-runtimeclasses` ClusterRole must
-   exist or the pod will not start. That failure is intended, but it looks like an
-   outage.
+   One apply, and the order inside it matters: the cluster-scoped objects (the
+   `sandbox-controller-runtimeclasses` and `sandbox-controller-nodes` ClusterRoles
+   and their bindings, the two PriorityClasses, the `x402-sandbox` RuntimeClass)
+   land before the workloads that read or reference them. Do not roll the
+   controller image on its own first: with `EXECUTION_MODE=kata` it refuses to
+   start when it cannot read the RuntimeClass, so a missing ClusterRole is a
+   crashloop that looks like a bad image. That failure is intended. See
+   [release-process.md](release-process.md#2-apply-cluster-scoped-objects-before-the-workloads).
 
 3. Route the hostname to the tunnel in the Cloudflare dashboard, and confirm the
    origin is reachable only through it.

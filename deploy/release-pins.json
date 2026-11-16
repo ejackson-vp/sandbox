@@ -2,11 +2,14 @@
   "_comment": [
     "The release the Talos overlay deploys, recorded so a digest can be tied to a tag offline.",
     "A registry tag can be checked against nothing without the network, and a digest is opaque:",
-    "this file is the committed link between them. It is updated in the same change as",
-    "deploy/talos/kustomization.yaml and the allowlist in",
-    "deploy/kubernetes/kyverno/guest-image-policy.yaml, and scripts/check-deploy-pins.mjs",
-    "fails when the three disagree. Values are index digests from the v<release> GitHub",
-    "release / GHCR multi-arch index, not per-platform manifests."
+    "this file is the committed link between them. Values are index digests from the v<release>",
+    "GitHub release / GHCR multi-arch index, not per-platform manifests.",
+    "Do not edit by hand: `npm run release:bump-pins -- --version <release> ...` writes this",
+    "file, deploy/talos/kustomization.yaml and the allowlist in",
+    "deploy/kubernetes/kyverno/guest-image-policy.yaml together. scripts/check-deploy-pins.mjs",
+    "fails when the three disagree, and with --tag it also fails when this release is not the",
+    "tag being built: a tag deploys the pins in its own tree, so v0.1.31 cut from a 0.1.30",
+    "tree deployed 0.1.30 images and nothing noticed."
   ],
   "talos": {
     "release": "0.1.30",
