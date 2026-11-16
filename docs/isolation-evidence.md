@@ -9,6 +9,7 @@ the image digests the cluster actually ran.
 
 | Control | Guest | Result |
 | --- | --- | --- |
+| `0.1.33` `sha256:4804da2e…` | `0.1.33` `sha256:933a53e0…` | **23 passed, 1 skipped**, run against the deployed pair after `v0.1.33` promoted. Same four suites as the row below, same cluster, same skip: the `X-Forwarded-For` case, because this deployment sets `TRUST_PROXY_HOPS=1`. This is the first release where control and guest carry the jittered reconnect and the expiry-bounded capacity reservation. |
 | `0.1.32` `sha256:540af95a…` | `0.1.31` `sha256:eea680fa…` | **23 passed, 1 skipped** (the `X-Forwarded-For` case, skipped because this deployment sets `TRUST_PROXY_HOPS=1`). The attacker suite passes here, including the per-client connection cap that `0.1.30` did not have. |
 | `0.1.30` `sha256:39c8d2d0…` | `0.1.29` `sha256:bd5161d7…` | 20 passed, 1 failed, 3 skipped. The failure was version skew: `0.1.30` had no connection limiter, and `main` refused with `429 connection_limit` where the deployed build returned retryable 503s. |
 

@@ -127,9 +127,9 @@ spec:
                     # negative membership test and is what 1.20 keeps.
                     operator: AnyNotIn
                     value:
-                      # base image, GUEST_IMAGE_DIGEST (release 0.1.32)
-                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:d66635e2b3ba3b105706790ceba07539c19ab55b4b5c4d2696eaf79a9060c10e"
-                      # python profile, RUNTIME_PROFILES.python.digest (0.1.32)
-                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:647164dec8e7ff8f62b752eb8d7df9e81b7a88ede1e2ac9db6064415a2df5e36"
-                      # node profile, RUNTIME_PROFILES.node.digest (0.1.32)
-                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:499535828adce829a0703c9ecc64f1fb8efd0c3d9e41cc822a8fc3bf0a7580ae"
+                      # base image, GUEST_IMAGE_DIGEST (release 0.1.33)
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:933a53e00a6e813f0e7a3c56bf066ee1560f9949ba21c59c982788f0ee8d6d63"
+                      # python profile, RUNTIME_PROFILES.python.digest (0.1.33)
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:ea95c0568678ce8e0dce66f1a9c87fbdb3742ce5330b82805c71f4be85dddcfd"
+                      # node profile, RUNTIME_PROFILES.node.digest (0.1.33)
+                      - "ghcr.io/ejackson-vp/sandbox-guest@sha256:55a16d77369752be249dbbf7072f75a68dbad7b2a0c26b6b9f9381d30afe827e"
