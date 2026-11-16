@@ -69,8 +69,11 @@ export function comparePins(pins, talos, admitted) {
   if (pins.control !== pins.release) {
     say(`release map: control tag ${pins.control} is not the recorded release ${pins.release}`);
   }
-  if (pins.guest !== pins.release) {
-    say(`release map: guest tag ${pins.guest} is not the recorded release ${pins.release}`);
+  // The guest may lag the control by one release: its digest is only knowable
+  // once that release is built, so a tree about to be tagged names the last
+  // promoted guest. It may not be ahead of the control.
+  if (pins.guest !== pins.release && compareVersions(pins.guest, pins.release) > 0) {
+    say(`release map: guest tag ${pins.guest} is ahead of the recorded release ${pins.release}`);
   }
   for (const [name, tag] of Object.entries({ control: pins.control, guest: pins.guest })) {
     if (!TAG.test(String(tag))) {
@@ -81,14 +84,8 @@ export function comparePins(pins, talos, admitted) {
     say(`release map: guestDigest ${pins.guestDigest} is not a sha256 digest`);
   }
 
-  // The two images in one overlay must come from one release. This is the check
-  // that would have caught 0.1.30 control + 0.1.25 guest.
-  if (talos.controlTag !== talos.guestTag) {
-    say(
-      `deploy/talos: control tag ${talos.controlTag} and guest tag ${talos.guestTag} ` +
-        `are different releases; deploy one pair`,
-    );
-  }
+  // Control and guest are compared to the map individually below, not to each
+  // other: a lagging guest is normal and a moved control is the defect.
   if (talos.controlTag !== pins.control) {
     say(
       `deploy/talos: control tag ${talos.controlTag} does not match the release map's ` +
@@ -102,7 +99,7 @@ export function comparePins(pins, talos, admitted) {
   }
   if (talos.guestDigest !== pins.guestDigest) {
     say(
-      `deploy/talos: GUEST_IMAGE_DIGEST ${talos.guestDigest} is not the ${pins.release} ` +
+      `deploy/talos: GUEST_IMAGE_DIGEST ${talos.guestDigest} is not the ${pins.guest} ` +
         `digest ${pins.guestDigest}; a digest is the only part of this pin that cannot move`,
     );
   }
@@ -115,7 +112,7 @@ export function comparePins(pins, talos, admitted) {
     }
     if (deployed !== digest) {
       say(
-        `deploy/talos: RUNTIME_PROFILES.${name}.digest ${deployed} is not the ${pins.release} ` +
+        `deploy/talos: RUNTIME_PROFILES.${name}.digest ${deployed} is not the ${pins.guest} ` +
           `digest ${digest}`,
       );
     }
@@ -124,7 +121,7 @@ export function comparePins(pins, talos, admitted) {
     if (!(name in pins.profiles)) {
       say(
         `deploy/talos: RUNTIME_PROFILES names profile ${name}, which the release map does ` +
-          `not record for ${pins.release}`,
+          `not record for ${pins.guest}`,
       );
     }
   }
@@ -169,6 +166,19 @@ export function tagVersion(ref) {
  *
  * Takes the parsed overlay and the tag, so it is checkable without a checkout.
  */
+
+/** Numeric compare of dotted versions; unrparseable input sorts as zero. */
+export function compareVersions(a, b) {
+  const parts = (value) => String(value).split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const left = parts(a);
+  const right = parts(b);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
 export function compareTag(pins, talos, ref) {
   const version = tagVersion(ref);
   const errors = [];
@@ -189,10 +199,17 @@ export function compareTag(pins, talos, ref) {
         `${ref} would deploy the ${talos.controlTag} control image`,
     );
   }
-  if (talos.guestTag !== version) {
+  // The guest may lag exactly one release, and normally does. A tree cannot
+  // contain its own image digest: the release stamps the build commit into the
+  // image, so a pins commit changes the digest and a pre-tag rehearsal is
+  // always one commit behind. The last promoted guest is therefore the newest
+  // one whose digest can be named in the tree, and the deployment pins the
+  // digest it actually runs. What must not happen is a guest from the future,
+  // which would mean this tree was cut after its own release.
+  if (talos.guestTag !== version && compareVersions(talos.guestTag, version) > 0) {
     say(
-      `deploy/talos: guest tag ${talos.guestTag} is not this tag's release ${version}; ` +
-        `${ref} would deploy the ${talos.guestTag} guest image`,
+      `deploy/talos: guest tag ${talos.guestTag} is ahead of this tag's release ${version}; ` +
+        `${ref} names a guest that cannot exist yet`,
     );
   }
   return errors;

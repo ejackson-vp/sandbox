@@ -151,9 +151,11 @@ describe("comparePins", () => {
     expect(drift(talosYaml())).toEqual([]);
   });
 
-  it("fails when control and guest come from different releases", () => {
+  it("fails when the overlay's guest is not the one the map records", () => {
+    // A lagging guest is allowed; an unrecorded one is not, because the digest
+    // beside it would then belong to no release anyone can name.
     const errors = drift(talosYaml({ guest: "0.1.25" }));
-    expect(errors.join("\n")).toMatch(/control tag 0.1.30 and guest tag 0.1.25 are different releases/);
+    expect(errors.join("\n")).toMatch(/guest tag 0\.1\.25 does not match the release map's 0\.1\.30/);
   });
 
   it("fails when the guest digest is not the release's digest", () => {
@@ -179,13 +181,13 @@ describe("comparePins", () => {
     expect(errors.join("\n")).toMatch(/RUNTIME_PROFILES has no node entry/);
   });
 
-  it("fails when the map disagrees with itself", () => {
+  it("fails when the map records a guest from the future", () => {
     const errors = comparePins(
-      pins({ guest: "0.1.29" }) as never,
-      parseTalos(talosYaml({ guest: "0.1.29" })),
+      pins({ guest: "0.1.31" }) as never,
+      parseTalos(talosYaml({ guest: "0.1.31" })),
       parseKyvernoAdmitted(kyvernoYaml()),
     );
-    expect(errors.join("\n")).toMatch(/guest tag 0.1.29 is not the recorded release 0.1.30/);
+    expect(errors.join("\n")).toMatch(/guest tag 0\.1\.31 is ahead of the recorded release 0\.1\.30/);
   });
 
   it("fails when the Kyverno allowlist was not updated with the overlay", () => {
@@ -226,18 +228,29 @@ describe("compareTag", () => {
     const errors = compareTag(pins(), parseTalos(talosYaml()), "v0.1.31").join("\n");
     expect(errors).toMatch(/records release 0\.1\.30, but this build is cutting 0\.1\.31/);
     expect(errors).toMatch(/control tag 0\.1\.30 is not this tag's release 0\.1\.31/);
-    expect(errors).toMatch(/guest tag 0\.1\.30 is not this tag's release 0\.1\.31/);
     expect(errors).toMatch(/would deploy the 0\.1\.30 control image/);
+    // The guest is allowed to lag: its digest is only knowable after the
+    // release is built, so a tag necessarily names the last promoted guest.
+    expect(errors).not.toMatch(/guest tag/);
   });
 
-  it("names only the image that lags when the other one moved", () => {
+  it("allows the guest to lag one release, which is how a tag is cut", () => {
     const errors = compareTag(
       pins({ release: "0.1.31", control: "0.1.31" }),
       parseTalos(talosYaml({ control: "0.1.31", guest: "0.1.30" })),
       "v0.1.31",
     );
+    expect(errors).toEqual([]);
+  });
+
+  it("refuses a guest from a release that cannot exist yet", () => {
+    const errors = compareTag(
+      pins({ release: "0.1.31", control: "0.1.31" }),
+      parseTalos(talosYaml({ control: "0.1.31", guest: "0.1.32" })),
+      "v0.1.31",
+    );
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatch(/guest tag 0\.1\.30 is not this tag's release 0\.1\.31/);
+    expect(errors[0]).toMatch(/guest tag 0\.1\.32 is ahead of this tag's release 0\.1\.31/);
   });
 });
 

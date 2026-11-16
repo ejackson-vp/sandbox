@@ -61,7 +61,7 @@ resources:
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: 0.1.30
+    newTag: 0.1.32
   # 0.1.30 runs two relay shards and fixes the warm pool's relay addressing:
   # it now follows RELAY_GUEST_ADDRESS instead of always dialling a ClusterIP.
   # The guest below is the 0.1.30 build from the same tag. Do not move one
@@ -82,13 +82,13 @@ patches:
     patch: |-
       - op: replace
         path: /data/GUEST_IMAGE
-        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.30
+        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.31
       # Index digest of the release above. The controller pulls
       # `repo@sha256:…` whenever a digest is set (dev mode or not), so a moved
       # tag cannot change what runs inside the sandbox.
       - op: replace
         path: /data/GUEST_IMAGE_DIGEST
-        value: sha256:4872ec154b43fd4a09b6272abb7b5ab3923e4bb754caefefd3c4f9c54c3a398d
+        value: sha256:eea680fa3401d6e632f7650590c3ab987ceb8270e55252e6bc194b9cd1ff4f06
       # Keep most of the warm budget on the default profile. Other profiles
       # start at zero and grow from observed misses into the remaining slots.
       - op: add
@@ -96,7 +96,7 @@ patches:
         value: "16"
       - op: add
         path: /data/RUNTIME_PROFILES
-        value: '{"python":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:eb78d226ac40b3285252777562dd1a6b291db1fe797924927d0af9a9d800e49e"},"node":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:b9ce875fc6ed7820469305b771b6730eb274aa289da6eacc48c20061243cbd60"}}'
+        value: '{"python":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:b1eea6a0c8f0c63f9f5ad35a87462d066ed6f2b5d913eb1024427964e5827ac5"},"node":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:9e7f07506729961972d75b0c7b9f5bfec12d67dd3f025ecc833445a9de0341c2"}}'
       - op: replace
         path: /data/PUBLIC_BASE_URL
         value: https://sandbox.example.ts.net
