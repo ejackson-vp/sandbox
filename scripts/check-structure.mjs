@@ -204,7 +204,6 @@ const FUNCTION_BASELINE = new Map([
   ["controller/src/control-api/sessions.ts::registerSessionRoutes", [347, "seven internal session routes in one registration"]],
   ["controller/src/main.ts::start", [281, "three boot phases: config and lease, listeners, reconciler"]],
   ["controller/src/egress-proxy.ts::handleConnect", [275, "one tunnel from token to splice, defined inside the factory"]],
-  ["api/src/routes/sessions.ts::createSessionsRouter", [243, "six route groups plus the capability check they share"]],
   ["controller/src/relay/http.ts::registerRelayControlRoutes", [222, "eleven relay control routes in one registration"]],
   ["tests/integration/support/api-harness.ts::startHarness", [207, "boots API, controller, facilitator and store for one test"]],
   ["scripts/control-faults.ts::lifecycleRestart", [206, "fault script: seed, kill, wait for convergence, report"]],

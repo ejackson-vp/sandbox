@@ -110,10 +110,12 @@ sdk/src/session.ts              create/attach/suspend/resume/destroy
 sdk/src/operations.ts           exec + filesystem operations
 sdk/src/data-plane.ts           services, HTTP, SSE/chunked, WebSocket
 
-api/src/server.ts               composition, middleware, pricing/health/images
+api/src/server.ts               composition: the boot phase order, 19 lines
+api/src/boot/                   payment surface, metrics, HTTP shell, routes
 api/src/use-cases/create-session.ts x402 handshake, verify, settle, entitlement
 api/src/routes/create-session.ts HTTP mapping for the create-session use case
-api/src/routes/sessions.ts      status, operations, data plane, lifecycle
+api/src/routes/sessions.ts      mounts the session route groups
+api/src/routes/sessions/        status, operations, requests, lifecycle, one authorizer
 api/src/schemas.ts              request schemas + plaintext guard
 api/src/status.ts               controller view -> public wire status
 
@@ -226,13 +228,15 @@ count, and `tests/unit/structure-functions.test.ts` pins the scanner's behaviour
 on the shapes that would fool a brace counter (a brace in a string, a brace in a
 regex, a `${}` hole, a Go raw string, `if (x) {`).
 
-Today 144 functions are pinned above the budget. The longest are
+Today 142 functions are pinned above the budget. The longest are
 `tests/unit/store-contract/suite.ts::describeStoreContract` (421, one case per
 store method), `controller/src/control-api/payments.ts::registerPaymentRoutes`
 (387, eight routes in one registration) and
 `controller/src/egress-proxy.ts::createEgressProxy` (372, the whole CONNECT path
 inline). Each entry carries the one-line reason it is allowed to be that long,
-and that reason is the split plan.
+and that reason is the split plan. `api/src/server.ts::createApp` (200) and
+`api/src/routes/sessions.ts::createSessionsRouter` (243) were on the list when
+it was written and are off it now.
 
 Completed slices:
 
@@ -249,6 +253,10 @@ Completed slices:
   provisioning use case is two modules: the create half in `provisioning.ts`,
   the readiness handshake in `provisioning/readiness.ts`.
 - API split into create/session routers, schemas, status mapping and composition.
+  The composition is boot phases in `api/src/boot/` (`createApp` is the order of
+  the phases, 200 lines down to 19), and the session surface is one module per
+  route group in `api/src/routes/sessions/` behind one authorizer
+  (`createSessionsRouter`, 243 down to 9).
 - Wire protocol split by concept. `@x402s/shared` has no root entry: consumers
   import a subpath (`./protocol`, `./runtimes`, `./money`, `./crypto`,
   `./payment`, `./runtime`, `./env`, `./ip`) so a wire-type consumer no longer
