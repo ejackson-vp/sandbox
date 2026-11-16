@@ -8,6 +8,7 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
+import { NON_TERMINAL_STATES, TERMINAL_STATES } from "@x402s/shared/protocol";
 import { PostgresStore } from "../../controller/src/store/postgres/store.js";
 import { WriterLockUnavailableError } from "../../controller/src/store/postgres/pg.js";
 import { ensureTestDatabase, testDatabaseUrl } from "../helpers/test-store.js";
@@ -87,5 +88,43 @@ describe("postgres", () => {
         await admin.end();
       }
     });
+  });
+});
+
+describe("derived schema", () => {
+  /**
+   * The `sessions_due` predicate is generated from `SESSION_STATES`, and
+   * `CREATE INDEX IF NOT EXISTS` will happily leave an older predicate in place.
+   * A database that predates a state therefore keeps an index that does not
+   * cover the due query for that state, which is a full scan of `sessions` on
+   * every reconcile pass. Opening the store has to reconcile it.
+   */
+  it("rebuilds the due index when its predicate no longer matches the vocabulary", async () => {
+    const url = testDatabaseUrl("unit-index");
+    await ensureTestDatabase("unit-index");
+    // First open creates and migrates the database, and with it the correct index.
+    await (await PostgresStore.open(url, { writer: true })).close();
+
+    const client = new pg.Client({ connectionString: url });
+    await client.connect();
+    try {
+      // Stand in for a database written under an older vocabulary.
+      await client.query("DROP INDEX sessions_due");
+      await client.query(
+        "CREATE INDEX sessions_due ON sessions(next_due_ms NULLS FIRST) WHERE state IN ('PAID')",
+      );
+
+      const reopened = await PostgresStore.open(url, { writer: true });
+      await reopened.close();
+
+      const res = await client.query<{ definition: string }>(
+        "SELECT pg_get_indexdef(to_regclass('sessions_due')) AS definition",
+      );
+      const definition = res.rows[0]!.definition;
+      for (const state of NON_TERMINAL_STATES) expect(definition).toContain(`'${state}'`);
+      for (const state of TERMINAL_STATES) expect(definition).not.toContain(`'${state}'`);
+    } finally {
+      await client.end();
+    }
   });
 });

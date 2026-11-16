@@ -18,12 +18,11 @@
  * global concurrency budgets still apply.
  */
 import { tierWithinMax } from "@x402s/shared/payment";
-import type { SessionTier } from "@x402s/shared/protocol";
-import {
-  NON_TERMINAL_STATE_SQL,
-  type AllowlistDecision,
-  type AllowlistEntryInput,
-  type PayerAllowlistEntry,
+import { NON_TERMINAL_STATE_SQL, type SessionTier } from "@x402s/shared/protocol";
+import type {
+  AllowlistDecision,
+  AllowlistEntryInput,
+  PayerAllowlistEntry,
 } from "../models.js";
 import { advisoryKey, type PgConnection } from "./pg.js";
 

@@ -17,6 +17,7 @@
  * forward: the ladder is additive and idempotent, so replaying a step cannot
  * corrupt a money table.
  */
+import { NON_TERMINAL_STATES, NON_TERMINAL_STATE_SQL } from "@x402s/shared/protocol";
 import type { Tx } from "./pg.js";
 import { SCHEMA_VERSION } from "../schema-version.js";
 
@@ -200,12 +201,41 @@ CREATE INDEX IF NOT EXISTS exec_requests_session ON exec_requests(session_id);
 `;
 
 /**
- * The due index is created separately because the predicate is built from the
- * same constant as the query it serves.
+ * The due index, whose predicate is the shared non-terminal list.
  */
-function dueIndexSql(nonTerminalStatesSql: string): string {
+function dueIndexSql(): string {
   return `CREATE INDEX IF NOT EXISTS sessions_due ON sessions(next_due_ms NULLS FIRST)
-    WHERE state IN (${nonTerminalStatesSql});`;
+    WHERE state IN (${NON_TERMINAL_STATE_SQL});`;
+}
+
+/** The state literals in an index definition, as Postgres normalised it. */
+function indexStateLiterals(definition: string): Set<string> {
+  return new Set([...definition.matchAll(/'([A-Z_]+)'/g)].map((match) => match[1]!));
+}
+
+/**
+ * Create the due index, or rebuild it when its predicate no longer matches the
+ * state vocabulary.
+ *
+ * `CREATE INDEX IF NOT EXISTS` alone is not enough: the predicate is derived
+ * from `SESSION_STATES`, so adding a state changes the wanted list, and the
+ * existing index quietly keeps the old one. The index then no longer covers the
+ * due query for that state, which is a full scan of `sessions` on every
+ * reconcile pass. Comparing the literals in the deployed definition is what
+ * makes a derived index stay derived.
+ */
+async function ensureDueIndex(tx: Tx): Promise<void> {
+  const res = await tx.query<{ definition: string | null }>(
+    "SELECT pg_get_indexdef(to_regclass('sessions_due')) AS definition",
+  );
+  const deployed = res.rows[0]?.definition ?? null;
+  if (deployed !== null) {
+    const present = indexStateLiterals(deployed);
+    const wanted = NON_TERMINAL_STATES;
+    if (present.size === wanted.length && wanted.every((state) => present.has(state))) return;
+    await tx.query("DROP INDEX IF EXISTS sessions_due");
+  }
+  await tx.query(dueIndexSql());
 }
 
 /** Additive steps applied by the ladder; each one is idempotent. */
@@ -324,10 +354,7 @@ interface MigrationResult {
 /**
  * Apply the ladder. Requires the writer lock: a standby must never migrate.
  */
-export async function migratePostgres(
-  tx: Tx,
-  nonTerminalStateSql: string,
-): Promise<MigrationResult> {
+export async function migratePostgres(tx: Tx): Promise<MigrationResult> {
   await tx.serialise(MIGRATION_LOCK_KEY);
   await tx.query("CREATE TABLE IF NOT EXISTS sandbox_schema (version INTEGER NOT NULL)");
   const current = await tx.query<{ version: number }>("SELECT version FROM sandbox_schema LIMIT 1");
@@ -338,17 +365,21 @@ export async function migratePostgres(
       `postgres schema v${from} is newer than this build (v${SCHEMA_VERSION}); refusing to downgrade`,
     );
   }
-  if (from === SCHEMA_VERSION) return { from, to: from };
+  if (from === SCHEMA_VERSION) {
+    // An up-to-date database still gets the derived index reconciled: the
+    // predicate changes when the vocabulary does, without a schema version.
+    await ensureDueIndex(tx);
+    return { from, to: from };
+  }
 
   if (from === 0) {
     await tx.query(BASE_SCHEMA);
-    await tx.query(dueIndexSql(nonTerminalStateSql));
   } else {
     for (const step of LADDER) {
       if (from < step.from) await tx.query(step.sql);
     }
-    await tx.query(dueIndexSql(nonTerminalStateSql));
   }
+  await ensureDueIndex(tx);
 
   if (from === 0) {
     await tx.query("INSERT INTO sandbox_schema (version) VALUES ($1)", [SCHEMA_VERSION]);

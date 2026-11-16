@@ -19,7 +19,6 @@
 import { metrics } from "@x402s/shared/runtime";
 import type { SessionTier } from "@x402s/shared/protocol";
 import {
-  NON_TERMINAL_STATE_SQL,
   type AllowlistDecision,
   type AllowlistEntryInput,
   type ChallengeBurnResult,
@@ -109,7 +108,7 @@ export class PostgresStore implements StoreBackend {
         );
       }
       try {
-        await conn.tx((tx) => migratePostgres(tx, NON_TERMINAL_STATE_SQL));
+        await conn.tx((tx) => migratePostgres(tx));
       } catch (err) {
         await conn.close();
         throw err;
@@ -142,7 +141,7 @@ export class PostgresStore implements StoreBackend {
     }
     // The lock holder owns the schema, so a takeover also applies the ladder. It
     // is one `SELECT version` when the database is already current.
-    await this.conn.tx((tx) => migratePostgres(tx, NON_TERMINAL_STATE_SQL));
+    await this.conn.tx((tx) => migratePostgres(tx));
   }
 
   close(): Promise<void> {

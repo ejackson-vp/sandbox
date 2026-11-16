@@ -18,7 +18,11 @@
  * in the pure module needs a clause here too, which the Postgres test catches by
  * seeding that shape.
  */
-import { MAX_SESSION_LIFETIME_SECONDS, type SessionState } from "@x402s/shared/protocol";
+import {
+  MAX_SESSION_LIFETIME_SECONDS,
+  NON_TERMINAL_STATE_SQL,
+  type SessionState,
+} from "@x402s/shared/protocol";
 import type {
   IntentLedgerSnapshot,
   LedgerAuditLimits,
@@ -27,7 +31,6 @@ import type {
   SessionLifetimeSnapshot,
 } from "../../ledger-audit.js";
 import type { IntentStatus, LedgerStatus } from "../models/money.js";
-import { NON_TERMINAL_STATE_SQL } from "../models/session.js";
 import type { PgConnection } from "./pg.js";
 
 interface PaymentAuditRow {
