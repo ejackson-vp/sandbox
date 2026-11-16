@@ -196,6 +196,10 @@ beforeAll(async () => {
     ADMIN_TOKEN: ADMIN,
     ROLE: "controller",
     KUBERNETES_ENABLED: "false",
+    // No guest image is involved: this drives the control API over HTTP with a
+    // fake capacity service. The dev flag is what tells the loader not to
+    // demand a pinned digest it will never pull.
+    ALLOW_INSECURE_DEV: "true",
     RELAY_ADMIN_TOKEN: "r".repeat(24),
     WAKE_TOKEN: "w".repeat(24),
     PROXY_TOKEN_SECRET: "p".repeat(24),
