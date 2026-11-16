@@ -476,6 +476,31 @@ describe("refund worker", () => {
     });
   }
 
+  it("writes the payment source the caller names, and defaults it to x402", async () => {
+    const store = await freshStore();
+    const entry = {
+      paymentKey: PAYMENT_KEY,
+      sessionId: `unsettled:${PAYMENT_KEY}`,
+      payer: PAYER,
+      amount: "0",
+      asset: "mock:usdc",
+      network: "mock:local",
+      mode: "mock" as const,
+      status: "SETTLED" as const,
+      reason: "settled_without_entitlement",
+      settlementNonce: null,
+    };
+    // The unclaimed row is a ledger row, so it has to be able to say what the
+    // ledger says. `source` is the column that used to be unreachable from
+    // this insert.
+    await store.insertUnclaimedLedger({ ...entry, source: "allowlist" });
+    expect((await store.getLedgerByPayment(PAYMENT_KEY))?.source).toBe("allowlist");
+
+    const other = { ...entry, paymentKey: "b".repeat(64), sessionId: "unsettled:other" };
+    await store.insertUnclaimedLedger(other);
+    expect((await store.getLedgerByPayment(other.paymentKey))?.source).toBe("x402");
+  });
+
   it("executes a pending refund once and records the transaction", async () => {
     const store = await freshStore();
     await seedPending(store);

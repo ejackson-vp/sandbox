@@ -10,6 +10,7 @@
 import type { Express, Request, Response } from "express";
 import { log } from "@x402s/shared/runtime";
 import { allowlistAuthorizeSchema, allowlistEntrySchema } from "../control-api-schemas.js";
+import { invalidRequest } from "../routes/errors.js";
 import type { ControlApiDeps } from "./types.js";
 
 export function registerAllowlistRoutes(app: Express, deps: ControlApiDeps): void {
@@ -19,7 +20,7 @@ export function registerAllowlistRoutes(app: Express, deps: ControlApiDeps): voi
   app.post("/internal/payer-allowlist/authorize", async (req: Request, res: Response) => {
     const parsed = allowlistAuthorizeSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const decision = await store.authorizeAllowlistedPayer(parsed.data.address, parsed.data.tier);
@@ -41,7 +42,7 @@ export function registerAllowlistRoutes(app: Express, deps: ControlApiDeps): voi
   app.put("/internal/payer-allowlist", async (req: Request, res: Response) => {
     const parsed = allowlistEntrySchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const entry = await store.upsertAllowlist(parsed.data, Date.now());

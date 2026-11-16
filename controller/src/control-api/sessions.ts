@@ -3,6 +3,7 @@ import type { Express, Request, Response } from "express";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import { LifecycleError } from "../reconciler.js";
 import { operationSchema, opLabel } from "../control-api-schemas.js";
+import { invalidRequest } from "../routes/errors.js";
 import { describeSession } from "../session-view.js";
 import type { ControlApiDeps } from "./types.js";
 
@@ -24,8 +25,63 @@ function outcomeUnknown(requestId: string): Record<string, unknown> {
   };
 }
 
+/**
+ * One lifecycle action, registered the same way for suspend and resume.
+ *
+ * The two routes were nineteen duplicated lines apart from three tokens: the
+ * action, the success code (200 for a settled suspend, 202 for an accepted
+ * resume) and the code a failed action reports. A fix to one of the shared
+ * lines, such as the 404 when the row disappeared under the action, used to have
+ * to be made twice or it silently applied to only half the lifecycle.
+ */
+interface LifecycleRoute {
+  path: "suspend" | "resume";
+  /** The reconciler action; absent on a process that has no reconciler. */
+  run: ((id: string) => Promise<void>) | undefined;
+  /** 200 for a completed suspend, 202 for a resume that has been accepted. */
+  status: number;
+  /** Code on the 500 for a failure that is not a `LifecycleError`. */
+  failure: string;
+}
+
+function registerLifecycleRoute(
+  app: Express,
+  store: ControlApiDeps["store"],
+  route: LifecycleRoute,
+): void {
+  app.post(`/internal/sessions/:id/${route.path}`, async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? "");
+    const run = route.run;
+    if (!run) {
+      res.status(501).json({ error: "not_supported" });
+      return;
+    }
+    try {
+      await run(id);
+      const view = await describeSession(store, id);
+      if (!view) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      res.status(route.status).json(view);
+    } catch (err) {
+      if (err instanceof LifecycleError) {
+        res.status(err.status).json({ error: err.code, message: err.message, ...(err.details ?? {}) });
+        return;
+      }
+      res.status(500).json({ error: route.failure, message: (err as Error).message });
+    }
+  });
+}
+
 export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void {
   const { cfg, store, relay } = deps;
+  const lifecycleRoutes: LifecycleRoute[] = [
+    { path: "suspend", run: deps.suspend, status: 200, failure: "suspend_failed" },
+    { path: "resume", run: deps.resume, status: 202, failure: "resume_failed" },
+  ];
+  for (const route of lifecycleRoutes) registerLifecycleRoute(app, store, route);
+
   app.get("/internal/sessions/:id", async (req: Request, res: Response) => {
     const view = await describeSession(store, String(req.params.id ?? ""));
     if (!view) {
@@ -35,57 +91,11 @@ export function registerSessionRoutes(app: Express, deps: ControlApiDeps): void 
     res.json(view);
   });
 
-  app.post("/internal/sessions/:id/suspend", async (req: Request, res: Response) => {
-    const id = String(req.params.id ?? "");
-    if (!deps.suspend) {
-      res.status(501).json({ error: "not_supported" });
-      return;
-    }
-    try {
-      await deps.suspend(id);
-      const view = await describeSession(store, id);
-      if (!view) {
-        res.status(404).json({ error: "not_found" });
-        return;
-      }
-      res.json(view);
-    } catch (err) {
-      if (err instanceof LifecycleError) {
-        res.status(err.status).json({ error: err.code, message: err.message, ...(err.details ?? {}) });
-        return;
-      }
-      res.status(500).json({ error: "suspend_failed", message: (err as Error).message });
-    }
-  });
-
-  app.post("/internal/sessions/:id/resume", async (req: Request, res: Response) => {
-    const id = String(req.params.id ?? "");
-    if (!deps.resume) {
-      res.status(501).json({ error: "not_supported" });
-      return;
-    }
-    try {
-      await deps.resume(id);
-      const view = await describeSession(store, id);
-      if (!view) {
-        res.status(404).json({ error: "not_found" });
-        return;
-      }
-      res.status(202).json(view);
-    } catch (err) {
-      if (err instanceof LifecycleError) {
-        res.status(err.status).json({ error: err.code, message: err.message, ...(err.details ?? {}) });
-        return;
-      }
-      res.status(500).json({ error: "resume_failed", message: (err as Error).message });
-    }
-  });
-
   app.post("/internal/sessions/:id/operations", async (req: Request, res: Response) => {
     const id = String(req.params.id ?? "");
     const parsed = operationSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const { requestId, envelope, op } = parsed.data;

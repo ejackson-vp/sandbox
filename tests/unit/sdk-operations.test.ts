@@ -36,8 +36,17 @@ interface Sent {
 function service(answer: Record<string, unknown> = { ok: true }): { operations: OperationService; sent: Sent[] } {
   const sent: Sent[] = [];
   const rt = {
-    async run(_handle: SessionHandle, operation: { requestId: string }, requestId: string, _queueMs: number, timeoutMs?: number) {
-      sent.push({ operation: operation as unknown as Record<string, unknown>, requestId, timeoutMs });
+    async run(req: {
+      handle: SessionHandle;
+      operation: { requestId: string };
+      requestId: string;
+      timeoutMs?: number;
+    }) {
+      sent.push({
+        operation: req.operation as unknown as Record<string, unknown>,
+        requestId: req.requestId,
+        timeoutMs: req.timeoutMs,
+      });
       return answer;
     },
     async runGet(_handle: SessionHandle, operation: { requestId: string }, requestId: string) {

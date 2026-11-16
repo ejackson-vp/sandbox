@@ -178,14 +178,13 @@ export function harness(opts: HarnessOptions = {}): WarmHarness {
     },
     session,
     claim: (runtime?: string, overrides?: Partial<SessionRecord>) =>
-      manager.tryClaim(
-        session(runtime, overrides),
+      manager.tryClaim({
+        session: session(runtime, overrides),
         // The caller's fallback is the controller's own endpoint view, which
         // in a real deployment is a Pod IP. The claim must not use it.
-        { host: "relay-pod", port: 8443 },
-        { host: "proxy", port: 3128 },
-        clock.now,
-      ),
+        endpoints: { relay: { host: "relay-pod", port: 8443 }, proxy: { host: "proxy", port: 3128 } },
+        begunAt: clock.now,
+      }),
     reconcile: () => manager.reconcile(),
   };
 }

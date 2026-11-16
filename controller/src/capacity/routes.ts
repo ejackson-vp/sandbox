@@ -6,6 +6,7 @@ import express, { type Request, type Response } from "express";
 import { z } from "zod";
 import { specSchema } from "../control-api-schemas.js";
 import type { CapacityService } from "./service.js";
+import { invalidRequest } from "../routes/errors.js";
 import { toCapacityDecision } from "./wire.js";
 
 export function createCapacityRouter(capacity: CapacityService): express.Router {
@@ -19,7 +20,7 @@ export function createCapacityRouter(capacity: CapacityService): express.Router 
   router.post("/capacity/preflight", async (req: Request, res: Response) => {
     const parsed = bodySchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     res.json(toCapacityDecision(await capacity.preflight(parsed.data.spec)));

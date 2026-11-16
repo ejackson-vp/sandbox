@@ -14,6 +14,7 @@
 import type { Express, Request, Response } from "express";
 import { log, metrics, publishCreateSwitch } from "@x402s/shared/runtime";
 import { createSwitchDisableSchema, createSwitchEnableSchema } from "../control-api-schemas.js";
+import { invalidRequest } from "../routes/errors.js";
 import type { CreateSwitchState } from "../store/models/admin.js";
 import type { ControlApiDeps } from "./types.js";
 
@@ -38,7 +39,7 @@ export function registerCreateSwitchRoutes(app: Express, deps: ControlApiDeps): 
   app.put("/internal/create-switch", async (req: Request, res: Response) => {
     const parsed = createSwitchEnableSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const until = parsed.data.until ? Date.parse(parsed.data.until) : null;
@@ -70,7 +71,7 @@ export function registerCreateSwitchRoutes(app: Express, deps: ControlApiDeps): 
   app.delete("/internal/create-switch", async (req: Request, res: Response) => {
     const parsed = createSwitchDisableSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const written = await store.writeCreateSwitch(

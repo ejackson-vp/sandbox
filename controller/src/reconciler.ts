@@ -39,6 +39,7 @@ import { OperationFence } from "./operation-fence.js";
 import { RelayRecovery } from "./relay-recovery.js";
 import { ServiceAddressResolver } from "./service-address.js";
 import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
+import type { Endpoint } from "./provisioning/endpoints.js";
 import { cadenceFor } from "./reconcile-cadence.js";
 import { ClockGuard } from "./clock-guard.js";
 import { PhaseDispatcher } from "./reconciler/dispatch.js";
@@ -62,13 +63,13 @@ interface ReconcilerDeps {
     name: string,
     shard?: number,
     podPrefix?: string,
-  ) => Promise<{ host: string; port: number } | null>;
+  ) => Promise<Endpoint | null>;
   /** Override for tests: resolves ClusterIP-based guest addresses. */
   stableServiceAddress?: (
     name: string,
     shard?: number,
     podPrefix?: string,
-  ) => Promise<{ host: string; port: number } | null>;
+  ) => Promise<Endpoint | null>;
   /** Restart-recovery fence; defaults to one bound to the store and relay. */
   fence?: OperationFence;
   /** Injection point for tests; defaults to one bound to the fence and relay. */
@@ -448,7 +449,7 @@ export class Reconciler {
     name: string,
     shard?: number,
     podPrefix?: string,
-  ): Promise<{ host: string; port: number } | null> {
+  ): Promise<Endpoint | null> {
     return this.serviceAddresses.resolve(
       `stable:${name}#${shard ?? ""}#${podPrefix ?? name}`,
       () => this.deps.stableServiceAddress
@@ -462,7 +463,7 @@ export class Reconciler {
     name: string,
     shard?: number,
     podPrefix?: string,
-  ): Promise<{ host: string; port: number } | null> {
+  ): Promise<Endpoint | null> {
     // The relay resolves to a ready endpoint Pod IP. A replacement relay gets a
     // new IP, so caching it would boot new guests against the old process.
     // Resolve it on every use; only the stable proxy address is cached. The key

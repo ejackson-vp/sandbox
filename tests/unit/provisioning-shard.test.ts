@@ -143,8 +143,7 @@ describe("provisioning data-plane placement", () => {
 
     await provisioning.createPod(
       session("sbx_single"),
-      { host: "10.96.0.7", port: cfg.relayPort },
-      { host: "10.0.0.9", port: cfg.proxyPort },
+      { relay: { host: "10.96.0.7", port: cfg.relayPort }, proxy: { host: "10.0.0.9", port: cfg.proxyPort } },
     );
 
     const spec = createPod.mock.calls[0]![0];
@@ -245,8 +244,7 @@ describe("provisioning data-plane placement", () => {
 
     await provisioning.createPod(
       session(zero),
-      { host: "10.0.0.1", port: cfg.relayPort },
-      { host: "10.0.0.9", port: cfg.proxyPort },
+      { relay: { host: "10.0.0.1", port: cfg.relayPort }, proxy: { host: "10.0.0.9", port: cfg.proxyPort } },
     );
 
     const spec = createPod.mock.calls[0]![0];

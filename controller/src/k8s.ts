@@ -23,6 +23,7 @@ import {
 import { listNodes } from "./k8s-nodes.js";
 import type { WorkspacePvcInfo } from "./checkpoint-retention.js";
 import type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
+import type { Endpoint } from "./provisioning/endpoints.js";
 
 export type { NodeInfo, Provisioner, SandboxPodSpec, WarmPodSpec, WarmPodInfo } from "./k8s-types.js";
 export type { WorkspacePvcInfo } from "./checkpoint-retention.js";
@@ -396,7 +397,7 @@ export class KubeProvisioner implements Provisioner {
     name: string,
     shard?: number,
     podPrefix?: string,
-  ): Promise<{ host: string; port: number } | null> {
+  ): Promise<Endpoint | null> {
     const serviceName = shard === undefined ? name : `${podPrefix ?? name}-${shard}`;
     try {
       const svc = await this.core.readNamespacedService({
@@ -440,7 +441,7 @@ export class KubeProvisioner implements Provisioner {
     name: string,
     shard?: number,
     podPrefix?: string,
-  ): Promise<{ host: string; port: number } | null> {
+  ): Promise<Endpoint | null> {
     try {
       const svc = await this.core.readNamespacedService({ name, namespace: this.controlNamespace });
       const port = svc.spec?.ports?.[0]?.port;

@@ -12,6 +12,7 @@ import { log, metrics } from "@x402s/shared/runtime";
 import { isHeldBy } from "@x402s/shared/durable";
 import { DuplicateEntitlementError, LedgerSettledError, PaymentAlreadyRedeemedError, PaymentClaimLostError, type LedgerStatus } from "../store/models/money.js";
 import { completeSchema, intentClaimSchema } from "../control-api-schemas.js";
+import { invalidRequest } from "../routes/errors.js";
 import { describeSession } from "../session-view.js";
 import type { ControlApiDeps } from "./types.js";
 
@@ -38,7 +39,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
   app.post("/internal/payment-intents/claim", async (req: Request, res: Response) => {
     const parsed = intentClaimSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const result = await store.claimPaymentIntent(
@@ -98,7 +99,7 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
     const paymentKey = String(req.params.paymentKey ?? "");
     const parsed = completeSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const body = parsed.data;

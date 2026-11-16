@@ -74,7 +74,7 @@ const proxyAddr = { host: "10.0.0.9", port: 3128 };
 describe("cold provisioning image selection", () => {
   it("boots the profile image the session asked for", async () => {
     const { provisioning, createPod } = harness();
-    await provisioning.createPod(session({}, "python"), relayAddr, proxyAddr);
+    await provisioning.createPod(session({}, "python"), { relay: relayAddr, proxy: proxyAddr });
     expect(createPod).toHaveBeenCalledTimes(1);
     const spec = createPod.mock.calls[0]![0];
     expect(spec.image).toBe(`ghcr.io/example/guest@${digestPython}`);
@@ -84,7 +84,7 @@ describe("cold provisioning image selection", () => {
 
   it("boots the base guest image when no profile is given", async () => {
     const { provisioning, createPod } = harness();
-    await provisioning.createPod(session(), relayAddr, proxyAddr);
+    await provisioning.createPod(session(), { relay: relayAddr, proxy: proxyAddr });
     const spec = createPod.mock.calls[0]![0];
     expect(spec.image).toBe(`ghcr.io/example/guest@${digestBase}`);
     expect(spec.imageDigest).toBe(digestBase);
@@ -94,7 +94,7 @@ describe("cold provisioning image selection", () => {
 
   it("normalises a missing runtime to base rather than inventing a profile", async () => {
     const { provisioning, createPod } = harness();
-    await provisioning.createPod(session({}, ""), relayAddr, proxyAddr);
+    await provisioning.createPod(session({}, ""), { relay: relayAddr, proxy: proxyAddr });
     expect(createPod.mock.calls[0]![0].imageDigest).toBe(digestBase);
   });
 

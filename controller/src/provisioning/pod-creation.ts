@@ -27,7 +27,7 @@ import { sessionTimings } from "../session-timings.js";
 import type { SessionRecord } from "../store/models/session.js";
 import type { ProvisioningStore } from "../store/ports.js";
 import { relayCredential } from "./endpoints.js";
-import type { DataPlaneEndpoints, Endpoint, RelayRegistration } from "./endpoints.js";
+import type { DataPlaneEndpoints, RelayRegistration, ResolvedEndpoints } from "./endpoints.js";
 
 type PodCreationStore = Pick<
   ProvisioningStore,
@@ -139,9 +139,8 @@ export class PodCreation {
 
     const endpoints = await this.ctx.endpoints.podEndpoints(session);
     if (!endpoints) return false;
-    const { relay: relayAddr, proxy: proxyAddr } = endpoints;
     const timings = sessionTimings(session);
-    const created = await this.createPod(session, relayAddr, proxyAddr, {
+    const created = await this.createPod(session, endpoints, {
       ...(session.workspacePvc ? { workspacePvc: session.workspacePvc } : {}),
       ...(session.state === "RESUMING" ? { resume: true } : {}),
     });
@@ -191,8 +190,7 @@ export class PodCreation {
 
   async createPod(
     session: SessionRecord,
-    relayAddr: Endpoint,
-    proxyAddr: Endpoint,
+    endpoints: ResolvedEndpoints,
     opts: {
       workspacePvc?: string;
       resume?: boolean;
@@ -225,8 +223,8 @@ export class PodCreation {
     // `podEndpoints`; the address and the readiness probe are separate. The proxy endpoint is a Pod IP and already resolved by the
     // caller; a proxy restart costs egress for the rest of the session, not the
     // session itself.
-    const relay = (await this.ctx.endpoints.relayAddress(session.id)) ?? relayAddr;
-    const proxy = proxyAddr;
+    const relay = (await this.ctx.endpoints.relayAddress(session.id)) ?? endpoints.relay;
+    const proxy = endpoints.proxy;
 
     const createStarted = Date.now();
     const { podName } = await this.ctx.provisioner.createPod({

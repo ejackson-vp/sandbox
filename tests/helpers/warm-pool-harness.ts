@@ -149,12 +149,11 @@ export function harness(env: NodeJS.ProcessEnv = {}) {
     });
 
   const claim = (runtime: string, overrides: Partial<SessionRecord> = {}) =>
-    manager.tryClaim(
-      session(runtime, overrides),
-      { host: "relay", port: 8443 },
-      { host: "proxy", port: 3128 },
-      clock.now,
-    );
+    manager.tryClaim({
+      session: session(runtime, overrides),
+      endpoints: { relay: { host: "relay", port: 8443 }, proxy: { host: "proxy", port: 3128 } },
+      begunAt: clock.now,
+    });
 
   return {
     cfg,

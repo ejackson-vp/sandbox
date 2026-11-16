@@ -20,8 +20,9 @@ import type {
   SessionRecord,
   SessionState,
   StoreHealth,
+  UnclaimedLedgerEntry,
 } from "./models.js";
-import type { PaymentMode, SessionTier } from "@x402s/shared/protocol";
+import type { SessionTier } from "@x402s/shared/protocol";
 import type { ReservationStore } from "../capacity/reservation-store.js";
 import type { ClaimToken } from "@x402s/shared/durable";
 import type { BudgetDecision, BudgetLimits } from "./budget-decision.js";
@@ -199,19 +200,7 @@ export interface LedgerAuditStore {
 export interface SettlementRecoveryStore {
   getLedgerByNonce(settlementNonce: string): Promise<PaymentLedgerRecord | null>;
   getLedgerByPayment(paymentKey: string): Promise<PaymentLedgerRecord | null>;
-  insertUnclaimedLedger(entry: {
-    paymentKey: string;
-    sessionId: string;
-    payer: string | null;
-    amount: string;
-    asset: string;
-    network: string;
-    mode: PaymentMode;
-    status: LedgerStatus;
-    reason: string;
-    refundTransaction?: string | null;
-    settlementNonce: string | null;
-  }): Promise<boolean>;
+  insertUnclaimedLedger(entry: UnclaimedLedgerEntry): Promise<boolean>;
   listStaleClaimedIntents(olderThan: number, limit: number): Promise<PaymentIntentRecord[]>;
 }
 

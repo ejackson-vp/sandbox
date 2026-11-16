@@ -187,17 +187,20 @@ function harness(options: {
     purges,
     session,
     claim: (id: string, overrides: Partial<SessionRecord> = {}) =>
-      pool.tryClaim(session(id, overrides), { host: "relay-pod", port: 8443 }, { host: "proxy", port: 3128 }, clock.now),
+      pool.tryClaim({
+        session: session(id, overrides),
+        endpoints: { relay: { host: "relay-pod", port: 8443 }, proxy: { host: "proxy", port: 3128 } },
+        begunAt: clock.now,
+      }),
     /** Start a claim and park it after `pick` has reserved the pod. */
     claimInFlight: async (id: string) => {
       claimGate = deferred<void>();
       claimStarted = deferred<void>();
-      const result = pool.tryClaim(
-        session(id),
-        { host: "relay-pod", port: 8443 },
-        { host: "proxy", port: 3128 },
-        clock.now,
-      );
+      const result = pool.tryClaim({
+        session: session(id),
+        endpoints: { relay: { host: "relay-pod", port: 8443 }, proxy: { host: "proxy", port: 3128 } },
+        begunAt: clock.now,
+      });
       await claimStarted.promise;
       return {
         result,
@@ -369,8 +372,7 @@ describe("reconcile spends the budget, never the cap", () => {
           const budget = await h.pool.reconcile([...h.pods], {
             target,
             maxCreate,
-            relayAddr: { host: "relay", port: 8443 },
-            proxyAddr: { host: "proxy", port: 3128 },
+            endpoints: { relay: { host: "relay", port: 8443 }, proxy: { host: "proxy", port: 3128 } },
           });
           expect(h.creates.length).toBeLessThanOrEqual(maxCreate);
           expect(budget).toBe(maxCreate - h.creates.length);
@@ -393,8 +395,7 @@ describe("reconcile spends the budget, never the cap", () => {
         const budget = await h.pool.reconcile([...h.pods], {
           target,
           maxCreate: 2,
-          relayAddr: { host: "relay", port: 8443 },
-          proxyAddr: { host: "proxy", port: 3128 },
+          endpoints: { relay: { host: "relay", port: 8443 }, proxy: { host: "proxy", port: 3128 } },
         });
         // Nothing was created, so the pass returns its whole budget.
         expect(h.creates).toHaveLength(0);
