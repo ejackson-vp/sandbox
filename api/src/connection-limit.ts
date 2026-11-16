@@ -79,6 +79,11 @@ export function createConnectionLimiter(opts: ConnectionLimitOptions): Connectio
       else if (opts.maxGlobal > 0 && inFlight >= opts.maxGlobal) scope = "global";
       if (scope !== null) {
         refusals.inc({ scope });
+        // A client that is told to go away without being told when to come
+        // back retries immediately, which is the burst we are refusing. One
+        // second is the smallest honest answer: the slot frees as soon as the
+        // in-flight request finishes, which is normally far sooner.
+        res.setHeader("Retry-After", "1");
         res.status(429).json({ error: "connection_limit" });
         return;
       }
