@@ -1,0 +1,90 @@
+# Restore the Postgres volume to a point in time (ADR 0015).
+#
+# Not part of the kustomize component: this is a one-shot job an operator runs
+# during an incident, with two placeholders filled in. docs/backup-restore.md
+# has the surrounding steps (stop the controller first, stop Postgres second, or
+# the restore races a writer).
+#
+# Replace before applying:
+#   <TARGET>   the timestamp to recover to, e.g. '2026-11-15 03:00:00+00'.
+#              `pgbackrest info` in the sidecar lists the backups and the WAL
+#              range that is available.
+#   <SET>      optional. The backup label from `pgbackrest info`, e.g.
+#              20261115-030000F. Omit both this and --set to let pgBackRest pick
+#              the newest backup that stops before the target.
+#
+# `--delta` copies only the files that differ from the backup, which is what makes
+# a restore over the existing 8Gi volume quick. It is the wrong tool if the volume
+# is corrupt: for corruption, delete the PVC and let the StatefulSet provision an
+# empty one, then run the same job without `--delta`. The base backup is on the
+# object store, so throwing the volume away costs nothing.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-restore
+  namespace: sandbox-system
+  labels:
+    app: postgres
+    app.kubernetes.io/component: pitr
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: postgres-restore
+    spec:
+      restartPolicy: Never
+      # The same identity the database runs as, so the restored files land with
+      # the ownership Postgres expects and nothing needs a chown.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: restore
+          # The same image the StatefulSet runs, for the same reason: one
+          # pgBackRest version on both sides of a backup.
+          image: x402-sandbox/postgres-pitr:17
+          command:
+            - pgbackrest
+            - restore
+            - --stanza=sandbox
+            - --pg1-path=/var/lib/postgresql/data/pgdata
+            - --type=time
+            - --target=<TARGET>
+            - --target-action=promote
+            - --delta
+            # - --set=<SET>
+            - --log-level-console=info
+          env:
+            - name: PGBACKREST_PG1_USER
+              valueFrom:
+                secretKeyRef: {name: postgres-credentials, key: username}
+          envFrom:
+            # The bucket, endpoint, keys and cipher pass, exactly as the pod gets
+            # them. Nothing in this file is a credential.
+            - secretRef:
+                name: postgres-pitr
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: pgbackrest-config, mountPath: /etc/pgbackrest, readOnly: true}
+            - {name: pgbackrest-spool, mountPath: /var/spool/pgbackrest}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        # The StatefulSet's volumeClaimTemplate, not a new volume: this restore
+        # writes over the database's own data directory.
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-postgres-0
+        - name: pgbackrest-config
+          configMap:
+            name: postgres-pitr
+            defaultMode: 0444
+        - name: pgbackrest-spool
+          emptyDir: {}

@@ -139,11 +139,16 @@ spec:
         - protocol: TCP
           port: 53
 ---
-# The store accepts connections and dials nothing. Ingress is the controller on
-# 5432 only: the API, relay, proxy and facilitator have no rule that reaches it,
-# and sandbox pods cannot either because their egress policy has no route into
-# this namespace. Reply traffic on the established connection is stateful and
-# needs no egress rule of its own.
+# The store accepts connections and, without the `pitr` component, dials nothing.
+# Ingress is the controller on 5432 only: the API, relay, proxy and facilitator
+# have no rule that reaches it, and sandbox pods cannot either because their
+# egress policy has no route into this namespace. Reply traffic on the
+# established connection is stateful and needs no egress rule of its own.
+#
+# `egress: []` stays empty even with PITR on. Rules from every policy that
+# selects a pod are additive, so the archiving path is opened by its own policy
+# (deploy/kubernetes/pitr/networkpolicy.yaml: 443 and DNS) and this one keeps
+# saying that the base deployment gives the store nothing to talk to.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

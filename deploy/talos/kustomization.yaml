@@ -23,6 +23,25 @@ resources:
   # is why it lives here and not in the base.
   - ../kubernetes/cilium
 
+# PITR (ADR 0015) is deliberately not a component of this overlay.
+#
+# It cannot be: the component needs a bucket, a `postgres-pitr` Secret and a
+# pushed pgBackRest image, and none of them exists in any environment yet. An
+# apply without them does not degrade, it stops the database (ImagePullBackOff on
+# the postgres container, or a missing Secret), which is a worse outcome than the
+# nightly dump this is meant to replace.
+#
+# `deploy/pitr` is this overlay plus the component, which is the shape to apply
+# once those three things exist:
+#
+#   kubectl kustomize deploy/pitr | kubectl diff -f -
+#   kubectl apply -k deploy/pitr
+#
+# To turn it on here instead, add:
+#
+#   components:
+#     - ../kubernetes/pitr
+
 # Published by .github/workflows/release.yml on a git tag v*.
 # NOTE: the workflow uses semver pattern {{version}}, so the IMAGE tag has no
 # `v` prefix: git tag v0.1.0 -> image tag 0.1.0. Getting this wrong is an
@@ -37,6 +56,11 @@ images:
   # without the other: scripts/check-deploy-pins.mjs compares this overlay, the
   # release map and the Kyverno allowlist, and fails when they name different
   # releases.
+  #
+  # The PITR component names `x402-sandbox/postgres-pitr:17`, which is what
+  # `docker build -f Dockerfile.postgres-pitr` produces. Add its registry name
+  # and digest here once it is pushed. scripts/check-deploy-pins.mjs does not
+  # cover this image, so the digest in this file is the only pin.
 
 patches:
   - target:

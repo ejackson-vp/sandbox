@@ -1,0 +1,128 @@
+# The PITR half of the Postgres pod (ADR 0015). Applied by the `pitr` component
+# as a strategic merge, so everything 05-postgres.yaml says about probes,
+# resources, the security context, the node selector, the ReadWriteOnce volume
+# and its storage class still holds. Nothing here changes where the data lives.
+#
+# What it adds:
+#
+#   1. the four server settings that make archiving work, passed as `postgres -c`
+#      flags rather than edited into postgresql.conf, so they survive an image
+#      bump and are visible in `kubectl get sts postgres -o yaml`;
+#   2. a `pgbackrest` sidecar that takes the daily base backup and verifies it;
+#   3. three volumes: the config, the archive spool, and the unix socket
+#      directory the sidecar reaches the server through.
+#
+# The image is the derived one from `Dockerfile.postgres-pitr`. A deployed
+# environment points this at the digest it pushed; the release workflow does not
+# build it, and nothing in this file claims a published image exists.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: sandbox-system
+spec:
+  template:
+    spec:
+      volumes:
+        # Where archive-push queues segments while a child process ships them
+        # (configmap.yaml: archive-async). sizeLimit is twice
+        # archive-push-queue-max, so a full spool is a pgBackRest warning and not
+        # a node disk alarm.
+        - name: pgbackrest-spool
+          emptyDir:
+            sizeLimit: 2Gi
+        # Shared between the two containers so pgBackRest finds the socket the
+        # server is listening on. The pod's fsGroup (999) makes it writable by
+        # the postgres user without a privileged init step.
+        - name: postgres-socket
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: pgbackrest-config
+          configMap:
+            name: postgres-pitr
+            defaultMode: 0444
+      containers:
+        - name: postgres
+          image: x402-sandbox/postgres-pitr:17
+          # The entrypoint turns an argument that starts with `-` into
+          # `postgres -c ...`, so these land as server settings.
+          #
+          # archive_command is one binary invocation with no shell, no bucket and
+          # no credential in it: everything it needs comes from
+          # /etc/pgbackrest/pgbackrest.conf and the PGBACKREST_* environment.
+          #
+          # The stanza is named on the command line as well as in the `[sandbox]`
+          # section of that file, because pgBackRest refuses an archive-push
+          # without it. Renaming the stanza means renaming it in both places, and
+          # the failure is loud: Postgres retries the segment and logs the error.
+          args:
+            - -c
+            - archive_mode=on
+            # Declared rather than inherited from the image, because the sidecar
+            # reaches Postgres over this socket and the two have to agree. The
+            # empty volume below is mounted at this path.
+            - -c
+            - unix_socket_directories=/var/run/postgresql
+            - -c
+            - archive_command=pgbackrest --stanza=sandbox archive-push %p
+            # The RPO in docs/backup-restore.md is this number. Without it a
+            # quiet database keeps a segment open until it fills, and a crash
+            # loses everything since the last switch.
+            - -c
+            - archive_timeout=60
+          env:
+            # Every key in this Secret is a PGBACKREST_* option name, so the
+            # container gets the bucket, endpoint, region, keys and cipher pass
+            # without any of them appearing in the repository. See
+            # 02-secrets-pitr.yaml.example for the expected keys.
+            - name: PGBACKREST_PG1_USER
+              valueFrom:
+                secretKeyRef: {name: postgres-credentials, key: username}
+          envFrom:
+            - secretRef:
+                name: postgres-pitr
+          volumeMounts:
+            - {name: pgbackrest-config, mountPath: /etc/pgbackrest, readOnly: true}
+            - {name: pgbackrest-spool, mountPath: /var/spool/pgbackrest}
+            - {name: postgres-socket, mountPath: /var/run/postgresql}
+        - name: pgbackrest
+          image: x402-sandbox/postgres-pitr:17
+          # The loop is in the ConfigMap so it can be read without `kubectl
+          # exec`, and so a change to it is a diff and not a shell history.
+          command: ["/bin/sh", "/etc/pgbackrest/backup-loop.sh"]
+          env:
+            - name: PGBACKREST_PG1_USER
+              valueFrom:
+                secretKeyRef: {name: postgres-credentials, key: username}
+            - {name: PITR_STANZA, value: sandbox}
+            # A day between base backups. Shorten it if the repository is cheap
+            # and the restore-time target matters more than storage: a base
+            # backup only bounds how much WAL has to be replayed.
+            - {name: PITR_BACKUP_INTERVAL_SECONDS, value: "86400"}
+            - {name: PITR_BACKUP_RETRY_SECONDS, value: "300"}
+            # How often to retry the stanza bootstrap at pod start. Short,
+            # because the only thing it is waiting for is Postgres coming up.
+            - {name: PITR_STANZA_RETRY_SECONDS, value: "10"}
+          envFrom:
+            - secretRef:
+                name: postgres-pitr
+          volumeMounts:
+            - {name: pgbackrest-config, mountPath: /etc/pgbackrest, readOnly: true}
+            - {name: pgbackrest-spool, mountPath: /var/spool/pgbackrest}
+            - {name: postgres-socket, mountPath: /var/run/postgresql}
+            # Read-only on purpose: the backup can read the data directory and
+            # cannot write to it, so the worst a bug in this container can do is
+            # read the database.
+            - {name: data, mountPath: /var/lib/postgresql/data, readOnly: true}
+          # The root filesystem stays writable, like the postgres container's and
+          # for the same kind of reason: pgBackRest writes nothing outside the
+          # spool here, but nothing in this repository proves that for every
+          # subcommand, and a read-only mount that turns out to be wrong is a
+          # CrashLoopBackOff in the container that takes the backups.
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits: {cpu: "500m", memory: "512Mi"}

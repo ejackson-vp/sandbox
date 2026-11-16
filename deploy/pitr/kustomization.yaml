@@ -1,0 +1,46 @@
+# The reference deployment, with Postgres PITR switched on (ADR 0015).
+#
+#   kubectl kustomize deploy/pitr | kubectl diff -f -    # what enabling it changes
+#   kubectl apply -k deploy/pitr                          # after provisioning
+#
+# This is `deploy/talos` plus the `pitr` component. It is a separate directory
+# because the component has three prerequisites that no environment has yet, and
+# applying it without them stops the database instead of merely not backing it
+# up:
+#
+#   1. an S3-compatible bucket, and the `postgres-pitr` Secret that names it
+#      (deploy/kubernetes/02-secrets-pitr.yaml.example lists the keys);
+#   2. the image from Dockerfile.postgres-pitr, pushed and pinned by digest in
+#      the `images:` block below;
+#   3. the cipher passphrase, stored somewhere that survives the cluster.
+#
+# `deploy/talos` stays PITR-free for that reason, and a Flux-managed deployment
+# that reconciles it keeps running exactly as it does today. Once the three
+# things above exist, apply this overlay, or copy the two lines below into
+# whichever overlay that deployment owns.
+#
+# What the component changes, and nothing else: the postgres container's image and
+# server flags, a `pgbackrest` sidecar, three volumes, and an egress policy for
+# the object store. The StatefulSet's volume, storage class and node pinning are
+# untouched, so removing the component is a rollout back to the plain server.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../talos
+
+components:
+  - ../kubernetes/pitr
+
+# Uncomment and fill in once the image is pushed. `docker build -f
+# Dockerfile.postgres-pitr -t <registry>/postgres-pitr:17 .` produces it, and
+# scripts/check-deploy-pins.mjs does not cover it, so the digest written here is
+# the only pin. Until then this overlay names the local tag the drill builds,
+# which no cluster can pull: that is the point of it not being applied by
+# default.
+#
+# images:
+#   - name: x402-sandbox/postgres-pitr
+#     newName: <registry>/postgres-pitr
+#     newTag: "17"
+#     # digest: sha256:<...>

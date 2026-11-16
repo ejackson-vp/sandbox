@@ -1,0 +1,125 @@
+# pgBackRest configuration and the sidecar's backup loop (ADR 0015).
+#
+# Nothing secret is here. The bucket, endpoint, region, keys and the repository
+# cipher pass arrive as `PGBACKREST_*` environment variables from the
+# `postgres-pitr` Secret, which is why this file is safe to read, diff and paste
+# into an issue.
+#
+# Postgres loads this file with no flag: pgBackRest reads
+# /etc/pgbackrest/pgbackrest.conf by default, and the component mounts it there
+# in both containers.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-pitr
+  namespace: sandbox-system
+  labels:
+    app: postgres
+    app.kubernetes.io/component: pitr
+data:
+  pgbackrest.conf: |
+    [global]
+    # S3 speaks to any object store that speaks S3. The endpoint is separate
+    # because the store is not necessarily AWS.
+    repo1-type=s3
+    # Encrypt at rest in the repository. The pass comes from the Secret and is
+    # the one piece of recovery material that cannot be recreated: without it
+    # every backup is noise. Keep it with the other break-glass material, not in
+    # the bucket it encrypts.
+    repo1-cipher-type=aes-256-cbc
+
+    # 14 days of full backups and the WAL to go with them. Time-based, so an
+    # operator reads "two weeks" and not "two and a half backups". pgBackRest
+    # expires the WAL with the full backups it belongs to, which is why there is
+    # no separate `repo1-retention-archive` here: setting it to a count is how
+    # the archive log and the base backups drift apart.
+    repo1-retention-full-type=time
+    repo1-retention-full=14
+
+    # Archive asynchronously. The commit path writes the segment into the spool
+    # and returns; a child process pushes it. Synchronous archiving would put the
+    # object store's latency inside every segment switch, and an unreachable
+    # bucket would stall checkpointing until the volume filled.
+    #
+    # The queue is the price: past 1GiB pgBackRest drops the oldest segments with
+    # a warning and keeps the database writing. That is a deliberate trade of
+    # RPO for availability, and `pgbackrest verify` (below) plus the
+    # `pg_stat_archiver` metrics in docs/backup-restore.md are how you find out
+    # it happened.
+    archive-async=y
+    archive-push-queue-max=1GiB
+    spool-path=/var/spool/pgbackrest
+    lock-path=/var/spool/pgbackrest/lock
+    log-path=/var/spool/pgbackrest/log
+    log-level-console=info
+    # A file log inside the pod dies with the pod and duplicates what the
+    # container runtime already keeps. Keep the two in one place.
+    log-level-file=off
+
+    # Start the copy after an immediate checkpoint instead of waiting for the
+    # next scheduled one. Shortens how long the backup holds a checkpoint open.
+    start-fast=y
+    compress-type=lz4
+
+    [sandbox]
+    pg1-path=/var/lib/postgresql/data/pgdata
+    # Local mode: the sidecar shares the socket directory with the postgres
+    # container, so the backup needs no TCP connection and no password. The
+    # stanza name is the same string `stanza-create` writes into the repository.
+    pg1-socket-path=/var/run/postgresql
+    pg1-port=5432
+
+  # The sidecar's whole job: make sure the stanza exists, then take a base
+  # backup and verify it, once a day, until the pod goes away.
+  #
+  # Deliberately not a CronJob: a CronJob that mounts the ReadWriteOnce data
+  # volume can land on a node that does not hold it, and the one it does land on
+  # gets a read-write mount of a live data directory. This container gets a
+  # read-only mount of PGDATA and shares the pod's socket, so it cannot corrupt
+  # what it is copying.
+  backup-loop.sh: |
+    #!/bin/sh
+    # No `set -e`: a transient object-store failure must retry, not restart the
+    # container in a loop. Anything that needs to exit does so explicitly.
+    set -u
+
+    interval="${PITR_BACKUP_INTERVAL_SECONDS:-86400}"
+    retry="${PITR_BACKUP_RETRY_SECONDS:-300}"
+    # A separate, shorter wait for the stanza: at pod start Postgres is a couple
+    # of seconds away from accepting connections, and sitting out the full
+    # backup retry before the first stanza-create leaves WAL piling up in
+    # pg_wal for no reason.
+    bootstrap="${PITR_STANZA_RETRY_SECONDS:-10}"
+    stanza="${PITR_STANZA:-sandbox}"
+
+    log() { echo "pitr: $*"; }
+
+    # The stanza has to exist before the first archive-push can succeed, and it
+    # cannot be created until Postgres is up and answering. Until then Postgres
+    # retries the same segment and logs an archive failure, which is expected on
+    # a fresh volume and is not a reason to give up.
+    until pgbackrest check --stanza="$stanza" >/dev/null 2>&1; do
+      log "check failed for stanza $stanza: no stanza yet, Postgres not accepting connections, or the repository is unreachable. Retrying in ${bootstrap}s"
+      # Errors here are expected on the first pass and on every pass until
+      # Postgres is up, so the result is not interesting: the loop condition is.
+      pgbackrest stanza-create --stanza="$stanza" >/dev/null 2>&1 || true
+      sleep "$bootstrap"
+    done
+    log "stanza $stanza is configured and archiving works"
+
+    while true; do
+      if pgbackrest backup --stanza="$stanza" --type=full; then
+        # verify reads the repository back and checks it against its manifest,
+        # including the WAL needed to make the backup consistent. It is the only
+        # step here that proves the artifact rather than the process.
+        if ! pgbackrest verify --stanza="$stanza"; then
+          log "verify FAILED for the backup just taken; the repository needs a human"
+        fi
+      else
+        log "backup failed; retrying in ${retry}s"
+        sleep "$retry"
+        continue
+      fi
+      log "next base backup in ${interval}s"
+      sleep "$interval"
+    done

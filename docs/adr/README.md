@@ -20,6 +20,7 @@ were rejected, and the cost we accepted.
 | [0012](0012-guest-reconnects-after-relay-loss.md) | A guest reconnects after a relay link loss | accepted |
 | [0013](0013-free-entitlement-from-proven-address.md) | A proven address gets a free session from a stable allowlist | accepted |
 | [0014](0014-chain-verified-settlement-recovery.md) | Settlement recovery reads the chain, not only the facilitator | accepted |
+| [0015](0015-postgres-pitr.md) | PITR for the ledger's Postgres with pgBackRest | accepted |
 
 ## Writing a record
 

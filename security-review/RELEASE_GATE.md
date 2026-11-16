@@ -40,7 +40,7 @@ row cites it; where it depends on reading code and tests, it says so.
 | Capacity quotas per payer/IP | PASS | durable per-payer and global budget (#48) |
 | Budget survives a controller restart | PASS | `tests/unit/payer-budget.test.ts` |
 | Multi-replica controller | SUPPORTED (writer-safe) | Postgres, Kubernetes Lease, writer guard, measured handover. The store is still a single primary (ADR 0010) |
-| Postgres durability | PARTIAL | daily logical backups complete in the reference deployment; no PITR, restore drill exists but has not run on production data (#162) |
+| Postgres durability | PARTIAL | daily logical backups complete in the reference deployment. PITR is designed and drilled locally (ADR 0015, `make pitr-drill`) but not provisioned: no bucket, no `postgres-pitr` Secret, so nothing archives today. The restore drill exists and has not run on production data (#162) |
 | Alerts reach a human | **FAIL** | the rule file ships no receiver; the reference stack evaluates with `-notifier.blackhole` |
 | Incident procedures rehearsed | **FAIL** | four runbooks and a tabletop script, none executed (#60) |
 | Emergency stop | PARTIAL | durable create kill switch (schema v21): `sandbox admin killswitch enable` writes one row the API reads before any payment or capacity work, refusing `503 creates_disabled` while live sessions keep executing. Proven by `tests/unit/create-switch.test.ts` (refusal order, fail-closed read, live exec while on), `create-switch-store.test.ts`, `create-switch-admin.test.ts` and `create-switch-migration.test.ts`. Not exercised against a production incident, and the API must be deployed after the controller (a new API with an old controller fails closed) |
@@ -102,8 +102,9 @@ Profile: arbitrary internet tenants, real money, untrusted code, an SLA.
 
 - **No independent test of the guest/host boundary.** This review is by the
   author of the code.
-- **No PITR and no measured database failover.** The store is one Postgres
-  primary; backups are daily and logical (#162).
+- **No provisioned PITR and no measured database failover.** The store is one
+  Postgres primary; backups are daily and logical. The PITR design is shipped and
+  drilled locally (ADR 0015) with no object store behind it yet (#162).
 - **Checkpoints are plaintext and node-pinned** (ADR 0007). Any product that
   sells suspendable sessions inherits that.
 - **Relay state is in process memory**, so a restart still costs one interrupted

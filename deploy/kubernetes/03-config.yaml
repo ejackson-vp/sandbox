@@ -92,8 +92,8 @@ data:
   RELAY_HOST_TEMPLATE: "relay-{shard}.relay-headless"
   PROXY_HOST_TEMPLATE: "egress-proxy-{shard}.egress-proxy-headless"
   # Backups are not this process's job any more. The controller never copies
-  # the database; logical/physical backups, PITR, encryption and retention
-  # belong to the Postgres layer. See docs/backup-restore.md.
+  # the database; WAL archiving, base backups, encryption and retention live in
+  # the `pitr` component (ADR 0015). See docs/backup-restore.md.
   SANDBOX_NAMESPACE: "sandbox-workloads"
   CONTROL_NAMESPACE: "sandbox-system"
 
