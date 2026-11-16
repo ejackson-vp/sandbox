@@ -13,4 +13,5 @@ kind: Kustomization
 
 resources:
   - serviceaccount.yaml
+  - configmap.yaml
   - deployment.yaml

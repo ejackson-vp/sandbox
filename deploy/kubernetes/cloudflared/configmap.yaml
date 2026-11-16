@@ -1,0 +1,32 @@
+# The tunnel's ingress rules, as data in Git rather than a dashboard entry.
+#
+# Token mode (TUNNEL_TOKEN) authenticates the connector, and cloudflared still
+# reads local ingress rules when a config file is passed. Keeping them here means
+# the public hostname mapping is reviewable and reproducible: a re-created tunnel
+# is one apply away, not a set of clicks someone has to remember.
+#
+# The origin is the in-cluster Service, so the hop from cloudflared to the API
+# never leaves the cluster and TLS for the public leg terminates at Cloudflare's
+# edge. No `originRequest.noTLSVerify` is needed for the same reason: there is no
+# TLS on this hop to verify.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: sandbox-system
+  labels:
+    app: cloudflared
+data:
+  config.yml: |
+    ingress:
+      # The public API. `api.throwbox.dev` resolves to this tunnel's CNAME, and
+      # TRUST_PROXY_HOPS=1 makes the API read the client address from the
+      # X-Forwarded-For this connector appends. That is only safe while the API
+      # admits proxies we run: see the allow-api policy, which lists cloudflared
+      # by pod label and refuses every other pod in the cluster.
+      - hostname: api.throwbox.dev
+        service: http://api.sandbox-system.svc.cluster.local:3000
+      # Anything else reaching the tunnel by hostname is not ours. A catch-all is
+      # required by cloudflared, and 404 is the honest answer rather than falling
+      # through to the API and letting the API decide.
+      - service: http_status:404
