@@ -189,7 +189,21 @@ export class MockExactClientScheme implements SchemeNetworkClient {
 
 export interface MockNonceStore {
   /** Atomically claim a nonce. Returns false when already used. */
-  claimNonce(nonce: string, meta: { payer: string; paymentKey: string; amount: string }): Promise<boolean>;
+  claimNonce(
+    nonce: string,
+    meta: {
+      payer: string;
+      paymentKey: string;
+      amount: string;
+      /**
+       * The address the settled authorisation pays. Stored so a settlement
+       * lookup can prove the recipient, not merely that the key was used
+       * (F-21). It is the authorisation's own `to`, never the caller's
+       * requirements.
+       */
+      recipient: string;
+    },
+  ): Promise<boolean>;
   /** Release a claim after settlement failure (optional). */
   releaseNonce?(nonce: string): Promise<void>;
 }
@@ -266,6 +280,9 @@ export class MockExactFacilitatorScheme implements SchemeNetworkFacilitator {
       payer: parsed.authorization.from,
       paymentKey: key,
       amount: parsed.authorization.value,
+      // What the submitted authorisation actually pays, so a settlement lookup
+      // can prove the recipient as well as the amount (F-21).
+      recipient: parsed.authorization.to,
     });
     if (!claimed) {
       return {

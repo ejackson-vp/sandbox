@@ -9,6 +9,13 @@
  * API recovers the entitlement from the record; the controller's recovery worker
  * writes a refundable ledger row for a settlement no session consumed.
  *
+ * A record is a facilitator's claim, not a proof. "Settled: true" answers "did
+ * this payment key settle", which is not the same question as "did this
+ * requirement settle": the amount and the recipient have to be in the record
+ * before it can entitle anything, and a record that cannot answer both is
+ * withheld rather than granted (F-21). `settled` alone is enough only to know
+ * that a debt exists.
+ *
  * Both processes read the same contract, so it lives here rather than once per
  * workspace: two copies drift silently and one of them is then wrong about what
  * the facilitator returned.
@@ -24,6 +31,13 @@ export interface SettlementRecord {
   settled: boolean;
   transaction?: string;
   payer?: string;
+  /**
+   * The address the settled transfer went to, as the facilitator observed it in
+   * the authorisation it submitted. Absent when the facilitator cannot say, and
+   * a record that cannot say cannot entitle a session.
+   */
+  recipient?: string;
+  /** Atomic units that actually moved. Absent or unusable means unprovable. */
   amount?: string;
 }
 

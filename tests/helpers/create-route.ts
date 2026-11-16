@@ -9,10 +9,14 @@
  */
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { decodePaymentSignatureHeader } from "@x402/core/http";
+import type { PaymentRequirements } from "@x402/core/types";
 import { x402Client } from "@x402/core/client";
 import { x402HTTPClient } from "@x402/core/client";
 import { vi } from "vitest";
-import { clientCommitmentMessage } from "../../shared/src/entries/crypto.js";
+import {
+  clientCommitmentMessage,
+  type ClientCommitmentInput,
+} from "../../shared/src/entries/crypto.js";
 import {
   DEFAULT_TIERS,
   MOCK_NETWORK,
@@ -22,12 +26,22 @@ import {
 } from "../../shared/src/entries/payment.js";
 import { TokenBucket } from "../../shared/src/entries/runtime.js";
 import type { SettlementLookup } from "../../shared/src/entries/runtime.js";
+import {
+  capabilityKeyRing,
+  mintCapability,
+  recoverCapability as recoverCapabilityFromRing,
+} from "../../shared/src/capability.js";
 import { createSessionHandler } from "../../api/src/routes/create-session.js";
 import type { ChainSettlementVerifier } from "../../shared/src/entries/settlement.js";
 
 export const CHALLENGE_NONCE = `cn_${"a".repeat(32)}`;
 
-const REQUIREMENT = {
+/**
+ * The terms the harness prices every create at ($0.05, the `standard` tier).
+ * Exported so an attack can build a payload against the same requirements the
+ * server will quote, which is the only way to test one field in isolation.
+ */
+export const REQUIREMENT: PaymentRequirements = {
   scheme: "exact",
   network: MOCK_NETWORK,
   asset: "mock:usdc",
@@ -36,6 +50,12 @@ const REQUIREMENT = {
   maxTimeoutSeconds: 300,
   extra: {},
 };
+
+/**
+ * One fixed ring, so a capability re-derivation is the production HMAC rather
+ * than a constant. Deliberately low entropy: a fixture, not a credential.
+ */
+const CAPABILITY_RING = capabilityKeyRing({ keyId: "k1", secret: "c".repeat(32) });
 
 /** Everything the handler may call on the controller, defaulted to "admit". */
 interface ControllerStub {
@@ -94,6 +114,8 @@ interface CreateResult {
   settlementNonce: `0x${string}`;
   /** The server's own terms: the chain check must be given these, not the body. */
   terms: { payTo: `0x${string}`; amount: bigint };
+  /** The header that was presented, so a second call can replay it verbatim. */
+  header: string;
 }
 
 /**
@@ -104,7 +126,9 @@ interface CreateResult {
  * replaces the inert stub when a test exercises verify/settle.
  */
 export async function postCreate(
-  patch: (ctx: { controller: ControllerStub; body: Record<string, unknown> }) => void = () => undefined,
+  patch: (
+    ctx: { controller: ControllerStub; body: Record<string, unknown> },
+  ) => void | Promise<void> = () => undefined,
   opts: {
     settlementLookup?: SettlementLookup;
     /** A fake chain check. Tests must never reach an RPC. */
@@ -117,28 +141,54 @@ export async function postCreate(
     commitmentSigner?: { signMessage(args: { message: string }): Promise<`0x${string}`> };
     /** Override PAYER_ALLOWLIST_ENABLED for the create. Defaults to on. */
     allowlistEnabled?: boolean;
+    /**
+     * The wallet that signs the payment header and the commitment. Reuse one
+     * across two calls to replay a header, or to sign a commitment the payment
+     * did not authorise.
+     */
+    account?: ReturnType<typeof privateKeyToAccount>;
+    /** Body challenge nonce. Defaults to {@link CHALLENGE_NONCE}. */
+    challengeNonce?: string;
+    /**
+     * Present this PAYMENT-SIGNATURE verbatim instead of minting one. The
+     * commitment is still signed by `opts.account` (or `commitmentSigner`), so a
+     * test can hold one payment constant and vary the proof.
+     */
+    paymentHeader?: string;
+    /**
+     * What the payer wallet actually signs. Defaults to the canonical
+     * commitment; override one field to attack the binding (F-02, F-07).
+     */
+    commitmentMessage?: (canonical: ClientCommitmentInput) => ClientCommitmentInput;
+    /** Price the requirement from the resolved spec, so a tier is really priced. */
+    requirementFor?: (priceUsd: string, spec: { tier: string }) => PaymentRequirements;
   } = {},
 ): Promise<CreateResult> {
-  const account = privateKeyToAccount(generatePrivateKey());
+  const account = opts.account ?? privateKeyToAccount(generatePrivateKey());
   const controller = admittingController();
   const body: Record<string, unknown> = {
     tier: "standard",
     clientPublicKey: "a".repeat(44),
     clientNonce: "b".repeat(44),
-    challengeNonce: CHALLENGE_NONCE,
+    challengeNonce: opts.challengeNonce ?? CHALLENGE_NONCE,
   };
-  patch({ controller, body });
+  await patch({ controller, body });
 
-  const client = x402Client.fromConfig({
-    schemes: [{ network: MOCK_NETWORK, client: new MockExactClientScheme(account) }],
-    spendControls: false,
-  });
-  const payload = await client.createPaymentPayload({
-    x402Version: 2,
-    resource: { url: "https://sandbox.test/v1/sessions" },
-    accepts: [REQUIREMENT],
-  } as never);
-  const header = new x402HTTPClient(client).encodePaymentSignatureHeader(payload)["PAYMENT-SIGNATURE"]!;
+  let header: string;
+  if (opts.paymentHeader) {
+    header = opts.paymentHeader;
+  } else {
+    const client = x402Client.fromConfig({
+      schemes: [{ network: MOCK_NETWORK, client: new MockExactClientScheme(account) }],
+      spendControls: false,
+    });
+    const payload = await client.createPaymentPayload({
+      x402Version: 2,
+      resource: { url: "https://sandbox.test/v1/sessions" },
+      accepts: [REQUIREMENT],
+    } as never);
+    header = new x402HTTPClient(client).encodePaymentSignatureHeader(payload)["PAYMENT-SIGNATURE"]!;
+  }
   const decoded = decodePaymentSignatureHeader(header);
   const key = paymentKey(decoded);
   const authorization = (decoded.payload as { authorization?: { from?: string; nonce?: string } })
@@ -147,13 +197,14 @@ export async function postCreate(
   const settlementNonce = (authorization?.nonce ?? `0x${"0".repeat(64)}`) as `0x${string}`;
 
   if (body.clientSignature === undefined) {
+    const canonical: ClientCommitmentInput = {
+      paymentKey: key,
+      clientPublicKey: body.clientPublicKey as string,
+      clientNonce: body.clientNonce as string,
+      challengeNonce: body.challengeNonce as string,
+    };
     body.clientSignature = await (opts.commitmentSigner ?? account).signMessage({
-      message: clientCommitmentMessage({
-        paymentKey: key,
-        clientPublicKey: body.clientPublicKey as string,
-        clientNonce: body.clientNonce as string,
-        challengeNonce: body.challengeNonce as string,
-      }),
+      message: clientCommitmentMessage(opts.commitmentMessage?.(canonical) ?? canonical),
     });
   }
 
@@ -194,9 +245,17 @@ export async function postCreate(
     resourceServer: opts.resourceServer ?? {},
     settlementLookup: opts.settlementLookup ?? { supported: false, lookup: async () => null },
     ...(opts.settlementVerifier ? { settlementVerifier: opts.settlementVerifier } : {}),
-    requirementFor: async () => REQUIREMENT,
+    requirementFor: async (priceUsd: string, spec: { tier: string }) =>
+      opts.requirementFor?.(priceUsd, spec) ?? REQUIREMENT,
     payment402,
-    capabilityFor: () => "capability",
+    // The production derivation, so a replay is judged against the real HMAC:
+    // the same payment with a different client commitment cannot reproduce the
+    // stored hash, which is what makes a second create return 409 rather than a
+    // token for someone else's session.
+    capabilityFor: (key: string, commitment: string) =>
+      mintCapability(CAPABILITY_RING.signing, key, commitment),
+    recoverCapability: (key: string, commitment: string, storedHash: string) =>
+      recoverCapabilityFromRing(CAPABILITY_RING, key, commitment, storedHash),
     ipCreateLimiter: new TokenBucket(100, 100),
     createLimiter: new TokenBucket(100, 100),
   } as never);
@@ -219,5 +278,6 @@ export async function postCreate(
     authorizer,
     settlementNonce,
     terms: { payTo: REQUIREMENT.payTo as `0x${string}`, amount: BigInt(REQUIREMENT.amount) },
+    header,
   };
 }

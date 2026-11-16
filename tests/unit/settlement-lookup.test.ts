@@ -149,9 +149,18 @@ describe("unsupported settlement lookup", () => {
 
 describe("API consumer", () => {
   it("completes a recovered intent from the lookup instead of settling again", async () => {
+    // The record has to prove the transfer, not just that the key settled
+    // (F-21): these are the server's own terms.
+    const settled = JSON.parse(REQUIREMENTS) as { payTo: string; amount: string };
     const baseUrl = await facilitator(() => ({
       status: 200,
-      body: { settled: true, transaction: "mock:tx", payer: PAYER },
+      body: {
+        settled: true,
+        transaction: "mock:tx",
+        payer: PAYER,
+        recipient: settled.payTo,
+        amount: settled.amount,
+      },
     }));
 
     const result = await postCreate(

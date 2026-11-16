@@ -13,7 +13,8 @@
  *   one, no matching `Transfer` at all, or it reverted. Never grant.
  * - `unavailable`: the check could not be made or could not place the payment:
  *   no verifier for this payload, a requirement that cannot be turned into a
- *   check, no `AuthorizationUsed` log inside the window, or a read that threw.
+ *   check, no `AuthorizationUsed` log inside the window, a read that threw, or a
+ *   settlement record that does not name the recipient and the amount it moved.
  *   A nonce older than the window is *this*, not `unsettled`: the nonce may have
  *   settled before the window opened, and calling that a refusal turns a paid
  *   payment into a permanent retry loop with no debt recorded. `unavailable`
@@ -21,17 +22,20 @@
  *   recovery worker and the facilitator fallback need.
  *
  * The requirement is always the server's own: `payTo` and the price it quoted.
- * A recipient or amount taken from the request would let the payer choose what
- * "settled" means.
+ * A recipient or amount taken from the request, or from a settlement record that
+ * merely says "settled", would let the payer choose what "settled" means (F-21).
  *
  * The facilitator lookup remains the fallback for a network this module cannot
- * read, which is why `recoveryAvailable` accepts either mechanism.
+ * read, which is why `recoveryAvailable` accepts either mechanism. It is held to
+ * the same standard as the chain: `settled: true` alone proves a debt exists,
+ * not that this requirement was paid.
  */
 import type { PaymentRequirements } from "@x402/core/types";
 import { paymentAuthorizer, settlementNonce } from "@x402s/shared/crypto";
-import { log } from "@x402s/shared/runtime";
+import { log, type SettlementRecord } from "@x402s/shared/runtime";
 import {
   buildChainSettlementVerifier,
+  isEvmAddress,
   redactSettlementError,
   settlementTerms,
   settlementVerdict,
@@ -128,6 +132,35 @@ export function recoveryAvailable(deps: {
   return deps.settlementVerifier !== undefined || deps.settlementLookup.supported;
 }
 
+/** The record as the chain check would need it, or null when it cannot answer. */
+function recordTerms(record: SettlementRecord): { recipient: `0x${string}`; amount: bigint } | null {
+  if (!isEvmAddress(record.recipient)) return null;
+  if (typeof record.amount !== "string" || !/^\d+$/.test(record.amount)) return null;
+  return { recipient: record.recipient, amount: BigInt(record.amount) };
+}
+
+/**
+ * What a settlement record proves about one requirement.
+ *
+ * `settled: true` says the payment key settled, not that this requirement was
+ * paid. The record has to name the address the transfer went to and the amount
+ * that moved, or the answer is `unknown`: a record that cannot answer is the
+ * same withholding as a chain read that cannot place the nonce, and a facilitator
+ * that omits the fields is never able to mint a session (F-21). A record that
+ * answers with a different recipient or a short amount contradicts the
+ * requirement, so it is a refusal rather than an unanswered question.
+ */
+function recordVerdict(
+  record: SettlementRecord,
+  priced: { recipient: `0x${string}`; amount: bigint },
+): ChainVerdict {
+  const terms = recordTerms(record);
+  if (!terms) return "unavailable";
+  if (terms.recipient.toLowerCase() !== priced.recipient.toLowerCase()) return "unsettled";
+  if (terms.amount < priced.amount) return "unsettled";
+  return "settled";
+}
+
 /**
  * Resolve a payment that may already have settled, for the crash-recovery path.
  *
@@ -136,10 +169,13 @@ export function recoveryAvailable(deps: {
  * ends the question: the chain read the nonce's transaction and it does not pay
  * this requirement, so a facilitator lookup must not override it.
  *
- * Only a chain that could not answer falls back to the lookup. When neither
- * source can answer, the result is `unknown`, which is a different thing from
- * "did not settle": callers must withhold rather than refuse, or a paid payment
- * gets a terminal refusal with no debt recorded.
+ * Only a chain that could not answer falls back to the lookup, and the lookup is
+ * held to the same standard: the record must prove the recipient and the amount,
+ * not merely that the key settled (F-21).
+ *
+ * When neither source can answer, the result is `unknown`, which is a different
+ * thing from "did not settle": callers must withhold rather than refuse, or a
+ * paid payment gets a terminal refusal with no debt recorded.
  *
  * `terms` is the requirement the intent was claimed with, not anything the
  * client sent with the retry: the recovery must check the same transfer the
@@ -148,7 +184,7 @@ export function recoveryAvailable(deps: {
 export async function recoverSettlement(
   deps: {
     settlementVerifier?: ChainSettlementVerifier;
-    settlementLookup: { readonly supported: boolean; lookup(key: string): Promise<RecoveredSettlement | null> };
+    settlementLookup: { readonly supported: boolean; lookup(key: string): Promise<SettlementRecord | null> };
   },
   paymentKey: string,
   payload: unknown,
@@ -163,12 +199,26 @@ export async function recoverSettlement(
   }
   if (chain === "unsettled") return { status: "not-settled" };
   if (!deps.settlementLookup.supported) return { status: "unknown" };
+  let record: SettlementRecord | null;
   try {
-    const record = await deps.settlementLookup.lookup(paymentKey);
-    return record ? { status: "settled", settlement: record } : { status: "not-settled" };
+    record = await deps.settlementLookup.lookup(paymentKey);
   } catch (err) {
     // A lookup that failed is not a lookup that said no.
     log.warn("settlement_lookup_failed", { error: (err as Error).message, paymentKeyPrefix: paymentKey.slice(0, 12) });
     return { status: "unknown" };
   }
+  if (!record) return { status: "not-settled" };
+  const priced = settlementTerms(terms);
+  const verdict = priced ? recordVerdict(record, priced) : "unavailable";
+  if (verdict === "unsettled") {
+    // A readable record that paid another address, or too little. The log line
+    // carries a category, never a field.
+    log.warn("settlement_record_disproven", { paymentKeyPrefix: paymentKey.slice(0, 12) });
+    return { status: "not-settled" };
+  }
+  if (verdict === "unavailable") {
+    log.warn("settlement_record_incomplete", { paymentKeyPrefix: paymentKey.slice(0, 12) });
+    return { status: "unknown" };
+  }
+  return { status: "settled", settlement: record };
 }
