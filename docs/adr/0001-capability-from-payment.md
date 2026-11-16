@@ -1,6 +1,12 @@
 # 0001. Derive the session capability from the settled payment
 
-Status: accepted
+Status: superseded by [0016](0016-capability-key-ring.md) (2026-11-16).
+
+> The decision stands: the capability is derived from the settled payment,
+> so a retry recovers the same session. Two details do not. The MAC is
+> `x402-capability:v2:<paymentKey>:<commitment>`, and a key ring replaces
+> the single secret, so rotation no longer invalidates live capabilities.
+> See 0016 for what the code does and why.
 
 ## Context
 

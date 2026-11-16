@@ -75,8 +75,10 @@ database layer's responsibility, not the controller's
 - Stateless. It verifies and settles payment, then asks the controller to
   materialise the entitlement.
 - Never accepts plaintext: the only operation field is an opaque sealed box.
-- Derives the session capability with HMAC(server secret, payment key) so a
-  retried request recovers the *same* capability; stores only its SHA-256 hash.
+- Derives the session capability from the settled payment and the client
+  commitment, signed by a key ring so a rotation does not invalidate live
+  sessions, so a retried request recovers the *same* capability; stores only
+  its SHA-256 hash ([ADR 0016](adr/0016-capability-key-ring.md)).
 
 ### Controller (`controller/src/`)
 
