@@ -1,7 +1,7 @@
 # Operational readiness review
 
 What this is: the document an on-call engineer reads at 2am to decide whether
-to page, roll back, or ride it out. It describes the repository at `4d5e26c`,
+to page, roll back, or ride it out. It describes the repository at `eea1569`,
 on branch `docs/orr`, and it has not been through an incident: no page has ever
 been delivered, no failover has been measured on the deployed store, and no
 real money has moved. Where a claim depends on one of those, the text says so.
@@ -49,7 +49,7 @@ gone. "Closed" means the request is refused rather than admitted unaccounted.
 | Dependency | Used for | When slow | When absent | Fails |
 | --- | --- | --- | --- | --- |
 | x402 facilitator | `verify` and `settle` on the create path | Every call times out at `FACILITATOR_TIMEOUT_MS` (20 s default). `verify` retries a bounded number of times; `settle` never retries, because the nonce makes it idempotent and a lost answer is resolved on chain. Creates get slower up to 20 s each, then fail. | No create can settle, so no session is created. No money moves. Refunds do not use the facilitator; they use the operator webhook. | Closed |
-| Chain RPC (`PAYMENT_RPC_URL`) | Proving the transfer behind a consumed nonce; settlement recovery | A create that needs the check (recovery and the first-attempt proof path) stalls on RPC latency inside the 12-call cap. | `not-found` and read errors are both `unavailable`, so entitlement is withheld and the intent stays `claimed` for the recovery worker. The API answers `409 reconciliation_pending`. With neither RPC nor a facilitator lookup, the debt is only visible to a human reconciling the chain. | Closed |
+| Chain RPC (`PAYMENT_RPC_URL`) | Proving the transfer behind a consumed nonce, on the create path and in settlement recovery ([ADR 0014](adr/0014-chain-verified-settlement-recovery.md)) | A create that needs the check stalls on RPC latency inside the 12-call cap. Recovery waits for the next housekeeping pass. | A mainnet controller refuses to start without it, so this is a startup failure rather than a degraded create. Where the check cannot answer, `not-found` and read errors are both `unavailable`: entitlement is withheld, the intent stays `claimed`, and the API answers `409 reconciliation_pending`. With neither RPC nor a facilitator lookup, the debt is only visible to a human reconciling the chain. | Closed |
 | Postgres | Every durable decision, including admission budgets | Creates slow down. Readiness removes the controller in roughly 17 s: a 2 s result cache, a 5 s probe period and `failureThreshold: 3`. | Controller reports not-ready and is removed from Service endpoints. The API answers `503 admission_unavailable` rather than admitting unaccounted work. Live sessions are unaffected until their lease ends. | Closed |
 | Relay | Every operation, upload and download | `sandbox_relay_pending_requests` rises; clients see long `exec` calls. | The guest reconnects with bounded backoff. If it cannot, the session ends `failure:relay_lost` at `RELAY_LOSS_GRACE_MS` (90 s) or 1 s before the lease, whichever is first, and is refunded in full. In `RELAY_GUEST_ADDRESS=pod` mode there is no continuity at all. | Partly open: the session survives, the operation in flight does not |
 | Kubernetes API | Pod and PVC lifecycle, Lease election | Provisioning slows; reconciles slow; queue wait rises. | No pod can be created or deleted. A session stays `PAID` and is failed by the queue timeout (120 s) or, once it got as far as a pod, by `PROVISIONING_TIMEOUT_MS` (90 s). A running session is not reconciled, and its pod survives until the in-pod watchdog and `activeDeadlineSeconds` end it. | Closed for creates |
@@ -73,7 +73,7 @@ no availability number has ever been computed from data.
 | Create latency, client | Not an alert. The SDK round trip, measured by the bench | Proposed: p95 < 1 s | Yes, once: p50 395 ms, p95 708 ms on 0.1.16; 548 to 595 ms client on 0.1.22 |
 | Provisioning timeout rate | `sandbox_provision_failures_total{reason="provisioning_timeout"}` / `sandbox_sessions_created_total` > 1% for 10m, `SandboxProvisioningTimeoutRateHigh` | < 1% | No. Zero failures in the two runs that were done (25/25 and 60/60), which is not a rate |
 | Provisioning queue wait | `histogram_quantile(0.95, sandbox_provisioning_wait_seconds_bucket)` > 5 s for 10m, `SandboxProvisioningQueueWaitP95High` | p95 < 5 s | Only on kind: 5.85 s p95 unlimited, 9.41 s with `MAX_CONCURRENT_PROVISIONING=4` at 25 creates ([admission-control.md](admission-control.md)) |
-| Relay pending | `max(sandbox_relay_pending_requests{role="controller"}) > 0` for 5m, `SandboxRelayPendingRequests` | 0 | No. The rule cannot fire in the reference deployment: see below |
+| Relay pending | `max(sandbox_relay_pending_requests{role="relay"}) > 0` for 5m, `SandboxRelayPendingRequests` | 0 | No. The metric exists and the selector now names the role that exports it, but it has never been seen non-zero in a recorded run |
 | Reconcile pass | `histogram_quantile(0.95, sandbox_reconcile_duration_seconds_bucket{role="controller"})` > 1 for 10m, `SandboxReconcileP95High` | p95 < 1 s | No. Never measured on the cluster, and the 0.1.16 numbers were taken while the controller still ran SQLite |
 | Create conflicts | Any `409` on `POST /v1/sessions` for 10m, `SandboxReconciliationPending` | 0 sustained | Partly. The counter exists; the code is not broken out, so this mixes `reconciliation_pending`, `payment_in_progress`, `spec_mismatch`, `entitlement_missing` and non-retryable capacity conflicts |
 | Operation latency | `sandbox_exec_duration_seconds`, exported but not alerted on | Proposed: p95 < 500 ms | Yes, once: p50 53 ms, p95 108 ms, p99 216 ms (n=50, existing session) |
@@ -85,16 +85,19 @@ no availability number has ever been computed from data.
 | Target health | `up{job="sandbox-control"} == 0` for 2m, `SandboxMetricsTargetDown` | 1 | Yes in the sense that the series exists; it has never fired in anger |
 | Availability | None. There is no external prober and no success-ratio SLI for the public hostname | Proposed: 99.5% monthly on a synthetic create, 99.9% on `/healthz` through Cloudflare | No |
 
-Two of those definitions do not work as written. `SandboxRelayPendingRequests`
-and `SandboxBlastRadius` both select `role="controller"`, but
-`sandbox_relay_pending_requests` and `sandbox_relay_sessions` are exported by
-the relay process, which the scrape config labels `role: relay`
-(`controller/src/relay/metrics.ts`,
-`deploy/monitoring/contract/prometheus-scrape.yaml`).
-In the reference deployment the relay is a separate StatefulSet, so both
-expressions match no series and neither alert can fire. The dashboard queries
-the same families without a role selector and does show them. Until that is
-fixed, treat relay health as visible but unpaged.
+Both relay rules used to select `role="controller"` while the relay process is
+the one that exports `sandbox_relay_sessions` and
+`sandbox_relay_pending_requests`. In the reference deployment that meant
+`SandboxRelayPendingRequests` and the relay half of `SandboxBlastRadius` matched
+no series and could not fire. The selectors now say `role="relay"`, which is the
+label `deploy/monitoring/contract/prometheus-scrape.yaml` gives each relay
+shard. The consequence is that a deployment running the relay inside another
+process (`ROLE=all`) has to label that scrape target `relay` or the two rules
+go quiet again; `deploy/monitoring/README.md` records that.
+`deploy/monitoring/contract/rules/sandbox-slo.test.yaml` pins both directions
+with `promtool test rules`: it fires on `role="relay"` and stays silent on
+`role="controller"`. The dashboard queries the families without a role selector,
+so it was never affected.
 
 Do not read the 0.1.16 latency figures as current. The same 50-sample method on
 0.1.22 measured 292 to 354 ms server and 548 to 595 ms client, so the baseline
@@ -149,16 +152,22 @@ The gap between configured and demonstrated:
 | Controller replicas | 1 | takeover 0.25 s on release, 10.10 s on a stale lease | Both measured with SQLite, not the deployed Postgres path (ADR 0010) |
 | Postgres | 1 primary, no replica | no failover measured | Failover time is unknown. The estimate for a volume detach and reattach is 30 s to 2 min, and that is an estimate, not a measurement |
 
-The memory arithmetic does not support the configured cap. A short-tier pod is
-512 MiB of limit plus the RuntimeClass overhead of 130Mi, so 642 MiB per pod.
-Two hundred of those is 125.4 GiB. The fleet has about 26 GiB allocatable
-across both nodes. The 200 cap is therefore about 4.8x what the memory allows
-at the short tier; it is a policy bound that the scheduler and the capacity
-preflight, not the budget, will refuse first. Even the 20-pod warm pool is
-12.54 GiB of static limit if it all lands on one node, which is 96% of a 13 GiB
-node. The measured idle delta is much smaller (182 MiB per guest), so the pool
-fits in practice, but a pool that idles at 182 MiB and bursts to 642 MiB does
-not leave 20 sessions of headroom on the same node.
+The memory arithmetic does not support the configured cap. A short-tier pod
+carries a 512 MiB limit, which is what the scheduler accounts, so two hundred of
+them is 100 GiB of limits. The fleet has about 26 GiB allocatable across both
+nodes, so the 200 cap is about 3.8x what the limits alone allow. Add the 130Mi
+per-pod budget for the VM and shim, which is documented in
+`deploy/kata/README.md` and not declared as a RuntimeClass `overhead` field, and
+the real footprint is about 125 GiB, or 4.8x. Either way the cap is a policy
+bound that the scheduler and the capacity preflight refuse long before the
+budget does.
+
+The warm pool has the same shape at a smaller scale. Twenty pods spread over two
+nodes is 5 GiB of limits per node, which fits. Concentrated on one node it is
+10 GiB of limits, or 12.54 GiB with the VM budget, against 13 GiB allocatable
+and before the control plane. The measured idle delta is much smaller (182 MiB
+per guest), so the pool fits in practice, but a pool that idles at 182 MiB and
+bursts to 642 MiB does not leave 20 sessions of headroom on the same node.
 
 Read that as: the concurrency number to plan against is the measured 60 plus
 the admission estimate of about 120, not the configured 200, and the memory
@@ -185,21 +194,24 @@ and the other twenty are warnings. The
 runnable stack is VictoriaMetrics single-node, vmalert and Grafana, 14-day
 retention, in the private deployment repository under
 `apps/sandbox-monitoring/`.
-There is no Alertmanager, no node-exporter and no kube-state-metrics.
+The contract ships no Alertmanager, no node-exporter and no kube-state-metrics.
 
-Where it goes: nowhere. The rule file carries no receiver, the stack evaluates
-with `-notifier.blackhole`, and the only visible effect of a firing rule is an
-`ALERTS{alertstate="firing"}` series and the row it produces in the dashboard's
-"Firing SLO alerts" table. Nothing pages. Until the rules and that panel
-existed, an operator could not see the state at all without querying the store
-by hand; now the state is visible to someone who is already looking at the
-dashboard. That is the whole change. No alert has been delivered to a person,
-and the path vmalert, to a receiver, to a phone has not been exercised end to
-end. This is why the gate still records "Alerts reach a human" as FAIL, and why
-"one alert delivered to a person" is an exit criterion rather than a task.
+Where it goes, in this repository: nowhere. The contract rule file carries no
+receiver, so an evaluator that loads it unchanged has alert state and no
+delivery. Until the rules and the dashboard panel existed, an operator could not
+see that state at all without querying the store by hand; now it is visible to
+someone who is already looking at the dashboard.
 
-Two rules that will never fire in the reference deployment are covered in
-section 3. Four families that a real incident needs are not implemented at all:
+The reference deployment moved while this review was being written. vmalert
+there points at an Alertmanager whose single route ends in an agent in the
+`hermes` namespace, not a pager, and no delivery through it is recorded here. So
+the gate's "Alerts reach a human" FAIL still stands, for the reason that matters
+at 2am: there is no evidence that a firing rule reaches a person, and the last
+hop is software deciding whether to message one. Treat the rules as visible and
+delivery as unproven until a delivery is written down in the launch checklist.
+
+The role selectors that kept two relay rules from ever matching are fixed (see
+section 3). Four families that a real incident needs are not implemented at all:
 settlement failures as their own signal, PVC or disk full, orphan pods and PVCs,
 and database health beyond the scrape target being up. The runbooks for egress
 abuse and orphan storage therefore start from log lines and a manual comparison,
@@ -213,7 +225,7 @@ means the ledger policy in [payment-ledger.md](payment-ledger.md) applies.
 | Failure | What happens | Mitigation in place | Residual |
 | --- | --- | --- | --- |
 | Relay restart | Every guest on that shard loses its socket. The in-flight operation becomes `outcome_unknown` and is never replayed. The guest reconnects to the stable ClusterIP and re-sends `hello`; the next operation starts after it reports idle. | ADR 0012, epoch fence (ADR 0008), two shards so one restart is half the fleet, `RELAY_LOSS_GRACE_MS` 90 s | One interrupted operation per session, and up to 90 s or the rest of a short lease with no operations. A guest that cannot reconnect ends `relay_lost` and is refunded. In `RELAY_GUEST_ADDRESS=pod` mode the session is lost and refunded. The egress proxy URL is still a pod IP, so a proxy replacement breaks egress for the rest of the session |
-| Controller crash mid-settlement | The intent is `claimed` and the money may have moved. On the client's next attempt the API retries the same payment key, finds the claim, asks the chain and then the facilitator lookup, and completes the entitlement without charging again. | Outbox, claim fencing (ADR 0011), on-chain transfer proof (F-17), `SETTLEMENT_RECOVERY_GRACE_MS` 5 min | The controller's own recovery worker only uses the facilitator lookup, never the chain (F-19). With a facilitator that has no lookup endpoint, the row is written only if the client retries, so an absent client leaves a settled payment recorded nowhere |
+| Controller crash mid-settlement | The intent is `claimed` and the money may have moved. On the client's next attempt the API retries the same payment key, asks the chain to prove the transfer, and completes the entitlement without charging again. The controller's recovery worker runs the same proof against the authorizer, nonce and terms recorded on the intent and records the debt, which the refund policy turns into `REFUND_PENDING`, so it is recorded even if the client never comes back. | Outbox, claim fencing (ADR 0011), one shared chain verifier (F-17, [ADR 0014](adr/0014-chain-verified-settlement-recovery.md)), `SETTLEMENT_RECOVERY_GRACE_MS` 5 min | An intent claimed before schema v20, a nonce outside the scan window, or a deployment with no RPC falls back to the facilitator lookup, and a network with neither records nothing. A `disproven` chain answer is final and writes no debt |
 | Postgres loss | The controller loses its writer, reports not-ready and leaves the Service endpoints. Creates answer `503 admission_unavailable`. Running guests keep executing until their lease and their own watchdog end them, but nothing can extend, terminate or refund them. | Postgres is the only store, readiness checks a real write probe, backups are daily | One primary on one `ReadWriteOnce` volume pinned to the control-plane node. Recovery waits for a reschedule and a volume reattach, estimated at 30 s to 2 min and never measured. No PITR, so the RPO is up to 24 h |
 | Node loss | Sandbox pods on that node die with their sessions. A suspendable workspace is on a node-pinned local-path PVC, so resume fails fast with `409 resume_unavailable` rather than hanging. A control-plane node loss takes the API, controller, Postgres, cloudflared and the relay shards with it. | Warm pool absorbs a short gap while it lasts; cancellation of the pod is bounded by the kubelet | No session survives its node. There is no drain procedure for the sandbox node and no PodDisruptionBudget, so a drain is an outage for every session on it. Checkpoints cannot move nodes at all |
 | Facilitator outage | `verify` fails, or `settle` returns an ambiguous answer. A plain refusal fails the intent and releases the capacity hold; a timeout or `settlement_pending` leaves it `claimed`. | `FACILITATOR_TIMEOUT_MS` 20 s, bounded retries on `verify` only, idempotent settle by nonce | Creates fail closed while the outage lasts. Ambiguous settlements need the chain check or a lookup to resolve; without either they sit claimed until the API's retry path or a human |
@@ -382,11 +394,10 @@ which is what the impact column is for.
 | --- | --- | --- | --- | --- |
 | Kata guest to host isolation has never run on KVM hardware | The isolation claim rests on unit tests and construction. A beta running hostile code cannot make it | Maintainer, infra | Yes | #44, [RELEASE_GATE.md](../security-review/RELEASE_GATE.md) |
 | No real settle and no real refund has executed | The refund worker and the webhook contract are mock-tested only. Copy that says money moves is untested | Maintainer | Yes | #31, [payment-ledger.md](payment-ledger.md) |
-| No alert is delivered to a person | A payment incident is found by a customer. Two relay rules cannot fire at all (section 3) | Maintainer, infra | Yes | Gate FAIL, #38 for the rules |
+| No alert is delivered to a person | A payment incident is found by a customer. The live route ends in an agent and no delivery is recorded, so the FAIL stands | Maintainer, infra | Yes | Gate FAIL, #38 for the rules |
 | Incident procedures have never been rehearsed | Four runbooks and a tabletop script exist; detection leans on log lines because the matching alerts are missing | Maintainer, on call | Yes | #60, [runbooks/tabletop.md](runbooks/tabletop.md) |
 | No kill switch | The only stop is scaling the API to zero, which also stops reads for live sessions | Maintainer | Yes | [launch.md](launch.md) "Rollback" |
 | Ledger RPO is up to 24 h, with no PITR and no production restore drill | A node loss can drop a day of settled payments. RTO is unknown | Maintainer, infra | Yes, unless the loss window is accepted in writing | #162, [backup-restore.md](backup-restore.md) |
-| Controller-side settlement recovery uses the facilitator lookup only | A settled-but-unentitled payment is recorded only if the client retries | Maintainer | Yes for unattended money | F-19, [FINDINGS.md](../security-review/FINDINGS.md) |
 | Relay state is in process memory | A restart costs one interrupted operation per session and up to 90 s of no operations | Maintainer | No | #24, [ADR 0012](adr/0012-guest-reconnects-after-relay-loss.md) |
 | Checkpoints are plaintext and node pinned | A node loss makes a suspended session unrecoverable, and the node admin can read it | Maintainer | No for a lease product; yes if suspend and resume are sold as durable | #32, [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) |
 | No database failover has been measured on the Postgres path | Recovery time is an estimate of 30 s to 2 min for a volume reattach | Maintainer, infra | No, but the outage budget is unknown | [ADR 0010](adr/0010-controller-ha-storage.md) |
@@ -395,11 +406,6 @@ which is what the impact column is for.
 | Egress hostname allowlist is disabled | A session can reach any public host on 443 within 1 GiB and 16 tunnels | Maintainer | No | [runbooks/egress-abuse.md](runbooks/egress-abuse.md) |
 | Suspend and resume are free in the mock model and unpriced | A production price has to decide active time, resumes or storage before charging for them | Maintainer | No, while payments are mock | [lifecycle.md](lifecycle.md), #117 |
 | Create latency regressed after 0.1.16 | 0.1.22 measured 292 to 354 ms server against 127 ms on 0.1.16, so the quoted baseline is stale | Maintainer | No | #116, [performance-cluster.md](performance-cluster.md) |
-
-One row is known to lag its code. The F-19 row follows the gate and FINDINGS at
-the revision in the header, and a fix that proves settlement in the controller
-landed on `main` after that revision (ADR 0014). Check FINDINGS before treating
-the row as current fact; if the gate has caught up, delete the row.
 
 ## What to do with this document
 

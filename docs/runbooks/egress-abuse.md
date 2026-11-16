@@ -43,10 +43,26 @@ because no metric carries a session id.
 | `bytes` and `active` in `/stats` | proxy, in memory | current process totals, all sessions |
 | `sandbox_egress_cross_shard_total` | proxy metrics | session sent to the wrong proxy replica |
 
-The proxy is not one of the three scrape targets in
-`deploy/monitoring/contract/prometheus-scrape.yaml`, so its metrics are only
-visible if you add `egress-proxy.sandbox-system.svc.cluster.local:9100` as a
-target or read them by port-forward.
+The contract lists the proxy as the fourth scrape target in
+`deploy/monitoring/contract/prometheus-scrape.yaml`:
+`egress-proxy-0.egress-proxy-headless.sandbox-system.svc.cluster.local:9100`,
+every 15 s with `role: proxy`. Check that this deployment actually scrapes it
+before relying on the series:
+
+```promql
+up{job="sandbox-control", role="proxy"}
+```
+
+A `1` means the metrics are in the store: start with the alert, then query
+`sandbox_egress_limit_total{scope}` or
+`sandbox_egress_bytes_total{scope="global"}` there, and do not port-forward. No
+result means the deployment is running a scrape config older than the contract,
+in which case add the target or fall back to the process totals below.
+
+Only `egress-proxy-0` is listed, so a second replica is invisible to the alert
+and to the query even when the target exists. That case, and the missing-target
+case, are the two where a port-forward is the right move, and it reads the
+process totals rather than the stored series:
 
 ```bash
 kubectl -n sandbox-system port-forward deploy/egress-proxy 13128:3128 &
@@ -211,8 +227,9 @@ the case closes.
   the session.
 - Denials from an unverifiable token have no session id, by construction, and
   the byte-limit log line deliberately carries only the scope.
-- The proxy is not one of the three scrape targets, so the two egress alerts
-  need a target added before they evaluate (see Detect).
+- Only `egress-proxy-0` is a scrape target. A second proxy replica multiplies
+  the byte budgets and exports totals nothing scrapes, so the two egress alerts
+  would see one process of two (see Detect).
 
 ## Related
 

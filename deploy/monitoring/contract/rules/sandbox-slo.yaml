@@ -75,8 +75,12 @@ groups:
             reconcile in-flight count.
           runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
 
+      # `sandbox_relay_pending_requests` is exported by the relay process, not
+      # the controller, so the selector names the role the scrape contract gives
+      # that process. A deployment that runs `ROLE=all` must still label its
+      # scrape target `relay` or this rule matches nothing.
       - alert: SandboxRelayPendingRequests
-        expr: max(sandbox_relay_pending_requests{role="controller"}) > 0
+        expr: max(sandbox_relay_pending_requests{role="relay"}) > 0
         for: 5m
         labels:
           severity: warning
@@ -429,7 +433,7 @@ groups:
       - alert: SandboxBlastRadius
         expr: |
           (
-            max_over_time(sandbox_relay_sessions{role="controller"}[15m]) >= 5
+            max_over_time(sandbox_relay_sessions{role="relay"}[15m]) >= 5
           )
           and on()
           (

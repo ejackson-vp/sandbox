@@ -53,11 +53,31 @@ warm_pods_per_node x memory_limit_per_tier
 <= node allocatable memory
 ```
 
-With 12 GiB nodes and a 512 MiB `short` limit, twenty warm pods spread over two
-nodes is 5 GiB of limits per node before anything is claimed for the control
-plane. That fits, but only if the scheduler spreads them. If the pool is
-concentrated on one node, lower `WARM_POOL_BASE_MIN` until the arithmetic works
-for a single node, because that is what a drained or cordoned peer produces.
+The reference deployment's nodes are 8 vCPU with about 13 GiB allocatable each
+(`docs/performance-cluster.md`, and the same figure in the comment above
+`MAX_CPU_MILLIS` in `deploy/kubernetes/03-config.yaml`). With a 512 MiB `short`
+limit:
+
+```text
+20 warm pods x 512 MiB limit     = 10 GiB of limits, so 5 GiB per node
+20 warm pods x 130 MiB VM/shim   = 2.5 GiB in total, so 1.3 GiB per node
+5 + 1.3 + 2 GiB headroom         = 8.3 GiB of a 13 GiB node
+```
+
+So a twenty-pod pool spread over two nodes fits on the repo's figure, leaving
+about 4.7 GiB per node for the control plane. The conclusion does not change
+from the older 12 GiB arithmetic, but the margin is smaller than 12 GiB made it
+look.
+
+The 130 MiB is a documented per-pod budget (`deploy/kata/README.md`), not a
+declared `overhead` field, so the scheduler accounts only the 512 MiB limit and
+the extra memory is real but invisible to it.
+
+Concentration is the case that does not fit. Twenty pods on one node is 10 GiB
+of limits, or 12.5 GiB with the VM budget, against 13 GiB allocatable and before
+the control plane, so the pool has to be spread. If the scheduler or a drained
+peer concentrates it, lower `WARM_POOL_BASE_MIN` until the arithmetic works for
+a single node, because that is what a drained or cordoned peer produces.
 
 ### 1.2 Eviction order
 

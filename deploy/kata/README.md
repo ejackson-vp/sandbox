@@ -54,5 +54,9 @@ full matrix, including what is enforced and what is not.
 
 ## Cost
 
-The RuntimeClass declares `130Mi` memory and `250m` CPU of overhead per pod.
-Budget accordingly: on a 13 GiB node, roughly 20 sandboxes at 512 Mi.
+Budget `130Mi` memory and `250m` CPU per pod for the VM and shim. The
+RuntimeClass manifest does not declare an `overhead` block, so the scheduler
+accounts only the pod's own requests and limits; this budget is real memory the
+node has to hold but that Kubernetes does not reserve for you. On a 13 GiB node
+that is roughly 20 sandboxes at a 512 MiB limit, and only if the pool is spread
+across nodes.

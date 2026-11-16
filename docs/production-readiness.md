@@ -161,8 +161,16 @@ concrete next step.
 
 ## 4. Session product policy
 
-- **Maximum lease**: 30 minutes by default (hard ceiling 1 h). Longer leases
-  increase the blast radius and idle cost; decide deliberately.
+- **Maximum lease**: 30 minutes by default, hard ceiling 1 h. The field is
+  `durationSeconds`, capped by `maxLeaseSeconds`, which is the
+  `MAX_LEASE_SECONDS` setting (1800 in `deploy/kubernetes/03-config.yaml`)
+  clamped to the protocol constant of 3600 s
+  (`shared/src/protocol/lifecycle.ts`). That ceiling is a lease, not a session.
+  A suspendable session has a second, separate cap: `maxLifetimeSeconds`, which
+  defaults to 28800 s (8 h) and counts suspended time, so a session can hold a
+  workspace for 8 h while each individual lease is at most 1 h. Do not read the
+  8 h figure as a lease. Longer leases increase the blast radius and idle cost;
+  decide deliberately.
 - **Idle expiry**: currently a session burns its lease even if unused. Consider
   reducing the tier price or adding a short grace window.
 - **Operation concurrency**: one foreground operation per sandbox. If customers

@@ -193,6 +193,14 @@ which also includes `payment_in_progress`, `spec_mismatch`,
 backlog. When the API exports a dedicated bounded counter, replace the
 expression and narrow the rule.
 
+**The two relay rules select `role="relay"`.** `sandbox_relay_sessions` and
+`sandbox_relay_pending_requests` are exported by the relay process, which the
+scrape contract labels `role: relay` (a sharded deployment scrapes each shard by
+pod name). `SandboxRelayPendingRequests` and the relay half of
+`SandboxBlastRadius` name that label, so a deployment that runs the relay inside
+another process (`ROLE=all`) has to keep the `relay` label on its scrape target
+or both rules match nothing.
+
 **Warm-pool rules are gated on an enabled pool.** `SandboxWarmPoolEmpty` is
 gated on `sum(sandbox_warm_pool_budget) > 0`, so it stays inactive when
 `WARM_POOL_SIZE=0`, the reference deployment's default. The profile rules are
@@ -321,6 +329,7 @@ These checks need no cluster:
 | --- | --- |
 | Kustomize render | `kubectl kustomize deploy/monitoring/contract` |
 | Rule syntax | `promtool check rules deploy/monitoring/contract/rules/sandbox-slo.yaml` |
+| Relay selectors still match | `cd deploy/monitoring/contract/rules && promtool test rules sandbox-slo.test.yaml` |
 | Scrape syntax | `promtool check config` on the extracted `sandbox-scrape-configs.yaml` |
 | Dashboard JSON | `python3 -m json.tool deploy/monitoring/contract/grafana-dashboard.json` |
 | Dashboard panel ids | `jq -e '([.panels[].id] \| length) == ([.panels[].id] \| unique \| length)' deploy/monitoring/contract/grafana-dashboard.json` |
