@@ -171,8 +171,10 @@ async function settlementFailure(
   }
   if (err instanceof PaymentClaimLostError) {
     // The claim was reclaimed while this request was in flight. Do not free
-    // capacity here: the live owner holds the same payment reservation.
-    // If it has already settled, hand back the winning session.
+    // capacity here: the live owner holds the same payment reservation, and
+    // releasing it would hand that owner's capacity to another create. If the
+    // owner has already settled, `settle` points the row back at its session;
+    // if it never does, the allocation grace expires the row.
     const current = await deps.store.getPaymentIntent(paymentKey);
     if (current?.status === "settled" && current.sessionId) {
       return { kind: "recovered", sessionId: current.sessionId };
@@ -222,7 +224,17 @@ async function settle(
     // Only a failure of the transaction lands here. Everything below runs after
     // the commit, and a create that exists must not be released or answered 5xx
     // because a later write failed.
-    return settlementFailure(deps, paymentKey, body, err);
+    const settlement = await settlementFailure(deps, paymentKey, body, err);
+    if (settlement.kind === "recovered") {
+      // This request bound the payment's reservation to a session id that was
+      // never written, possibly after the winner bound it to the real one. Point
+      // it back: the row is the winner's, and the grace must not expire a live
+      // session's capacity.
+      await deps.capacity
+        .attach(paymentKey, settlement.sessionId, expectedHash, spec)
+        .catch(() => undefined);
+    }
+    return settlement;
   }
   if (completed.created) {
     await mergeTimings(deps, body);

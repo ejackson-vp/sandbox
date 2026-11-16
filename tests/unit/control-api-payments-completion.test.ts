@@ -428,6 +428,15 @@ describe("a claim lost to a worker that settled it hands back that session", () 
     // The live owner holds the same payment reservation, so freeing it here
     // would hand its capacity to another create while the session is live.
     expect(capacity.releaseSession).not.toHaveBeenCalled();
+    // This request may have rebound the payment's reservation to its own session
+    // id, which was never written. Pointing it back at the winner is what keeps
+    // the allocation grace from expiring the live session's capacity.
+    expect(capacity.attach).toHaveBeenLastCalledWith(
+      paymentKey,
+      winnerId,
+      SPEC_HASH,
+      expect.objectContaining({ tier: "standard" }),
+    );
     expect(store.completeEntitlement).toHaveBeenCalledTimes(1);
   });
 });
@@ -565,5 +574,43 @@ describe("a failure after the settlement commits is not a failed create", () => 
     // how a live session ends up running with no reservation.
     expect(capacity.releaseSession).not.toHaveBeenCalled();
     expect(await store.getSession(sessionId)).toMatchObject({ state: "PAID", paymentKey });
+  });
+});
+
+describe("a claim lost before its owner settles leaves the reservation to the grace", () => {
+  it("answers 409 without freeing a reservation the new owner may be using", async () => {
+    const store = await freshStore();
+    const paymentKey = "a1".repeat(32);
+    const sessionId = `sbx_${"a".repeat(24)}`;
+    const token = await claim(store, paymentKey);
+    // The claim moved to a worker that has not settled yet: the transaction
+    // refuses and the intent is still `claimed`. Releasing would hand capacity
+    // the new owner may already have been admitted to another create.
+    const lost = storeWith(store, {
+      completeEntitlement: async () => {
+        throw new PaymentClaimLostError(paymentKey);
+      },
+    });
+    const capacity = realCapacity(store);
+    const release = vi.spyOn(capacity, "releaseSession");
+    const base = await listen({ store: lost, capacity });
+
+    const res = await post(
+      base,
+      `/internal/payment-intents/${paymentKey}/complete`,
+      completionBody(paymentKey, token, { sessionId }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: "stale_claim" });
+    expect(release).not.toHaveBeenCalled();
+
+    // No session will own this row, so the grace is what frees it.
+    const abandoned = await store.reservations.getBySession(sessionId);
+    expect(abandoned).toMatchObject({ state: "ALLOCATED", paymentKey });
+    expect(await store.getSession(sessionId)).toBeNull();
+    expect(
+      (await store.reservations.reapExpired((abandoned?.expiresAt ?? 0) + 1)).allocations,
+    ).toBe(1);    expect((await store.reservations.getBySession(sessionId))?.state).toBe("RELEASED");
   });
 });
