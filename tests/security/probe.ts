@@ -10,7 +10,7 @@
  * `x402-netprobe` is built into the guest image and reads its cases from the
  * `PROBES` environment variable. Nothing here mocks a packet.
  */
-import { kubectl } from "./kubectl.js";
+import { clusterAvailable, deployConfig, kubectl } from "./kubectl.js";
 
 export interface ProbeCase {
   name: string;
@@ -41,7 +41,33 @@ export interface ProbeOutcome {
  * `GUEST_IMAGE` (the variable the controller and `scripts/isolation-gate.sh`
  * already read), points the probe at the image actually under test.
  */
-export const PROBE_IMAGE = process.env.PROBE_IMAGE ?? process.env.GUEST_IMAGE ?? "x402-sandbox/guest:dev";
+export const PROBE_IMAGE = defaultProbeImage();
+
+/**
+ * The image a probe pod can actually pull.
+ *
+ * Order: an explicit `PROBE_IMAGE`, then `GUEST_IMAGE` from the environment,
+ * then the deployment's own `GUEST_IMAGE`/`GUEST_IMAGE_DIGEST` from its
+ * ConfigMap, then the local kind tag. The cluster default matters: running this
+ * suite against a released deployment without `GUEST_IMAGE` exported used to
+ * leave the probe in ImagePullBackOff against `docker.io/x402-sandbox/guest:dev`,
+ * which looks like an isolation failure and is a harness failure.
+ */
+function defaultProbeImage(): string {
+  if (process.env.PROBE_IMAGE) return process.env.PROBE_IMAGE;
+  if (process.env.GUEST_IMAGE) return process.env.GUEST_IMAGE;
+  try {
+    if (clusterAvailable()) {
+      const image = deployConfig("GUEST_IMAGE");
+      const digest = deployConfig("GUEST_IMAGE_DIGEST");
+      if (image && /^sha256:[0-9a-f]{64}$/.test(digest)) return `${image}@${digest}`;
+      if (image) return image;
+    }
+  } catch {
+    // No cluster, or no ConfigMap read: fall through to the kind default.
+  }
+  return "x402-sandbox/guest:dev";
+}
 
 /** A guest container with the production RuntimeClass and no extra privilege. */
 export function probePod(name: string): string {
