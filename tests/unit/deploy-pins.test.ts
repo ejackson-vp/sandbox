@@ -8,6 +8,9 @@
  * under test; the last case runs the committed tree so a release bump that
  * updates only one of the three files fails here as well as in CI.
  */
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   checkDeployPins,
@@ -18,7 +21,7 @@ import {
   parseTalos,
   tagVersion,
 } from "../../scripts/check-deploy-pins.mjs";
-import { bumpReleasePins } from "../../scripts/bump-release-pins.mjs";
+import { bumpReleasePins, bumpTree } from "../../scripts/bump-release-pins.mjs";
 
 const BASE = "sha256:" + "1".repeat(64);
 const PYTHON = "sha256:" + "2".repeat(64);
@@ -251,6 +254,33 @@ describe("compareTag", () => {
     );
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/guest tag 0\.1\.32 is ahead of this tag's release 0\.1\.31/);
+  });
+});
+
+describe("bumpTree", () => {
+  it("forwards --guest-version to the pure function", () => {
+    // The wrapper is where an option gets dropped: bumpReleasePins was tested
+    // with guestVersion directly, so a missing passthrough in bumpTree shipped
+    // and pinned the guest to the new release instead of the promoted one.
+    const root = mkdtempSync(join(tmpdir(), "pins-"));
+    mkdirSync(join(root, "deploy/talos"), { recursive: true });
+    mkdirSync(join(root, "deploy/kubernetes/kyverno"), { recursive: true });
+    writeFileSync(join(root, "deploy/talos/kustomization.yaml"), talosYaml());
+    writeFileSync(join(root, "deploy/release-pins.json"), mapJson());
+    writeFileSync(
+      join(root, "deploy/kubernetes/kyverno/guest-image-policy.yaml"),
+      kyvernoPolicy(),
+    );
+
+    const talos = bumpTree(root, {
+      version: "0.1.31",
+      guestVersion: "0.1.30",
+      guestDigest: NEXT,
+      profileDigests: { python: NEXT_PYTHON, node: NEXT_NODE },
+    });
+
+    expect(talos.control).toBe("0.1.31");
+    expect(talos.guest).toBe("0.1.30");
   });
 });
 
