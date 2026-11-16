@@ -155,6 +155,7 @@ export function bumpTree(root, options) {
     map: readFileSync(files.map, "utf8"),
     kyverno: readFileSync(files.kyverno, "utf8"),
     version: options.version,
+    guestVersion: options.guestVersion,
     guestDigest: options.guestDigest,
     profileDigests: options.profileDigests,
   });
