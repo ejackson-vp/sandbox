@@ -43,7 +43,7 @@ row cites it; where it depends on reading code and tests, it says so.
 | Postgres durability | PARTIAL | daily logical backups complete in the reference deployment; no PITR, restore drill exists but has not run on production data (#162) |
 | Alerts reach a human | **FAIL** | the rule file ships no receiver; the reference stack evaluates with `-notifier.blackhole` |
 | Incident procedures rehearsed | **FAIL** | four runbooks and a tabletop script, none executed (#60) |
-| Emergency stop | **FAIL** | no kill switch; scaling the API to zero also stops reads for live sessions |
+| Emergency stop | PARTIAL | durable create kill switch (schema v21): `sandbox admin killswitch enable` writes one row the API reads before any payment or capacity work, refusing `503 creates_disabled` while live sessions keep executing. Proven by `tests/unit/create-switch.test.ts` (refusal order, fail-closed read, live exec while on), `create-switch-store.test.ts`, `create-switch-admin.test.ts` and `create-switch-migration.test.ts`. Not exercised against a production incident, and the API must be deployed after the controller (a new API with an old controller fails closed) |
 | Independent test of the guest/host boundary | **FAIL** | not performed |
 
 ---

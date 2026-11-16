@@ -14,7 +14,7 @@
  */
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../api/src/config.js";
 import { ControllerError } from "../../api/src/controller-client.js";
 import { createApp } from "../../api/src/server.js";
@@ -58,6 +58,19 @@ async function app(
     readiness: async () => ({ ok: true }),
     issueChallengeNonce: async () => ({ nonce: `cn_${"a".repeat(32)}`, expiresAt: Date.now() + 60_000 }),
     preflightCapacity: async () => ({ admitted: true, nodeId: "node-a", reservation: { nodeId: "node-a" } }),
+    /**
+     * The create kill switch, off. Without this the create use case fails closed
+     * on an unreachable switch, and every 402 case here would be refused before
+     * the challenge it is written to exercise.
+     */
+    readCreateSwitch: async () => ({
+      enabled: false,
+      reason: "",
+      actor: "",
+      changedAt: null,
+      expiresAt: null,
+      expired: false,
+    }),
     getSession: async () => {
       throw new ControllerError(404, "session_not_found", "no such session");
     },
@@ -191,6 +204,47 @@ describe("the 402 challenge", () => {
     expect(res.status).toBe(503);
     expect(res.headers.get("retry-after")).toBe("2");
     expect(await res.json()).toMatchObject({ error: "challenge_unavailable", retryable: true });
+  });
+
+  /**
+   * The app-shell level order: with the switch on, a well-formed create is
+   * refused before the challenge is minted. A nonce issued for a payment that
+   * can never be used is exactly what the kill switch exists to prevent, so no
+   * nonce and no PAYMENT-REQUIRED header may leave this route.
+   */
+  it("refuses with creates_disabled and issues no nonce when the switch is on", async () => {
+    const issueChallengeNonce = vi.fn(async () => ({
+      nonce: `cn_${"a".repeat(32)}`,
+      expiresAt: Date.now() + 60_000,
+    }));
+    const base = await app({
+      controller: {
+        issueChallengeNonce,
+        readCreateSwitch: async () => ({
+          enabled: true,
+          reason: "payment incident INC-431",
+          actor: "eric",
+          changedAt: Date.now(),
+          expiresAt: null,
+          expired: false,
+        }),
+      },
+    });
+
+    const res = await fetch(`${base}/v1/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(createBody),
+    });
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("payment-required")).toBeNull();
+    expect(await res.json()).toEqual({
+      error: "creates_disabled",
+      retryable: true,
+      message: "payment incident INC-431",
+    });
+    expect(issueChallengeNonce).not.toHaveBeenCalled();
   });
 });
 

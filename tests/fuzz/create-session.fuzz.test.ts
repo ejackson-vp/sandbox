@@ -63,7 +63,22 @@ const FORBIDDEN_FIELDS = [
   "plaintext",
 ] as const;
 
+/**
+ * The kill switch, off. Without it the create use case fails closed on an
+ * unreachable switch, and every generated request would be refused before the
+ * path it was written to exercise.
+ */
+const switchOff = async () => ({
+  enabled: false as const,
+  reason: "",
+  actor: "",
+  changedAt: null,
+  expiresAt: null,
+  expired: false,
+});
+
 const controller = {
+  readCreateSwitch: switchOff,
   async preflightCapacity() {
     return { admitted: true as const, nodeId: "node-fuzz", reservation: { nodeId: "node-fuzz" } };
   },
@@ -71,6 +86,7 @@ const controller = {
 
 /** Capacity that refuses, which is the only way an unpaid quote carries headers. */
 const refusingController = {
+  readCreateSwitch: switchOff,
   async preflightCapacity() {
     return {
       admitted: false as const,

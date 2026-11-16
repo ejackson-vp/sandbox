@@ -84,6 +84,20 @@ export type AllowlistDecision =
   | { allowed: true; label: string; maxTier: SessionTier; maxConcurrent: number }
   | { allowed: false; reason: string };
 
+/**
+ * The create kill switch (schema v21). Mirrors the controller's
+ * `CreateSwitchState`; `enabled` is already the effective answer, expiry
+ * included.
+ */
+export interface CreateSwitchStatus {
+  enabled: boolean;
+  reason: string;
+  actor: string;
+  changedAt: number | null;
+  expiresAt: number | null;
+  expired: boolean;
+}
+
 export type CapacityDecision =
   | { admitted: true; nodeId: string; reservation: { nodeId: string } }
   | {
@@ -262,6 +276,35 @@ export class ControllerClient {
       { method: "POST", body: JSON.stringify({ address, tier }) },
       5_000,
     );
+  }
+
+  /* ---------------- create kill switch (v21) ---------------- */
+
+  /**
+   * Ask whether new creates are refused. The controller owns the row, so there
+   * is no cached copy here: a flip takes effect on the next create without a
+   * rollout or a restart.
+   *
+   * A short timeout, because this is on the create path before any work: a
+   * controller that cannot answer in five seconds is a controller the caller
+   * should refuse for rather than wait on. A missing or malformed answer throws
+   * `ControllerError`, and the caller fails closed.
+   */
+  async readCreateSwitch(): Promise<CreateSwitchStatus> {
+    const answer = await this.call<{ switch?: CreateSwitchStatus }>(
+      "/internal/create-switch",
+      {},
+      5_000,
+    );
+    const state = answer?.switch;
+    if (!state || typeof state.enabled !== "boolean") {
+      throw new ControllerError(
+        502,
+        "create_switch_malformed",
+        "the controller returned no create switch state",
+      );
+    }
+    return state;
   }
 
   /* ---------------- challenge nonces (#47) ---------------- */

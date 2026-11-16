@@ -8,6 +8,11 @@
  * entitlement completion. Every branch, every side effect and the order in
  * which they happen match the handler this was extracted from.
  *
+ * It validates the request, then checks the kill switch
+ * (`create-session-switch.ts`): a malformed body is a 400 whatever the switch
+ * says, and a valid one is refused before the price, the challenge, the capacity
+ * hold, the intent claim and the settlement.
+ *
  * It returns a discriminated result instead of touching the socket, so the
  * ordering of payment and capacity side effects is testable without an Express
  * response.
@@ -25,6 +30,7 @@ import {
 } from "./create-session-contract.js";
 import { allowlistPaymentKey, resolveAllowance } from "./create-session-allowlist.js";
 import { completeEntitlement } from "./create-session-completion.js";
+import { refuseWhenCreatesDisabled } from "./create-session-switch.js";
 import {
   admitPayer,
   burnChallenge,
@@ -54,11 +60,21 @@ export async function createSession(
   input: CreateSessionInput,
 ): Promise<CreateSessionResult> {
   const { body, sourceIp, receivedAt } = input;
+  // Validate first, then ask the switch. A body that could never succeed is a
+  // 400 whether creates are on, off or unreadable: telling a caller to retry
+  // later when the request itself is wrong is the dishonest answer.
   const resolution = resolveSessionSpec(body, deps.config.tiers, deps.config.platformLimits);
   if (!resolution.ok) {
     return json(400, { error: resolution.code, message: resolution.message });
   }
   const { spec, priceUsd } = resolution;
+
+  // Then the kill switch: before pricing, the 402 challenge, the capacity hold,
+  // the intent claim and settlement, so a refused create is never charged and
+  // never handed a challenge it cannot use.
+  const refused = await refuseWhenCreatesDisabled(deps);
+  if (refused) return refused;
+
   const requirement = await deps.requirementFor(priceUsd, spec);
   const specDigest = specHash(spec);
 

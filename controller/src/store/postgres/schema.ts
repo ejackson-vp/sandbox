@@ -101,6 +101,14 @@ CREATE TABLE IF NOT EXISTS payer_allowlist (
   created_at BIGINT NOT NULL,
   disabled_at BIGINT
 );
+CREATE TABLE IF NOT EXISTS create_switch (
+  id SMALLINT PRIMARY KEY CHECK (id = 1),
+  enabled BOOLEAN NOT NULL,
+  reason TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  changed_at BIGINT NOT NULL,
+  expires_at BIGINT
+);
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   capability_hash TEXT NOT NULL,
@@ -289,6 +297,22 @@ const LADDER: ReadonlyArray<{ from: number; sql: string }> = [
     from: 20,
     sql: `ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS authorizer TEXT;
           ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS settlement_nonce TEXT;`,
+  },
+  {
+    // The create kill switch (emergency stop). A row rather than an environment
+    // variable: flipping it needs no rollout, it survives a restart, and every
+    // API replica reads the same answer. One row, fixed at id = 1, so there is
+    // no "which row is the switch" question; the CHECK is what keeps it one.
+    // No row means creates are enabled, which is the state of every database
+    // that upgrades through this step.
+    from: 21,
+    sql: `CREATE TABLE IF NOT EXISTS create_switch (
+            id SMALLINT PRIMARY KEY CHECK (id = 1),
+            enabled BOOLEAN NOT NULL,
+            reason TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            changed_at BIGINT NOT NULL,
+            expires_at BIGINT);`,
   },
 ];
 

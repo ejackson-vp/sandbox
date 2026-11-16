@@ -9,6 +9,10 @@
  * `admin capacity` moved here unchanged. `admin allowlist` manages the free
  * entitlement list (ADR 0013) and validates its inputs before calling the
  * controller, so a typo costs no round trip and cannot create a half-valid row.
+ * `admin killswitch` is the emergency stop (schema v21): it writes one durable
+ * row that refuses new creates and touches no live session, so an `--until` in
+ * the past and a missing `--reason` are refused here rather than at the
+ * controller.
  */
 
 export const ADMIN_USAGE = `usage:
@@ -16,10 +20,17 @@ export const ADMIN_USAGE = `usage:
   sandbox admin allowlist [list]
   sandbox admin allowlist add <address> --label <name> [--max-tier short|standard|extended|long] [--max-concurrent N]
   sandbox admin allowlist disable <address>
+  sandbox admin killswitch [status]
+  sandbox admin killswitch enable --reason <text> [--until <iso8601|none>] [--actor <name>]
+  sandbox admin killswitch disable [--actor <name>]
 `;
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const TIERS = new Set(["short", "standard", "extended", "long"]);
+/** An ISO 8601 instant with an offset: `--until 2026-11-16T08:00:00Z`. */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+const MAX_REASON = 280;
+const MAX_ACTOR = 64;
 
 export interface AdminIo {
   /** Writes one machine-readable result (already JSON-formatted). */
@@ -60,6 +71,31 @@ function parseMaxConcurrent(raw: unknown): number | null {
   if (raw === undefined) return 1;
   const value = Number(raw);
   return Number.isInteger(value) && value >= 0 && value <= 100 ? value : null;
+}
+
+/**
+ * Who is flipping the switch. The token is the credential; this is the audit
+ * string the next operator reads, so it defaults to the login name and can be
+ * overridden with `--actor` when a shared laptop or a break-glass account is
+ * used.
+ */
+function actor(values: Record<string, unknown>): string | null {
+  const raw = typeof values.actor === "string" ? values.actor.trim() : "";
+  const name = raw === "" ? (process.env.USER ?? process.env.USERNAME ?? "") : raw;
+  return name !== "" && name.length <= MAX_ACTOR ? name : null;
+}
+
+/**
+ * `--until`: absent or `none` means "until disabled". An instant in the past is
+ * an operator mistake, so it is refused here as well as at the controller: a row
+ * that says "on" and behaves off is the one shape `status` cannot explain.
+ */
+function parseUntil(raw: unknown): { ok: true; until: string | null } | { ok: false } {
+  if (raw === undefined || raw === "none") return { ok: true, until: null };
+  const text = String(raw);
+  if (!ISO_INSTANT.test(text) || !Number.isFinite(Date.parse(text))) return { ok: false };
+  if (Date.parse(text) <= Date.now()) return { ok: false };
+  return { ok: true, until: new Date(Date.parse(text)).toISOString() };
 }
 
 export async function runAdmin(
@@ -116,6 +152,52 @@ export async function runAdmin(
         return 2;
       }
       const { ok, body } = await call(`/internal/payer-allowlist/${target}`, { method: "DELETE" });
+      print(io, body);
+      return ok ? 0 : 1;
+    }
+  }
+
+  if (section === "killswitch") {
+    if (action === undefined || action === "status") {
+      const { ok, body } = await call("/internal/create-switch");
+      print(io, body);
+      return ok ? 0 : 1;
+    }
+
+    if (action === "enable") {
+      const reason = typeof values.reason === "string" ? values.reason.trim() : "";
+      if (!reason || reason.length > MAX_REASON) {
+        io.err(`--reason is required and must be 1-${MAX_REASON} characters\n`);
+        return 2;
+      }
+      const who = actor(values);
+      if (who === null) {
+        io.err(`--actor must be 1-${MAX_ACTOR} characters, or set $USER\n`);
+        return 2;
+      }
+      const until = parseUntil(values.until);
+      if (!until.ok) {
+        io.err("--until must be an ISO 8601 instant in the future, or none\n");
+        return 2;
+      }
+      const { ok, body } = await call("/internal/create-switch", {
+        method: "PUT",
+        body: JSON.stringify({ reason, actor: who, until: until.until }),
+      });
+      print(io, body);
+      return ok ? 0 : 1;
+    }
+
+    if (action === "disable") {
+      const who = actor(values);
+      if (who === null) {
+        io.err(`--actor must be 1-${MAX_ACTOR} characters, or set $USER\n`);
+        return 2;
+      }
+      const { ok, body } = await call("/internal/create-switch", {
+        method: "DELETE",
+        body: JSON.stringify({ actor: who }),
+      });
       print(io, body);
       return ok ? 0 : 1;
     }

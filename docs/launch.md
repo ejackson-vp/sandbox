@@ -199,10 +199,24 @@ one create.
 
 ## Rollback
 
-There is no kill switch yet: stopping new creates means scaling the API to zero,
-which also stops reads for sessions already running. Treat that as the emergency
-stop and expect to refund leases it interrupts. A durable flag that refuses
-creates without touching live leases is the next change, not part of this launch.
+The emergency stop is the create kill switch, not scaling the API to zero.
+Scaling to zero also stops reads for sessions that are already running and
+already paid for, and it needs a rollout to undo. The switch refuses new creates
+with `503 creates_disabled` and leaves every live session alone:
+
+```bash
+sandbox admin killswitch enable --reason "why, for the next operator" \
+  --until 2026-11-16T08:00:00Z
+sandbox admin killswitch status
+sandbox admin killswitch disable
+```
+
+`--until` is optional; leave it off for "until disabled". Set it during an
+incident so the stop cannot outlive the shift. The switch, its refusal body, the
+fail-closed read behaviour and its metrics are in
+[admission-control.md](admission-control.md#create-kill-switch-emergency-stop).
+Live sessions still need their leases to expire or an operator to destroy them;
+the switch stops the bleeding, it does not cancel anything already sold.
 
 To undo a payment configuration change, roll the API back to the previous image
 digest. The ledger is additive, so a rollback does not lose settled rows; the

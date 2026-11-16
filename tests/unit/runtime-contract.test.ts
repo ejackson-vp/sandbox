@@ -39,6 +39,15 @@ async function post(body: unknown) {
     res.status(402).json({ error });
   });
   const preflightCapacity = vi.fn(async () => ({ admitted: true as const, reservationId: "r" }));
+  // The kill switch is read before the spec, so it needs an answer here too.
+  const readCreateSwitch = vi.fn(async () => ({
+    enabled: false,
+    reason: "",
+    actor: "",
+    changedAt: null,
+    expiresAt: null,
+    expired: false,
+  }));
   const headers: Record<string, string> = {};
   const response = {
     statusCode: 200,
@@ -74,7 +83,7 @@ async function post(body: unknown) {
       capabilityTtlSeconds: 60,
       intentStaleMs: 30_000,
     },
-    controller: { preflightCapacity },
+    controller: { preflightCapacity, readCreateSwitch },
     resourceServer: {},
     settlementLookup: {},
     requirementFor,

@@ -2,6 +2,9 @@ import type {
   AllowlistDecision,
   AllowlistEntryInput,
   ChallengeBurnResult,
+  CreateSwitchState,
+  CreateSwitchWrite,
+  CreateSwitchWriteResult,
   PayerAllowlistEntry,
   ClaimOperationResult,
   ClaimedRefund,
@@ -258,6 +261,13 @@ export interface ControlApiStore {
     amountAtomic: string,
     limits: BudgetLimits,
   ): Promise<BudgetDecision>;
+  /**
+   * The create kill switch (schema v21). The controller owns the row; the API
+   * reads it over the internal surface before it does any payment or capacity
+   * work, so there is no second copy to go stale.
+   */
+  readCreateSwitch(nowMs: number): Promise<CreateSwitchState>;
+  writeCreateSwitch(input: CreateSwitchWrite, nowMs: number): Promise<CreateSwitchWriteResult>;
   completeEntitlement(
     paymentKey: string,
     claimToken: string,
