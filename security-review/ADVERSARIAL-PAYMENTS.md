@@ -1,7 +1,7 @@
 # Adversarial payment tests
 
-Base revision: `eea1569` (main). Suite commit: `62f46a2`, fix commit: the commit
-that adds this line. The attacks are in
+Base revision: `eea1569` (main). Suite commit: `62f46a2`, fix commit: `96b1568`.
+The attacks are in
 `tests/unit/payment-adversarial.test.ts` (36 cases) with their builders in
 `tests/helpers/payment-attacks.ts`; the F-21 verdict table is in
 `tests/unit/settlement-record.test.ts` (5 cases) and the record's producer in
