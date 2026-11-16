@@ -117,17 +117,17 @@ export const INTERNAL_RATE_LIMIT: TokenBucketOptions = {
   maxBuckets: 1_024,
 };
 
-export interface RateLimitRequest {
+interface RateLimitRequest {
   ip?: string;
   socket?: { remoteAddress?: string };
 }
 
-export interface RateLimitResponse {
+interface RateLimitResponse {
   setHeader(name: string, value: string): unknown;
   status(code: number): { json(body: unknown): unknown };
 }
 
-export type RateLimitNext = (err?: unknown) => void;
+type RateLimitNext = (err?: unknown) => void;
 
 /**
  * Express-compatible middleware over a bounded token bucket.

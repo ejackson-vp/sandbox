@@ -82,7 +82,7 @@ function renderLabels(labels: Labels, extra?: Labels): string {
   return body ? `{${body}}` : "";
 }
 
-export interface CounterLike {
+interface CounterLike {
   inc(labels?: Labels, amount?: number): void;
 }
 

@@ -40,6 +40,7 @@ export function routeTemplate(req: MetricsRequest): string {
   return full.length <= 128 ? full : "other";
 }
 
+/** Register the HTTP families so a scrape before the first request still prints them at zero. */
 export function registerHttpMetrics(registry: MetricsRegistry = metrics): void {
   registry.counter(HTTP_REQUESTS_TOTAL, "HTTP requests by route template, method and status");
   registry.histogram(
