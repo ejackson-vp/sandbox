@@ -16,12 +16,12 @@ import { respondControllerError } from "./respond.js";
 export function mountLifecycleRoutes(
   router: express.Router,
   deps: SessionsDeps,
-  readLimit: RequestHandler,
+  rateLimit: RequestHandler,
   authorize: Authorizer,
 ): void {
-  router.post("/v1/sessions/:id/suspend", readLimit, (req, res) => suspend(req, res, deps, authorize));
-  router.post("/v1/sessions/:id/resume", readLimit, (req, res) => resume(req, res, deps, authorize));
-  router.delete("/v1/sessions/:id", readLimit, (req, res) => destroy(req, res, deps, authorize));
+  router.post("/v1/sessions/:id/suspend", rateLimit, (req, res) => suspend(req, res, deps, authorize));
+  router.post("/v1/sessions/:id/resume", rateLimit, (req, res) => resume(req, res, deps, authorize));
+  router.delete("/v1/sessions/:id", rateLimit, (req, res) => destroy(req, res, deps, authorize));
 }
 
 async function suspend(

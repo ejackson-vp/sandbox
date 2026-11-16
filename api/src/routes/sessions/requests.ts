@@ -12,13 +12,13 @@ import { respondControllerError, validRequestId, writeOperation } from "./respon
 export function mountRequestRoutes(
   router: express.Router,
   deps: SessionsDeps,
-  readLimit: RequestHandler,
+  rateLimit: RequestHandler,
   authorize: Authorizer,
 ): void {
-  router.get("/v1/sessions/:id/requests/:requestId", readLimit, (req, res) =>
+  router.get("/v1/sessions/:id/requests/:requestId", rateLimit, (req, res) =>
     pollOperation(req, res, deps, authorize),
   );
-  router.delete("/v1/sessions/:id/requests/:requestId", readLimit, (req, res) =>
+  router.delete("/v1/sessions/:id/requests/:requestId", rateLimit, (req, res) =>
     cancelOperation(req, res, deps, authorize),
   );
 }

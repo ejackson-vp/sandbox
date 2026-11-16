@@ -17,18 +17,18 @@ import { respondControllerError, validRequestId, writeOperation } from "./respon
 export function mountOperationRoutes(
   router: express.Router,
   deps: SessionsDeps,
-  readLimit: RequestHandler,
+  rateLimit: RequestHandler,
   authorize: Authorizer,
 ): void {
   // Every operation carries its type inside the sealed envelope. The URL is
   // deliberately opaque: a path cannot change what the guest does.
-  router.post("/v1/sessions/:id/operations", readLimit, rejectPlaintextBodies, (req, res) =>
+  router.post("/v1/sessions/:id/operations", rateLimit, rejectPlaintextBodies, (req, res) =>
     runOperation(req, res, deps, authorize),
   );
 
   // Download/list/stat: the request (path and options) is inside the encrypted
   // envelope too, so the API never learns what is being read.
-  router.get("/v1/sessions/:id/operations", readLimit, (req, res) => fileGet(req, res, deps, authorize));
+  router.get("/v1/sessions/:id/operations", rateLimit, (req, res) => fileGet(req, res, deps, authorize));
 }
 
 async function runOperation(

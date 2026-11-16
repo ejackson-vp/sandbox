@@ -10,10 +10,10 @@ import type { Authorizer } from "./authorize.js";
 
 export function mountStatusRoutes(
   router: express.Router,
-  readLimit: RequestHandler,
+  rateLimit: RequestHandler,
   authorize: Authorizer,
 ): void {
-  router.get("/v1/sessions/:id", readLimit, async (req, res) => {
+  router.get("/v1/sessions/:id", rateLimit, async (req, res) => {
     const session = await authorize(req, res);
     if (!session) return;
     res.json(toStatus(session));

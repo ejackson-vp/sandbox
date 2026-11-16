@@ -31,15 +31,15 @@ export type Authorizer = (req: Request, res: Response) => Promise<SessionView | 
  * true for every route by construction, including ones added later, and it is
  * the shape a reader and a static analyser both look for.
  */
-export function createReadLimit(deps: SessionsDeps): RequestHandler {
-  const readLimiter = new RateLimiter(deps.config.readRateBurst, deps.config.readRateRefill);
+export function createRateLimit(deps: SessionsDeps): RequestHandler {
+  const rateLimiter = new RateLimiter(deps.config.readRateBurst, deps.config.readRateRefill);
   return (req, res, next) => {
-    if (!readLimiter.take(req.ip ?? "unknown")) {
+    if (!rateLimiter.take(req.ip ?? "unknown")) {
       recordRateLimited("read");
       // The header, not a body field: the SDK reads Retry-After off a failed
       // transport call, and the body shape is asserted by the admission tests.
       const key = req.ip ?? "unknown";
-      res.setHeader("Retry-After", String(readLimiter.retryAfterSeconds(key)));
+      res.setHeader("Retry-After", String(rateLimiter.retryAfterSeconds(key)));
       res.status(429).json({ error: "rate_limited" });
       return;
     }

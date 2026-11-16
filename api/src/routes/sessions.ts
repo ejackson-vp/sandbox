@@ -8,7 +8,7 @@
  * three shared answers live in `./sessions/respond.ts`.
  */
 import express from "express";
-import { createAuthorizer, createReadLimit, type SessionsDeps } from "./sessions/authorize.js";
+import { createAuthorizer, createRateLimit, type SessionsDeps } from "./sessions/authorize.js";
 import { mountLifecycleRoutes } from "./sessions/lifecycle.js";
 import { mountOperationRoutes } from "./sessions/operations.js";
 import { mountRequestRoutes } from "./sessions/requests.js";
@@ -16,11 +16,11 @@ import { mountStatusRoutes } from "./sessions/status.js";
 
 export function createSessionsRouter(deps: SessionsDeps): express.Router {
   const router = express.Router();
-  const readLimit = createReadLimit(deps);
+  const rateLimit = createRateLimit(deps);
   const authorize = createAuthorizer(deps);
-  mountStatusRoutes(router, readLimit, authorize);
-  mountOperationRoutes(router, deps, readLimit, authorize);
-  mountRequestRoutes(router, deps, readLimit, authorize);
-  mountLifecycleRoutes(router, deps, readLimit, authorize);
+  mountStatusRoutes(router, rateLimit, authorize);
+  mountOperationRoutes(router, deps, rateLimit, authorize);
+  mountRequestRoutes(router, deps, rateLimit, authorize);
+  mountLifecycleRoutes(router, deps, rateLimit, authorize);
   return router;
 }
