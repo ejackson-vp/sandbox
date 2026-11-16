@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fuzzSeed } from "./seeds.js";
 import { sha256Hex } from "@x402s/shared/crypto";
 import { createSessionsRouter } from "../../api/src/routes/sessions.js";
+import { errorBackstop } from "../../api/src/routes/errors.js";
 import type { ApiConfig } from "../../api/src/config.js";
 import type { ControllerClient, SessionView } from "../../api/src/controller-client.js";
 
@@ -68,6 +69,10 @@ beforeAll(async () => {
   const app = express();
   app.use(express.json({ limit: "32mb" }));
   app.use(createSessionsRouter({ config, controller }));
+  // The real backstop `api/src/server.ts` puts after the router: without it a
+  // refused body would answer with Express's HTML page and "always JSON" would
+  // be untestable.
+  app.use(errorBackstop);
   server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -77,17 +82,40 @@ afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-async function post(body: unknown): Promise<{ status: number; json: boolean }> {
-  const res = await fetch(`${base}/v1/sessions/${SESSION_ID}/operations`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-sandbox-capability": CAPABILITY,
-    },
-    body: JSON.stringify(body),
-  });
+/** The shared GET/POST answer shape, so an assertion can name the body it wants. */
+interface Answer {
+  status: number;
+  json: boolean;
+  body: Record<string, unknown> | undefined;
+}
+
+async function answer(res: Response): Promise<Answer> {
+  const text = await res.text();
+  let parsed: unknown;
+  try {
+    parsed = text ? JSON.parse(text) : undefined;
+  } catch {
+    parsed = undefined;
+  }
   const contentType = res.headers.get("content-type") ?? "";
-  return { status: res.status, json: contentType.includes("application/json") };
+  return {
+    status: res.status,
+    json: contentType.includes("application/json"),
+    body: parsed as Record<string, unknown> | undefined,
+  };
+}
+
+async function post(body: unknown): Promise<Answer> {
+  return answer(
+    await fetch(`${base}/v1/sessions/${SESSION_ID}/operations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-sandbox-capability": CAPABILITY,
+      },
+      body: JSON.stringify(body),
+    }),
+  );
 }
 
 describe("operations route", () => {
@@ -108,17 +136,33 @@ describe("operations route", () => {
   });
 
   it("answers 400 for malformed JSON instead of failing the request", async () => {
-    for (const raw of ["", "{", "{\"requestId\":", "not json", "[1,2,3]", "null"]) {
-      const res = await fetch(`${base}/v1/sessions/${SESSION_ID}/operations`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-sandbox-capability": CAPABILITY,
-        },
-        body: raw,
-      });
-      expect(res.status).toBeGreaterThanOrEqual(400);
-      expect(res.status).toBeLessThan(500);
+    /**
+     * Body -> which layer refuses it. The parser takes an object or an array and
+     * refuses anything else (`null`, or text that does not parse), so a top-level
+     * array is the schema's refusal and `null` is the parser's. An empty body
+     * parses as `{}`, which is also the schema's.
+     */
+    const cases: Array<[string, string]> = [
+      ["{", "invalid_json"],
+      ['{"requestId":', "invalid_json"],
+      ["not json", "invalid_json"],
+      ["null", "invalid_json"],
+      ["[1,2,3]", "invalid_request"],
+      ["", "invalid_request"],
+    ];
+    for (const [raw, error] of cases) {
+      const res = await answer(
+        await fetch(`${base}/v1/sessions/${SESSION_ID}/operations`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-sandbox-capability": CAPABILITY,
+          },
+          body: raw,
+        }),
+      );
+      expect(res.status, raw).toBe(400);
+      expect(res.body, raw).toMatchObject({ error });
     }
   });
 
@@ -129,13 +173,23 @@ describe("operations route", () => {
       command: ["sh", "-c", "id"],
     });
     expect(res.status).toBe(400);
+    // The guard names the field it refused; a generic 400 would leave a client
+    // guessing which of its keys was the plaintext one.
+    expect(res.body).toEqual({
+      error: "plaintext_not_accepted",
+      message: "this endpoint only accepts ciphertext; encrypt your operation for the attested guest key",
+      field: "command",
+    });
   });
 
-  it("forwards a valid operation and never exposes a 5xx for bad ids", async () => {
+  it("forwards a valid operation and refuses a bad request id with its issues", async () => {
     const ok = await post({ requestId: "request-1234", envelope: "AAAA" });
     expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ state: "READY", requestId: "request-1234", envelope: "e30=" });
     const bad = await post({ requestId: "x", envelope: "AAAA" });
     expect(bad.status).toBe(400);
+    expect(bad.body).toMatchObject({ error: "invalid_request" });
+    expect(Array.isArray(bad.body?.issues)).toBe(true);
   });
 
   it("rejects arbitrary query envelopes on GET without a 5xx", async () => {

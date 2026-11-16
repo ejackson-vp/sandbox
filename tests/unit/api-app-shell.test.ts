@@ -14,9 +14,12 @@
  */
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ZodError } from "zod";
 import { loadConfig } from "../../api/src/config.js";
 import { ControllerError } from "../../api/src/controller-client.js";
+import { errorBackstop } from "../../api/src/routes/errors.js";
 import { createApp } from "../../api/src/server.js";
 
 const servers: Server[] = [];
@@ -290,5 +293,61 @@ describe("response headers", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("x-powered-by")).toBeNull();
+  });
+});
+
+/**
+ * The backstop's own two refusals. Every route validates with `safeParse` and
+ * answers 400 itself, so these only run when a handler throws instead: the
+ * answers still have to be the client's (400 with the issues) or the process's
+ * (500 with no internal message), never a stack trace.
+ */
+describe("the error backstop", () => {
+  async function throwingApp(thrower: () => never): Promise<string> {
+    const expressApp = express();
+    expressApp.get("/throws", () => thrower());
+    expressApp.use(errorBackstop);
+    const server = await new Promise<Server>((resolve) => {
+      const listener = expressApp.listen(0, "127.0.0.1", () => resolve(listener));
+    });
+    servers.push(server);
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  it("answers a thrown ZodError as the same 400 a safeParse refusal writes", async () => {
+    const base = await throwingApp(() => {
+      throw new ZodError([
+        {
+          code: "invalid_type",
+          path: ["tier"],
+          message: "Expected string, received number",
+          expected: "string",
+          received: "number",
+        } as never,
+      ]);
+    });
+    const res = await fetch(`${base}/throws`);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "invalid_request",
+      issues: [
+        {
+          code: "invalid_type",
+          path: ["tier"],
+          message: "Expected string, received number",
+          expected: "string",
+          received: "number",
+        },
+      ],
+    });
+  });
+
+  it("answers any other throw as a 500 without the internal message", async () => {
+    const base = await throwingApp(() => {
+      throw new Error("connect ECONNREFUSED 10.0.0.7:3001");
+    });
+    const res = await fetch(`${base}/throws`);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal_error" });
   });
 });
