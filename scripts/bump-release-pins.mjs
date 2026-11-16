@@ -50,7 +50,15 @@ const USAGE = [
  * file, returns the new text, so the failure modes are unit-testable without a
  * checkout or a filesystem.
  */
-export function bumpReleasePins({ overlay, map, kyverno, version, guestVersion, guestDigest, profileDigests }) {
+export function bumpReleasePins({
+  overlay,
+  map,
+  kyverno,
+  version,
+  guestVersion = null,
+  guestDigest,
+  profileDigests,
+}) {
   const release = tagVersion(version);
   // The guest may lag by one release and normally does. A guest image stamps
   // the commit it was built from into a label, so the digest of the release
