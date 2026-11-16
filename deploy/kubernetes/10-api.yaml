@@ -83,6 +83,20 @@ spec:
             - name: CAPABILITY_PREVIOUS_KEY_ID
               valueFrom:
                 secretKeyRef: {name: x402-secrets, key: capability-previous-key-id, optional: true}
+            # Settlement credentials. Optional so mock and testnet run without
+            # them; mainnet refuses to start unless the facilitator URL, the
+            # key pair and the RPC are all present, so an absent Secret key
+            # surfaces as the startup assertion rather than at the first
+            # payment. The RPC is a secret because provider URLs carry a key.
+            - name: FACILITATOR_API_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: facilitator-api-key-id, optional: true}
+            - name: FACILITATOR_API_KEY_SECRET
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: facilitator-api-key-secret, optional: true}
+            - name: PAYMENT_RPC_URL
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: payment-rpc-url, optional: true}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
