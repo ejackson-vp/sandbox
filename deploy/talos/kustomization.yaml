@@ -46,6 +46,18 @@ resources:
 # NOTE: the workflow uses semver pattern {{version}}, so the IMAGE tag has no
 # `v` prefix: git tag v0.1.0 -> image tag 0.1.0. Getting this wrong is an
 # ImagePullBackOff, not an error at apply time.
+#
+# Everything below is one release: the control tag, the guest tag and the guest
+# digest. Do not edit these values by hand. A tag deploys the tree it was cut
+# from, so a stale pin deploys the previous release and nothing in the cluster
+# complains; v0.1.31 shipped 0.1.30 images that way. Move them together:
+#
+#   npm run release:bump-pins -- --version 0.1.32 --guest-digest sha256:... \
+#     --profile-digest python=sha256:... --profile-digest node=sha256:...
+#
+# scripts/check-deploy-pins.mjs compares this overlay, deploy/release-pins.json
+# and the Kyverno allowlist, and on a tag build it also fails when they name a
+# release other than the tag.
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
@@ -71,7 +83,7 @@ patches:
       - op: replace
         path: /data/GUEST_IMAGE
         value: ghcr.io/ejackson-vp/sandbox-guest:0.1.30
-      # Index digest from the v0.1.30 release. The controller pulls
+      # Index digest of the release above. The controller pulls
       # `repo@sha256:…` whenever a digest is set (dev mode or not), so a moved
       # tag cannot change what runs inside the sandbox.
       - op: replace

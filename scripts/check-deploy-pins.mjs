@@ -14,6 +14,13 @@
  * as the overlay. This check compares the overlay, the map and the Kyverno
  * allowlist, so the only way to move one is to move all three.
  *
+ * With `--tag vX.Y.Z` it also checks the thing a committed-consistency check
+ * cannot see: that the release being cut is the release this tree pins. A tag
+ * deploys the overlay in its own commit, so v0.1.31 cut from a tree whose
+ * overlay still said 0.1.30 deployed 0.1.30 images, with nothing failing. The
+ * release workflow passes `github.ref_name`; `compareTag` is the unit under
+ * test.
+ *
  * No YAML parser: the file shapes are fixed and pinned by this script, so a
  * regex that stops matching is a loud failure rather than a silent pass. The
  * extractors below throw when they cannot find a field.
@@ -140,11 +147,64 @@ export function comparePins(pins, talos, admitted) {
   return errors;
 }
 
-export function checkDeployPins(root = DEFAULT_ROOT) {
+/** `v0.1.31` -> `0.1.31`. Image tags never carry the `v`, the git tag always does. */
+export function tagVersion(ref) {
+  const value = String(ref ?? "").trim();
+  const version = value.startsWith("v") ? value.slice(1) : value;
+  if (!TAG.test(version)) {
+    throw new Error(`"${value}" is not a version tag; expected vX.Y.Z, for example v0.1.31`);
+  }
+  return version;
+}
+
+/**
+ * The overlay and the map must name the release this build is cutting.
+ *
+ * `comparePins` proves the three files agree with each other; it cannot prove
+ * they agree with the tag, because the tag is not one of the files. That gap is
+ * exactly v0.1.31: overlay, map and allowlist were internally consistent at
+ * 0.1.30, and the tag was cut as 0.1.31, so the tag deployed the previous
+ * release. The digest check needs no registry lookup here: the digest is tied
+ * to the map (`comparePins`) and the map is tied to the tag (this function).
+ *
+ * Takes the parsed overlay and the tag, so it is checkable without a checkout.
+ */
+export function compareTag(pins, talos, ref) {
+  const version = tagVersion(ref);
+  const errors = [];
+  const say = (message) => errors.push(message);
+
+  if (pins.release !== version) {
+    say(
+      `release map: records release ${pins.release}, but this build is cutting ${version} ` +
+        `(${ref}); the tag would deploy the ${pins.release} release`,
+    );
+  }
+  // The two images are named separately rather than trusting the map: a tag
+  // whose overlay names one stale image is the failure being prevented, and the
+  // message should say which one so the fix is obvious.
+  if (talos.controlTag !== version) {
+    say(
+      `deploy/talos: control tag ${talos.controlTag} is not this tag's release ${version}; ` +
+        `${ref} would deploy the ${talos.controlTag} control image`,
+    );
+  }
+  if (talos.guestTag !== version) {
+    say(
+      `deploy/talos: guest tag ${talos.guestTag} is not this tag's release ${version}; ` +
+        `${ref} would deploy the ${talos.guestTag} guest image`,
+    );
+  }
+  return errors;
+}
+
+export function checkDeployPins(root = DEFAULT_ROOT, ref = null) {
   const pins = JSON.parse(readFileSync(join(root, FILES.pins), "utf8")).talos;
   const talos = parseTalos(readFileSync(join(root, FILES.talos), "utf8"));
   const admitted = parseKyvernoAdmitted(readFileSync(join(root, FILES.kyverno), "utf8"));
-  return comparePins(pins, talos, admitted);
+  const errors = comparePins(pins, talos, admitted);
+  if (ref) errors.push(...compareTag(pins, talos, ref));
+  return errors;
 }
 
 function imageTag(text, imageName) {
@@ -185,12 +245,36 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const USAGE = "usage: node scripts/check-deploy-pins.mjs [--tag vX.Y.Z]";
+
+/** `--tag v0.1.31` or `--tag=v0.1.31`; anything else is a usage error. */
+export function parseArgs(argv) {
+  let ref = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--tag") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("-")) throw new Error(`--tag needs a value\n${USAGE}`);
+      ref = value;
+      index += 1;
+    } else if (arg.startsWith("--tag=")) {
+      ref = arg.slice("--tag=".length);
+      if (!ref) throw new Error(`--tag needs a value\n${USAGE}`);
+    } else {
+      throw new Error(`unknown argument ${arg}\n${USAGE}`);
+    }
+  }
+  return { ref };
+}
+
 const invokedDirectly =
   Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
   let errors;
+  let ref = null;
   try {
-    errors = checkDeployPins();
+    ({ ref } = parseArgs(process.argv.slice(2)));
+    errors = checkDeployPins(DEFAULT_ROOT, ref);
   } catch (error) {
     console.error(`deploy pins: ${error.message}`);
     process.exitCode = 2;
@@ -202,13 +286,17 @@ if (invokedDirectly) {
       console.error("");
       console.error(
         "Update deploy/talos/kustomization.yaml, deploy/release-pins.json and the allowlist " +
-          "in deploy/kubernetes/kyverno/guest-image-policy.yaml together, from one release.",
+          "in deploy/kubernetes/kyverno/guest-image-policy.yaml together, from one release, " +
+          "with `npm run release:bump-pins`. A tag deploys the pins in its own tree, so they " +
+          "must name the release the tag claims.",
       );
       process.exitCode = 1;
     } else {
       const pins = JSON.parse(readFileSync(join(DEFAULT_ROOT, FILES.pins), "utf8")).talos;
+      const against = ref ? ` and match tag ${ref}` : "";
       console.log(
-        `deploy pins ok: Talos overlay and Kyverno allowlist match release ${pins.release}`,
+        `deploy pins ok: Talos overlay, Kyverno allowlist and release map match release ` +
+          `${pins.release}${against}`,
       );
     }
   }

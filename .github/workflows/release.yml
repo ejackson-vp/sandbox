@@ -88,6 +88,14 @@ jobs:
       # Same pin check as the `unit` job: a release must not ship an overlay
       # that deploys two different releases.
       - run: node scripts/check-deploy-pins.mjs
+      # A tag deploys the pins in its own tree, so a tag whose overlay names a
+      # different release deploys the previous one and nothing else notices:
+      # v0.1.31 shipped 0.1.30 images that way, and the images had to be
+      # overridden by hand. A workflow_dispatch rehearsal against a branch has
+      # no version to compare, so this runs on a tag ref only.
+      - name: the tag is the release this tree pins
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/check-deploy-pins.mjs --tag "${{ github.ref_name }}"
       - run: ./guest/check-profiles.sh
       # Same list as the `unit` job in ci.yml, coverage included: the floor in
       # vitest.config.ts is a gate, so it has to hold for a release too.
