@@ -22,7 +22,7 @@ export type StoreHealth =
     };
 
 /** How an entitlement was paid for. `allowlist` rows are always `amount = "0"`. */
-export type PaymentSource = "x402" | "allowlist";
+type PaymentSource = "x402" | "allowlist";
 
 export interface PaymentRecord {
   paymentKey: string;

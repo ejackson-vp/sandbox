@@ -41,7 +41,7 @@ import type { SessionRecord } from "./store/models.js";
  * scanned. At the default 1 s cadence, 500 costs 500 relay state reads/s, which
  * the control listener's internal rate limit (2000/s) absorbs.
  */
-export const RELAY_SCAN_LIMIT = 500;
+const RELAY_SCAN_LIMIT = 500;
 
 /** Map entries unseen for this long are dropped (a terminated session's). */
 const FORGET_AFTER_MS = 600_000;
@@ -58,7 +58,7 @@ const FORGET_AFTER_MS = 600_000;
  */
 const RELAY_LOSS_LEASE_MARGIN_MS = 1_000;
 
-export interface RelayRecoveryResult {
+interface RelayRecoveryResult {
   /** Sessions inspected this pass. */
   scanned: number;
   /** Interrupted operations fenced after a link loss. */

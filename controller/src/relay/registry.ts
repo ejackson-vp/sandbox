@@ -18,16 +18,11 @@ const MAX_CACHED_RESPONSES = 64;
  * reporting a failed operation, and `session_destroyed` means the session is
  * being torn down.
  */
-export type RelayFailureCode =
+type RelayFailureCode =
   | "guest_disconnected"
   | "request_superseded"
   | "session_destroyed"
   | "guest_error";
-
-/** Link-loss codes: the outcome is unknown, not a failure. */
-export function isLinkLossFailure(code: RelayFailureCode): boolean {
-  return code === "guest_disconnected" || code === "request_superseded";
-}
 
 type WaiterValue = { envelope: string } | { error: RelayFailureCode; message: string } | null;
 

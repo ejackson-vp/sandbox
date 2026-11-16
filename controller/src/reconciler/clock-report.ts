@@ -14,7 +14,7 @@ import { log } from "@x402s/shared/runtime";
 import type { ClockJump } from "../clock-guard.js";
 import type { ReconcilerStore } from "../store/ports.js";
 
-export interface ClockReportRuntime {
+interface ClockReportRuntime {
   readonly store: Pick<ReconcilerStore, "listNonTerminal">;
   /** How many steps the guard has seen, so a flapping clock shows in the count. */
   readonly jumpCount: number;

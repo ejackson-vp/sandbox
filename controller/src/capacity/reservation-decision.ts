@@ -70,7 +70,7 @@ export function reservationFromRow(row: ReservationRow): ReservationRecord {
 const DEFAULT_TTL_MS = 120_000;
 
 /** What the caller does with the row it found for this identity. */
-export type ExistingOutcome =
+type ExistingOutcome =
   /** A different spec on the same identity: invalid_request, nothing written. */
   | { kind: "refuse" }
   /** Already attached to this session: re-read the row and answer with it. */
@@ -80,7 +80,7 @@ export type ExistingOutcome =
   /** Admit against the snapshot, excluding `excludeId` from the accounting. */
   | { kind: "admit"; excludeId: string | null };
 
-export interface AdmissionPlan {
+interface AdmissionPlan {
   /** `HELD` while provisional, `ALLOCATED` once a session owns it. */
   state: "HELD" | "ALLOCATED";
   /** Whether the row must be attached to a session as well as updated. */

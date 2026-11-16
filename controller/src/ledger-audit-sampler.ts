@@ -37,7 +37,7 @@ import { metrics, type MetricsRegistry } from "@x402s/shared/runtime";
 /** The registry's gauge handle, without exporting the class. */
 type Gauge = ReturnType<MetricsRegistry["gauge"]>;
 
-export interface LedgerAuditSamplerOptions {
+interface LedgerAuditSamplerOptions {
   store: LedgerAuditStore;
   /** How often a sample runs. `LEDGER_AUDIT_INTERVAL_MS` supplies it in `main`. */
   intervalMs: number;
@@ -48,7 +48,7 @@ export interface LedgerAuditSamplerOptions {
   registry?: MetricsRegistry;
 }
 
-export interface LedgerAuditSampler {
+interface LedgerAuditSampler {
   /** One sampling pass. The timer calls this; tests call it directly. */
   sample(): Promise<void>;
   /**

@@ -12,7 +12,7 @@ import type { SessionLimits } from "@x402s/shared/protocol";
  * a shared node. Defined with the rest of the classes in
  * `deploy/kubernetes/04-priorityclasses.yaml`.
  */
-export const TENANT_PRIORITY_CLASS = "sandbox-tenant";
+const TENANT_PRIORITY_CLASS = "sandbox-tenant";
 
 type PodEnvSpec = {
   executionMode: string;

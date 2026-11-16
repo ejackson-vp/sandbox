@@ -16,7 +16,7 @@ import { runBounded } from "../bounded-queue.js";
 import type { SessionRecord } from "../store/models.js";
 
 /** The scheduler knobs dispatch needs, and nothing else. */
-export interface DispatchRuntime {
+interface DispatchRuntime {
   /** Workers per phase. */
   readonly concurrency: number;
   now(): number;

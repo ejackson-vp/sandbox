@@ -73,7 +73,7 @@ export const AUDIT_SESSION_PHASES = [
   "TERMINATING",
 ] as const;
 
-export type AuditSessionPhase = (typeof AUDIT_SESSION_PHASES)[number];
+type AuditSessionPhase = (typeof AUDIT_SESSION_PHASES)[number];
 
 /** One intent and the ledger row with the same payment key, if any. */
 export interface IntentLedgerSnapshot {
@@ -130,14 +130,14 @@ export interface LedgerDivergence {
   reason: LedgerDivergenceReason;
 }
 
-export interface StaleSession {
+interface StaleSession {
   sessionId: string;
   phase: AuditSessionPhase;
   /** How far past the deadline the session is, before the grace was applied. */
   overdueMs: number;
 }
 
-export interface LedgerAuditResult {
+interface LedgerAuditResult {
   /** Per-payment divergences in snapshot order, then duplicate claims. */
   divergences: readonly LedgerDivergence[];
   staleSessions: readonly StaleSession[];

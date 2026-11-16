@@ -28,7 +28,7 @@ export const EGRESS_LIMIT_SCOPES = ["session", "global"] as const;
 
 export type EgressLimitScope = (typeof EGRESS_LIMIT_SCOPES)[number];
 
-export interface EgressBudgetOptions {
+interface EgressBudgetOptions {
   /** Bytes one session may move in this process. 0 disables the bound. */
   maxBytesPerSession: number;
   /** Bytes all sessions may move inside one window. 0 disables the bound. */
@@ -39,7 +39,7 @@ export interface EgressBudgetOptions {
   now?: () => number;
 }
 
-export interface EgressBudget {
+interface EgressBudget {
   /**
    * Charge `bytes` to both budgets. Returns the scope that would be crossed, or
    * null when the whole chunk fits. A refusal charges nothing: the chunk is not

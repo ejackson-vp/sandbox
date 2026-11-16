@@ -29,10 +29,17 @@ interface ClusterFlags {
   leaderElection: boolean;
 }
 
-type ExecutionSettings = Pick<
-  ControllerConfig,
-  "executionMode" | "runtimeClass" | "allowInsecureDev" | "guestImageDigest" | "guestImageRef"
->;
+/**
+ * Execution mode plus the base image it pins. The image pair is consumed by
+ * `parseRuntimeProfilesFor` to build the `base` profile and is deliberately not
+ * part of `ControllerConfig`: the catalog is the only reader, so a second copy
+ * on the config would be a second answer to "which image is base".
+ */
+interface ExecutionSettings
+  extends Pick<ControllerConfig, "executionMode" | "runtimeClass" | "allowInsecureDev"> {
+  guestImageDigest: string;
+  guestImageRef: string;
+}
 
 export function parseClusterFlags(env: NodeJS.ProcessEnv): ClusterFlags {
   const kubeEnabled = bool(env.KUBERNETES_ENABLED, true);
@@ -94,7 +101,7 @@ export interface RuntimeClassCheck {
   allowed: string[];
 }
 
-export interface RuntimeClassCheckOptions {
+interface RuntimeClassCheckOptions {
   executionMode: string;
   runtimeClass: string;
   kubeEnabled: boolean;
@@ -225,8 +232,6 @@ type KubernetesSettings = Pick<
   | "executionMode"
   | "runtimeClass"
   | "allowInsecureDev"
-  | "guestImageDigest"
-  | "guestImageRef"
   | "runtimeProfiles"
   | "kubeEnabled"
   | "leaderElection"
@@ -243,7 +248,9 @@ export function parseKubernetes(
   return {
     sandboxNamespace: env.SANDBOX_NAMESPACE ?? "sandbox-workloads",
     controlNamespace: env.CONTROL_NAMESPACE ?? "sandbox-system",
-    ...execution,
+    executionMode: execution.executionMode,
+    runtimeClass: execution.runtimeClass,
+    allowInsecureDev: execution.allowInsecureDev,
     runtimeProfiles,
     kubeEnabled: cluster.kubeEnabled,
     leaderElection: cluster.leaderElection,
