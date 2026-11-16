@@ -23,7 +23,7 @@ import { buildChainSettlementVerifier } from "@x402s/shared/settlement";
 import type { ControllerConfig } from "./config.js";
 import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 import type { ReconcilerStore } from "./store/ports.js";
 import { WarmPoolManager } from "./warm-pool-manager.js";
 import { Provisioning } from "./provisioning.js";

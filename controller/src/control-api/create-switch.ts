@@ -14,7 +14,7 @@
 import type { Express, Request, Response } from "express";
 import { log, metrics, publishCreateSwitch } from "@x402s/shared/runtime";
 import { createSwitchDisableSchema, createSwitchEnableSchema } from "../control-api-schemas.js";
-import type { CreateSwitchState } from "../store/models.js";
+import type { CreateSwitchState } from "../store/models/admin.js";
 import type { ControlApiDeps } from "./types.js";
 
 /** Publish the gauge here too, so an operator sees the flip without create traffic. */

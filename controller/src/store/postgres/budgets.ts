@@ -11,7 +11,7 @@
  * takes a `FOR UPDATE` lock on the payer row, which is enough because the only
  * writer that can change `spend` is another settlement.
  */
-import { NON_TERMINAL_STATE_SQL } from "../models.js";
+import { NON_TERMINAL_STATE_SQL } from "../models/session.js";
 import {
   GLOBAL_BUDGET_KEY,
   budgetSubject,

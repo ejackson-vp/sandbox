@@ -123,7 +123,7 @@ describe("production config guards", () => {
       ...base,
       GUEST_IMAGE_DIGEST: `sha256:${"a".repeat(64)}`,
     });
-    expect(cfg.guestImageDigest).toBe(`sha256:${"a".repeat(64)}`);
+    expect(cfg.runtimeProfiles.base!.digest).toBe(`sha256:${"a".repeat(64)}`);
   });
 
   it("pulls by digest even when insecure dev mode is on", () => {
@@ -133,7 +133,7 @@ describe("production config guards", () => {
       GUEST_IMAGE: "ghcr.io/example/guest:0.1.0",
       GUEST_IMAGE_DIGEST: digest,
     });
-    expect(cfg.guestImageRef).toBe(`ghcr.io/example/guest@${digest}`);
+    expect(cfg.runtimeProfiles.base!.imageRef).toBe(`ghcr.io/example/guest@${digest}`);
   });
 
   it("keeps the tag when the dev placeholder digest is used", () => {
@@ -142,7 +142,7 @@ describe("production config guards", () => {
       GUEST_IMAGE: "x402-sandbox/guest:dev",
       GUEST_IMAGE_DIGEST: "sha256:dev-unpinned-image",
     });
-    expect(cfg.guestImageRef).toBe("x402-sandbox/guest:dev");
+    expect(cfg.runtimeProfiles.base!.imageRef).toBe("x402-sandbox/guest:dev");
   });
 
   describe("guest image pinning follows the provisioner", () => {
@@ -154,7 +154,7 @@ describe("production config guards", () => {
         GUEST_IMAGE_DIGEST: PINNED,
       });
       expect(cfg.kubeEnabled).toBe(true);
-      expect(cfg.guestImageRef).toBe(`ghcr.io/example/guest@${PINNED}`);
+      expect(cfg.runtimeProfiles.base!.imageRef).toBe(`ghcr.io/example/guest@${PINNED}`);
     });
 
     it("rejects the placeholder with Kubernetes enabled, even when insecure dev is on", () => {
@@ -179,7 +179,7 @@ describe("production config guards", () => {
       });
       expect(cfg.role).toBe("relay");
       expect(cfg.kubeEnabled).toBe(true);
-      expect(cfg.guestImageDigest).toBe(PLACEHOLDER);
+      expect(cfg.runtimeProfiles.base!.digest).toBe(PLACEHOLDER);
     });
 
     it("accepts a pinned digest with the local process provisioner", () => {
@@ -190,7 +190,7 @@ describe("production config guards", () => {
         GUEST_IMAGE_DIGEST: PINNED,
       });
       expect(cfg.kubeEnabled).toBe(false);
-      expect(cfg.guestImageRef).toBe(`ghcr.io/example/guest@${PINNED}`);
+      expect(cfg.runtimeProfiles.base!.imageRef).toBe(`ghcr.io/example/guest@${PINNED}`);
     });
 
     it("accepts the placeholder with the local process provisioner", () => {
@@ -201,7 +201,7 @@ describe("production config guards", () => {
         GUEST_IMAGE_DIGEST: PLACEHOLDER,
       });
       expect(cfg.kubeEnabled).toBe(false);
-      expect(cfg.guestImageRef).toBe("x402-sandbox/guest:dev");
+      expect(cfg.runtimeProfiles.base!.imageRef).toBe("x402-sandbox/guest:dev");
     });
   });
 

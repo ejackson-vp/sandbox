@@ -42,7 +42,7 @@ const types = {
  * each leave the scrape handler well inside that budget even when the database
  * is slow rather than down.
  */
-export const READ_ONLY_QUERY_TIMEOUT_MS = 2_000;
+const READ_ONLY_QUERY_TIMEOUT_MS = 2_000;
 
 /** How long the audit pool may spend establishing a connection. */
 const READ_ONLY_CONNECT_TIMEOUT_MS = 1_000;

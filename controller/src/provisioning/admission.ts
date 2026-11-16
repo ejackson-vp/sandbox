@@ -19,7 +19,8 @@ import {
 } from "../config.js";
 import type { Provisioner } from "../k8s.js";
 import type { RelayClient } from "../relay-client.js";
-import type { SessionRecord } from "../store/models.js";
+import type { SessionRecord } from "../store/models/session.js";
+import { sessionTimings } from "../session-timings.js";
 import type { ProvisioningStore } from "../store/ports.js";
 
 type AdmissionStore = Pick<ProvisioningStore, "mergeTimings" | "requestTermination" | "setWorkspacePvc">;
@@ -127,9 +128,7 @@ export class ProvisioningAdmission {
       }
       reservation = admission.reservation;
     }
-    const queued = session.timingsJson
-      ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
-      : {};
+    const queued = sessionTimings(session);
     if (typeof queued.provisionQueueEnteredAt === "number" && typeof queued.provisionQueueWaitMs !== "number") {
       const waitMs = Math.max(0, this.ctx.now() - queued.provisionQueueEnteredAt);
       metrics

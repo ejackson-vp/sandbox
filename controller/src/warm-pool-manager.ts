@@ -18,8 +18,8 @@ import { DEFAULT_RUNTIME_PROFILE, sessionRuntime } from "./config.js";
 import type { WarmPodInfo } from "./k8s.js";
 import { DataPlaneEndpoints } from "./provisioning/endpoints.js";
 import type { ReconcilerContext } from "./reconciler-context.js";
-import type { SessionRecord } from "./store/models.js";
-import { WarmPool, type WarmClaimOutcome } from "./warm-pool.js";
+import type { SessionRecord } from "./store/models/session.js";
+import { recycleWarmPod, WarmPool, type WarmClaimOutcome } from "./warm-pool.js";
 
 /** Pods the whole manager may create per reconcile pass. */
 const MAX_CREATE_PER_PASS = 2;
@@ -356,10 +356,7 @@ export class WarmPoolManager {
       if (this.pools.has(runtime)) continue;
       for (const pod of orphans) {
         if (!pod.warmId) continue;
-        await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
-        await this.ctx.relay.purge(pod.poolId).catch(() => undefined);
-        log.info("warm_pod_recycled", {
-          podName: pod.name,
+        await recycleWarmPod(this.ctx, pod, {
           runtime: runtime === "" ? "unknown" : runtime,
           reason: "unknown_profile",
         });

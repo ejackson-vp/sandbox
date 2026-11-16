@@ -15,8 +15,9 @@
 import { lifetimeExpired, transition } from "@x402s/shared/protocol";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
 import { sessionRuntime } from "./config.js";
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 import { snapshotOf } from "./session-snapshot.js";
+import { sessionTimings } from "./session-timings.js";
 import type { WarmPoolManager } from "./warm-pool-manager.js";
 import { createPath, effectContext, executeEffects, isOk } from "./effects.js";
 import type { CreatePath, StartPodRequest } from "./effects.js";
@@ -109,9 +110,7 @@ export class Provisioning implements CreatePath {
   }
 
   private async deferForSlot(session: SessionRecord): Promise<void> {
-    const queued = session.timingsJson
-      ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
-      : {};
+    const queued = sessionTimings(session);
     if (typeof queued.provisionQueueEnteredAt !== "number") {
       await this.ctx.store.mergeTimings(session.id, { provisionQueueEnteredAt: this.ctx.now() });
     }

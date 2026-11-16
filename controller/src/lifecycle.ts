@@ -19,7 +19,7 @@ import type { EffectStore, LifecycleStore } from "./store/ports.js";
 type LifecycleContext = Omit<ReconcilerContext, "store"> & {
   store: LifecycleStore & EffectStore;
 };
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 import { snapshotOf } from "./session-snapshot.js";
 import type { Provisioning } from "./provisioning.js";
 import { createPath, effectContext, executeEffects, isOk } from "./effects.js";

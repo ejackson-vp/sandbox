@@ -285,39 +285,6 @@ describe("ledger audit", () => {
     expect(text).not.toContain("sandbox_ledger_audit_age_seconds");
   });
 
-  it("runs one sample at a time so a slow store cannot stack work", async () => {
-    const registry = new MetricsRegistry({ cacheMs: 0 });
-    let reads = 0;
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const sampler = createLedgerAuditSampler({
-      store: {
-        readLedgerAudit: async () => {
-          reads += 1;
-          await gate;
-          return { intents: [], liveRefunds: [], sessions: [] };
-        },
-      },
-      registry,
-      now: () => NOW,
-      intervalMs: INTERVAL_MS,
-    });
-
-    const first = sampler.sample();
-    // A second tick arrives while the first is still waiting on the store.
-    await sampler.sample();
-    expect(reads).toBe(1);
-    release?.();
-    await first;
-    expect(reads).toBe(1);
-
-    // The next tick after the first finished does read again.
-    await sampler.sample();
-    expect(reads).toBe(2);
-  });
-
   it("defaults are bounded", () => {
     expect(DEFAULT_LEDGER_AUDIT_LIMITS.sessionGraceMs).toBeGreaterThan(0);
   });

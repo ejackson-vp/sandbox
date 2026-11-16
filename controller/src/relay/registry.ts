@@ -4,49 +4,26 @@ import { log, metrics, type MetricsRegistry } from "@x402s/shared/runtime";
 import { constantTimeEqual, sha256Hex } from "../secrets.js";
 import { guestTokenShard } from "../tokens.js";
 import { registerRelayMetrics, type RelayDisconnectReason } from "./metrics.js";
+import { ResponseCache } from "./response-cache.js";
+import type {
+  AttachResult,
+  RaiseEpochResult,
+  RegisterResult,
+  RelayFailureCode,
+  RequestResult,
+  SendResult,
+  WaiterValue,
+  WaitResult,
+} from "./results.js";
 
 export const MAX_FRAME_BYTES = 24 * 1024 * 1024;
 export const MAX_PENDING = 8;
-const MAX_CACHED_RESPONSES = 64;
-
-/**
- * Why the relay could not produce an outcome for a request it accepted.
- *
- * `guest_disconnected` and `request_superseded` are link-loss classes: the
- * frame may have been started, so the controller must treat the operation as
- * `outcome_unknown`, never as a guest error. `guest_error` is the guest itself
- * reporting a failed operation, and `session_destroyed` means the session is
- * being torn down.
- */
-export type RelayFailureCode =
-  | "guest_disconnected"
-  | "request_superseded"
-  | "session_destroyed"
-  | "guest_error";
-
-/** Link-loss codes: the outcome is unknown, not a failure. */
-export function isLinkLossFailure(code: RelayFailureCode): boolean {
-  return code === "guest_disconnected" || code === "request_superseded";
-}
-
-type WaiterValue = { envelope: string } | { error: RelayFailureCode; message: string } | null;
 
 interface Pending {
   at: number;
   /** Execution epoch the frame was forwarded under, for withdrawal. */
   epoch: number;
   waiter?: (value: WaiterValue) => void;
-}
-
-interface CachedResponse {
-  envelope: string;
-  at: number;
-}
-
-interface CachedError {
-  code: RelayFailureCode;
-  message: string;
-  at: number;
 }
 
 interface Entry {
@@ -67,8 +44,8 @@ interface Entry {
   /** Operation verbs the guest reported on hello; null when it sent none. */
   capabilities: readonly string[] | null;
   pending: Map<string, Pending>;
-  responses: Map<string, CachedResponse>;
-  errors: Map<string, CachedError>;
+  /** Answers already produced, so a retry is served rather than resent. */
+  cache: ResponseCache;
   lastError: { code: string; message: string } | null;
   /** Guest-reported operation state; null until the guest sends a status frame. */
   activeRequestId: string | null;
@@ -102,33 +79,6 @@ interface RelayRegistryOptions {
   /** Injectable for tests; defaults to the process-wide registry. */
   metricsRegistry?: MetricsRegistry;
 }
-
-type RegisterResult = "ok" | "already_connected" | "at_capacity";
-type RequestResult =
-  | "sent"
-  | "cached"
-  | "pending"
-  | "too_many"
-  | "not_connected"
-  | "not_registered"
-  | "stale_epoch";
-type EpochResult = "ok" | "unknown";
-
-interface RaiseEpochResult {
-  result: EpochResult;
-  /** Pending frames dropped from the superseded generation. */
-  withdrawn: number;
-  /** Whether the guest link was reset to discard an unread frame. */
-  reset: boolean;
-}
-type SendResult = "sent" | "not_registered" | "not_connected";
-type AttachResult = "ok" | "not_found" | "expired" | "bad_token" | "wrong_shard" | "connected";
-
-type WaitResult =
-  | { kind: "envelope"; envelope: string }
-  | { kind: "error"; code: RelayFailureCode; message: string }
-  | { kind: "pending"; stillPending: boolean }
-  | { kind: "not_registered" };
 
 export class RelayRegistry {
   private readonly entries = new Map<string, Entry>();
@@ -189,8 +139,7 @@ export class RelayRegistry {
       protocolVersion: null,
       capabilities: null,
       pending: existing?.pending ?? new Map(),
-      responses: existing?.responses ?? new Map(),
-      errors: existing?.errors ?? new Map(),
+      cache: existing?.cache ?? new ResponseCache(this.opts.responseTtlMs),
       lastError: null,
       // A fresh registration is a fresh guest process. Do not inherit an
       // execution state: fail closed until the guest reports one.
@@ -235,7 +184,7 @@ export class RelayRegistry {
     // has already superseded. Epoch 0 is only admissible while no floor has
     // been raised (the relay's floor starts at 0).
     if (requestedEpoch < entry.epochFloor) return "stale_epoch";
-    if (entry.responses.has(id) || entry.errors.has(id)) return "cached";
+    if (entry.cache.has(id)) return "cached";
     if (entry.pending.has(id)) return "pending";
     if (entry.pending.size >= MAX_PENDING) return "too_many";
     if (!entry.ws || entry.ws.readyState !== 1) return "not_connected";
@@ -302,6 +251,18 @@ export class RelayRegistry {
   }
 
   /**
+   * Deliver one failure to every waiter on this entry, then forget them.
+   *
+   * The link is gone, so nobody is going to answer them. Repeated for a reset,
+   * a detach and a session destroy, which differ only in the code the controller
+   * must see: a link loss is `outcome_unknown`, a destroy is terminal.
+   */
+  private failPending(entry: Entry, code: RelayFailureCode, message: string): void {
+    for (const pending of entry.pending.values()) pending.waiter?.({ error: code, message });
+    entry.pending.clear();
+  }
+
+  /**
    * End a guest connection with a TCP reset, not a WebSocket close. A close
    * frame is ordered after every frame already queued on the socket, so the
    * guest would still read them; a reset discards unread bytes. The guest
@@ -322,10 +283,7 @@ export class RelayRegistry {
     const socket = entry.socket;
     entry.ws = null;
     entry.socket = null;
-    for (const pending of entry.pending.values()) {
-      pending.waiter?.({ error: "guest_disconnected", message: "guest disconnected" });
-    }
-    entry.pending.clear();
+    this.failPending(entry, "guest_disconnected", "guest disconnected");
     const resets = this.metrics.counter(
       "sandbox_relay_connection_resets_total",
       "Guest link terminations after an epoch withdrawal, by mechanism",
@@ -395,13 +353,13 @@ export class RelayRegistry {
   async waitForResponse(sessionId: string, id: string, waitMs: number): Promise<WaitResult> {
     const entry = this.entries.get(sessionId);
     if (!entry) return { kind: "not_registered" };
-    this.prune(entry);
+    entry.cache.expire(Date.now());
 
-    const cachedError = entry.errors.get(id);
+    const cachedError = entry.cache.error(id);
     if (cachedError) {
       return { kind: "error", code: cachedError.code, message: cachedError.message };
     }
-    const cached = entry.responses.get(id);
+    const cached = entry.cache.response(id);
     if (cached) return { kind: "envelope", envelope: cached.envelope };
     if (!entry.pending.has(id)) return { kind: "pending", stillPending: false };
 
@@ -495,9 +453,8 @@ export class RelayRegistry {
   response(sessionId: string, id: string, envelope: string): "ok" | "duplicate" | "unknown" {
     const entry = this.entries.get(sessionId);
     if (!entry) return "unknown";
-    if (entry.responses.has(id) || entry.errors.has(id)) return "duplicate";
-    entry.responses.set(id, { envelope, at: Date.now() });
-    this.prune(entry);
+    if (entry.cache.has(id)) return "duplicate";
+    entry.cache.remember(id, envelope, Date.now());
     entry.lastError = null;
     const pending = entry.pending.get(id);
     entry.pending.delete(id);
@@ -508,13 +465,12 @@ export class RelayRegistry {
   error(sessionId: string, id: string, code: string, message: string): "ok" | "duplicate" | "unknown" {
     const entry = this.entries.get(sessionId);
     if (!entry) return "unknown";
-    if (id && (entry.responses.has(id) || entry.errors.has(id))) return "duplicate";
+    if (id && entry.cache.has(id)) return "duplicate";
     entry.lastError = { code, message };
     if (!id) return "ok";
     // A guest-reported operation error: the guest ran the operation and says it
     // failed. That is a real outcome, not a link loss.
-    entry.errors.set(id, { code: "guest_error", message, at: Date.now() });
-    this.prune(entry);
+    entry.cache.rememberError(id, "guest_error", message, Date.now());
     const pending = entry.pending.get(id);
     entry.pending.delete(id);
     pending?.waiter?.({ error: "guest_error", message });
@@ -526,10 +482,7 @@ export class RelayRegistry {
     if (!entry || entry.ws !== ws) return;
     entry.ws = null;
     entry.socket = null;
-    for (const pending of entry.pending.values()) {
-      pending.waiter?.({ error: "guest_disconnected", message: "guest disconnected" });
-    }
-    entry.pending.clear();
+    this.failPending(entry, "guest_disconnected", "guest disconnected");
   }
 
   /** Record a guest disconnect with a bounded close-reason label. */
@@ -547,10 +500,7 @@ export class RelayRegistry {
     } catch {
       /* ignore */
     }
-    for (const pending of entry.pending.values()) {
-      pending.waiter?.({ error: "session_destroyed", message: "session destroyed" });
-    }
-    entry.pending.clear();
+    this.failPending(entry, "session_destroyed", "session destroyed");
     this.entries.delete(sessionId);
     return true;
   }
@@ -562,26 +512,6 @@ export class RelayRegistry {
       } catch {
         /* ignore */
       }
-    }
-  }
-
-  private prune(entry: Entry): void {
-    const now = Date.now();
-    for (const [id, value] of entry.responses) {
-      if (now - value.at > this.opts.responseTtlMs) entry.responses.delete(id);
-    }
-    for (const [id, value] of entry.errors) {
-      if (now - value.at > this.opts.responseTtlMs) entry.errors.delete(id);
-    }
-    while (entry.responses.size > MAX_CACHED_RESPONSES) {
-      const oldest = entry.responses.keys().next().value;
-      if (oldest === undefined) break;
-      entry.responses.delete(oldest);
-    }
-    while (entry.errors.size > MAX_CACHED_RESPONSES) {
-      const oldest = entry.errors.keys().next().value;
-      if (oldest === undefined) break;
-      entry.errors.delete(oldest);
     }
   }
 }

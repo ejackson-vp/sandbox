@@ -22,8 +22,9 @@ import {
   type RelayStateSnapshot,
 } from "@x402s/shared/protocol";
 import { LATENCY_BUCKETS, log, metrics } from "@x402s/shared/runtime";
-import type { SessionRecord } from "../store/models.js";
+import type { SessionRecord } from "../store/models/session.js";
 import { snapshotOf } from "../session-snapshot.js";
+import { sessionTimings } from "../session-timings.js";
 import { effectContext, executeEffects, isOk } from "../effects.js";
 import type { ProvisioningContext } from "./context.js";
 import type { PodCreation } from "./pod-creation.js";
@@ -37,7 +38,7 @@ export class Readiness {
   ) {}
 
   async awaitReady(session: SessionRecord): Promise<void> {
-    const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
+    const timings = sessionTimings(session);
     if (
       timings.warmPoolHit === 1 &&
       typeof timings.warmClaimAt === "number" &&

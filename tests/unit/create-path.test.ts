@@ -213,13 +213,13 @@ async function harness(
               phase: "Running",
               identity: warmPoolIdentity({
                 runtime: "base",
-                imageDigest: cfg.guestImageDigest,
+                imageDigest: cfg.runtimeProfiles.base!.digest,
                 runtimeClass: cfg.runtimeClass,
                 executionMode: cfg.executionMode,
                 workspaceDir: cfg.workspaceDir,
                 limits: { cpuMillis: 500, memoryMiB: 512, diskMiB: 256 },
               }),
-              imageDigest: cfg.guestImageDigest,
+              imageDigest: cfg.runtimeProfiles.base!.digest,
               runtime: "base",
             },
           ]

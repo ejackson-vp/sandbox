@@ -31,7 +31,7 @@ import { log } from "@x402s/shared/runtime";
 import type { Provisioner } from "./k8s.js";
 import type { RelayClient } from "./relay-client.js";
 import type { Snapshotter } from "./snapshotter.js";
-import type { SessionRecord } from "./store/models.js";
+import type { SessionRecord } from "./store/models/session.js";
 import type { EffectStore } from "./store/ports.js";
 import type { Endpoint, RelayRegistration } from "./provisioning/endpoints.js";
 

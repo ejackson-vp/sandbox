@@ -41,7 +41,7 @@ interface SwitchRow {
  * serialise it, and a shared mutable literal is one editing bug away from a
  * second source of truth.
  */
-export function createSwitchAbsent(): CreateSwitchState {
+function createSwitchAbsent(): CreateSwitchState {
   return {
     enabled: false,
     reason: "",

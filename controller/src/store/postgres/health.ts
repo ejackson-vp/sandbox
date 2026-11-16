@@ -6,7 +6,7 @@
  * write probe is a no-op UPDATE, not a `SELECT`, because a read-only replica
  * answers a `SELECT` happily and only rejects the write.
  */
-import type { StoreHealth } from "../models.js";
+import type { StoreHealth } from "../models/health.js";
 import { SCHEMA_VERSION } from "../schema-version.js";
 import type { PgConnection } from "./pg.js";
 

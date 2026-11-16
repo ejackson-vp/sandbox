@@ -14,7 +14,10 @@
  * deliberate: taking a global lock on an unauthenticated 402 path would let a
  * client stall every other challenge.
  */
-import { ChallengeNonceCapacityError, type ChallengeBurnResult } from "../models.js";
+import {
+  ChallengeNonceCapacityError,
+  type ChallengeBurnResult,
+} from "../models/admin.js";
 import type { PgConnection } from "./pg.js";
 
 interface NonceRow {

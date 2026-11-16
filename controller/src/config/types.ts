@@ -51,9 +51,6 @@ export interface ControllerConfig {
   databaseUrl: string;
   sandboxNamespace: string;
   controlNamespace: string;
-  guestImageDigest: string;
-  /** Image reference actually used in the pod spec: `repo@sha256:…` when pinned. */
-  guestImageRef: string;
   /**
    * Selectable runtime profiles, always including `base` built from
    * `GUEST_IMAGE`/`GUEST_IMAGE_DIGEST`. A session may only name a profile that

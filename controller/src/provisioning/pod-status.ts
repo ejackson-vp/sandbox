@@ -9,7 +9,8 @@
 import { log, metrics } from "@x402s/shared/runtime";
 import type { CapacityService } from "../capacity/service.js";
 import type { Provisioner } from "../k8s.js";
-import type { SessionRecord } from "../store/models.js";
+import { sessionTimings } from "../session-timings.js";
+import type { SessionRecord } from "../store/models/session.js";
 import type { ProvisioningStore } from "../store/ports.js";
 
 type PodStatusStore = Pick<ProvisioningStore, "mergeTimings" | "requestTermination" | "setNodeName">;
@@ -47,7 +48,7 @@ export class PodStatus {
     }
     if (pod && pod.phase === "Running") {
       // Record the first observation of a running container (tick resolution).
-      const timings = session.timingsJson ? (JSON.parse(session.timingsJson) as Record<string, unknown>) : {};
+      const timings = sessionTimings(session);
       if (!timings.podRunningObservedAt && timings.warmPoolHit !== 1) {
         await this.ctx.store.mergeTimings(session.id, { podRunningObservedAt: this.ctx.now() });
       }

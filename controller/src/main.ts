@@ -99,14 +99,7 @@ export async function start(): Promise<ControllerProcess> {
   };
 
   if (cfg.role === "relay") {
-    const relayOpts = {
-      adminToken: cfg.relayAdminToken,
-      controllerUrl: cfg.controllerUrl,
-      wakeToken: cfg.wakeToken,
-      ...(cfg.relayTls ? { controlTls: cfg.relayTls } : {}),
-      ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
-      replicas: cfg.relayReplicas,
-    };
+    const relayOpts = relayOptions(cfg);
     const relay = createRelay(relayOpts);
     collectors.push(() => relay.collectMetrics());
     await listenRelay(relay, cfg);
@@ -122,19 +115,7 @@ export async function start(): Promise<ControllerProcess> {
   }
 
   if (cfg.role === "proxy") {
-    const proxy = createEgressProxy({
-      tokenSecret: cfg.proxyTokenSecret,
-      allowedPorts: cfg.allowedPorts,
-      allowedHostSuffixes: cfg.allowedHostSuffixes,
-      deniedCidrs: cfg.deniedCidrs,
-      maxConnectionsPerSession: cfg.egressMaxConnectionsPerSession,
-      maxGlobalConnections: cfg.egressMaxGlobalConnections,
-      maxBytesPerSession: cfg.egressMaxBytesPerSession,
-      maxBytesGlobal: cfg.egressMaxBytesGlobalWindow,
-      bytesWindowMs: cfg.egressBytesWindowMs,
-      ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
-      replicas: cfg.proxyReplicas,
-    });
+    const proxy = createEgressProxy(proxyOptions(cfg));
     await listen(proxy.server, cfg.proxyPort);
     log.info("egress_proxy_listening", {
       port: cfg.proxyPort,
@@ -179,14 +160,7 @@ export async function start(): Promise<ControllerProcess> {
   const shutdown: Array<() => Promise<void>> = [];
 
   if (cfg.relayEnabled) {
-    const relayOpts = {
-      adminToken: cfg.relayAdminToken,
-      controllerUrl: cfg.controllerUrl,
-      wakeToken: cfg.wakeToken,
-      ...(cfg.relayTls ? { controlTls: cfg.relayTls } : {}),
-      ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
-      replicas: cfg.relayReplicas,
-    };
+    const relayOpts = relayOptions(cfg);
     const relay = createRelay(relayOpts);
     collectors.push(() => relay.collectMetrics());
     await listenRelay(relay, cfg);
@@ -197,19 +171,7 @@ export async function start(): Promise<ControllerProcess> {
   }
 
   if (cfg.proxyEnabled) {
-    const proxy = createEgressProxy({
-      tokenSecret: cfg.proxyTokenSecret,
-      allowedPorts: cfg.allowedPorts,
-      allowedHostSuffixes: cfg.allowedHostSuffixes,
-      deniedCidrs: cfg.deniedCidrs,
-      maxConnectionsPerSession: cfg.egressMaxConnectionsPerSession,
-      maxGlobalConnections: cfg.egressMaxGlobalConnections,
-      maxBytesPerSession: cfg.egressMaxBytesPerSession,
-      maxBytesGlobal: cfg.egressMaxBytesGlobalWindow,
-      bytesWindowMs: cfg.egressBytesWindowMs,
-      ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
-      replicas: cfg.proxyReplicas,
-    });
+    const proxy = createEgressProxy(proxyOptions(cfg));
     await listen(proxy.server, cfg.proxyPort);
     log.info("egress_proxy_listening", { port: cfg.proxyPort });
     shutdown.push(() => proxy.close());
@@ -362,6 +324,41 @@ export async function start(): Promise<ControllerProcess> {
   }
 
   return { stop };
+}
+
+/**
+ * Relay options for this process.
+ *
+ * A relay-only pod and the `all` role's embedded relay must build the same
+ * server: the shard ordinal and replica count decide token enforcement, and a
+ * difference would make one process accept a guest the other refuses.
+ */
+function relayOptions(cfg: ControllerConfig) {
+  return {
+    adminToken: cfg.relayAdminToken,
+    controllerUrl: cfg.controllerUrl,
+    wakeToken: cfg.wakeToken,
+    ...(cfg.relayTls ? { controlTls: cfg.relayTls } : {}),
+    ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
+    replicas: cfg.relayReplicas,
+  };
+}
+
+/** Egress proxy options for this process; see `relayOptions`. */
+function proxyOptions(cfg: ControllerConfig) {
+  return {
+    tokenSecret: cfg.proxyTokenSecret,
+    allowedPorts: cfg.allowedPorts,
+    allowedHostSuffixes: cfg.allowedHostSuffixes,
+    deniedCidrs: cfg.deniedCidrs,
+    maxConnectionsPerSession: cfg.egressMaxConnectionsPerSession,
+    maxGlobalConnections: cfg.egressMaxGlobalConnections,
+    maxBytesPerSession: cfg.egressMaxBytesPerSession,
+    maxBytesGlobal: cfg.egressMaxBytesGlobalWindow,
+    bytesWindowMs: cfg.egressBytesWindowMs,
+    ...(cfg.shardIndex !== undefined ? { shardIndex: cfg.shardIndex } : {}),
+    replicas: cfg.proxyReplicas,
+  };
 }
 
 /**

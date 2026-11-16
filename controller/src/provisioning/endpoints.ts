@@ -10,7 +10,7 @@
 import { log } from "@x402s/shared/runtime";
 import { pinnedShard, shardClaim } from "../data-plane-shard.js";
 import type { DataPlanePlacement, DataPlaneService } from "../data-plane-shard.js";
-import type { SessionRecord } from "../store/models.js";
+import type { SessionRecord } from "../store/models/session.js";
 import { newOpaqueToken, sha256Hex } from "../secrets.js";
 import { guestTokenFor } from "../tokens.js";
 

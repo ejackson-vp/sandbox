@@ -82,14 +82,14 @@ export type BudgetDecision =
     };
 
 /** One `payer_budgets` row, after its fixed window has been rolled forward. */
-export interface BudgetRowSnapshot {
+interface BudgetRowSnapshot {
   windowStartMs: number;
   creates: number;
   /** Atomic units committed in the window. */
   spend: string;
 }
 
-export interface BudgetSnapshot {
+interface BudgetSnapshot {
   /** The constant `global` row. */
   global: BudgetRowSnapshot;
   /** Non-terminal sessions cluster-wide. */
