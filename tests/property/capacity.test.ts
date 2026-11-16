@@ -140,6 +140,14 @@ describe("pure capacity admission", () => {
         const node = snapshot.nodes.find((n) => n.id === decision.nodeId)!;
         const reserved = snapshot.reservations
           .filter((r) => r.nodeId === decision.nodeId && r.state !== "RELEASED")
+          // A HELD row past its expiry is not charged: the reaper frees it, and
+          // `reservedOnNode` already skips it. Counting it here makes the
+          // reference disagree with a decision that was right to discount the
+          // hold, and the property fails on an expired reservation (seed
+          // 1083731105: a HELD row with expiresAt 0 at now 0).
+          .filter(
+            (r) => !(r.state === "HELD" && r.expiresAt !== null && r.expiresAt <= snapshot.now),
+          )
           .reduce(
             (sum, r) => addResources(sum, accountedResources(r, snapshot.accounting)),
             { cpuMillicores: 0, memoryBytes: 0, storageBytes: 0 },

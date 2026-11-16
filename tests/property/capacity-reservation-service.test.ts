@@ -96,7 +96,12 @@ describe("the reaper follows the state table", () => {
   it("releases terminal, suspends suspended and confirms only a missing Pod", async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.array(
+        // Distinct ids, because `id` is the reservation primary key: two rows
+        // that happen to share one collapse in the reference map below and the
+        // test then expects a confirmation for a row the store cannot hold.
+        // Same fixture collision the node list already guards against, and it
+        // failed about one run in fifty before this.
+        fc.uniqueArray(
           fc.record({
             id: fc.string({ minLength: 1, maxLength: 8 }),
             reservationState: fc.constantFrom<ReservationState>(
@@ -116,7 +121,7 @@ describe("the reaper follows the state table", () => {
             podName: fc.option(fc.string({ minLength: 1, maxLength: 8 }), { nil: null }),
             missingSession: fc.boolean(),
           }),
-          { maxLength: 5 },
+          { maxLength: 5, selector: (row) => row.id },
         ),
         fc.boolean(),
         async (rows, podExists) => {
