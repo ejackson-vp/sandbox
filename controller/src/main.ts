@@ -15,6 +15,7 @@
 import http from "node:http";
 import https from "node:https";
 import type { Server } from "node:http";
+import type { KubeConfig } from "@kubernetes/client-node";
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadControllerConfig, makeProvisioner, makeRelayClient, verifyRuntimeClass, type ControllerConfig, type RuntimeClassCheck } from "./config.js";
@@ -371,19 +372,57 @@ export async function start(): Promise<ControllerProcess> {
  * permission the read needs. Asking there would make a data-plane rollout
  * depend on an RBAC rule for a control-plane decision, so the check is scoped
  * to the roles that create pods.
+ *
+ * Exported, with the kube config injectable, so the three startup states
+ * (verified, dev on a cluster, no cluster) are asserted without booting a
+ * store and two listeners. `start()` still calls it exactly as before.
  */
-async function checkRuntimeClass(cfg: ControllerConfig): Promise<RuntimeClassCheck | null> {
+export async function checkRuntimeClass(
+  cfg: Pick<ControllerConfig, "role" | "executionMode" | "runtimeClass" | "kubeEnabled">,
+  kubeConfig?: KubeConfig,
+): Promise<RuntimeClassCheck | null> {
   if (cfg.role !== "controller" && cfg.role !== "all") return null;
 
   const check = await verifyRuntimeClass({
     executionMode: cfg.executionMode,
     runtimeClass: cfg.runtimeClass,
     kubeEnabled: cfg.kubeEnabled,
+    kubeConfig,
   });
 
+  if (!check.enforced && cfg.kubeEnabled && cfg.executionMode === "dev") {
+    // Kubernetes is on but the mode is `dev`, so every sandbox is scheduled
+    // with RUNTIME_CLASS and nothing reads its handler: isolation is whatever
+    // the class points at, and this process cannot tell. It is a legitimate
+    // profile for kind and the local cluster, so it starts, loudly, and the
+    // state is a scrape-time sample rather than a line in the boot log only.
+    // Refusing here would break `make up`; silence would make a runc
+    // RuntimeClass indistinguishable from a kata one at 3am.
+    log.warn("runtime_class_isolation_not_enforced", {
+      executionMode: cfg.executionMode,
+      runtimeClass: cfg.runtimeClass,
+      kubeEnabled: cfg.kubeEnabled,
+      isolation: "not-enforced",
+      detail:
+        `EXECUTION_MODE=dev with KUBERNETES_ENABLED=true: RuntimeClass ` +
+        `"${cfg.runtimeClass}" is applied to every sandbox but its handler is ` +
+        `not verified, so isolation is not enforced. Set EXECUTION_MODE=kata to ` +
+        `have the handler checked, or KUBERNETES_ENABLED=false for a run with ` +
+        `no isolation claim.`,
+    });
+    metrics
+      .gauge(
+        "sandbox_runtime_isolation_unenforced",
+        "1 when a Kubernetes deployment runs EXECUTION_MODE=dev, where the RuntimeClass handler is not verified",
+      )
+      .set({ runtime_class: cfg.runtimeClass, execution_mode: cfg.executionMode }, 1);
+    return check;
+  }
+
   if (!check.enforced) {
-    // Not an isolation claim: dev mode or no Kubernetes API, where no
-    // RuntimeClass exists to consult. Recorded so the absent claim is visible.
+    // Not an isolation claim: no Kubernetes API, where no RuntimeClass exists
+    // to consult and no pod is scheduled. Recorded so the absent claim is
+    // visible, and no gauge: there is no cluster to be wrong about.
     log.warn("runtime_class_unverified", {
       executionMode: cfg.executionMode,
       runtimeClass: cfg.runtimeClass,

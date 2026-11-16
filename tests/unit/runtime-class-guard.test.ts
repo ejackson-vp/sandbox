@@ -11,12 +11,14 @@
  * must not talk to a cluster at all. Local and test runs that never schedule a
  * pod cannot acquire a dependency on an object that only exists in one.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { log, metrics } from "@x402s/shared/runtime";
 import {
   DEFAULT_MICROVM_HANDLERS,
   parseMicrovmHandlers,
   verifyRuntimeClass,
 } from "../../controller/src/config/kubernetes.js";
+import { checkRuntimeClass } from "../../controller/src/main.js";
 import { FakeApiServer } from "../helpers/fake-apiserver.js";
 
 const servers: FakeApiServer[] = [];
@@ -182,5 +184,110 @@ describe("verifyRuntimeClass", () => {
 
     expect(check.enforced).toBe(false);
     expect(api.requests).toHaveLength(0);
+  });
+});
+
+/**
+ * The state a deployment can be left in, as seen from outside the process.
+ *
+ * `EXECUTION_MODE=dev` on a cluster is the one that is easy to leave switched
+ * on: the pods are still scheduled with RUNTIME_CLASS, so a `runc` class looks
+ * exactly like a kata one except in a boot line nobody reads. It warns by name
+ * and exports a gauge, and neither exists on the other two paths, so a scrape
+ * that shows the gauge is a deployment someone has to explain. It must not
+ * refuse: dev is the kind and local-cluster profile, and `make up` depends on it.
+ */
+describe("checkRuntimeClass startup signal", () => {
+  const UNENFORCED = "sandbox_runtime_isolation_unenforced";
+
+  /** Record the calls without writing to stderr. */
+  function warnSpy() {
+    return vi.spyOn(log, "warn").mockImplementation(() => {});
+  }
+
+  // 520 ms: the registry caches rendered text for 500 ms, so a render taken
+  // earlier would answer with the previous snapshot.
+  async function rendered(): Promise<string> {
+    await new Promise((resolve) => setTimeout(resolve, 520));
+    return metrics.render();
+  }
+
+  it("warns by RuntimeClass name and exports the gauge for dev mode on a cluster", async () => {
+    const warn = warnSpy();
+    try {
+      const check = await checkRuntimeClass({
+        role: "controller",
+        executionMode: "dev",
+        runtimeClass: "x402-sandbox-dev",
+        kubeEnabled: true,
+      });
+
+      // A warning, not a refusal: the process keeps the profile it was given.
+      expect(check?.enforced).toBe(false);
+      const line = warn.mock.calls.find(
+        (call) => call[0] === "runtime_class_isolation_not_enforced",
+      );
+      expect(line).toBeDefined();
+      const fields = line![1] as Record<string, unknown>;
+      expect(fields.runtimeClass).toBe("x402-sandbox-dev");
+      expect(fields.executionMode).toBe("dev");
+      expect(fields.kubeEnabled).toBe(true);
+      expect(String(fields.detail)).toContain('RuntimeClass "x402-sandbox-dev"');
+      expect(String(fields.detail)).toContain("isolation is not enforced");
+
+      expect(await rendered()).toContain(
+        `${UNENFORCED}{execution_mode="dev",runtime_class="x402-sandbox-dev"} 1`,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("neither warns nor exports the gauge when the handler is verified", async () => {
+    const api = await fakeApi();
+    api.seedRuntimeClass(runtimeClass("x402-sandbox-kata", "kata"));
+    const warn = warnSpy();
+    try {
+      const check = await checkRuntimeClass(
+        {
+          role: "controller",
+          executionMode: "kata",
+          runtimeClass: "x402-sandbox-kata",
+          kubeEnabled: true,
+        },
+        api.kubeConfig(),
+      );
+
+      expect(check).toMatchObject({ enforced: true, handler: "kata" });
+      expect(
+        warn.mock.calls.some((call) => call[0] === "runtime_class_isolation_not_enforced"),
+      ).toBe(false);
+      expect(await rendered()).not.toContain(
+        `${UNENFORCED}{execution_mode="kata",runtime_class="x402-sandbox-kata"}`,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("neither warns nor exports the gauge when Kubernetes is disabled", async () => {
+    const warn = warnSpy();
+    try {
+      const check = await checkRuntimeClass({
+        role: "controller",
+        executionMode: "dev",
+        runtimeClass: "x402-sandbox-nokube",
+        kubeEnabled: false,
+      });
+
+      expect(check?.enforced).toBe(false);
+      expect(
+        warn.mock.calls.some((call) => call[0] === "runtime_class_isolation_not_enforced"),
+      ).toBe(false);
+      // No cluster, so there is nothing to be wrong about and no sample to take.
+      expect(await rendered()).not.toContain('runtime_class="x402-sandbox-nokube"');
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -57,7 +57,7 @@ a family to catch an id-shaped label before it reaches storage.
 | File | Contract |
 | --- | --- |
 | [`contract/prometheus-scrape.yaml`](contract/prometheus-scrape.yaml) | The scrape job, bare-list form for `additionalScrapeConfigs` |
-| [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Twenty-one SLO rules, portable Prometheus/vmalert rule file |
+| [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml) | Twenty-three SLO rules, portable Prometheus/vmalert rule file |
 | [`contract/grafana-dashboard.json`](contract/grafana-dashboard.json) | `Sandbox control plane`, uid `sandbox-control-plane` |
 | [`contract/kustomization.yaml`](contract/kustomization.yaml) | Renders the three ConfigMaps, namespace `monitoring` |
 | [`contract/README.md`](contract/README.md) | How to consume the ConfigMaps, including with an existing Prometheus |
@@ -118,6 +118,32 @@ capacity. `base`'s floor is its `WARM_POOL_BASE_MIN` target and every language
 profile's floor is zero. Capacity is moved one growth step at a time, never
 created by a steal.
 
+## Payer allowlist
+
+ADR 0013 grants a $0 session to a wallet that proves control of an allowlisted
+address. The feature has no volume ceiling of its own: `payer_allowlist` bounds
+each entry per create with `max_tier` and `max_concurrent`, and nothing else
+counts how much free traffic the list absorbs. The two families the ratio
+depends on are exported:
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `sandbox_sessions_total` | counter | `source` | Sessions created; `source="allowlist"` is a granted free session |
+| `sandbox_allowlist_decisions_total` | counter | `result` | Every allowlist consultation on the create path |
+
+`result` is a closed enum: `granted`, `not_allowlisted`, `disabled`,
+`tier_not_allowed`, `concurrency_exhausted`, `lookup_failed`. `not_allowlisted`
+is the ordinary paid path, because every create consults the list when
+`PAYER_ALLOWLIST_ENABLED=true`, and `lookup_failed` is an unreachable controller
+that answers 503. Neither is a free-tier attempt, so the ratio rule excludes
+both. No label carries the address or the operator label: the address is
+customer identity and the label is free text.
+
+The two allowlist rules are detection, not enforcement. The per-entry caps stay
+the bound, and disabling a row (`sandbox admin allowlist disable <address>`)
+takes effect on the next create, because `authorize` reads the row under its
+advisory lock every time and there is no cache to expire.
+
 ## Alerts
 
 Rules are in [`contract/rules/sandbox-slo.yaml`](contract/rules/sandbox-slo.yaml).
@@ -140,6 +166,8 @@ evaluators all load them unchanged.
 | `SandboxWarmPoolDrainThrash` | at least 5 idle drains and 5 growths in 1h, per profile | 30m | warning |
 | `SandboxEgressBytesNearCap` | egress above 75% of the global hourly byte budget | 10m | warning |
 | `SandboxEgressLimitRejections` | any egress byte budget refusal, per scope | 5m | warning |
+| `SandboxAllowlistSessionRateHigh` | free sessions above 30/hour, averaged over 15m | 15m | warning |
+| `SandboxAllowlistAttemptsToGrantsHigh` | allowlist attempts above 5x granted free sessions, at least 12 in 10m | 10m | warning |
 | `SandboxMetricsTargetDown` | `up{job="sandbox-control"} == 0` | 2m | critical |
 | `SandboxBlastRadius` | controller or relay down with ≥5 relay sessions in the last 15m | 5m | critical |
 | `SandboxLedgerDivergence` | any `sandbox_ledger_divergence{reason}` above zero | 1m | critical |
@@ -221,6 +249,18 @@ construction, because every chunk is charged to both budgets: the expressions
 select one scope and never sum across them. `SandboxEgressBytesNearCap` hardcodes
 75% of the 20 GiB default for `EGRESS_MAX_BYTES_GLOBAL_WINDOW` over its 1 h
 default window, so change the range and threshold together with either.
+
+**Allowlist volume is detection, not a ceiling.** Neither allowlist rule bounds
+anything: the entry's `max_tier` and `max_concurrent` are the bound, and the
+rules only decide when a human should look. `SandboxAllowlistSessionRateHigh`
+assumes the default `max_concurrent = 1` and the 60 s `short` tier; an entry with
+`max_concurrent = 0`, or a workload that only uses `long` sessions, moves what
+"too much" means, so tune the 30/hour threshold with the recorded reason.
+`SandboxAllowlistAttemptsToGrantsHigh` divides attempts by *created* free
+sessions, so a grant that later fails on budget or capacity also lifts the
+ratio: check `sandbox_allowlist_decisions_total{result}` and the API log for
+`allowlist_refused` before treating it as a leaked key. The 12-attempt gate in
+the window keeps a couple of retries from a cold client quiet.
 
 **The rules do not deliver notifications.** The rule file carries no receiver.
 The operator's monitoring stack evaluates with `-notifier.blackhole`, so alerts

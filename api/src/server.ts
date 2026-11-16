@@ -40,6 +40,7 @@ import type { ChainSettlementVerifier } from "./payments/settlement-verifier.js"
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 import { createSessionHandler } from "./routes/create-session.js";
+import { ALLOWLIST_DECISIONS_TOTAL } from "./use-cases/create-session-allowlist.js";
 
 async function retry<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
   const deadline = Date.now() + timeoutMs;
@@ -124,6 +125,10 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   metrics.histogram("sandbox_session_create_duration_seconds", "Create request duration", LATENCY_BUCKETS);
   metrics.counter("sandbox_sessions_created_total", "Session create requests by outcome");
   metrics.counter("sandbox_sessions_total", "Sessions created by entitlement source");
+  // Registered here, not on first use, so a scrape before the first allowlist
+  // consultation shows a zero instead of an absent family. The free tier has no
+  // volume ceiling, so its counters are the only place a shared wallet shows up.
+  metrics.counter(ALLOWLIST_DECISIONS_TOTAL, "Allowlist entitlement decisions by outcome");
 
   const resourceInfo = {
     url: `${config.publicBaseUrl}/v1/sessions`,

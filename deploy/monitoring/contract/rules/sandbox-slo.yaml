@@ -344,6 +344,73 @@ groups:
             docs/runbooks/egress-abuse.md before raising either bound.
           runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
 
+      # Payer allowlist (ADR 0013). A free session is granted to a proven
+      # allowlisted address, bounded per entry by `max_tier` and `max_concurrent`
+      # and by nothing else: there is no volume ceiling, so a shared or leaked
+      # wallet is only visible in these counters. Both rules are detection, not
+      # enforcement. The caps stay the bound and an operator decides whether a
+      # rate is a batch job or a wallet that escaped.
+      #
+      # `sandbox_allowlist_decisions_total{result}` (api role) carries the
+      # outcome of every consultation. `not_allowlisted` is the ordinary paid
+      # path and `lookup_failed` is an unreachable controller, so the ratio
+      # counts only the decisions that reached an allowlist row. Neither family
+      # carries an address: the address is customer identity.
+      - alert: SandboxAllowlistSessionRateHigh
+        expr: |
+          sum(rate(sandbox_sessions_total{role="api",source="allowlist"}[15m])) * 3600 > 30
+        for: 15m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Free sessions are being created at more than 30 per hour"
+          description: >-
+            Allowlisted wallets created {{ $value | humanize }} free sessions
+            per hour, averaged over 15 minutes and held for 15. The default
+            entry sets `max_concurrent = 1` and the shortest tier is 60 s, so
+            one wallet cannot exceed about 60 sequential short sessions an
+            hour; 30 is half that ceiling and far above the occasional create a
+            named agent makes. Sustained volume here is either a batch job on a
+            free wallet or a key that is shared. Read the ledger rows with
+            `source = 'allowlist'` and their labels, then
+            `sandbox admin allowlist disable <address>` if the volume is not
+            expected: that takes effect on the next create.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
+      - alert: SandboxAllowlistAttemptsToGrantsHigh
+        expr: |
+          (
+            sum(rate(sandbox_allowlist_decisions_total{role="api",result=~"granted|disabled|tier_not_allowed|concurrency_exhausted"}[10m]))
+            /
+            clamp_min(sum(rate(sandbox_sessions_total{role="api",source="allowlist"}[10m])), 0.001)
+          ) > 5
+          and on ()
+          (
+            sum(rate(sandbox_allowlist_decisions_total{role="api",result=~"granted|disabled|tier_not_allowed|concurrency_exhausted"}[10m])) > 0.02
+          )
+        for: 10m
+        labels:
+          severity: warning
+          service: sandbox
+        annotations:
+          summary: "Allowlist attempts are above five per granted free session"
+          description: >-
+            Allowlist consultations that reached a row have run at
+            {{ $value | humanize }} times the rate of granted free sessions for
+            10 minutes. A client that is behaving makes one attempt per
+            session; a rate this far above one means most attempts are being
+            refused, which is what repeatedly hitting `max_concurrent` (or a
+            disabled row) from a shared or leaked key looks like. The rule is
+            gated on roughly 12 attempts or more in the 10-minute window so a
+            couple of retries cannot fire it. Check
+            `sandbox_allowlist_decisions_total` by `result` for which reason
+            dominates, then disable the entry if the traffic is not the
+            wallet's owner. A grant that fails later (budget, capacity) also
+            lifts this ratio, so confirm in the API log before treating it as a
+            leak.
+          runbook_url: "https://github.com/ejackson-vp/sandbox/blob/main/deploy/monitoring/README.md#alerts"
+
       - alert: SandboxMetricsTargetDown
         expr: up{job="sandbox-control"} == 0
         for: 2m

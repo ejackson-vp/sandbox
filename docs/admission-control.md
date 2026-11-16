@@ -153,6 +153,58 @@ it stays in front. Metrics: `sandbox_budget_rejections_total{scope}` in the
 controller, `sandbox_rate_limited_total{scope="payer_budget"|"global_budget"}` in
 the API.
 
+## Allowlist volume (detection, not a ceiling)
+
+`PAYER_ALLOWLIST_ENABLED=true` gives a proven allowlisted address a $0 session
+(ADR 0013). Each entry is bounded per create by `max_tier` and `max_concurrent`,
+and the free path reserves under `allow:<address>`, so a free session cannot
+consume a paying payer's window. Neither cap watches volume: a wallet whose key
+is shared or leaked stays inside them and only looks different in the counters.
+
+What to watch, both on the API process that makes the decision:
+
+| Metric | Labels | Read it as |
+| --- | --- | --- |
+| `sandbox_sessions_total{source="allowlist"}` | `source` | free sessions actually created |
+| `sandbox_allowlist_decisions_total{result}` | `result` | outcome of every consultation: `granted`, `not_allowlisted`, `disabled`, `tier_not_allowed`, `concurrency_exhausted`, `lookup_failed` |
+
+`not_allowlisted` is the ordinary paid path, because every create consults the
+list while the feature is on, and `lookup_failed` is a controller that could not
+be reached (a 503, no payment taken). Neither is a free-tier attempt. No label
+carries the address or the operator label: the address is customer identity.
+
+Two SLO rules read those names
+([sandbox-slo.yaml](../deploy/monitoring/contract/rules/sandbox-slo.yaml)):
+
+- **`SandboxAllowlistSessionRateHigh`** fires above 30 free sessions an hour,
+  averaged over 15 minutes and held for 15. With the default
+  `max_concurrent = 1` and the 60 s `short` tier, one wallet tops out near 60
+  sequential short sessions an hour; 30 is half that ceiling and far above the
+  occasional create a named agent makes. It means free capacity is being used at
+  a rate no single named wallet should reach.
+- **`SandboxAllowlistAttemptsToGrantsHigh`** fires when attempts that reached an
+  allowlist row run above five per created free session for 10 minutes, gated on
+  at least 12 attempts in the window. A behaving client makes one attempt per
+  session, so most of that ratio is refusals, which is what repeatedly hitting
+  `max_concurrent` from a shared or leaked key looks like. Split it by `result`
+  to see which refusal dominates. A grant that later fails on budget or capacity
+  also lifts the ratio, so confirm in the API log (`allowlist_refused`) before
+  treating it as a leak.
+
+Neither rule is a limit. If the traffic is not the wallet's owner, disabling the
+row is the response:
+
+```bash
+sandbox admin allowlist disable 0x<address>
+```
+
+It takes effect on the next create: every request runs `authorize`, which opens a
+transaction and reads the row under an address-scoped advisory lock before it
+answers, so there is no cache to expire and no restart. Disabling keeps the row
+and its label (a re-add clears `disabled_at`), and a refusal falls back to the
+paid path rather than erroring, so the caller loses the free session and nothing
+else.
+
 ## Measured burst (pool = 8, all buckets raised)
 
 All sessions were paid mock sessions against the real API/controller/relay. The

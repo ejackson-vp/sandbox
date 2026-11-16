@@ -18,7 +18,7 @@
  */
 import { sha256Hex } from "@x402s/shared/crypto";
 import type { SessionSpec } from "@x402s/shared/protocol";
-import { log } from "@x402s/shared/runtime";
+import { log, metrics } from "@x402s/shared/runtime";
 import type { AllowlistDecision } from "../controller-client.js";
 import {
   json,
@@ -44,6 +44,36 @@ export function allowlistBudgetKey(address: string): string {
   return `allow:${address.toLowerCase()}`;
 }
 
+/** The one metric family the allowlist decision exports. */
+export const ALLOWLIST_DECISIONS_TOTAL = "sandbox_allowlist_decisions_total";
+
+/**
+ * Outcomes of one consultation, as a closed enum.
+ *
+ * `granted` and `lookup_failed` are this module's two outcomes; the rest are the
+ * controller's refusal reasons. The address and the operator label are never
+ * label values: the address is customer identity and the label is free text.
+ */
+type DecisionOutcome =
+  | "granted"
+  | "lookup_failed"
+  | Extract<AllowlistDecision, { allowed: false }>["reason"];
+
+/**
+ * Count one consultation.
+ *
+ * The free tier is bounded per entry by `max_tier` and `max_concurrent`, and
+ * nothing watches its volume, so a shared or leaked wallet otherwise leaves no
+ * trace beyond its ledger rows. `not_allowlisted` is the ordinary paid path and
+ * is counted too, so the family answers "how much of the create traffic
+ * consults the allowlist" as well as "how much of it is free".
+ */
+function countDecision(result: DecisionOutcome): void {
+  metrics
+    .counter(ALLOWLIST_DECISIONS_TOTAL, "Allowlist entitlement decisions by outcome")
+    .inc({ result });
+}
+
 export type Allowance =
   | { kind: "allowed"; label: string; budgetKey: string }
   | { kind: "unavailable"; result: CreateSessionResult };
@@ -67,6 +97,7 @@ export async function resolveAllowance(
     // is meant to be free, so the honest answer is a retryable refusal.
     // Stryker disable next-line CallExpression,StringLiteral,ObjectLiteral: log only; the 503 below is the behaviour
     log.error("allowlist_lookup_failed", { error: (err as Error).message });
+    countDecision("lookup_failed");
     return {
       kind: "unavailable",
       result: json(503, {
@@ -86,8 +117,10 @@ export async function resolveAllowance(
       // Stryker disable next-line CallExpression,StringLiteral,ObjectLiteral: log only
       log.info("allowlist_refused", { reason: decision.reason, tier: spec.tier });
     }
+    countDecision(decision.reason);
     return null;
   }
+  countDecision("granted");
   return {
     kind: "allowed",
     label: decision.label,
