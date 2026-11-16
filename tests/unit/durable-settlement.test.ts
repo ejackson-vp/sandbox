@@ -9,7 +9,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { UnsupportedSettlementLookup, type SettlementLookup } from "@x402s/shared/runtime";
-import { postCreate } from "../helpers/create-route.js";
+import { REQUIREMENT, postCreate } from "../helpers/create-route.js";
 
 const SUPPORTED_LOOKUP: SettlementLookup = {
   supported: true,
@@ -99,7 +99,16 @@ describe("settlement outcome classification", () => {
   });
 
   it("still recovers a nonce conflict through the lookup", async () => {
-    const lookup = vi.fn(async () => ({ settled: true, payer: "0xpayer", transaction: "0xtx" }));
+    // A record has to prove the recipient and the amount, not just that the key
+    // settled (F-21): these are the server's own terms, which is what a truthful
+    // facilitator reports from the authorisation it submitted.
+    const lookup = vi.fn(async () => ({
+      settled: true,
+      payer: "0xpayer",
+      transaction: "0xtx",
+      recipient: REQUIREMENT.payTo,
+      amount: REQUIREMENT.amount,
+    }));
     const result = await postCreate(
       () => undefined,
       {

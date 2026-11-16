@@ -236,7 +236,8 @@ describe("the validity window a client signs", () => {
       expect(verify.payer).toBeDefined();
 
       // A settled payment names the transaction the ledger records, and the
-      // nonce store is handed the key and amount recovery reconciles against.
+      // nonce store is handed the key, the amount and the recipient recovery
+      // reconciles against (F-21).
       const settle = await scheme.settle(payload, requirements());
       expect(settle.success).toBe(true);
       expect(settle.transaction).toMatch(/^mock:[0-9a-f]{32}$/);
@@ -245,6 +246,7 @@ describe("the validity window a client signs", () => {
         payer: verify.payer,
         paymentKey: expect.stringMatching(/^[0-9a-f]{64}$/),
         amount: "50000",
+        recipient: requirements().payTo,
       });
 
       // A replay is refused by the nonce store and says so, without inventing

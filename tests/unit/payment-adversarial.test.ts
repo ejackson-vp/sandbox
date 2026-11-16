@@ -13,11 +13,11 @@
  * a fake reader, so nothing reaches a network and a refusal is the guard firing
  * rather than a stub agreeing.
  *
- * One attack succeeds: the settlement lookup is trusted without proving the
- * transfer (F-21), asserted as the correct behaviour under `it.fails` and
- * written up in `security-review/ADVERSARIAL-PAYMENTS.md`. A few rows also have
- * a home elsewhere (F-02, F-07, F-17, F-20, `api-config.test.ts`); they are here
- * because this file is the attack record.
+ * F-21 (a settlement record that proves neither recipient nor amount) started
+ * here as the one attack that succeeded; it is now a fixed behaviour with its
+ * own verdict table. A few rows also have a home elsewhere (F-02, F-07, F-17,
+ * F-20, `api-config.test.ts`); they are here because this file is the attack
+ * record.
  */
 import { describe, expect, it, vi } from "vitest";
 import type { PaymentRequirements } from "@x402/core/types";
@@ -562,70 +562,5 @@ describe("attack 8: configuration that would enable it", () => {
         FACILITATOR_API_KEY_SECRET: "secret",
       }),
     ).toThrow(/https/);
-  });
-});
-
-/**
- * FINDING F-21 (proven): the settlement lookup is trusted without proving the
- * transfer. `recoverSettlement` reads `settled: true` and grants; the record's
- * amount and payer are never compared to the intent's terms. Reachable in
- * `PAYMENT_MODE=mock`, the only mode that wires a supported lookup, and in any
- * deployment that enables one without a chain verifier.
- *
- * The assertion below is the *correct* behaviour; it fails today.
- */
-describe("finding F-21: a lookup answer is not proof of a transfer", () => {
-  it.fails("refuses a payment the facilitator settled to the payer's own address", async () => {
-    const { freshStore } = await import("../helpers/test-store.js");
-    const store = await freshStore();
-    const payer = ACCOUNT();
-    // The right amount, the wrong recipient: `decodePayment` checks the amount
-    // and the network, not the recipient.
-    const accepted = { ...REQUIREMENT, payTo: payer.address };
-    const payload = await payloadFor(payer, { to: payer.address }, accepted);
-    const header = headerOf(payload);
-    const { resourceServer } = facilitator();
-    const lookup = {
-      supported: true,
-      lookup: async () => ({ settled: true, transaction: "mock:self", payer: payer.address }),
-    };
-    // `staleMs: 0` is the stale-claim path the 30 s default takes, without the
-    // wait (`claimLease`: a zero lease means "already expired").
-    const claimStore = (staleMs: number) =>
-      vi.fn(async (key: string, specHash: string, _staleMs: number, requirement: unknown) =>
-        store.claimPaymentIntent(key, specHash, staleMs, {
-          requirementsJson: JSON.stringify(requirement),
-        }),
-      );
-
-    // 1. The first attempt is refused by verify, and the intent it claimed
-    //    stays `claimed`: a failed verify releases capacity, not the intent.
-    const first = await postCreate(
-      ({ controller }) => {
-        controller.claimIntent = claimStore(30_000);
-      },
-      { account: payer, paymentHeader: header, resourceServer, settlementLookup: lookup },
-    );
-    expect(first.status).toBe(402);
-    expect(first.body.error).toBe("payment_invalid:payto_mismatch");
-    expect((await store.getPaymentIntent(first.paymentKey))?.status).toBe("claimed");
-
-    // 2. The payer settles its own authorisation: 50 000 units to itself.
-    expect(await resourceServer.settlePayment(payload, accepted)).toMatchObject({ success: true });
-
-    // 3. The reclaim happens, and with no chain verifier the facilitator's
-    //    record is the only source.
-    const second = await postCreate(
-      ({ controller }) => {
-        controller.burnChallengeNonce = vi.fn(async () => ({ status: "replay" as const }));
-        controller.claimIntent = claimStore(0);
-      },
-      { account: payer, paymentHeader: header, resourceServer, settlementLookup: lookup },
-    );
-
-    // Today: 201, with a ledger row that says amount 50 000 to `PAY_TO` while
-    // the settlement transferred 50 000 to the payer.
-    expect(second.status).toBe(402);
-    expect(second.controller.completeIntent).not.toHaveBeenCalled();
   });
 });

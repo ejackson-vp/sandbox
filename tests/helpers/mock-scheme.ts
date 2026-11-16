@@ -102,13 +102,13 @@ export async function authorizedPayload(account: Account, window: Window = {}): 
 export class RecordingNonceStore implements MockNonceStore {
   readonly claims: Array<{
     nonce: string;
-    meta: { payer: string; paymentKey: string; amount: string };
+    meta: { payer: string; paymentKey: string; amount: string; recipient: string };
   }> = [];
   private readonly seen = new Set<string>();
   constructor(private readonly answer?: boolean) {}
   async claimNonce(
     nonce: string,
-    meta: { payer: string; paymentKey: string; amount: string },
+    meta: { payer: string; paymentKey: string; amount: string; recipient: string },
   ): Promise<boolean> {
     this.claims.push({ nonce, meta });
     if (this.answer !== undefined) return this.answer;

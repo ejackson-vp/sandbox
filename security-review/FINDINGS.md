@@ -1,8 +1,10 @@
 # Findings
 
 Base revision: `9d4bf54` for F-01 to F-16, reviewed again at `5d4d50a` for
-F-17 to F-20 (see [Delta review](#delta-review-5d4d50a)). Follow-up work is
-tracked as GitHub issues #31, #42–#48 and #64. See `EVIDENCE.md`.
+F-17 to F-20 (see [Delta review](#delta-review-5d4d50a)). F-21 was found by the
+adversarial suite at `eea1569` and fixed on `test/adversarial-payments`. Follow-up
+work is tracked as GitHub issues #31, #42–#48 and #64. See `EVIDENCE.md` and
+`ADVERSARIAL-PAYMENTS.md`.
 Severity is impact if exploited **in the configuration named in each entry**.
 Confidence: `proven` (regression test), `code-confirmed` (read and traced, not
 executed), `theoretical` (no concrete path found).
@@ -29,6 +31,7 @@ executed), `theoretical` (no concrete path found).
 | F-18 | Low | code-confirmed | The runtime-class guard only runs when `EXECUTION_MODE=kata`. A cluster deployed with the default `dev` skips it, and the only signal is the `executionMode` field in the evidence | Accepted (dev is explicit); healthz now reports the resolved handler in every mode |
 | F-19 | Medium | code-confirmed | Background settlement recovery in the controller still uses the facilitator lookup only, so a settled-but-unentitled payment is recorded as debt only if the client retries the create and the API resolves it from the chain | Open; the client-retry path is the gap |
 | F-20 | Medium | code-confirmed | The allowlist is a free tier on the public create path. The credential is a long-lived wallet key held by the agent host that runs model-authored code, so a compromised host gets free sessions until the entry is disabled | Accepted with a tier ceiling and a concurrency cap; see below |
+| F-21 | Medium | proven | A facilitator settlement record was trusted on `settled: true` alone: the recovery path granted a session without proving the recipient or the amount, so a payment a payer sent to itself bought a session | **Fixed**: the record must name the recipient it settled to and the amount that moved; see below |
 
 ---
 
@@ -598,6 +601,82 @@ Free sessions also skip the facilitator, so they are not screened by the KYT and
 OFAC checks a paying payment gets. The value of that is low, but it means an
 allowlisted wallet is the one path into the service that is not compliance
 screened.
+
+### F-21 — a settlement record proves a key was used, not that this requirement was paid
+
+**Attacker prerequisites:** a wallet, and a facilitator that will settle what its
+caller asks it to. Settlement of a self-addressed EIP-3009 authorisation is a
+valid transfer, so nothing exotic is needed.
+**Surface:** `POST /v1/sessions`, the crash-recovery branch that reads
+`GET /settlements/:paymentKey` (`recoverSettlement` in
+`api/src/payments/settlement-confirmation.ts`).
+**Boundary:** a facilitator's claim → an entitlement.
+**CWE:** CWE-345 (insufficient verification of data authenticity).
+
+**Expected:** a recovered payment entitles a session only when the source proves
+*this* transfer: this payer, this nonce, at least this amount, to this `PAY_TO`.
+F-17 established that for the chain. The lookup is a second source and has to
+meet the same standard.
+
+**Actual:** `recoverSettlement` granted on `record.settled === true`. The record
+carried an `amount` and a `payer`, and nothing compared either to the
+requirement the intent was claimed with. The module's own comment said the
+opposite ("A recipient or amount taken from the request would let the payer
+choose what settled means"), which is how the gap survived review: the argument
+was made about the request, and the record was never held to it.
+
+Reachable path, executed as a test: the payer posts a header that advertises the
+server's amount and authorises 50,000 units **to itself**. `decodePayment`
+checks the amount and the network, not the recipient, so it passes; the
+facilitator refuses with `payto_mismatch` and the client gets a 402. That failed
+verify releases capacity but leaves the payment intent `claimed`. The payer then
+settles its own authorisation, waits out the claim lease (30 s by default), and
+retries. The reclaimed intent answers `recovered: true`, `recoverSettlement`
+runs before any verify, the chain has no verifier in mock mode, and the lookup
+says `settled`. The API answered 201 with a capability and wrote a ledger row
+claiming `amount 50000` to `PAY_TO` for a transfer that went to the payer.
+
+**Why it was bounded to mock:** `createApp` wires `HttpSettlementLookup` only
+when `PAYMENT_MODE=mock`; testnet and mainnet use `UnsupportedSettlementLookup`,
+so `recoverSettlement` answers `unknown` and withholds. **The deployed mock
+deployment was exposed**; testnet and mainnet never were. Two things made that
+worth fixing rather than accepting:
+
+- the mock path is the deployment the payment test suite runs against, so a
+  shape that grants without the transfer weakens the evidence for the recipient
+  property everywhere it is asserted;
+- `HttpSettlementLookup` is not mock-specific. One `supported: true` on a real
+  network would have turned a documented, unproven facilitator answer into an
+  entitlement, and a real facilitator settles what it is asked to settle.
+
+**Fix applied:** `SettlementRecord` gained `recipient`, alongside the `amount` it
+already had, and both are now required for a grant. `recoverSettlement` decides
+`settled` only when the chain proves the transfer or the record proves both:
+`record.recipient` equal to the requirement's `payTo` (address shape checked,
+compared case-insensitively, never a substring) and `record.amount >=
+requirement.amount`. A record that cannot name either is `unknown`, which
+withholds without closing the reconciliation window; a record that names another
+recipient or a short amount positively contradicts the requirement and is
+`disproven`, so it is refused rather than retried forever. The mock facilitator
+(`api/src/mock-facilitator.ts`) now stores the recipient from the submitted
+authorisation, next to the amount it already stored, and reports both from that
+row rather than from anything the caller supplied. The controller's recovery
+worker still treats `settled: true` as enough to record a debt, which is correct:
+a debt needs to exist, an entitlement needs to be earned.
+
+**Regression:** `tests/unit/settlement-record.test.ts` holds the verdict table
+(correct record grants, wrong recipient refuses, short amount refuses, missing
+recipient or amount withholds) and the end-to-end self-addressed attack that
+started this; `tests/unit/mock-facilitator.test.ts` pins that the record reports
+the authorisation's recipient and value and never stores a settlement it
+refused; `tests/unit/payment-adversarial.test.ts` keeps the other 36 attacks.
+
+**Residual:** a facilitator that lies about both fields is indistinguishable
+from one that tells the truth, which is why the chain check takes precedence
+wherever it exists and why mainnet refuses to start without one. A database
+written by the previous mock facilitator reads its old rows as "settled but
+unprovable" (the column is added as nullable), so an operator upgrading the mock
+sees a withhold until that payment is settled again, never a bad grant.
 
 ---
 

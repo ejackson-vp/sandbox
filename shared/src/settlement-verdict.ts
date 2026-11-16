@@ -31,6 +31,15 @@ import {
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
 
 /**
+ * Whether a value has the 20-byte EVM address shape. One predicate, so a
+ * requirement, a settlement record and a config override cannot disagree about
+ * what a usable address is.
+ */
+export function isEvmAddress(value: unknown): value is `0x${string}` {
+  return typeof value === "string" && ADDRESS_PATTERN.test(value);
+}
+
+/**
  * What a settlement check means to a caller.
  *
  * - `settled`: the chain proved the transfer. Grant or recover.
@@ -47,7 +56,7 @@ export function settlementTerms(terms: {
   payTo: string;
   amount: string | bigint;
 }): { recipient: `0x${string}`; amount: bigint } | null {
-  if (!ADDRESS_PATTERN.test(terms.payTo)) return null;
+  if (!isEvmAddress(terms.payTo)) return null;
   let amount: bigint;
   try {
     amount = typeof terms.amount === "bigint" ? terms.amount : BigInt(terms.amount);

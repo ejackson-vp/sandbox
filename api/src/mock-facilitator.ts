@@ -32,21 +32,38 @@ class SqliteNonceStore implements MockNonceStore {
         payer TEXT NOT NULL,
         payment_key TEXT NOT NULL UNIQUE,
         amount TEXT NOT NULL,
+        recipient TEXT,
         created_at INTEGER NOT NULL
       );
     `);
+    // Additive for a database written before the settlement lookup could prove
+    // a recipient. A stale row reads as "settled but unprovable", so the create
+    // path withholds rather than granting (F-21).
+    const columns = this.db.prepare("PRAGMA table_info(mock_nonces)").all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((column) => column.name === "recipient")) {
+      this.db.exec("ALTER TABLE mock_nonces ADD COLUMN recipient TEXT");
+    }
   }
 
   async claimNonce(
     nonce: string,
-    meta: { payer: string; paymentKey: string; amount: string },
+    meta: { payer: string; paymentKey: string; amount: string; recipient: string },
   ): Promise<boolean> {
     try {
       this.db
         .prepare(
-          "INSERT INTO mock_nonces (nonce, payer, payment_key, amount, created_at) VALUES (?, ?, ?, ?, ?)",
+          "INSERT INTO mock_nonces (nonce, payer, payment_key, amount, recipient, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         )
-        .run(nonce.toLowerCase(), meta.payer, meta.paymentKey, meta.amount, Date.now());
+        .run(
+          nonce.toLowerCase(),
+          meta.payer,
+          meta.paymentKey,
+          meta.amount,
+          meta.recipient.toLowerCase(),
+          Date.now(),
+        );
       return true;
     } catch {
       return false; // UNIQUE violation => replay
@@ -141,6 +158,11 @@ export async function createMockFacilitator(opts: MockFacilitatorOptions = {}): 
   // Settlement lookup: lets the API recover the crash window between settlement
   // and durable entitlement creation without charging twice. Mock-only: a
   // production facilitator exposes no such contract.
+  //
+  // The record reports the recipient and the amount from the authorisation that
+  // settled, never from the requirements the caller supplied: a caller can ask
+  // the facilitator to settle a transfer to itself, and the API must be able to
+  // tell that apart from a payment to `PAY_TO` (F-21).
   app.get("/settlements/:paymentKey", (req, res) => {
     const key = String(req.params.paymentKey ?? "");
     if (!/^[0-9a-f]{64}$/.test(key)) {
@@ -148,8 +170,8 @@ export async function createMockFacilitator(opts: MockFacilitatorOptions = {}): 
       return;
     }
     const row = db
-      .prepare("SELECT payer, amount FROM mock_nonces WHERE payment_key = ?")
-      .get(key) as { payer: string; amount: string } | undefined;
+      .prepare("SELECT payer, amount, recipient FROM mock_nonces WHERE payment_key = ?")
+      .get(key) as { payer: string; amount: string; recipient: string | null } | undefined;
     if (!row) {
       res.status(404).json({ settled: false });
       return;
@@ -159,6 +181,7 @@ export async function createMockFacilitator(opts: MockFacilitatorOptions = {}): 
       transaction: `mock:${sha256Hex(key).slice(0, 32)}`,
       payer: row.payer,
       amount: row.amount,
+      ...(row.recipient ? { recipient: row.recipient } : {}),
     });
   });
 
