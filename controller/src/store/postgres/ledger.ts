@@ -260,9 +260,9 @@ export class PgLedgerRepository {
     const now = Date.now();
     const res = await this.conn.write(
       `INSERT INTO payment_ledger
-         (payment_key, session_id, payer, amount, asset, network, mode, status, reason,
+         (payment_key, session_id, payer, amount, asset, network, mode, source, status, reason,
           refund_tx, settlement_nonce, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
        ON CONFLICT DO NOTHING`,
       [
         entry.paymentKey,
@@ -272,6 +272,9 @@ export class PgLedgerRepository {
         entry.asset,
         entry.network,
         entry.mode,
+        // The column default is the same value; sending it keeps the row the
+        // caller described rather than the row the schema guessed.
+        entry.source ?? "x402",
         entry.status,
         entry.reason,
         entry.refundTransaction ?? null,

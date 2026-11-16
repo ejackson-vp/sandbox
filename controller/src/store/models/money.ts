@@ -115,21 +115,39 @@ export interface PaymentLedgerRecord {
  * unentitled or a duplicate charge. Shared by the refund and settlement-recovery
  * ports, so the shape lives with the record it inserts rather than with an
  * adapter.
+ *
+ * Everything a funded row knows, minus the columns the refund worker owns (its
+ * attempts and its lease) and the timestamps the adapter stamps. Deriving it
+ * from {@link PaymentLedgerRecord} is the point: the second copy that used to
+ * live on the port drifted, and `source` was missing from both, so a caller
+ * could not write a row the ledger itself could hold.
  */
-export interface UnclaimedLedgerEntry {
-  paymentKey: string;
-  sessionId: string;
-  payer: string | null;
-  amount: string;
-  asset: string;
-  network: string;
-  mode: PaymentMode;
-  status: LedgerStatus;
-  reason: string;
+export type UnclaimedLedgerEntry = Omit<
+  PaymentLedgerRecord,
+  // Refund-worker state: this row is written before the worker ever sees it.
+  | "refundAttempts"
+  | "refundLastError"
+  | "refundNextAttemptAt"
+  | "refundClaimToken"
+  | "refundClaimedAt"
+  | "refundIdempotencyKey"
+  // Timestamps the adapter stamps at insert.
+  | "createdAt"
+  | "updatedAt"
+  // Removed here and re-added as optional below.
+  | "source"
+  | "refundTransaction"
+> & {
   /** Set when the row is written already refunded (a mock refund). */
   refundTransaction?: string | null;
-  settlementNonce: string | null;
-}
+  /**
+   * Optional because the column defaults to `x402` and a settled x402 payment
+   * is the only row this path writes. Spelled out so an allowlist row can say
+   * so instead of inheriting the default silently.
+   */
+  source?: PaymentSource;
+};
+
 export interface PaymentIntentRecord {
   paymentKey: string;
   status: IntentStatus;
