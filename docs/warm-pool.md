@@ -3,7 +3,8 @@
 > Benchmark tooling and raw results live in the [sandbox-bench](https://github.com/ejackson-vp/sandbox-bench) repository; paths below refer to that repo.
 
 Status: **implemented and measured on the local kind rig.** Not enabled by
-default.
+default: the base config ships `WARM_POOL_SIZE=0`. The Talos overlay enables it
+with 20 idle pods, 16 of them reserved for `base`.
 
 > **Position:** this pool is a development stand-in for snapshot restore, not a
 > scaling strategy. It is deliberately simpler than FES: claim-once, no reuse, no
