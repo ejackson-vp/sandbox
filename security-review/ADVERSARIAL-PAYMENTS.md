@@ -1,6 +1,6 @@
 # Adversarial payment tests
 
-Base revision: `eea1569` (main). The suite is
+Base revision: `eea1569` (main). Suite commit: `62f46a2`. The suite is
 `tests/unit/payment-adversarial.test.ts` (37 cases) with its builders in
 `tests/helpers/payment-attacks.ts`. Nothing here reaches a network: the
 facilitator is the repository's own `MockExactFacilitatorScheme` wired as a
