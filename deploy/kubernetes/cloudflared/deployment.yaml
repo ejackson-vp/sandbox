@@ -55,6 +55,12 @@ spec:
             # it is never routed by the tunnel itself.
             - --metrics
             - 0.0.0.0:2000
+            # Ingress rules from the ConfigMap beside this file. Token mode
+            # authenticates the connector; it does not supply routes, and a
+            # connector with no routes answers 503 for every request while
+            # looking perfectly healthy.
+            - --config
+            - /etc/cloudflared/config.yml
             - run
           env:
             # Token mode: the token carries the tunnel id, account and secret.
@@ -75,6 +81,7 @@ spec:
             limits: {cpu: "200m", memory: "128Mi", ephemeral-storage: "32Mi"}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
+            - {name: config, mountPath: /etc/cloudflared, readOnly: true}
           readinessProbe:
             # /ready answers 200 once at least one edge connection is registered,
             # so a pod that cannot reach Cloudflare is not sent traffic.
@@ -92,3 +99,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: "32Mi"}
+        - name: config
+          configMap:
+            name: cloudflared-config

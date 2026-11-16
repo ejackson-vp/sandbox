@@ -59,10 +59,17 @@ cloudflared tunnel route dns throwbox-api api.throwbox.dev
 cloudflared tunnel token throwbox-api          # the value for the Secret above
 ```
 
-Public hostname mapping, in the tunnel configuration (dashboard or
-`~/.cloudflared/config.yml`): service `http://api.sandbox-system.svc.cluster.local:3000`.
-No TLS origin is configured because the hop from cloudflared to the API stays
-inside the cluster; TLS for the public leg terminates at Cloudflare.
+Public hostname mapping, in [`configmap.yaml`](configmap.yaml): service
+`http://api.sandbox-system.svc.cluster.local:3000`. No TLS origin is configured
+because the hop from cloudflared to the API stays inside the cluster; TLS for the
+public leg terminates at Cloudflare.
+
+The routes live in Git rather than in the tunnel's dashboard configuration, and
+the connector is started with `--config`. This matters more than it looks: a
+token-mode connector with no routes registers successfully, reports healthy, and
+answers `503` to every request, with one warning line in its log. Reading the
+mapping from a committed file means a re-created tunnel is one apply away, and a
+missing route is a review comment rather than an outage nobody can explain.
 
 `throwbox.dev` itself (the static site) is Cloudflare Pages and is not part of
 this tunnel. See [site/README.md](../../../site/README.md).

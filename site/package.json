@@ -5,6 +5,11 @@
   "description": "The static sandbox landing page and agent docs.",
   "scripts": {
     "dev": "node serve.mjs",
-    "start": "node serve.mjs"
+    "start": "node serve.mjs",
+    "deploy": "wrangler deploy",
+    "preview": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^4.163.0"
   }
 }
