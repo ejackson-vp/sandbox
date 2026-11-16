@@ -82,13 +82,13 @@ patches:
     patch: |-
       - op: replace
         path: /data/GUEST_IMAGE
-        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.32
+        value: ghcr.io/ejackson-vp/sandbox-guest:0.1.33
       # Index digest of the release above. The controller pulls
       # `repo@sha256:…` whenever a digest is set (dev mode or not), so a moved
       # tag cannot change what runs inside the sandbox.
       - op: replace
         path: /data/GUEST_IMAGE_DIGEST
-        value: sha256:d66635e2b3ba3b105706790ceba07539c19ab55b4b5c4d2696eaf79a9060c10e
+        value: sha256:933a53e00a6e813f0e7a3c56bf066ee1560f9949ba21c59c982788f0ee8d6d63
       # The warm pool: 20 idle pods, the shape this directory's README sizes in
       # section 1.1 against two 13 GiB nodes (20 x 512 MiB limit), and the pool
       # the performance numbers in the top-level README were measured on.
@@ -107,7 +107,7 @@ patches:
         value: "16"
       - op: add
         path: /data/RUNTIME_PROFILES
-        value: '{"python":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:647164dec8e7ff8f62b752eb8d7df9e81b7a88ede1e2ac9db6064415a2df5e36"},"node":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:499535828adce829a0703c9ecc64f1fb8efd0c3d9e41cc822a8fc3bf0a7580ae"}}'
+        value: '{"python":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:ea95c0568678ce8e0dce66f1a9c87fbdb3742ce5330b82805c71f4be85dddcfd"},"node":{"image":"ghcr.io/ejackson-vp/sandbox-guest","digest":"sha256:55a16d77369752be249dbbf7072f75a68dbad7b2a0c26b6b9f9381d30afe827e"}}'
       - op: replace
         path: /data/PUBLIC_BASE_URL
         value: https://sandbox.example.ts.net
