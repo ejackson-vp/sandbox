@@ -221,11 +221,19 @@ describe("refund claim", () => {
     const claimed = [...first, ...second].map((claim) => claim.ledger.paymentKey);
     expect(new Set(claimed).size).toBe(3);
     expect(claimed).toHaveLength(3);
-    // Every claimed row is fenced and carries the stable key from the moment it
-    // is owned, not just when it is sent.
-    for (const claim of [...first, ...second]) {
+    // Every claimed row is fenced by the claimer that received it, and carries
+    // the stable key from the moment it is owned, not just when it is sent. A
+    // row stamped with the other claimer's token would pass a "not null" check
+    // and then be released by the wrong pass.
+    for (const claim of first) {
       expect(claim.ledger.status).toBe("REFUND_SENDING");
-      expect(claim.ledger.refundClaimToken).not.toBeNull();
+      expect(claim.ledger.refundClaimToken).toBe("a".repeat(32));
+      expect(claim.ledger.refundIdempotencyKey).toBe(`refund:${claim.ledger.paymentKey}`);
+      expect(claim.reclaimed).toBe(false);
+    }
+    for (const claim of second) {
+      expect(claim.ledger.status).toBe("REFUND_SENDING");
+      expect(claim.ledger.refundClaimToken).toBe("b".repeat(32));
       expect(claim.ledger.refundIdempotencyKey).toBe(`refund:${claim.ledger.paymentKey}`);
       expect(claim.reclaimed).toBe(false);
     }
