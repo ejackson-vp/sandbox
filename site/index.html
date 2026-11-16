@@ -406,45 +406,6 @@ blindly retry a side effect.</code></pre>
         </div>
       </section>
 
-      <section class="section smallprint" id="smallprint">
-        <div class="section-head">
-          <p class="kicker reveal">the small print</p>
-          <h2 class="reveal">In large type, <span class="serif">because it matters.</span></h2>
-          <p class="lede reveal">Every claim here points at a doc or a test. The gaps are listed the same way.</p>
-        </div>
-
-        <div class="claims">
-          <article class="claim yes reveal">
-            <h3>Holds today</h3>
-            <ul>
-              <li>The lease ends on time: guest watchdog, controller deadline, Kubernetes</li>
-              <li>Commands and files stay sealed in transit; the API, controller and relay see ciphertext</li>
-              <li>One settled payment maps to one session; a retried payment returns it instead of billing twice</li>
-              <li>Egress by policy: through the egress proxy, to port 443 destinations, with no inbound route to a sandbox</li>
-              <li>A session that never reaches READY, or one a relay failure ends, is recorded in the ledger for a full refund; sending it is a separate worker, so it is not instant</li>
-            </ul>
-          </article>
-          <article class="claim no reveal">
-            <h3>Not yet</h3>
-            <ul>
-              <li>The boundary is tested, not attacked: no escape attempt has been made, and a suite that passes is not a claim the hypervisor resists a determined one</li>
-              <li>The security review was written by the author of the code, not an independent reviewer, and it is not a penetration test</li>
-              <li>No hardware root of trust: the dev attestation key ships in the repo</li>
-              <li>Checkpoint storage is plaintext, which is why suspend and resume are not offered</li>
-              <li>No SLA: one operator, one region, one control-plane node, one Postgres primary, no measured failover</li>
-              <li>No GPUs, no arbitrary OCI images, no memory snapshots</li>
-              <li>Not parity with a general-purpose sandbox platform</li>
-            </ul>
-          </article>
-        </div>
-
-        <div class="risks reveal">
-          <h3>Accepted risks, in one paragraph</h3>
-          <p>Isolation between sessions is a Kata microVM, and the boundary properties the suite tests were verified on a real Kata cluster at control 0.1.33 and guest 0.1.33: the guest ran its own kernel and could not reach another session, the Kubernetes API, a node, the metadata endpoint, a Service VIP or the internet except through the egress proxy. That is not a hardware root of trust and it is not an escape test: no escape attempt has been made, so nothing here claims the hypervisor survives one. There is no hardware attestation either, and the attestation key ships in the repo, so the client proves which key it is talking to and not what the operator is running. The security review was written by the person who wrote the code, not an independent reviewer, and it is not a penetration test. Checkpoint storage is plaintext, which is why suspend is not offered. If a hostile-tenant guarantee is what you need, this beta does not sell one yet, and the docs say which controls are proven and which are not.</p>
-        </div>
-        <p class="claims-note">Read the <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md">guarantee matrix</a>, the <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/isolation-evidence.md">isolation evidence</a> and the <a href="https://github.com/ejackson-vp/sandbox/blob/main/docs/threat-model.md">threat model</a> before repeating any of this as a security claim.</p>
-      </section>
-
       <section class="section smallprint" id="terms">
         <div class="section-head">
           <p class="kicker reveal">the rules</p>

@@ -6,7 +6,7 @@
 
 The beta is one operator, one region, one control-plane node and one Postgres primary. Sessions are ephemeral. There is no suspend and no resume: the workspace is an `emptyDir` that dies with the pod, and nothing you write outlives the lease. Checkpoint storage in this repository is plaintext, which is why the hosted beta does not sell checkpoints.
 
-Isolation between sessions is a Kata microVM. The boundary properties the suite tests are verified on a real Kata cluster at control `0.1.33` and guest `0.1.33`: the guest runs its own kernel, and it cannot reach another session, the Kubernetes API, a node, the metadata endpoint, a Service VIP or the internet except through the egress proxy. That is not a hardware root of trust, and it is not an escape test: no escape attempt has been made, so nothing here claims the hypervisor resists one. There is no hardware attestation, no encrypted checkpoint and no SLA. The security review was written by the author of the code, not an independent reviewer. Read [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md) and [isolation evidence](https://github.com/ejackson-vp/sandbox/blob/main/docs/isolation-evidence.md) before repeating anything here as a security claim.
+Isolation between sessions is a Kata microVM: each guest runs its own kernel, cannot reach another session, the Kubernetes API, a node, the metadata endpoint or a Service VIP, and reaches the internet only through the egress proxy. That is not a hardware root of trust, no escape attempt has been made, and there is no hardware attestation and no SLA.
 
 - Source: <https://github.com/ejackson-vp/sandbox>
 - Licence: MIT
@@ -26,8 +26,7 @@ This repository's CLI and SDK build `mock` and `testnet` payments only, so a mai
 - [Architecture](https://github.com/ejackson-vp/sandbox/blob/main/docs/architecture.md): components, warm pool, relay and request path.
 - [CLI and SDK](https://github.com/ejackson-vp/sandbox/blob/main/docs/cli.md): every command and client method.
 - [HTTP API](https://github.com/ejackson-vp/sandbox/blob/main/docs/api.md): routes, envelopes, status codes.
-- [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md): what is enforced and what is not. Read before repeating a security claim.
-- [Isolation evidence](https://github.com/ejackson-vp/sandbox/blob/main/docs/isolation-evidence.md): the Kata boundary run, the probes that were denied, and what it does not prove.
+- [Security guarantees](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md): what is enforced and what is not.
 - [Threat model](https://github.com/ejackson-vp/sandbox/blob/main/docs/threat-model.md): STRIDE by component.
 - [Production readiness](https://github.com/ejackson-vp/sandbox/blob/main/docs/production-readiness.md): the ordered gap between the hosted beta and a production service.
 - [Workload compatibility](https://github.com/ejackson-vp/sandbox/blob/main/docs/workload-compatibility.md): what actually runs in the guest.
@@ -242,9 +241,11 @@ Command-level errors (`ok: false`) include `path_outside_workspace`, `quota_exce
 - Use the warm-pool path through the API; do not try to talk to a guest directly. There is no inbound networking.
 - For an HTTP service, start it with `service.start` and call it with the relay `http.request` operation. Do not expect a routable port.
 
-## Security scope, in one paragraph
+## Security scope
 
-The transport is sealed client-side to the guest's ephemeral key. The API, controller, relay, database and payment layer route ciphertext and hold no decryption key. Isolation between sandboxes is a Kata microVM, and the boundary properties the suite tests are verified at control `0.1.33` and guest `0.1.33`: separate guest kernel, no reach to a peer session, the Kubernetes API, a node, the metadata endpoint, a Service VIP or the internet except the proxy, and no host mounts or service-account token in the guest. That is not a hardware root of trust and no escape was attempted, so it is not a claim that the hypervisor resists one. The development attestation key ships in the repository, so anyone can produce the binding: the client learns which key it is talking to, not what the operator is running. The security review is by the author of the code, not an independent reviewer, and it is not a penetration test. Checkpoint storage in this repository is plaintext, which is why suspend is not offered here. Do not describe this system as confidential computing, attested, provider-blind or isolated. The full matrix is in [security-guarantees.md](https://github.com/ejackson-vp/sandbox/blob/main/docs/security-guarantees.md).
+The transport is sealed client-side to the guest's ephemeral key: the API, controller, relay, database and payment layer route ciphertext and hold no decryption key. Isolation between sandboxes is a Kata microVM, and the boundary properties the suite tests were verified at control `0.1.33` and guest `0.1.33`: separate guest kernel, no reach to a peer session, the Kubernetes API, a node, the metadata endpoint or a Service VIP, no host mounts and no service-account token in the guest, and the internet only through the proxy.
+
+That is not a hardware root of trust and no escape was attempted. The development attestation key ships in the repository, so anyone can produce the binding: the client learns which key it is talking to, not what the operator is running. Checkpoint storage is plaintext, which is why suspend is not offered. Do not describe this system as confidential computing, attested, provider-blind or isolated.
 
 ## Hosted beta: rules, refunds, data
 
