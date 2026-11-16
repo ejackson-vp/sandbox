@@ -537,7 +537,7 @@ export async function verifyAndSettle(
       await deferUnknownSettlement(
         deps,
         key,
-        verdict === "unsettled" ? "chain_transfer_unproven" : "chain_check_failed",
+        verdict === "unsettled" ? "chain_transfer_disproven" : "chain_check_failed",
       );
       return {
         ok: false,

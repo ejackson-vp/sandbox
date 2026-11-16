@@ -8,13 +8,17 @@
  * - `settled`: the transaction that consumed the EIP-3009 nonce also transferred
  *   at least the server's price, from the authorizer, to the server's `PAY_TO`,
  *   on the configured USDC contract. Grant or recover.
- * - `unsettled`: the chain was readable and did not prove that transfer: no
- *   `AuthorizationUsed` in the window, a different recipient, or a short amount.
- *   Never grant.
- * - `unavailable`: the check could not be made (no verifier for this payload, a
- *   requirement that cannot be turned into a check, or a read that threw).
- *   Callers fail closed: no entitlement, and the intent stays claimed while
- *   recovery is still possible.
+ * - `unsettled`: the chain was readable and positively disproved that transfer:
+ *   the nonce's transaction carried a `Transfer` to another recipient, a short
+ *   one, no matching `Transfer` at all, or it reverted. Never grant.
+ * - `unavailable`: the check could not be made or could not place the payment:
+ *   no verifier for this payload, a requirement that cannot be turned into a
+ *   check, no `AuthorizationUsed` log inside the window, or a read that threw.
+ *   A nonce older than the window is *this*, not `unsettled`: the nonce may have
+ *   settled before the window opened, and calling that a refusal turns a paid
+ *   payment into a permanent retry loop with no debt recorded. `unavailable`
+ *   withholds without closing the reconciliation window, which is what the
+ *   recovery worker and the facilitator fallback need.
  *
  * The requirement is always the server's own: `payTo` and the price it quoted.
  * A recipient or amount taken from the request would let the payer choose what
@@ -51,7 +55,7 @@ export type SettlementTerms = Pick<PaymentRequirements, "payTo" | "amount">;
  */
 export function buildSettlementVerifier(
   config: Pick<ApiConfig, "paymentMode" | "network" | "paymentRpcUrl" | "paymentUsdcAddress"> &
-    Partial<Pick<ApiConfig, "paymentSettlementLookbackBlocks">>,
+    Partial<Pick<ApiConfig, "paymentSettlementLookbackBlocks" | "paymentSettlementScanChunkBlocks">>,
 ): ChainSettlementVerifier | undefined {
   // The mock scheme has no chain: a nonce it accepts is never used on one. Run
   // the verifier there and every mock payment would be refused, so the mock
@@ -68,6 +72,9 @@ export function buildSettlementVerifier(
     usdcAddress,
     ...(config.paymentSettlementLookbackBlocks !== undefined
       ? { lookbackBlocks: config.paymentSettlementLookbackBlocks }
+      : {}),
+    ...(config.paymentSettlementScanChunkBlocks !== undefined
+      ? { chunkBlocks: config.paymentSettlementScanChunkBlocks }
       : {}),
   });
 }
@@ -93,7 +100,9 @@ function chainTerms(terms: SettlementTerms): { recipient: `0x${string}`; amount:
  * reaches a log line: the error class is enough to diagnose a failure.
  */
 function redactHex(message: unknown): string {
-  return typeof message === "string" ? message.replace(/0x[0-9a-fA-F]+/g, "0x<redacted>") : "unknown error";
+  return typeof message === "string"
+    ? message.replace(/0x[0-9a-fA-F]+/g, "0x<redacted>")
+    : "unknown error";
 }
 
 /** Ask the chain. Never throws: an error is `unavailable`, which fails closed. */
@@ -113,16 +122,27 @@ export async function confirmSettledOnChain(
     return "unavailable";
   }
   try {
-    const settled = await verifier.isSettled({
+    const proof = await verifier.settlementProof({
       authorizer,
       nonce: nonce as `0x${string}`,
       recipient: priced.recipient,
       amount: priced.amount,
     });
-    return settled ? "settled" : "unsettled";
+    if (proof.verdict === "proven") return "settled";
+    if (proof.verdict === "disproven") {
+      // The reason is a category, never an address or an amount.
+      log.warn("chain_settlement_disproven", { reason: proof.reason });
+      return "unsettled";
+    }
+    // The nonce is not in the window. It may have settled before it opened, so
+    // this is "could not place the payment", not "the payment failed".
+    log.warn("chain_settlement_not_in_window");
+    return "unavailable";
   } catch (err) {
     // Never the full authorizer or nonce: a log line must not be a receipt.
-    log.warn("chain_settlement_verification_failed", { error: redactHex((err as Error).message) });
+    log.warn("chain_settlement_verification_failed", {
+      error: redactHex(err instanceof Error ? err.message : err),
+    });
     return "unavailable";
   }
 }

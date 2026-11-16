@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../../api/src/config.js";
+import {
+  DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS,
+  DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS,
+} from "../../api/src/payments/settlement-verifier.js";
 
 const base = {
   PAYMENT_MODE: "mock",
@@ -211,6 +215,31 @@ describe("chain verification configuration", () => {
         PAYMENT_RPC_URL: "https://rpc.invalid",
       }),
     ).toThrow(/PAYMENT_USDC_ADDRESS/);
+  });
+
+  it("bounds the settlement scan with a window and a per-request chunk", () => {
+    const cfg = loadConfig({ ...testnet, PAYMENT_RPC_URL: "https://rpc.invalid" });
+    expect(cfg.paymentSettlementLookbackBlocks).toBe(DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS);
+    expect(cfg.paymentSettlementScanChunkBlocks).toBe(DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS);
+    // The default pair must fit the per-check call cap.
+    expect(cfg.paymentSettlementLookbackBlocks / cfg.paymentSettlementScanChunkBlocks).toBeLessThanOrEqual(12);
+  });
+
+  it("accepts an explicit window and chunk, and refuses zero for either", () => {
+    const cfg = loadConfig({
+      ...testnet,
+      PAYMENT_RPC_URL: "https://rpc.invalid",
+      PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS: "50000",
+      PAYMENT_SETTLEMENT_SCAN_CHUNK_BLOCKS: "5000",
+    });
+    expect(cfg.paymentSettlementLookbackBlocks).toBe(50000);
+    expect(cfg.paymentSettlementScanChunkBlocks).toBe(5000);
+    expect(() =>
+      loadConfig({ ...testnet, PAYMENT_RPC_URL: "https://rpc.invalid", PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS: "0" }),
+    ).toThrow();
+    expect(() =>
+      loadConfig({ ...testnet, PAYMENT_RPC_URL: "https://rpc.invalid", PAYMENT_SETTLEMENT_SCAN_CHUNK_BLOCKS: "0" }),
+    ).toThrow();
   });
 
   it("ignores the RPC URL on the mock path", () => {

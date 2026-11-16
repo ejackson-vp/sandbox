@@ -22,13 +22,27 @@
  *
  * Both facts are read from the raw topics and data rather than from anything a
  * node decoded for us, so the answer is "the chain said this", not "the RPC
- * thought this". The window is bounded because the nonce is consumed inside the
- * intent's lifetime; a log outside it is not found, which is `false` and fails
- * closed. So does an unreadable answer: it throws, and the caller answers
- * `unavailable`.
+ * thought this".
+ *
+ * The answer has three values, and the difference between the last two is the
+ * whole point of F-17's follow-up:
+ *
+ *  - `proven` when the transfer is there;
+ *  - `disproven` when the nonce's transaction was read and does not prove the
+ *    transfer. That is a readable answer, so it may be called `unsettled`;
+ *  - `not-found` when no log for the nonce is inside the window. That is *not*
+ *    "did not settle": the nonce may have been consumed before the window, and
+ *    calling it unsettled would turn a paid-and-stuck payment into a definite
+ *    refusal. The caller answers `unavailable`, which withholds without closing
+ *    the reconciliation window.
+ *
+ * The window is scanned backwards in chunks so a provider's `eth_getLogs` range
+ * limit is respected and the window can cover a real outage. The number of
+ * calls per verification is capped (see `MAX_SETTLEMENT_SCAN_QUERIES`), and the
+ * newest chunk answers almost every check.
  *
  * The reader is injected so tests never need an RPC endpoint; nothing here makes
- * a network call until `isSettled` is called on the real implementation.
+ * a network call until `settlementProof` is called on the real implementation.
  */
 import { createPublicClient, http, parseAbiItem, toEventSelector } from "viem";
 import type { AbiEvent } from "viem";
@@ -62,14 +76,33 @@ export const USDC_BY_NETWORK: Readonly<Record<string, `0x${string}`>> = {
 /**
  * How far behind head to look for the `AuthorizationUsed` log.
  *
- * Base produces a block every 2 s, so 900 blocks is 30 minutes: an order of
- * magnitude more than the intent lifetime (`PAYMENT_INTENT_STALE_MS`, 30 s) and
- * the settlement-recovery grace (5 min), and still a single small `eth_getLogs`
- * request because it is filtered by contract and two indexed topics. A window is
- * needed at all so this check cannot scan from genesis on a hostile or careless
- * call; a nonce older than the window is `unsettled`, never `settled`.
+ * Base produces a block every 2 s, so 90 000 blocks is 50 hours. That covers the
+ * failure this window exists for: the API settles, dies, stays down for a day
+ * or two, and the client retries after the restart. A shorter window turned a
+ * paid payment into a permanent `503` that no retry could resolve (F-17
+ * follow-up), because the nonce never re-enters the window.
+ *
+ * The cost is not per-block: the scan is newest-first and stops at the first
+ * chunk that knows the nonce, so a normal payment costs one `eth_getLogs`. A
+ * payment old enough to need the deep scan is exactly the case worth paying for.
  */
-export const DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS = 900;
+export const DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS = 90_000;
+
+/**
+ * Blocks per `eth_getLogs` call. 10 000 is the range cap most Base providers
+ * impose by default, so the default works against an unconfigured endpoint and
+ * an operator with a stricter provider can lower it.
+ */
+export const DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS = 10_000;
+
+/**
+ * Hard cap on `eth_getLogs` calls for one verification, independent of
+ * configuration: at most 12 chunks per check (120 000 blocks at the default
+ * chunk). The window is configurable, the work per call is not unbounded. A
+ * larger window is reached by raising the chunk size to the provider's limit,
+ * not by scanning forever.
+ */
+export const MAX_SETTLEMENT_SCAN_QUERIES = 12;
 
 /** A single nonce can only be consumed once; more than this is not one payment. */
 const MAX_CANDIDATE_TRANSACTIONS = 8;
@@ -90,17 +123,35 @@ export interface SettlementRequirement {
   amount: bigint;
 }
 
+/** Why a readable receipt did not prove the transfer. */
+export type DisproofReason =
+  | "transfer_to_another_recipient"
+  | "transfer_below_price"
+  | "no_matching_transfer"
+  | "transaction_reverted";
+
+/**
+ * The chain's answer. `not-found` means the window could not place the nonce,
+ * which is not the same as a chain that positively disproves the payment.
+ */
+export type SettlementProof =
+  | { verdict: "proven"; transaction: `0x${string}` }
+  | { verdict: "disproven"; transaction: `0x${string}`; reason: DisproofReason }
+  | { verdict: "not-found" };
+
 /** The settlement question, with no transport in it. */
 export interface ChainSettlementVerifier {
   /**
-   * True only when the transaction that consumed this nonce also transferred at
-   * least `amount` of this contract from `authorizer` to `recipient`.
-   * Throws when the answer could not be obtained; callers fail closed.
+   * `proven` only when the transaction that consumed this nonce also transferred
+   * at least `amount` of this contract from `authorizer` to `recipient`.
+   * `disproven` only when that transaction was read and did not.
+   * `not-found` when the nonce is not inside the window, which callers must not
+   * read as a refusal. Throws when the answer could not be obtained.
    */
-  isSettled(requirement: SettlementRequirement): Promise<boolean>;
+  settlementProof(requirement: SettlementRequirement): Promise<SettlementProof>;
 }
 
-/** The `getLogs` filter for the nonce, bounded to a block window. */
+/** The `getLogs` filter for the nonce, bounded to one chunk of blocks. */
 export interface AuthorizationUsedFilter {
   address: `0x${string}`;
   event: typeof AUTHORIZATION_USED_EVENT;
@@ -117,7 +168,7 @@ export interface AuthorizationUsedFilter {
 export interface UsdcChainReader {
   /** The current head, so the window is anchored to the chain and not a cache. */
   blockNumber(): Promise<bigint>;
-  /** Logs matching the exact event and both indexed topics in the window. */
+  /** Logs matching the exact event and both indexed topics in one chunk. */
   logs(filter: AuthorizationUsedFilter): Promise<unknown>;
   /** The receipt for a transaction the log named. */
   receipt(hash: `0x${string}`): Promise<unknown>;
@@ -130,6 +181,8 @@ export interface UsdcVerifierOptions {
   usdcAddress: `0x${string}`;
   /** Blocks behind head to scan. Defaults to `DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS`. */
   lookbackBlocks?: number;
+  /** Blocks per `eth_getLogs`. Defaults to `DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS`. */
+  chunkBlocks?: number;
   /** Per-request timeout on the JSON-RPC call. */
   timeoutMs?: number;
   /** Test seam. Production builds a viem client from `rpcUrl`. */
@@ -187,19 +240,20 @@ function asLog(entry: unknown): RawLog | null {
 }
 
 /**
- * Does this receipt prove the transfer the requirement asks for?
+ * What this receipt says about the requirement.
  *
  * Every clause is separate on purpose: the contract, the event, the sender, the
  * recipient and the amount are each checked, so passing one cannot imply another.
  * An unrelated log in the same receipt is skipped; a receipt that is not an
- * object, or has no log list, throws because nothing can be concluded from it.
+ * object, has no log list, or belongs to another transaction throws because
+ * nothing can be concluded from it.
  */
-function receiptProvesTransfer(
+function receiptProof(
   receipt: unknown,
   usdcAddress: `0x${string}`,
   requirement: SettlementRequirement,
   transactionHash: `0x${string}`,
-): boolean {
+): SettlementProof {
   const body = asLog(receipt);
   if (!body) throw new Error("transaction receipt was not an object");
   // The transfer must be in *this* transaction, so a receipt for another one is
@@ -211,36 +265,54 @@ function receiptProvesTransfer(
     throw new Error("transaction receipt was for a different transaction");
   }
   // A reverted transaction moved nothing, whatever its logs claim.
-  if (body.status !== undefined && body.status !== "success") return false;
+  if (body.status !== undefined && body.status !== "success") {
+    return { verdict: "disproven", transaction: transactionHash, reason: "transaction_reverted" };
+  }
   if (!Array.isArray(body.logs)) throw new Error("transaction receipt had no log list");
 
   const fromTopic = addressTopic(requirement.authorizer);
   const toTopic = addressTopic(requirement.recipient);
+  let fromAuthorizer = 0;
+  let toRecipient = false;
   for (const entry of body.logs) {
     const candidate = asLog(entry);
     if (!candidate || candidate.removed === true) continue;
     if (!sameAddress(candidate.address, usdcAddress)) continue;
     if (topicAt(candidate.topics, 0) !== TRANSFER_TOPIC) continue;
     if (topicAt(candidate.topics, 1) !== fromTopic) continue;
-    if (topicAt(candidate.topics, 2) !== toTopic) continue;
+    fromAuthorizer += 1;
+    const mine = topicAt(candidate.topics, 2) === toTopic;
+    if (!mine) continue;
+    toRecipient = true;
     const value = wordAt(candidate.data);
-    if (value !== null && value >= requirement.amount) return true;
+    if (value !== null && value >= requirement.amount) {
+      return { verdict: "proven", transaction: transactionHash };
+    }
   }
-  return false;
+  // The reason is the most specific true statement about what was found.
+  const reason: DisproofReason =
+    fromAuthorizer === 0
+      ? "no_matching_transfer"
+      : toRecipient
+        ? "transfer_below_price"
+        : "transfer_to_another_recipient";
+  return { verdict: "disproven", transaction: transactionHash, reason };
 }
 
 /**
  * Proves settlement on the configured USDC contract: the nonce's transaction,
  * and the transfer in it, at or above the server's price.
  *
- * Never answers `true` on anything it cannot read. A log outside the window, a
- * transfer to another address, a short amount and a transaction with no matching
- * transfer all read as `false`; an error reads as a throw.
+ * Never answers `proven` on anything it cannot read. A short transfer, another
+ * recipient, a transaction with no matching transfer and a reverted receipt are
+ * `disproven`. A nonce outside the window is `not-found`, and an error throws;
+ * both withhold without claiming the payment failed.
  */
 export class UsdcSettlementVerifier implements ChainSettlementVerifier {
   private readonly reader: UsdcChainReader;
   private readonly usdcAddress: `0x${string}`;
   private readonly lookbackBlocks: bigint;
+  private readonly chunkBlocks: bigint;
 
   constructor(options: UsdcVerifierOptions) {
     if (!isAddress(options.usdcAddress)) {
@@ -248,17 +320,31 @@ export class UsdcSettlementVerifier implements ChainSettlementVerifier {
     }
     const lookback = options.lookbackBlocks ?? DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS;
     if (!Number.isInteger(lookback) || lookback <= 0) {
-      // Not clamped: a zero window would answer "unsettled" for a real payment,
+      // Not clamped: a zero window would answer "not found" for a real payment,
       // and a silent widening is not this module's decision to make.
       throw new Error("settlement lookback must be a positive number of blocks");
     }
+    const chunk = options.chunkBlocks ?? DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS;
+    if (!Number.isInteger(chunk) || chunk <= 0) {
+      throw new Error("settlement scan chunk must be a positive number of blocks");
+    }
+    const queries = Math.ceil(lookback / chunk);
+    if (queries > MAX_SETTLEMENT_SCAN_QUERIES) {
+      // Refuse at startup rather than silently scanning less than configured: a
+      // window that cannot be read looks exactly like a payment that did not
+      // settle, which is the failure this module exists to prevent.
+      throw new Error(
+        `settlement lookback of ${lookback} blocks in ${chunk}-block chunks needs ${queries} eth_getLogs calls; the cap is ${MAX_SETTLEMENT_SCAN_QUERIES}`,
+      );
+    }
     this.lookbackBlocks = BigInt(lookback);
+    this.chunkBlocks = BigInt(chunk);
     this.usdcAddress = options.usdcAddress;
     this.reader =
       options.reader ?? viemReader(options.rpcUrl, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   }
 
-  async isSettled(requirement: SettlementRequirement): Promise<boolean> {
+  async settlementProof(requirement: SettlementRequirement): Promise<SettlementProof> {
     if (requirement.amount <= 0n) {
       // A free entitlement never reaches a chain check. A zero price here would
       // make every `value >= 0` transfer, including a 0-unit one, look settled.
@@ -268,20 +354,44 @@ export class UsdcSettlementVerifier implements ChainSettlementVerifier {
     if (typeof head !== "bigint" || head < 0n) {
       throw new Error("block number read returned no chain height");
     }
-    const fromBlock = head > this.lookbackBlocks ? head - this.lookbackBlocks : 0n;
-    const logs = await this.reader.logs({
-      address: this.usdcAddress,
-      event: AUTHORIZATION_USED_EVENT,
-      args: { authorizer: requirement.authorizer, nonce: requirement.nonce },
-      fromBlock,
-      toBlock: head,
-    });
 
-    for (const hash of this.authorizationTransactions(logs, requirement)) {
-      const receipt = await this.reader.receipt(hash);
-      if (receiptProvesTransfer(receipt, this.usdcAddress, requirement, hash)) return true;
+    const oldestBlock = head >= this.lookbackBlocks ? head - this.lookbackBlocks + 1n : 0n;
+    let toBlock = head;
+    let queries = 0;
+    while (toBlock >= oldestBlock) {
+      queries += 1;
+      if (queries > MAX_SETTLEMENT_SCAN_QUERIES) {
+        // Unreachable while the constructor validates, but the loop must never
+        // depend on configuration to terminate.
+        throw new Error("settlement scan exceeded its query cap");
+      }
+      const chunkStart = toBlock >= this.chunkBlocks - 1n ? toBlock - this.chunkBlocks + 1n : 0n;
+      const fromBlock = chunkStart > oldestBlock ? chunkStart : oldestBlock;
+      const logs = await this.reader.logs({
+        address: this.usdcAddress,
+        event: AUTHORIZATION_USED_EVENT,
+        args: { authorizer: requirement.authorizer, nonce: requirement.nonce },
+        fromBlock,
+        toBlock,
+      });
+      const hashes = this.authorizationTransactions(logs, requirement);
+      if (hashes.length > 0) {
+        // The nonce is consumed exactly once, so this chunk holds the answer;
+        // there is nothing older worth asking about.
+        let disproof: SettlementProof | null = null;
+        for (const hash of hashes) {
+          const receipt = await this.reader.receipt(hash);
+          const proof = receiptProof(receipt, this.usdcAddress, requirement, hash);
+          if (proof.verdict === "proven") return proof;
+          disproof ??= proof;
+        }
+        return disproof ?? { verdict: "not-found" };
+      }
+      if (fromBlock === 0n) break;
+      toBlock = fromBlock - 1n;
     }
-    return false;
+    // Nothing in the window: the nonce may predate it. Not a refusal.
+    return { verdict: "not-found" };
   }
 
   /**

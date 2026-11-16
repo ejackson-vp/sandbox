@@ -80,19 +80,46 @@ EIP-3009 nonce is not by itself a payment: a 1-atomic-unit authorisation and a
 (F-17):
 
 1. `AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)` on the
-   network's USDC contract, filtered on both indexed topics over a bounded block
-   window (`PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS`, default 900 blocks: 30 minutes
-   at Base's 2 s block time), names the transaction that consumed the nonce.
+   network's USDC contract, filtered on both indexed topics, names the
+   transaction that consumed the nonce.
 2. That transaction's receipt must carry a `Transfer` on the same contract with
    `from == authorizer`, `to == PAY_TO` and `value >= the amount the server
-   priced.
+   priced`.
 
 Both facts are read from the raw log topics and data, so the verdict is the
-chain's, not an RPC's decoding. Set `PAYMENT_RPC_URL` to enable it; the USDC
-address defaults per network (`PAYMENT_USDC_ADDRESS` overrides it). A proven
-transfer grants. No log in the window, a different recipient or a short amount
-is `unsettled` and refuses. An unreadable answer is `unavailable` and also
-refuses, so no branch of this check grants without the transfer. The check runs
+chain's, not an RPC's decoding.
+
+**Window.** `PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS` defaults to 90 000 blocks, which
+is 50 hours at Base's 2 s block time. That covers the failure the window exists
+for: the API settles, stays down for a day or two, and the client retries after
+the restart. The scan runs newest-first in `PAYMENT_SETTLEMENT_SCAN_CHUNK_BLOCKS`
+chunks (default 10 000, the range cap most Base providers apply) and stops at the
+first chunk that knows the nonce, so a normal payment is one `eth_getLogs`. The
+total work per check is capped at 12 calls, so a larger window is reached by
+raising the chunk size to the provider's limit, not by scanning forever; the
+verifier refuses to start if the pair would need more calls than that. Lower the
+chunk size for a stricter provider, at the cost of more calls for the same
+window.
+
+**Verdicts.** Set `PAYMENT_RPC_URL` to enable the check; the USDC address
+defaults per network (`PAYMENT_USDC_ADDRESS` overrides it).
+
+| Chain answer | Meaning | API verdict | Entitlement |
+|---|---|---|---|
+| `proven` | the nonce's transaction transferred at least the price to `PAY_TO` | `settled` | granted |
+| `disproven`: transfer to another recipient | readable receipt, wrong destination | `unsettled` | refused |
+| `disproven`: transfer below the price | readable receipt, short amount | `unsettled` | refused |
+| `disproven`: no matching `Transfer` | readable receipt, no transfer from the authorizer | `unsettled` | refused |
+| `disproven`: transaction reverted | readable receipt, nothing moved | `unsettled` | refused |
+| `not-found` | no `AuthorizationUsed` log in the window | `unavailable` | withheld |
+| read error or unreadable node answer | could not ask | `unavailable` | withheld |
+
+`not-found` is deliberately `unavailable`, not `unsettled`. The check cannot tell
+"never settled" from "settled before the window opened", and calling it
+`unsettled` would turn a paid payment into a permanent refusal that no retry can
+resolve: the nonce never re-enters the window, and no debt is ever recorded.
+`unavailable` withholds without closing the reconciliation window, which is what
+the recovery worker and the facilitator lookup need. The check runs
 before entitlement on the first attempt and first on the recovery path, so a
 hostile facilitator cannot mint a session by answering `success`.
 

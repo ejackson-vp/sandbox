@@ -30,6 +30,7 @@ import type { PaymentMode } from "@x402s/shared/protocol";
 import { DEFAULT_METRICS_PORT } from "@x402s/shared/runtime";
 import {
   DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS,
+  DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS,
   usdcAddressFor,
 } from "./payments/settlement-verifier.js";
 
@@ -72,10 +73,19 @@ export interface ApiConfig {
   paymentUsdcAddress?: `0x${string}`;
   /**
    * How far behind head the on-chain settlement check scans for the
-   * `AuthorizationUsed` log. Base is 2 s per block, so the 900-block default is
-   * 30 minutes: the intent lifetime plus the recovery grace with a wide margin.
+   * `AuthorizationUsed` log. Base is 2 s per block, so the 90 000-block default
+   * is 50 hours: long enough for the API to settle, stay down, and recover the
+   * payment after a restart. The scan runs newest-first and stops at the first
+   * chunk that knows the nonce, so a normal payment costs one `eth_getLogs`.
    */
   paymentSettlementLookbackBlocks: number;
+  /**
+   * Blocks per `eth_getLogs` call. 10 000 matches the per-request range cap most
+   * Base providers apply, so the default window is nine calls at worst, one in
+   * practice. Lower it for a stricter provider; raise it to make a larger
+   * window fit under `MAX_SETTLEMENT_SCAN_QUERIES`.
+   */
+  paymentSettlementScanChunkBlocks: number;
   controllerUrl: string;
   /** Client certificate for the controller's mTLS listener, when enabled. */
   controllerTls?: { certFile: string; keyFile: string; caFile: string };
@@ -234,22 +244,34 @@ function parseChainVerification(
   network: string,
 ): Pick<
   ApiConfig,
-  "paymentRpcUrl" | "paymentUsdcAddress" | "paymentSettlementLookbackBlocks"
+  | "paymentRpcUrl"
+  | "paymentUsdcAddress"
+  | "paymentSettlementLookbackBlocks"
+  | "paymentSettlementScanChunkBlocks"
 > {
-  // The scan window is bounded on every path, including the mock one, so a
-  // misconfigured deployment cannot ask for an unbounded `eth_getLogs`.
+  // The scan is bounded on every path, including the mock one, so a
+  // misconfigured deployment cannot ask for an unbounded `eth_getLogs`: the
+  // window is capped here and the number of calls per verification is capped in
+  // the verifier.
   const paymentSettlementLookbackBlocks = int(
     env.PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS,
     DEFAULT_SETTLEMENT_LOOKBACK_BLOCKS,
     1,
     1_000_000,
   );
+  const paymentSettlementScanChunkBlocks = int(
+    env.PAYMENT_SETTLEMENT_SCAN_CHUNK_BLOCKS,
+    DEFAULT_SETTLEMENT_SCAN_CHUNK_BLOCKS,
+    1,
+    1_000_000,
+  );
+  const scan = { paymentSettlementLookbackBlocks, paymentSettlementScanChunkBlocks };
   // The mock scheme has no chain, so a mock deployment ignores the setting
   // rather than refusing to start because a dev box has one exported.
-  if (paymentMode === "mock") return { paymentSettlementLookbackBlocks };
+  if (paymentMode === "mock") return scan;
   const rpcUrl = (env.PAYMENT_RPC_URL ?? "").trim();
   if (rpcUrl.length === 0) {
-    return { paymentSettlementLookbackBlocks };
+    return scan;
   }
   let parsed: URL;
   try {
@@ -270,7 +292,7 @@ function parseChainVerification(
       `PAYMENT_RPC_URL requires a known USDC address for ${network}; set PAYMENT_USDC_ADDRESS`,
     );
   }
-  return { paymentRpcUrl: rpcUrl, paymentUsdcAddress: usdcAddress, paymentSettlementLookbackBlocks };
+  return { paymentRpcUrl: rpcUrl, paymentUsdcAddress: usdcAddress, ...scan };
 }
 
 function parseCredentials(

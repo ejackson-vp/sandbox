@@ -84,9 +84,12 @@ it with the smallest session you can buy.
    ```
 
    `PAYMENT_USDC_ADDRESS` is optional; it defaults to the Base USDC contract and
-   exists only to override it. `PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS` (default 900,
-   which is 30 minutes at Base's 2 s block time) bounds the block scan that finds
-   the `AuthorizationUsed` log for a payment.
+   exists only to override it. `PAYMENT_SETTLEMENT_LOOKBACK_BLOCKS` (default
+   90 000, which is 50 hours at Base's 2 s block time) bounds the block scan that
+   finds the `AuthorizationUsed` log for a payment, and
+   `PAYMENT_SETTLEMENT_SCAN_CHUNK_BLOCKS` (default 10 000) bounds one
+   `eth_getLogs` request inside it. Lower the chunk size for a provider with a
+   tighter range limit; the scan is capped at 12 calls per check.
 
 3. Start the API and confirm the assertions pass. A missing verifier, a mock
    `PAY_TO` or an unset `NETWORK` refuses to start, which is the intended
