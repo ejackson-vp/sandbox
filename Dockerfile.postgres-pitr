@@ -1,0 +1,45 @@
+# Postgres 17 with pgBackRest, for continuous WAL archiving and PITR.
+#
+# The plain `postgres:17` image in deploy/kubernetes/05-postgres.yaml has no
+# pgBackRest, and `archive_command` runs inside the postgres container, so a
+# derived image is the only way to give that container the binary without
+# copying files between images at pod start. `docs/adr/0015-postgres-pitr.md`
+# has the argument.
+#
+# Not built by .github/workflows/release.yml (that workflow builds
+# Dockerfile.control and the guest only). Build it, push it, and pin it by
+# digest the way a deployed environment pins the control image:
+#
+#   docker build -f Dockerfile.postgres-pitr -t x402-sandbox/postgres-pitr:17 .
+#
+# `scripts/pitr-drill.sh` builds this same file, so the drill exercises the
+# image a cluster would run and not a locally improvised one.
+#
+# Nothing here is pinned finer than the base tag: `postgres:17` already floats,
+# and the digest of the built image is the pin (deploy/release-pins.json does
+# not cover it). The build prints the pgBackRest version so the log records what
+# went into the digest.
+#
+# pgBackRest comes from PGDG and not the distribution: Debian's build can lag
+# the Postgres major version, and a pgBackRest older than the data directory
+# refuses to restore it. The apt suite is read from the base image, so a
+# bookworm base and a trixie base both work.
+FROM postgres:17
+
+USER root
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl; \
+    . /etc/os-release; \
+    suite="${VERSION_CODENAME}-pgdg"; \
+    install -d /usr/share/postgresql-common/pgdg; \
+    curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+      https://www.postgresql.org/media/keys/ACCC4CF8.asc; \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${suite} main" \
+      > /etc/apt/sources.list.d/pgdg.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends pgbackrest; \
+    apt-get purge -y --auto-remove curl; \
+    rm -rf /var/lib/apt/lists/*; \
+    pgbackrest version
+USER postgres

@@ -10,7 +10,7 @@ concrete next step.
 | --- | --- | --- | --- |
 | 1 | **No hardware attestation** | dev/Kata evidence is signed by a published key | out of scope for this repository; it needs TEE hardware and an independent verifier |
 | 2 | **Shared host kernel in dev mode** | container escape is possible for hostile code | require Kata minimum; validate before launch |
-| 3 | **The database is a single Postgres pod** | one primary on a `ReadWriteOnce` volume, pinned to the control-plane node like the rest of the control plane. Losing the node loses the store until the pod is rescheduled and the volume reattached (30s to 2min on most clouds), so this is not database HA, and nothing in this repository backs it up | move the store onto CloudNativePG (streaming replicas + PITR) or pgBackRest, and record a failover that does not wait for a volume detach. [ADR 0010](adr/0010-controller-ha-storage.md), [backup-restore.md](backup-restore.md) |
+| 3 | **The database is a single Postgres pod** | one primary on a `ReadWriteOnce` volume, pinned to the control-plane node like the rest of the control plane. Losing the node loses the store until the pod is rescheduled and the volume reattached (30s to 2min on most clouds), so this is not database HA. PITR is designed and drilled ([ADR 0015](adr/0015-postgres-pitr.md)) but not provisioned: there is no bucket or `postgres-pitr` Secret in any environment, so the only backup running today is still the nightly dump | provision the bucket and Secret so the `pitr` component has somewhere to archive, then move the store onto CloudNativePG for a second copy on another node, and record a failover that does not wait for a volume detach. [ADR 0010](adr/0010-controller-ha-storage.md), [backup-restore.md](backup-restore.md) |
 | 4 | **Relay is an in-memory registry per pod** | a restart loses pending ciphertext and the registration; with the default stable ClusterIP the guest reconnects and the interrupted operation is `outcome_unknown`. On clusters whose guest policy denies Service VIPs, `RELAY_GUEST_ADDRESS=pod` keeps sessions working but cannot follow the replacement, so the grace ends `relay_lost` and refunds ([ADR 0012](adr/0012-guest-reconnects-after-relay-loss.md)). Replicas hold disjoint sessions, addressed by deterministic shard affinity and enforced in the token, so N>1 no longer splits a session. A restart still costs one interrupted operation and up to `RELAY_LOSS_GRACE_MS`, or the rest of a shorter lease, of no operations while the guest reconnects, and that case is refunded | Redis/NATS with per-session queues and TTLs (ciphertext only) if a relay restart must also stop interrupting the operation in flight |
 | 5 | **Settlement recovery needs a facilitator lookup** | the controller can now reconcile a settled-but-unentitled payment into a refundable ledger row, but only if the facilitator exposes `GET /settlements/:paymentKey`. Testnet's public facilitator does not, so that window still answers `409 reconciliation_pending` | use a facilitator with a settlement lookup or a webhook, and record the run that proves it |
 | 6 | **Real refunds have never run** | mock mode auto-refunds; a real mode records `REFUND_PENDING` and the refund worker sends it to an operator-configured webhook. Nothing in this repository has moved testnet funds, and the webhook contract is defined here rather than by a facilitator | a settlement-sandbox end-to-end run: settle, kill the controller, prove the refund executes. See [payment-ledger.md](payment-ledger.md) |
@@ -154,9 +154,10 @@ concrete next step.
   not affect. Alert on any `clock_skew_detected` line, because the sessions it
   names may have ended early.
 - Backup/restore of the Postgres metadata (sessions are disposable; payment
-  records are not). The controller does not back anything up: the database layer
-  owns backups, PITR, encryption and retention, and the restore drill runs the
-  store contract suite against the restored copy.
+  records are not). The controller does not back anything up: the `pitr`
+  component owns WAL archiving, base backups, encryption and retention
+  ([ADR 0015](adr/0015-postgres-pitr.md)), and the restore drills run the store
+  contract suite against the restored copy. 60s RPO once the bucket exists.
   See [backup-restore.md](backup-restore.md).
 
 ## 4. Session product policy

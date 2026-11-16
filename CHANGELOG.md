@@ -190,6 +190,19 @@ the container registry.
   mainnet controller refuses to start without `PAYMENT_RPC_URL`; mock mode is
   unchanged. See
   [ADR 0014](docs/adr/0014-chain-verified-settlement-recovery.md).
+- Point-in-time recovery for the Postgres store: a `pitr` kustomize component
+  (`deploy/kubernetes/pitr/`) turns on `archive_mode` with a pgBackRest
+  `archive_command`, adds a sidecar that takes a daily encrypted base backup and
+  verifies it, and keeps 14 days of WAL. The object store, its keys and the
+  cipher passphrase come from a `postgres-pitr` Secret that
+  `02-secrets-pitr.yaml.example` describes; nothing in the repository is a
+  credential. `make pitr-drill` runs the whole mechanism against a throwaway
+  Postgres with a file-backed repository: base backup, WAL replay to a timestamp,
+  promote, then the store contract on the result (measured 1.4s restore, 1.3s
+  replay). RPO 60s, RTO seconds plus volume attach. It is not provisioned in any
+  environment yet: no bucket exists, so the nightly dump is still the only
+  backup. See [ADR 0015](docs/adr/0015-postgres-pitr.md) and
+  [docs/backup-restore.md](docs/backup-restore.md).
 
 ### Security
 

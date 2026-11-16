@@ -137,7 +137,10 @@ Anything that can provision a `ReadWriteOnce` volume works —
 be created and executed but `suspend`/`resume` fails. The Postgres StatefulSet
 asks for its own 8 GiB `ReadWriteOnce` volume from the same class, so the store
 is node-pinned too: back it up from the database layer, not by copying the
-directory ([backup-restore.md](../../docs/backup-restore.md)).
+directory ([backup-restore.md](../../docs/backup-restore.md)). WAL archiving to
+an object store lives in the `pitr` component and is applied by
+`deploy/pitr`, not by this overlay: it needs a bucket, a Secret and a pushed
+image first ([ADR 0015](../../docs/adr/0015-postgres-pitr.md)).
 
 On this cluster `standard` is `local-path-provisioner`, so a suspended session's
 workspace is a directory on the node and is **not encrypted**. `local-path` has

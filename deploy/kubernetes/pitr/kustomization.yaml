@@ -1,0 +1,47 @@
+# Kustomize component: continuous WAL archiving and PITR for the Postgres
+# StatefulSet (ADR 0015).
+#
+# It is a component and not part of the base on purpose. `deploy/kubernetes`
+# is what `make up` deploys on kind, where there is no object store, no
+# pgBackRest image and no Secret, so archiving there would only fill `pg_wal`
+# with segments it cannot ship. `deploy/pitr` is the reference deployment plus
+# this component, which is the overlay to apply once those exist; `deploy/talos`
+# stays without it so a reconcile cannot stop the database by enabling archiving
+# into a repository that is not there.
+#
+# Add it to another overlay with:
+#
+#   components:
+#     - ../kubernetes/pitr
+#
+# Before the pod will start, an operator has to provision three things that this
+# repository cannot: the bucket, the Secret that names it, and the image.
+# `docs/backup-restore.md` has the commands; the short version is
+#
+#   1. build and push `Dockerfile.postgres-pitr`, and point the `postgres`
+#      container at the digest in the overlay;
+#   2. create the `postgres-pitr` Secret (see
+#      02-secrets-pitr.yaml.example for the keys);
+#   3. apply, then watch the `pgbackrest` sidecar take the first base backup.
+#
+# Reversing it is deleting the `components:` line: the StatefulSet, its PVC and
+# its storage class are untouched by this patch, and Postgres starts happily
+# with the extra volumes gone.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - configmap.yaml
+  - networkpolicy.yaml
+
+patches:
+  # The archive command and the settings Postgres needs to ship WAL, plus the
+  # sidecar that takes base backups. A strategic merge on the container list:
+  # POSTGRES_* env, probes and resources from 05-postgres.yaml are kept.
+  - path: postgres-statefulset.patch.yaml
+    target:
+      group: apps
+      version: v1
+      kind: StatefulSet
+      name: postgres
+      namespace: sandbox-system

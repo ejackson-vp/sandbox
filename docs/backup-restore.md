@@ -1,7 +1,12 @@
 # Backup and restore
 
-Status: **the controller does not back anything up.** The database layer owns
-backup, PITR, encryption, retention and the restore drill.
+Status: **the recovery window is designed and drilled, not yet provisioned.**
+
+The manifests, the configuration and the drill are in this repository, and the
+decision is [ADR 0015](adr/0015-postgres-pitr.md). What is missing is the object
+store and the Secret that names it: one thing an operator has to create, because
+no repository can. Until that exists the only backup of the ledger is the nightly
+`pg_dump` CronJob described further down, with an RPO of up to a day.
 
 The controller keeps the payment ledger, intents and session state in Postgres
 (`deploy/kubernetes/05-postgres.yaml`, [ADR 0010](adr/0010-controller-ha-storage.md)).
@@ -11,7 +16,7 @@ copy itself. That path is deleted, along with the volume, the
 up its own database has to get the schedule, the off-site copy, the retention and
 the restore drill right, and it usually does none of them well.
 
-## What is backed up
+## What is in the database
 
 The whole database, including:
 
@@ -27,51 +32,259 @@ durability is a separate problem: see
 [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) and
 [lifecycle.md](lifecycle.md#checkpoint-at-rest-expiry-and-backup).
 
-## Pick a layer
+### The ledger must survive, the sessions do not
 
-Two shapes fit this deployment. Neither is in this repository; both replace the
-bare StatefulSet in `05-postgres.yaml` when the deployment outgrows it.
+The two halves of this database have different values, and the design follows
+that rather than treating every table the same.
 
-| Option | What it gives you | What it costs |
+| Data | Cost of losing it | What covers it |
 | --- | --- | --- |
-| **CloudNativePG** | A `Cluster` CRD with streaming replicas, continuous WAL archiving to object storage, PITR, and `barman-cloud` for base backups. Restores are `bootstrap.recovery` from a backup or a PITR target. | An operator on the cluster, an object store, and a CRD that owns the Postgres pods instead of the plain StatefulSet here. |
-| **pgBackRest** | Repo-based full/differential/incremental backups, parallel WAL archiving, PITR, and its own retention and encryption. Works with the existing StatefulSet. | A sidecar or CronJob plus a repo (S3, NFS or a PVC), and a config file that has to be right before the first backup. |
+| `payments`, `payment_ledger`, `payment_intents` | money moved on chain with no record of what it bought: no session to serve, no refund to issue, and no way to tell from the database what happened | PITR, 60s RPO, 14 day window |
+| `sessions`, `exec_requests`, `reservations` | a paid session dies mid-flight; the client is refunded or retries and the work is redone | the same PITR window, but nobody needs it to be 60s |
+| checkpoint workspaces (per-session PVCs) | the sandbox's `/workspace` is gone and the session resumes as `checkpoint_missing` | nothing here, see [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) |
 
-Either way, the properties the controller's old path had to provide are now
-configuration in that layer:
+A restore therefore restores the ledger exactly, and restores sessions as far as
+their *records* go. Do not promise a customer their `/workspace` back from a
+database restore.
 
-- **Encryption.** CloudNativePG's object-store backend or pgBackRest's
-  `repo-cipher-pass` encrypts at rest. Losing that key makes every backup
-  unreadable, so keep it with the other recovery material, not in the same
-  bucket.
-- **Retention.** Set a retention policy in the layer (for example
-  `retentionPolicy: "14d"` or pgBackRest's `repo1-retention-full`). The database
-  layer prunes; nothing here does.
-- **Off-cluster copy.** The backup repo must not be the same volume or the same
-  node as the primary. A backup that lives beside the database protects against
-  a bad migration, not against losing the node.
-- **RPO / RTO.** WAL archiving gives a PITR window of minutes; a nightly base
-  backup alone gives an RPO of a day. Decide the window, then verify the restore
-  meets the RTO you wrote down.
+## The recovery window (designed)
 
-The reference deployment takes a smaller step: a nightly `pg_dump` CronJob,
-encrypted with the cluster's existing backup key, restored into a scratch
-database to prove it reads, and kept for seven days. That catches a bad
-migration or a deleted row. It is not disaster recovery, because the dump sits
-on a PVC on the same node as the primary; copy the files off-node or move to one
-of the two options above.
+One mechanism: **pgBackRest 2.60** in a derived image
+(`Dockerfile.postgres-pitr`), archiving WAL continuously to an S3-compatible
+repository and taking a daily base backup from a sidecar in the existing pod.
 
-## Restore verification
+| Piece | Where | What it does |
+| --- | --- | --- |
+| `archiving` | `deploy/kubernetes/pitr/postgres-statefulset.patch.yaml` | `archive_mode=on`, `archive_command = pgbackrest --stanza=sandbox archive-push %p`, `archive_timeout=60` |
+| `config` | `deploy/kubernetes/pitr/configmap.yaml` | pgBackRest options: S3 repository, `aes-256-cbc`, 14 day retention, async archiving with a 1GiB queue, and the sidecar's backup loop |
+| `sidecar` | same patch | shares the pod's socket, mounts PGDATA **read-only**, creates the stanza, then `backup --type=full`, `verify`, sleep a day |
+| `credentials` | `postgres-pitr` Secret, `02-secrets-pitr.yaml.example` | bucket, endpoint, region, keys and cipher pass as `PGBACKREST_*` env vars. Nothing in the repository is a credential |
+| `egress` | `deploy/kubernetes/pitr/networkpolicy.yaml` | the store's only egress: 443 and DNS |
+| `restore job` | `deploy/kubernetes/pitr/restore-job.yaml.example` | the one-shot Job that puts a backup back on the volume |
+| `drill` | `scripts/pitr-drill.sh` | base backup, WAL replay to a timestamp, contract, in one command |
 
-A restore you have never run is a guess. The check is the store contract suite
-run against a database restored from the artifact, because it proves the
-payment, session, transition and reservation invariants survived the restore,
-not just that `pg_dump` exited zero.
+Two properties worth reading out of the configuration:
 
-### The CronJob dump
+- **Archiving is asynchronous.** A commit writes the segment into a spool
+  directory and returns; a child process pushes it. Synchronous archiving would
+  put the object store's latency inside every segment switch, and an unreachable
+  bucket would stall checkpointing until the volume filled. The price is the
+  queue: past 1GiB of unshipped WAL, pgBackRest drops the oldest segments with a
+  warning and keeps Postgres writing. That is an RPO gap, deliberately chosen
+  over an outage.
+- **The sidecar cannot write to the data directory.** It mounts PGDATA
+  read-only, so a bug in the backup path can read the database and cannot damage
+  it.
+
+The component is not part of `deploy/kubernetes` (kind has no object store, and
+archiving there would only fill `pg_wal` with segments nothing can ship) and not
+part of `deploy/talos` either (a reconcile would try to archive into a repository
+that does not exist, and the postgres container would not start). `deploy/pitr`
+is `deploy/talos` plus this component, which is the overlay to apply once the
+three things below exist:
+
+```sh
+kubectl kustomize deploy/pitr | kubectl diff -f -   # what enabling it changes
+kubectl apply -k deploy/pitr
+```
+
+### What an operator has to provision
+
+Two things, and the first is the one no repository can hold:
+
+1. **A bucket and a Secret.** An S3-compatible bucket, an access key pair and a
+   cipher passphrase, in the `postgres-pitr` Secret.
+   `02-secrets-pitr.yaml.example` lists the keys. Keep the cipher passphrase
+   somewhere that survives the cluster *and* the secret store: without it every
+   backup is ciphertext.
+2. **The image.** `docker build -f Dockerfile.postgres-pitr -t <registry>/postgres-pitr:17 .`,
+   push it, and add it to the commented `images:` block in `deploy/pitr`.
+   `release.yml` does not build this image.
+
+Nothing else: no ServiceAccount, no RBAC, no CRD, no operator.
+
+### Is it working?
+
+Four checks, in order of how much they tell you:
+
+```sh
+# 1. The repository has a base backup, the WAL range covers it, and the stanza
+#    is healthy. This is the state field an alert should watch.
+kubectl -n sandbox-system exec -c postgres postgres-0 -- \
+  pgbackrest --stanza=sandbox info
+
+# 2. The configuration is right end to end: config, connection, archive_command.
+kubectl -n sandbox-system exec -c postgres postgres-0 -- \
+  pgbackrest --stanza=sandbox check
+
+# 3. WAL is actually leaving. failed_count and the gap between the last archived
+#    segment and the current one are the two numbers that matter.
+kubectl -n sandbox-system exec -c postgres postgres-0 -- psql -U sandbox -d sandbox \
+  -c "SELECT archived_count, failed_count, last_archived_wal, last_archived_time FROM pg_stat_archiver"
+
+# 4. The sidecar's own log: the last backup, the last verify, and the next one.
+kubectl -n sandbox-system logs -c pgbackrest postgres-0 --tail=50
+```
+
+`verify` runs after every base backup, so a repository that has stopped being
+restorable shows up in the sidecar log and in the `info` status before anyone
+needs it. That check is the reason this mechanism was chosen over WAL-G; see
+[ADR 0015](adr/0015-postgres-pitr.md).
+
+A fresh volume logs `archive command failed` until the sidecar creates the
+stanza, which it retries every ten seconds from its first start. Postgres retries
+the same segment on an exponential backoff, so the failure is self-healing, and
+the `failed_count` it leaves behind is expected on day one.
+
+## RPO and RTO
+
+| | Designed | Measured |
+| --- | --- | --- |
+| **RPO** | 60s: `archive_timeout=60` closes a segment, the async push lands it. Up to 1GiB of WAL at risk while the object store is unreachable | 1.2s from `pg_switch_wal` to `last_archived_wal`; the drill also proves replay *stops* at the target, by writing a row 3s after it and showing the row is not in the restored copy |
+| **RTO** | restore the newest base backup, replay up to a day of WAL, run the contract | 1.4s restore + 1.3s replay and promote + 2.0s contract, on the drill's 30MB database. Add image pull, volume attach (30s to 2min, [ADR 0010](adr/0010-controller-ha-storage.md)) and a human |
+
+Both numbers are about the database. The outage also includes the operator
+finding the cipher passphrase, choosing a target timestamp, and the control plane
+being scaled down while the restore runs.
+
+A daily base backup means up to a day of WAL to replay. On a database with real
+write volume that is minutes, not seconds; shorten
+`PITR_BACKUP_INTERVAL_SECONDS` on the sidecar rather than assuming otherwise.
+
+## Restore: the runbook
+
+Two shapes. Rehearse with the first, use the second for the real thing.
+
+### Into a throwaway instance
+
+This is the quarterly drill, and it is also what to do when someone asks "can we
+recover to just before the bad migration" without touching production.
+
+```sh
+export PGBACKREST_REPO1_CIPHER_PASS='<from the postgres-pitr Secret>'
+aws s3 sync "s3://<bucket>/backup/sandbox" /tmp/pitr-repo/backup/sandbox
+aws s3 sync "s3://<bucket>/archive/sandbox" /tmp/pitr-repo/archive/sandbox
+./scripts/pitr-drill.sh --restore-from=/tmp/pitr-repo --target='2026-11-15 03:00:00+00'
+```
+
+The script copies the repository into a sandbox directory, restores it into a
+container, replays to the target, prints where replay stopped, and runs the store
+contract against the result. It prints the timings and what it did not cover.
+`--keep` leaves the containers up so you can query the recovered database.
+
+A repository from the cluster has no `pitr_drill` table, so the boundary is
+asserted by the `recovery stopping before commit of transaction …` line and by
+the contract, not by marker rows. Run the local cycle in the section below when
+you want the both-sides proof: it writes a row either side of the timestamp and
+fails if replay crosses it.
+
+### Over the live volume
+
+The real restore. Two pods must be stopped first: the controller (it writes) and
+Postgres (its volume is about to be rewritten).
+
+```sh
+# 1. While everything is still up, read the repository: the backups it holds and
+#    the WAL range they cover. A target before the oldest backup or after the
+#    newest archived segment cannot be reached, and finding that out now is
+#    cheaper than finding it out at step 3.
+kubectl -n sandbox-system exec -c postgres postgres-0 -- \
+  pgbackrest --stanza=sandbox info
+
+# 2. Stop the writer, then the database. The controller holds the Lease, so
+#    scaling it to zero is also what stops a new leader from starting mid-restore.
+kubectl -n sandbox-system scale deploy/controller --replicas=0
+kubectl -n sandbox-system scale sts/postgres --replicas=0
+
+# 3. Restore. Edit the two placeholders in the example job first.
+kubectl -n sandbox-system create -f deploy/kubernetes/pitr/restore-job.yaml.example
+
+# 4. Watch it finish, then start the database again. Postgres replays the rest of
+#    the WAL itself, from the recovery config the restore job wrote, and promotes
+#    at the target.
+kubectl -n sandbox-system logs job/postgres-restore -f
+kubectl -n sandbox-system scale sts/postgres --replicas=1
+
+# 5. Let the controller migrate and verify the schema, then start traffic.
+kubectl -n sandbox-system scale deploy/controller --replicas=1
+kubectl -n sandbox-system rollout status deploy/controller --timeout=180s
+```
+
+If the volume is **corrupt** rather than merely wrong, do not `--delta` over it.
+Delete the PVC (`kubectl -n sandbox-system delete pvc data-postgres-0`), let the
+StatefulSet create an empty one, and run the same job without `--delta`. The base
+backup is on the object store, so discarding the volume costs one restore.
+
+Step 5 is also where a schema problem surfaces: the controller refuses a database
+newer than the build (`refusing to downgrade`), so a restore from a newer release
+needs that release.
+
+### After any restore
+
+- Run a create/exec/destroy smoke test against the restored stack, and confirm a
+  known `payments.payment_key` has its `payment_ledger` row with the status you
+  expect.
+- Record the RTO (first command to a serving API), the age of the base backup,
+  the WAL replayed, and every step that was not on this page.
+- Run `pgbackrest verify` once more. If it fails after a successful restore, the
+  repository is in worse shape than the restore suggested and that is worth
+  knowing before the next incident.
+- Check the sidecar took a backup after the restore, so the timeline is not left
+  with a gap where the promoted primary's WAL has nowhere to go.
+
+## The drill
+
+`make pitr-drill` (`./scripts/pitr-drill.sh`) exercises the mechanism, not the
+deployment: it starts a throwaway Postgres with the shipped `archive_command` and
+the shipped pgBackRest configuration read out of the ConfigMap, takes a base
+backup, writes a row either side of a timestamp, replays WAL to that timestamp,
+promotes, and runs the store contract against the result. Replaying one row too
+far fails the run, which is the assertion `pgbackrest info` cannot make. A POSIX repository in a
+temporary directory stands in for the bucket, so it needs docker, node and a
+checkout with `node_modules`; the first run also builds the pgBackRest image,
+which needs network.
+
+Real output from the run that shipped this, on an M-series Mac with Docker
+Desktop, against a 30MB database:
+
+```sh
+[pitr-drill] source passes the contract (2.224s, Tests  22 passed)
+[pitr-drill] base backup 20261116-015413F in 39.411s (5.8MB in the repository)
+[pitr-drill] verifying the repository reads back
+[pitr-drill] target timestamp 2026-11-16 01:54:56.95518+00
+[pitr-drill] segment 000000010000000000000004 archived in 1.299s (failed archive attempts so far: 0)
+[pitr-drill] restore took 1.451s
+[pitr-drill] restored instance is up and promoted after 2s (1.269s including WAL replay)
+[pitr-drill] recovery stopping before commit of transaction 875, time 2026-11-16 01:55:00.124231+00
+[pitr-drill] point in time: 'before' came back, 'after' did not, so replay stopped at 2026-11-16 01:54:56.95518+00
+[pitr-drill] contract passed against the restored copy (1.993s, Tests  22 passed)
+[pitr-drill] PASS
+[pitr-drill]   RTO measured here  2.720s (restore plus replay; no image pull, no volume attach, no human)
+```
+
+Read the base backup number with suspicion: 39s to copy 30MB is the container
+file-sharing layer on a laptop, not a PVC read and an S3 write. The restore,
+replay and contract numbers are the shape of the RTO; the backup number is not
+usable for anything.
+
+What the drill does **not** cover, and says so in its own output: the S3
+repository, the sidecar loop inside a pod, the NetworkPolicy, the image digest a
+cluster pulls, and the PVC. Those need a cluster and a bucket. The first run of
+this drill against the reference deployment is the follow-up on #162, and until
+it happens this page describes a design that has been exercised, not a
+deployment that has been proved.
+
+## The nightly dump (interim, and all that runs today)
+
+Until the bucket exists, the reference deployment takes a smaller step: a nightly
+`pg_dump` CronJob (`apps/sandbox/postgres-backup.yaml` in the private deployment
+repository), encrypted with the cluster's existing backup key, restored into a
+scratch database to prove it reads, and kept for seven days. That catches a bad
+migration or a deleted row. It is not disaster recovery, because the dump sits on
+a PVC on the same node as the primary.
 
 `make test-restore-dump DUMP=<file>` (`node scripts/restore-dump.mjs <file>`)
-runs the whole loop:
+runs the whole loop against one of those dumps:
 
 - creates `sbx_restore_<stamp>_<pid>_<random>`, a name no deployed database has;
 - decrypts with `openssl enc -d -aes-256-cbc -pbkdf2` when the file starts with
@@ -84,9 +297,6 @@ runs the whole loop:
 - drops the database on success, on failure and on `SIGINT`/`SIGTERM`, unless
   `--keep` is passed;
 - exits non-zero on any failure.
-
-The comparison has to run before the contract, because the contract truncates
-every table. By the time it passes there are no rows left to check.
 
 ```sh
 [restore-dump] data: source 127.0.0.1:5453/sandbox (read-only, full scan)
@@ -150,20 +360,18 @@ store contract` and a green contract suite. The `total fp` on that line is the
 fingerprint of the copy, so two runs of the same artifact print the same number.
 A truncated file, a wrong key, a corrupt archive or a dump this build cannot use
 all exit 1 with the failing step named, and so does a row that did not come back.
-`--keep` leaves the copy in place for the smoke test below and prints the
+`--keep` leaves the copy in place for the smoke test above and prints the
 `DROP DATABASE` command.
 
-Note what `npm run test:store-contract` does **not** do: with `DATABASE_URL`
-pointed at a restored database it creates a fresh `sbx_test_…` database from
-that URL and runs there, so the contract never runs against the restored copy.
-That is why the script uses `npm run test:store-contract-restored`, which runs
-the same suite against `SBX_RESTORE_DATABASE_URL` exactly as given.
+## Restore verification: the store contract
 
-### A CloudNativePG or pgBackRest recovery instance
+A restore you have never run is a guess. The check is the store contract suite
+run against a database restored from the artifact, because it proves the payment,
+session, transition and reservation invariants survived the restore, not just
+that the restore exited zero.
 
-Those restores produce a running database rather than a file, so point the same
-suite at a database in the recovery instance. It truncates every table, so use
-a throwaway instance or a database named for the drill:
+Point the suite at a database in a recovered instance. It truncates every table,
+so use a throwaway instance or a database named for the drill:
 
 ```sh
 SBX_RESTORE_DATABASE_URL='postgres://sandbox:<pw>@127.0.0.1:5433/sbx_restore_drill' \
@@ -172,12 +380,19 @@ SBX_RESTORE_DATABASE_URL='postgres://sandbox:<pw>@127.0.0.1:5433/sbx_restore_dri
 
 `tests/restore/store-contract.test.ts` refuses a database whose name does not
 start with `sbx_restore_`. Set `SBX_RESTORE_ALLOW_ANY_DB=1` only on a recovery
-instance you are willing to empty.
+instance you are willing to empty. `scripts/pitr-drill.sh` names its database
+`sbx_restore_drill` for exactly this reason.
+
+Note what `npm run test:store-contract` does **not** do: with `DATABASE_URL`
+pointed at a restored database it creates a fresh `sbx_test_…` database from
+that URL and runs there, so the contract never runs against the restored copy.
+That is why both scripts use `npm run test:store-contract-restored`, which runs
+the same suite against `SBX_RESTORE_DATABASE_URL` exactly as given.
 
 ### Schema versions
 
-`sandbox_schema.version` is the dump's schema version. The script reads it,
-prints it, and acts on it the way the controller does at start-up
+`sandbox_schema.version` is the dump's or backup's schema version. The scripts
+read it, print it, and act on it the way the controller does at start-up
 (`migratePostgres` in `controller/src/store/postgres/schema.ts`):
 
 - **Older than this checkout.** The contract fixture opens a writer on the copy,
@@ -190,17 +405,10 @@ prints it, and acts on it the way the controller does at start-up
 - **Newer than this build.** `migratePostgres` throws
   `refusing to downgrade`, the controller would not start on it either, and the
   script stops before running the contract and says so. Restore with the build
-  that wrote the dump.
-- **No version row.** Treated as v0 and the base schema is applied. The script
-  separately refuses a dump without `sessions`, `payments` and
+  that wrote the backup.
+- **No version row.** Treated as v0 and the base schema is applied. The scripts
+  separately refuse an artifact without `sessions`, `payments` and
   `payment_ledger`, so an unrelated database is not mistaken for a backup.
-
-### After the restore
-
-Run a create/exec/destroy smoke test against a controller pointed at the kept
-copy, and confirm a known `payments.payment_key` has its `payment_ledger` row.
-Record the RTO, the backup age and any step that was not on this page. Repeat
-quarterly, and after any change to the backup layer.
 
 ## Verified by
 
@@ -217,42 +425,46 @@ runs in the `postgres contract` CI job, and is excluded from
 `npm run test:integration` so it runs once per pull request.
 
 The copy is a server-side `TEMPLATE` of a cleanly closed source, which is not a
-production restore path: CloudNativePG `bootstrap.recovery`, pgBackRest and the
-`pg_dump` CronJob all replay WAL or restore a dump. The drill also says
-nothing about point-in-time recovery, a cross-region restore, or the Kubernetes
-objects around the database (pods, PVCs, the Lease).
+production restore path. The drill also says nothing about the Kubernetes objects
+around the database (pods, PVCs, the Lease), or about the object store.
 
-`scripts/restore-dump.mjs` closes the artifact half: it takes a real
-`pg_dump -Fc` file, decrypts it the way the CronJob encrypted it, restores it,
-compares every money and session table against the database the dump came from,
-and runs the contract against the restored copy. A table that lost rows, gained a
-duplicate or changed a value fails the run with the table and both fingerprints
-named, before the contract has a chance to truncate anything.
-`tests/unit/restore-dump.test.ts` and `tests/unit/restore-verify.test.ts` pin its
-decisions without a server (argument parsing, the scratch name, the encryption
-sniff, the schema-version branch, and what the fingerprint hashes and orders by).
-It is not in CI: no runner holds the `postgres-backups` PVC or the backup key,
-and the nightly faults job runs against a cluster that backs nothing up. The
-quarterly drill is still a human with the key, and this is the command they run.
+`scripts/pitr-drill.sh` closes the WAL half: it archives with the shipped
+`archive_command`, takes a real pgBackRest base backup, replays real WAL to a
+named timestamp, and proves the boundary in both directions. It is not in CI: it
+needs docker, and a runner that builds the pgBackRest image. The quarterly drill
+is still a human, and this is the command they run.
+
+`scripts/restore-dump.mjs` closes the dump half: it takes a real `pg_dump -Fc`
+file, decrypts it the way the CronJob encrypted it, restores it, compares every
+money and session table against the database the dump came from, and runs the
+contract against the restored copy. A table that lost rows, gained a duplicate or
+changed a value fails the run with the table and both fingerprints named, before
+the contract has a chance to truncate anything. `tests/unit/restore-dump.test.ts`
+and `tests/unit/restore-verify.test.ts` pin its decisions without a server
+(argument parsing, the scratch name, the encryption sniff, the schema-version
+branch, and what the fingerprint hashes and orders by). It is not in CI: no
+runner holds the `postgres-backups` PVC or the backup key.
 
 What is still unproven:
 
-- **The rows, when there is no source to compare with.** The comparison needs
-  the database the dump came from. `--no-compare`, or a `DATABASE_URL` database
-  with no sandbox tables, drops the run back to schema and counts, and says so
-  in the output. Comparing a week-old artifact against a live source also shows
-  legitimate drift, which reads as a mismatch: check the dump's age before
-  believing it.
+- **The cluster path.** No run of this design has touched a real bucket, the
+  sidecar, the NetworkPolicy or a PVC. `scripts/pitr-drill.sh` exercises the
+  commands; nothing exercises the deployment.
+- **Node loss.** One primary on one `ReadWriteOnce` volume means the data and the
+  node fail together. PITR makes the restore possible with a bounded RPO; it does
+  not make it a failover, and the 30s to 2min volume attach is still in the RTO.
+- **The rows, when there is no source to compare with**, for the dump path. The
+  comparison needs the database the dump came from. `--no-compare`, or a
+  `DATABASE_URL` database with no sandbox tables, drops the run back to schema
+  and counts, and says so in the output. Comparing a week-old artifact against a
+  live source also shows legitimate drift, which reads as a mismatch: check the
+  dump's age before believing it.
 - **Columns that only one side has.** A dump taken before a ladder step is
   compared on the columns both sides share, and the skipped columns are named.
   An altered value in a column the dump predates is not seen.
-- **Anything off-node.** The CronJob dump lands on the same local-path PVC as
-  the primary. It catches a bad migration or a deleted row; it is not disaster
-  recovery, and no drill here changes that.
-- **WAL replay and PITR.** No test in this repository replays WAL,
-  bootstraps a CloudNativePG recovery cluster or restores a pgBackRest repo.
-- **The Kubernetes objects around the database.** Restoring rows does not
-  restore the StatefulSet, the PVCs or the Lease.
+- **The quota of a single object store bucket.** There is no second copy in
+  another region and no lifecycle rule committed anywhere. The repository is
+  off-node, which is the property the old dump path lacked; it is not off-vendor.
 
 ## What is not covered
 
@@ -261,3 +473,6 @@ What is still unproven:
   follow-up 1 in [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md).
 - **Relay state.** In-memory per pod, by design
   ([architecture-principles.md](architecture-principles.md)).
+- **The cipher passphrase.** It is in the `postgres-pitr` Secret and nowhere
+  else in this design. If the Secret store is lost with the cluster, the
+  repository is unreadable. Keep a copy outside both.

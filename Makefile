@@ -9,7 +9,7 @@ GUEST_IMG    ?= x402-sandbox/guest:dev
 NAMESPACE    := sandbox-system
 KUBECTL      := kubectl --context $(CONTEXT)
 
-.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-restore-dump test-go coverage-go coverage-go-fuzz verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network kyverno-policy logs clean down
+.PHONY: help up up-2w build images guest deploy demo demo-agent demo-timeout demo-session dev-scale demo-expire demo-lifecycle demo-capacity demo-placement demo-portability demo-faults demo-http-basic demo-http demo-python demo-browser demo-large-file demo-directory test-transfers test-control-faults test-workloads demo-sse demo-ws cli fmt test test-unit test-integration test-restore-dump pitr-drill test-go coverage-go coverage-go-fuzz verify verify-model typecheck lint-structure test-property docs-check assets demo-gif security-test security-isolation kata security-network kyverno-policy logs clean down
 
 help:
 	@echo "x402 sandbox sessions"
@@ -34,6 +34,7 @@ help:
 	@echo "  make demo-ws       WebSocket echo through the relay"
 	@echo "  make test           unit + integration tests (real guest, no cluster)"
 	@echo "  make test-restore-dump DUMP=file  restore a backup and run the store contract on it"
+	@echo "  make pitr-drill    PITR: base backup, WAL replay to a timestamp, store contract (needs docker)"
 	@echo "  make verify         build, typecheck, structure lint, unit + property + go tests"
 	@echo "  make verify-model   model-check the lifecycle/payment/operation/fence state machines (TLA+)"
 	@echo "  make docs-check     markdownlint + internal link check"
@@ -165,6 +166,14 @@ test-portable:
 test-restore-dump:
 	@test -n "$(DUMP)" || { echo "usage: make test-restore-dump DUMP=<path> [DATABASE_URL=...]"; exit 2; }
 	node scripts/restore-dump.mjs "$(DUMP)"
+
+# The recovery window itself, not just the nightly dump: a base backup, WAL
+# replayed to a timestamp, and the store contract run against the restored copy.
+# Uses a POSIX repository in a temporary directory instead of the object store,
+# so it runs on a laptop with docker and no cluster. ADR 0015 has the design and
+# docs/backup-restore.md has the numbers and what this does not cover.
+pitr-drill:
+	./scripts/pitr-drill.sh
 
 demo-sse:
 	npx tsx scripts/sse-demo.ts

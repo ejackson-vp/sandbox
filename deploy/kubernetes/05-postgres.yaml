@@ -4,10 +4,12 @@
 # One primary on a ReadWriteOnce volume, pinned to the control-plane node like
 # the rest of the control plane. The controller still holds the Kubernetes Lease
 # (ADR 0009), so this is one writer's database, not a shared cluster: taking the
-# node out of service is a restore, not a failover. HA, logical/physical backups
-# and PITR are owned by the database layer (CloudNativePG or pgBackRest), not by
-# the controller; docs/backup-restore.md describes that split. Nothing here
-# copies the data directory.
+# node out of service is a restore, not a failover. Backups and PITR are not the
+# controller's job: this file is the plain server, and the archiving and the
+# daily base backup come from the `pitr` component (deploy/kubernetes/pitr,
+# ADR 0015), which overlays this StatefulSet without touching its volume.
+# docs/backup-restore.md describes that split. Nothing here copies the data
+# directory.
 #
 # Credentials come from `postgres-credentials`, which scripts/dev-secrets.sh
 # generates locally and a deployed environment injects from its own store. The

@@ -1,0 +1,42 @@
+# WAL archiving dials the object store (ADR 0015). This is the only egress the
+# store has ever had: 21-networkpolicy-control.yaml's `allow-postgres` closes it
+# with an empty egress list, and Kubernetes unions policy rules, so that file
+# still says what it said and this one opens the one path.
+#
+# There is no `to:` on the 443 rule, and that is a limitation worth naming: a
+# NetworkPolicy cannot express "the bucket named in the Secret". The endpoint is
+# a Secret value, so the pod can reach any host on 443 and the thing that keeps
+# it honest is that pgBackRest only ever dials its configured endpoint. A
+# CiliumNetworkPolicy with `toFQDNs` would narrow it, at the cost of committing
+# the hostname, which is the one thing this design keeps out of the repository.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-archive
+  namespace: sandbox-system
+  labels:
+    app: postgres
+    app.kubernetes.io/component: pitr
+spec:
+  podSelector:
+    matchLabels: {app: postgres}
+  policyTypes: ["Egress"]
+  egress:
+    # The object store. Port only, because the host is a Secret.
+    - ports:
+        - protocol: TCP
+          port: 443
+    # Resolving that endpoint. Failed DNS is the first symptom of a broken
+    # archive, and it looks like a credential problem in the logs.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
