@@ -13,6 +13,10 @@
  *  - the durable budget is reserved before the capacity hold and the claim,
  *  - capacity is held before settlement, so the hold closes the race between
  *    the advisory 402 preflight and the payment.
+ *
+ * The stages end with the claim. Everything that spends money is in
+ * `create-session-settlement.ts`, which the orchestrator calls next and which
+ * owns the failure taxonomy of verify and settle.
  */
 import { decodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentRequirements } from "@x402/core/types";
@@ -23,36 +27,23 @@ import {
   paymentAuthorizer,
 } from "@x402s/shared/crypto";
 import { PAYMENT_VERSION, paymentKey } from "@x402s/shared/payment";
-import { classifyThrown, settlementKey, toFailure } from "@x402s/shared/durable";
 import type { CreateSessionRequest, SessionSpec } from "@x402s/shared/protocol";
-import {
-  LATENCY_BUCKETS,
-  log,
-  metrics,
-  recordAuthFailure,
-  recordRateLimited,
-} from "@x402s/shared/runtime";
+import { log, recordAuthFailure, recordRateLimited } from "@x402s/shared/runtime";
 import { paymentPayerKey } from "../admission.js";
 import type { ApiConfig } from "../config.js";
 import type { BudgetDecision, CapacityDecision } from "../controller-client.js";
 import {
-  confirmSettledOnChain,
-  recoveryAvailable,
-  recoverSettlement,
-} from "../payments/settlement-confirmation.js";
-import { createResponseFrom } from "../status.js";
-import {
+  admissionUnavailable,
+  failAfterReleasingHold,
   json,
   paymentRequired,
   rejectCapacity,
-  rejectRetiredCapabilityKey,
+  replayedSession,
   type CreateSessionResult,
   type CreateSessionUseCaseDeps,
   type Failed,
   type Ok,
   type PaymentPayload,
-  type PaymentTimings,
-  type SettledPayment,
 } from "./create-session-contract.js";
 
 /**
@@ -71,7 +62,7 @@ export async function quoteWithoutPayment(
     preflight = await deps.controller.preflightCapacity(spec);
   } catch (err) {
     log.error("capacity_preflight_failed", { error: (err as Error).message });
-    return json(503, { error: "admission_unavailable", retryable: true, message: "try again shortly" });
+    return admissionUnavailable("try again shortly");
   }
   if (!preflight.admitted) return rejectCapacity(preflight);
   return paymentRequired(requirement, "payment_required");
@@ -103,30 +94,28 @@ export function decodePayment(
 
 /**
  * Per-payer admission, before the payment intent is claimed or the payment is
- * settled, so a throttled payer is never charged. Returns the bucket key.
+ * settled, so a throttled payer is never charged.
+ *
+ * `null` means "continue". The bucket key is a rate-limit identity rather than a
+ * trust decision, so it is not returned: nothing downstream reads it.
  */
 export function admitPayer(
   deps: CreateSessionUseCaseDeps,
   payload: PaymentPayload,
   sourceIp: string,
-): Ok<string> | Failed {
+): CreateSessionResult | null {
   const payerKey = paymentPayerKey(payload, sourceIp);
-  if (!deps.createLimiter.take(payerKey)) {
-    recordRateLimited("payer");
-    return {
-      ok: false,
-      result: json(
-        429,
-        {
-          error: "rate_limited",
-          scope: "payer",
-          message: "this payer is creating sessions too quickly; retry after the advertised delay",
-        },
-        { "Retry-After": String(deps.createLimiter.retryAfterSeconds(payerKey)) },
-      ),
-    };
-  }
-  return { ok: true, value: payerKey };
+  if (deps.createLimiter.take(payerKey)) return null;
+  recordRateLimited("payer");
+  return json(
+    429,
+    {
+      error: "rate_limited",
+      scope: "payer",
+      message: "this payer is creating sessions too quickly; retry after the advertised delay",
+    },
+    { "Retry-After": String(deps.createLimiter.retryAfterSeconds(payerKey)) },
+  );
 }
 
 /** The proven identity of the payer and the challenge it signed. */
@@ -240,14 +229,7 @@ export async function reserveBudget(
     budget = await deps.controller.reserveBudget(payerKey, amountAtomic);
   } catch (err) {
     log.error("budget_reservation_failed", { error: (err as Error).message });
-    return {
-      ok: false,
-      result: json(503, {
-        error: "admission_unavailable",
-        retryable: true,
-        message: "try again shortly; no payment was taken",
-      }),
-    };
+    return { ok: false, result: admissionUnavailable("try again shortly; no payment was taken") };
   }
   if (!budget.ok) {
     const globalScope = budget.scope.startsWith("global_");
@@ -287,10 +269,7 @@ export async function holdCapacity(
     hold = await deps.controller.holdCapacity(key, specDigest, spec);
   } catch (err) {
     log.error("capacity_hold_failed", { error: (err as Error).message });
-    return {
-      ok: false,
-      result: json(503, { error: "admission_unavailable", retryable: true, message: "try again shortly" }),
-    };
+    return { ok: false, result: admissionUnavailable("try again shortly") };
   }
   if (!hold.admitted) return { ok: false, result: rejectCapacity(hold) };
   return { ok: true, value: hold };
@@ -324,18 +303,18 @@ export async function claimPaymentIntent(
     };
   }
   if (claim.status === "failed") {
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: paymentRequired(requirement, `payment_intent_failed:${claim.reason ?? "unknown"}`),
-    };
+    return failAfterReleasingHold(
+      deps,
+      key,
+      paymentRequired(requirement, `payment_intent_failed:${claim.reason ?? "unknown"}`),
+    );
   }
   if (claim.status === "mismatch") {
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: json(409, { error: "spec_mismatch", message: "this payment was made for a different session spec" }),
-    };
+    return failAfterReleasingHold(
+      deps,
+      key,
+      json(409, { error: "spec_mismatch", message: "this payment was made for a different session spec" }),
+    );
   }
   if (claim.status === "settled") {
     // A replay must not leave a fresh provisional hold behind. This only
@@ -346,240 +325,7 @@ export async function claimPaymentIntent(
       return { ok: false, result: json(409, { error: "entitlement_missing", sessionId: claim.sessionId }) };
     }
     log.info("payment_idempotent_replay", { sessionId: claim.sessionId, paymentKeyPrefix: key.slice(0, 12) });
-    // The token may have been signed before a rotation: re-derive the one that
-    // matches the stored hash rather than signing a new one.
-    const replayCapability = deps.recoverCapability(key, commitment, session.capabilityHash);
-    if (!replayCapability) {
-      return { ok: false, result: rejectRetiredCapabilityKey(session.sessionId) };
-    }
-    return {
-      ok: false,
-      result: json(200, createResponseFrom(session, replayCapability, session.limits)),
-    };
+    return { ok: false, result: replayedSession(deps, key, commitment, session) };
   }
   return { ok: true, value: { token: claim.token, recovered: claim.recovered } };
-}
-
-/**
- * Facilitator error reasons that mean "we do not know", never "we refused".
- *
- * `settlement_pending` is the x402 mechanism reporting that it broadcast a
- * transaction and could not confirm it: a transfer may exist, so the attempt
- * must not be recorded as a definite failure (ADR 0011).
- */
-const AMBIGUOUS_SETTLE_REASONS: ReadonlySet<string> = new Set(["settlement_pending", "settlement_timeout"]);
-
-function settleVerdict(errorReason: string | undefined): "definite_failure" | "unknown" {
-  return errorReason !== undefined && AMBIGUOUS_SETTLE_REASONS.has(errorReason)
-    ? "unknown"
-    : "definite_failure";
-}
-
-/**
- * An unknown settlement is not a failure. With a settlement lookup, or an
- * on-chain verifier that can answer for the nonce, the intent stays `claimed`,
- * which is what lets `SettlementRecovery` and the client's retry resolve it.
- * With neither, nothing could ever resolve it, so the intent is failed exactly
- * as before: a terminal row an operator can see beats a claim that ages out into
- * nothing.
- */
-async function deferUnknownSettlement(
-  deps: CreateSessionUseCaseDeps,
-  key: string,
-  reason: string,
-): Promise<void> {
-  if (recoveryAvailable(deps)) return;
-  await deps.controller.failIntent(key, reason).catch(() => undefined);
-}
-
-/**
- * A settle whose answer was lost may still have landed. Ask the chain before
- * answering: a proven transfer completes the entitlement now, instead of leaving
- * the client to retry into `payment_in_progress` until the claim goes stale.
- */
-async function recoverLostSettle(
-  deps: CreateSessionUseCaseDeps,
-  payload: PaymentPayload,
-  key: string,
-  requirement: PaymentRequirements,
-): Promise<Ok<SettledPayment> | null> {
-  if (!deps.settlementVerifier) return null;
-  if ((await confirmSettledOnChain(deps.settlementVerifier, payload, requirement)) !== "settled") {
-    return null;
-  }
-  log.warn("payment_recovered_after_lost_settle", { paymentKeyPrefix: key.slice(0, 12) });
-  const payer = paymentAuthorizer(payload) ?? undefined;
-  return { ok: true, value: payer ? { payer } : {} };
-}
-
-/**
- * Verify, check the controller is up, then settle. A settlement failure keeps
- * the capacity hold until its TTL so recovery cannot over-allocate.
- *
- * Returns the settlement to complete with, or the answer that ends the request.
- * The nonce-conflict recovery resolves to a settlement here because it happens
- * instead of settlement, before completion.
- */
-export async function verifyAndSettle(
-  deps: CreateSessionUseCaseDeps,
-  payload: PaymentPayload,
-  requirement: PaymentRequirements,
-  key: string,
-  timings: PaymentTimings,
-): Promise<Ok<SettledPayment> | Failed> {
-  let verify;
-  const verifyStarted = Date.now();
-  try {
-    verify = await deps.resourceServer.verifyPayment(payload, requirement);
-    timings.verifyMs = Date.now() - verifyStarted;
-    metrics
-      .histogram("sandbox_payment_verify_duration_seconds", "Facilitator payment verification", LATENCY_BUCKETS)
-      .observe(timings.verifyMs / 1000);
-  } catch (err) {
-    log.warn("payment_verify_error", { error: (err as Error).message });
-    await deps.controller.releaseCapacity(key);
-    return { ok: false, result: paymentRequired(requirement, "payment_verify_failed") };
-  }
-  if (!verify.isValid) {
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: paymentRequired(requirement, `payment_invalid:${verify.invalidReason ?? "unknown"}`),
-    };
-  }
-
-  try {
-    const health = await deps.controller.healthz();
-    if (!health.ok) throw new Error("controller unhealthy");
-  } catch {
-    await deps.controller.failIntent(key, "control_plane_unavailable").catch(() => undefined);
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: json(503, { error: "provisioning_unavailable", message: "try again later; no payment was taken" }),
-    };
-  }
-
-  let settle;
-  const settleStarted = Date.now();
-  try {
-    settle = await deps.resourceServer.settlePayment(payload, requirement);
-    timings.settleMs = Date.now() - settleStarted;
-    metrics
-      .histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS)
-      .observe(timings.settleMs / 1000);
-  } catch (err) {
-    // The facilitator may have submitted the transfer before the answer was
-    // lost. A thrown settle is `unknown`, never a refusal (ADR 0011), so it is
-    // not recorded as a failed attempt and the intent is not failed while a
-    // settlement lookup can still resolve it. Keep the hold until its TTL so
-    // recovery cannot over-allocate capacity.
-    const failure = toFailure(err);
-    log.warn("payment_settle_error", {
-      paymentKeyPrefix: key.slice(0, 12),
-      operation: settlementKey(key).kind,
-      outcome: classifyThrown(err).kind,
-      error: failure.reason,
-    });
-    await deferUnknownSettlement(deps, key, "settle_error");
-    const recovered = await recoverLostSettle(deps, payload, key, requirement);
-    if (recovered) return recovered;
-    return { ok: false, result: paymentRequired(requirement, "payment_settle_failed") };
-  }
-
-  if (!settle.success) {
-    // A nonce conflict may mean an earlier attempt settled but crashed before
-    // the entitlement was durable. The chain answers that for an EVM payment
-    // whether or not the facilitator exposes a settlement lookup, so recover
-    // instead of charging twice.
-    if (settle.errorReason === "nonce_already_used" && recoveryAvailable(deps)) {
-      const resolution = await recoverSettlement(deps, key, payload, requirement);
-      if (resolution.status === "settled") {
-        log.warn("payment_recovered_after_nonce_conflict", { paymentKeyPrefix: key.slice(0, 12) });
-        return {
-          ok: true,
-          value: {
-            payer: resolution.settlement.payer,
-            transaction: resolution.settlement.transaction,
-          },
-        };
-      }
-      if (resolution.status === "unknown") {
-        // The facilitator says the nonce is used, but the chain cannot place the
-        // payment (outside the window, or unreadable) and no lookup can answer.
-        // That is not a refusal: failing the intent would hide the debt from the
-        // recovery worker, which only walks claimed intents. Keep the intent
-        // claimed and the hold until its TTL, and ask the client to retry with
-        // the same payment, exactly as the lost-settle path does.
-        log.warn("payment_settlement_unresolved", {
-          paymentKeyPrefix: key.slice(0, 12),
-          operation: settlementKey(key).kind,
-        });
-        await deferUnknownSettlement(deps, key, "settlement_unresolved");
-        return {
-          ok: false,
-          result: json(503, {
-            error: "payment_unconfirmed",
-            reason: "unavailable",
-            retryable: true,
-            message: "settlement could not be confirmed on chain; retry with the same payment",
-          }),
-        };
-      }
-      // A positive disproof falls through: it is a real refusal.
-    }
-    // The facilitator answered, but an answer that says "broadcast, not yet
-    // confirmed" is not a refusal. Same rule as a thrown call: keep the intent
-    // claimed for recovery and the hold until its TTL.
-    if (settleVerdict(settle.errorReason) === "unknown") {
-      log.warn("payment_settle_unknown", {
-        paymentKeyPrefix: key.slice(0, 12),
-        operation: settlementKey(key).kind,
-        reason: settle.errorReason,
-      });
-      await deferUnknownSettlement(deps, key, settle.errorReason ?? "settlement_pending");
-      const recovered = await recoverLostSettle(deps, payload, key, requirement);
-      if (recovered) return recovered;
-      return { ok: false, result: paymentRequired(requirement, "payment_settle_failed") };
-    }
-    await deps.controller.failIntent(key, settle.errorReason ?? "settlement_rejected").catch(() => undefined);
-    await deps.controller.releaseCapacity(key);
-    return {
-      ok: false,
-      result: paymentRequired(
-        requirement,
-        `payment_settlement_rejected:${settle.errorReason ?? "unknown"}`,
-      ),
-    };
-  }
-
-  // The facilitator said settled. On a chain that is a claim about a nonce, so
-  // confirm it before granting: a buggy or hostile facilitator must not be able
-  // to mint a session by answering `success`, and a refusal here is recoverable
-  // because the intent stays claimed while the chain can still answer.
-  if (deps.settlementVerifier) {
-    const verdict = await confirmSettledOnChain(deps.settlementVerifier, payload, requirement);
-    if (verdict !== "settled") {
-      log.warn("payment_not_confirmed_on_chain", {
-        paymentKeyPrefix: key.slice(0, 12),
-        verdict,
-      });
-      await deferUnknownSettlement(
-        deps,
-        key,
-        verdict === "unsettled" ? "chain_transfer_disproven" : "chain_check_failed",
-      );
-      return {
-        ok: false,
-        result: json(503, {
-          error: "payment_unconfirmed",
-          reason: verdict,
-          retryable: true,
-          message: "settlement could not be confirmed on chain; retry with the same payment",
-        }),
-      };
-    }
-  }
-
-  return { ok: true, value: { payer: settle.payer, transaction: settle.transaction } };
 }

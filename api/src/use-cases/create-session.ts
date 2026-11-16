@@ -40,16 +40,8 @@ import {
   proveCommitment,
   quoteWithoutPayment,
   reserveBudget,
-  verifyAndSettle,
 } from "./create-session-stages.js";
-
-export type {
-  CreateSessionInput,
-  CreateSessionJsonResult,
-  CreateSessionPaymentRequiredResult,
-  CreateSessionResult,
-  CreateSessionUseCaseDeps,
-} from "./create-session-contract.js";
+import { verifyAndSettle } from "./create-session-settlement.js";
 
 /**
  * Run the handshake and return the answer. The caller owns the socket; this
@@ -84,8 +76,8 @@ export async function createSession(
   if (!decoded.ok) return decoded.result;
   const payload = decoded.value;
 
-  const admitted = admitPayer(deps, payload, sourceIp);
-  if (!admitted.ok) return admitted.result;
+  const payerRefusal = admitPayer(deps, payload, sourceIp);
+  if (payerRefusal) return payerRefusal;
 
   const proven = await proveCommitment(body, payload, requirement);
   if (!proven.ok) return proven.result;

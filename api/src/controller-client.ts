@@ -15,7 +15,7 @@ import type { ReadinessReport } from "@x402s/shared/protocol";
 
 export type SessionView = ControllerSessionView;
 
-interface OperationResult {
+export interface OperationResult {
   state: SessionState;
   requestId: string;
   envelope?: string;
@@ -188,6 +188,33 @@ export class ControllerClient {
     return body as T;
   }
 
+  /**
+   * A call whose non-2xx answer is also a decided result: a refused capacity
+   * hold comes back as a 409 body the caller reads, an operation in flight as a
+   * 202. Everything else is the control plane failing, and carries the
+   * controller's own status, code and message so the route can answer with it.
+   */
+  private async callAccepting<T>(
+    path: string,
+    accepted: readonly number[],
+    defaultCode: string,
+    init: RequestInit = {},
+    timeoutMs?: number,
+  ): Promise<T> {
+    const res = await this.raw(path, init, timeoutMs);
+    const body = (await res.json().catch(() => ({}))) as T & {
+      error?: string;
+      message?: string;
+    };
+    if (res.ok || accepted.includes(res.status)) return body;
+    throw new ControllerError(
+      res.status,
+      body.error ?? defaultCode,
+      body.message ?? `controller ${res.status}`,
+      body,
+    );
+  }
+
   /* ---------------- readiness ---------------- */
 
   /**
@@ -338,13 +365,11 @@ export class ControllerClient {
   }
 
   async holdCapacity(paymentKey: string, specHash: string, spec: SessionSpec): Promise<CapacityDecision> {
-    const res = await this.raw("/internal/capacity/holds", {
+    // A 409 is the scheduler's refusal, which is a decision the caller reads.
+    return this.callAccepting("/internal/capacity/holds", [409], "capacity_hold_failed", {
       method: "POST",
       body: JSON.stringify({ paymentKey, specHash, spec }),
     });
-    const body = (await res.json().catch(() => ({}))) as CapacityDecision & { error?: string; message?: string };
-    if (res.ok || res.status === 409) return body;
-    throw new ControllerError(res.status, body.error ?? "capacity_hold_failed", body.message ?? `controller ${res.status}`, body);
   }
 
   async releaseCapacity(paymentKey: string): Promise<void> {
@@ -368,24 +393,24 @@ export class ControllerClient {
       payloadHash?: string;
     },
   ): Promise<OperationResult> {
-    const res = await this.raw(`/internal/sessions/${encodeURIComponent(sessionId)}/operations`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, 180_000);
-    const parsed = (await res.json().catch(() => ({}))) as OperationResult & { error?: string; message?: string };
-    if (res.ok || res.status === 202) return parsed;
-    throw new ControllerError(res.status, parsed.error ?? "operation_failed", parsed.message ?? `controller ${res.status}`, parsed);
+    // A 202 is a pending operation, which the route answers with the id to poll.
+    return this.callAccepting(
+      `/internal/sessions/${encodeURIComponent(sessionId)}/operations`,
+      [202],
+      "operation_failed",
+      { method: "POST", body: JSON.stringify(body) },
+      180_000,
+    );
   }
 
   async getOperation(sessionId: string, requestId: string, waitMs = 20_000): Promise<OperationResult> {
-    const res = await this.raw(
+    return this.callAccepting(
       `/internal/sessions/${encodeURIComponent(sessionId)}/operations/${encodeURIComponent(requestId)}?waitMs=${waitMs}`,
+      [202],
+      "operation_failed",
       {},
       waitMs + 20_000,
     );
-    const parsed = (await res.json().catch(() => ({}))) as OperationResult & { error?: string; message?: string };
-    if (res.ok || res.status === 202) return parsed;
-    throw new ControllerError(res.status, parsed.error ?? "operation_failed", parsed.message ?? `controller ${res.status}`, parsed);
   }
 
   async cancelOperation(sessionId: string, requestId: string): Promise<void> {

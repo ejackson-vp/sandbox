@@ -191,10 +191,20 @@ describe("facilitator client", () => {
     expect(running.requests[0]?.authorization).toBe("test POST /facilitator/verify");
   });
 
-  it("constructs with a bare configuration", () => {
-    expect(
-      new X402FacilitatorClient({ baseUrl: "https://facilitator.example.test/" }),
-    ).toBeInstanceOf(X402FacilitatorClient);
+  it("trims a trailing slash from the base URL instead of doubling it", async () => {
+    running = await fakeFacilitator((req, res) => {
+      // A doubled slash is a 404 on the real facilitator, and the failure
+      // surfaces at initialize() as "no supported payment kinds loaded".
+      if (req.url !== "/facilitator/supported") {
+        json(res, 404, { error: "not_found" });
+        return;
+      }
+      json(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "mock:local" }] });
+    });
+    const client = new X402FacilitatorClient({ baseUrl: `${running.url}/` });
+
+    await expect(client.getSupported()).resolves.toMatchObject({ kinds: expect.any(Array) });
+    expect(running.requests[0]?.path).toBe("/facilitator/supported");
   });
 
   // The resource server calls getSupported during initialize(). A POST here is

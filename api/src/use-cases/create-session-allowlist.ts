@@ -21,7 +21,7 @@ import type { SessionSpec } from "@x402s/shared/protocol";
 import { log, metrics } from "@x402s/shared/runtime";
 import type { AllowlistDecision } from "../controller-client.js";
 import {
-  json,
+  admissionUnavailable,
   type CreateSessionResult,
   type CreateSessionUseCaseDeps,
 } from "./create-session-contract.js";
@@ -100,11 +100,7 @@ export async function resolveAllowance(
     countDecision("lookup_failed");
     return {
       kind: "unavailable",
-      result: json(503, {
-        error: "admission_unavailable",
-        retryable: true,
-        message: "try again shortly; no payment was taken",
-      }),
+      result: admissionUnavailable("try again shortly; no payment was taken"),
     };
   }
 

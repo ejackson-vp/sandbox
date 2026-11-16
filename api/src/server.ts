@@ -10,11 +10,9 @@
  *    durable payment intent + UNIQUE payment key),
  *  - the API never logs bodies, headers or payment payloads.
  */
-import express, { type NextFunction, type Request, type Response } from "express";
-import { ZodError } from "zod";
+import express from "express";
 import { x402ResourceServer } from "@x402/core/server";
 import type { Network, PaymentRequirements } from "@x402/core/types";
-import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { mintCapability, recoverCapability } from "@x402s/shared/crypto";
 import { MOCK_NETWORK, MockExactServerScheme } from "@x402s/shared/payment";
@@ -41,7 +39,10 @@ import { createFacilitatorClient } from "./payments/facilitator-client.js";
 import type { ChainSettlementVerifier } from "@x402s/shared/settlement";
 import { rejectPlaintextBodies } from "./schemas.js";
 import { createSessionsRouter } from "./routes/sessions.js";
+import { errorBackstop } from "./routes/errors.js";
 import { createSessionHandler } from "./routes/create-session.js";
+import { createCatalogueRouter } from "./routes/catalogue.js";
+import { createPaymentRequiredWriter } from "./payments/payment-required.js";
 import { ALLOWLIST_DECISIONS_TOTAL } from "./use-cases/create-session-allowlist.js";
 
 async function retry<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -199,36 +200,8 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
     next();
   });
 
-  const payment402 = async (res: Response, requirement: PaymentRequirements, error: string) => {
-    // One fresh, single-use challenge per 402 (#47). The value is bound into the
-    // signed client commitment, so the wallet signature is only good for this
-    // challenge. Merge into `extra` rather than replacing it: @x402/evm keeps
-    // the token's EIP-712 domain fields there.
-    let challenge: { nonce: string; expiresAt: number };
-    try {
-      challenge = await controller.issueChallengeNonce();
-    } catch (err) {
-      log.error("challenge_nonce_unavailable", { error: (err as Error).message });
-      res.setHeader("Retry-After", "2");
-      res.status(503).json({ error: "challenge_unavailable", retryable: true, message: "try again shortly" });
-      return;
-    }
-    const withNonce: PaymentRequirements = {
-      ...requirement,
-      extra: { ...(requirement.extra ?? {}), challengeNonce: challenge.nonce },
-    };
-    const required = await resourceServer.createPaymentRequiredResponse([withNonce], resourceInfo, error);
-    res
-      .status(402)
-      .setHeader("PAYMENT-REQUIRED", encodePaymentRequiredHeader(required))
-      .json({
-        ...required,
-        error,
-        // Also top-level: a client can read it without unpacking `accepts`.
-        challengeNonce: challenge.nonce,
-        challengeNonceExpiresAt: new Date(challenge.expiresAt).toISOString(),
-      });
-  };
+  // One fresh, single-use challenge per 402 (#47).
+  const payment402 = createPaymentRequiredWriter({ controller, resourceServer, resourceInfo });
 
   // Bound to the payment *and* the client commitment: the same receipt with a
   // different client key derives a different capability. Signed with the
@@ -270,58 +243,12 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
   // here: the ingress routes `/` to this port, so a public /metrics would leak
   // operational data to the tailnet.
 
-  app.get("/v1/pricing", (_req, res) => {
-    res.json({
-      paymentMode: config.paymentMode,
-      network: config.network,
-      scheme: "exact",
-      asset: config.paymentMode === "mock" ? "mock:usdc" : "USDC",
-      payTo: config.payTo,
-      tiers: Object.fromEntries(
-        Object.entries(config.tiers).map(([name, t]) => [
-          name,
-          {
-            durationSeconds: t.durationSeconds,
-            priceUsd: t.priceUsd,
-            cpuMillis: t.cpuMillis,
-            memoryMiB: t.memoryMiB,
-            diskMiB: t.diskMiB,
-          },
-        ]),
-      ),
-      customSessions: {
-        allowed: config.platformLimits.allowCustom,
-        maxLeaseSeconds: config.platformLimits.maxLeaseSeconds,
-        maxCpuMillis: config.platformLimits.maxCpuMillis,
-        maxMemoryMiB: config.platformLimits.maxMemoryMiB,
-        maxDiskMiB: config.platformLimits.maxDiskMiB,
-        maxCommandSeconds: config.platformLimits.maxCommandSeconds,
-        maxFileBytes: config.platformLimits.maxFileBytes,
-        maxOutputBytes: config.platformLimits.maxOutputBytes,
-      },
-    });
-  });
+  // Read-only catalogue: what this deployment sells and what it runs.
+  app.use(createCatalogueRouter(config));
 
   /* ---------------------------------------------------------------- */
   /* Create session (x402 protected)                                   */
   /* ---------------------------------------------------------------- */
-  // Read-only image catalog. One operator-pinned guest image today; the
-  // endpoint establishes the lifecycle noun and surfaces the digest.
-  app.get("/v1/images", (_req, res) => {
-    res.json({
-      images: [
-        {
-          id: "guest",
-          digest: process.env.GUEST_IMAGE_DIGEST ?? "sha256:dev-unpinned-image",
-          reference: process.env.GUEST_IMAGE ?? "x402-sandbox/guest:dev",
-          runtimeClass: process.env.RUNTIME_CLASS ?? "x402-sandbox",
-          executionMode: process.env.EXECUTION_MODE ?? "dev",
-          current: true,
-        },
-      ],
-    });
-  });
-
   app.post(
     "/v1/sessions",
     rejectPlaintextBodies,
@@ -342,25 +269,7 @@ export async function createApp(deps: ApiDeps): Promise<express.Express> {
 
   app.use(createSessionsRouter({ config, controller }));
 
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    // Every current route uses safeParse and answers 400 itself. This is the
-    // backstop for a handler that throws a schema error instead: a validation
-    // failure is a client error, never a 500.
-    if (err instanceof ZodError) {
-      res.status(400).json({ error: "invalid_request", issues: err.issues });
-      return;
-    }
-    if (err.name === "PayloadTooLargeError" || (err as { type?: string }).type === "entity.too.large") {
-      res.status(413).json({ error: "payload_too_large" });
-      return;
-    }
-    if (err.name === "SyntaxError") {
-      res.status(400).json({ error: "invalid_json" });
-      return;
-    }
-    log.error("unhandled_error", { error: err.message });
-    res.status(500).json({ error: "internal_error" });
-  });
+  app.use(errorBackstop);
 
   return app;
 }

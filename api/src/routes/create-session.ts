@@ -13,11 +13,12 @@ import type { CreateSessionRequest } from "@x402s/shared/protocol";
 import { LATENCY_BUCKETS, metrics, recordRateLimited } from "@x402s/shared/runtime";
 import type { RateLimiter } from "../admission.js";
 import { createSchema } from "../schemas.js";
-import {
-  createSession,
-  type CreateSessionResult,
-  type CreateSessionUseCaseDeps,
-} from "../use-cases/create-session.js";
+import { createSession } from "../use-cases/create-session.js";
+import type {
+  CreateSessionResult,
+  CreateSessionUseCaseDeps,
+} from "../use-cases/create-session-contract.js";
+import { invalidRequest } from "./errors.js";
 
 interface CreateSessionDeps extends CreateSessionUseCaseDeps {
   ipCreateLimiter: RateLimiter;
@@ -64,7 +65,7 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     }
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     const body: CreateSessionRequest = parsed.data;

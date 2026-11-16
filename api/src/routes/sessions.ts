@@ -11,10 +11,16 @@ import {
   recordRateLimited,
 } from "@x402s/shared/runtime";
 import { RateLimiter } from "../admission.js";
-import { ControllerError, type ControllerClient, type SessionView } from "../controller-client.js";
+import {
+  ControllerError,
+  type ControllerClient,
+  type OperationResult,
+  type SessionView,
+} from "../controller-client.js";
 import type { ApiConfig } from "../config.js";
 import { operationSchema, payloadHashSchema, requestIdSchema, rejectPlaintextBodies } from "../schemas.js";
 import { toStatus } from "../status.js";
+import { invalidRequest } from "./errors.js";
 
 interface SessionsDeps {
   config: ApiConfig;
@@ -49,6 +55,28 @@ function respondControllerError(
     error: mapped.code ?? err.code,
     message: err.message,
   });
+}
+
+/**
+ * Write one operation answer. A pending result is a `202` the client polls, and
+ * a finished one carries the sealed envelope; both echo the id the answer is
+ * for, so a caller that pipelined two requests can pair them up.
+ */
+function writeOperation(res: Response, requestId: string, out: OperationResult): void {
+  if (out.pending) {
+    res.status(202).json({ state: out.state, requestId, pending: true });
+    return;
+  }
+  res.json({ state: out.state, requestId, envelope: out.envelope });
+}
+
+/**
+ * The request id a URL carries, or `null` when it is not one we accept. Shared
+ * by the poll and the cancel so both refuse the same shapes with the same code.
+ */
+function validRequestId(raw: unknown): string | null {
+  const requestId = typeof raw === "string" ? raw : "";
+  return requestIdSchema.safeParse(requestId).success ? requestId : null;
 }
 
 export function createSessionsRouter(deps: SessionsDeps): express.Router {
@@ -128,7 +156,7 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
     }
     const parsed = operationSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "invalid_request", issues: parsed.error.issues });
+      invalidRequest(res, parsed.error.issues);
       return;
     }
     try {
@@ -148,11 +176,7 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
         waitMs,
         ...(parsed.data.payloadHash ? { payloadHash: parsed.data.payloadHash } : {}),
       });
-      if (out.pending) {
-        res.status(202).json({ state: out.state, requestId: out.requestId, pending: true });
-        return;
-      }
-      res.json({ state: out.state, requestId: out.requestId, envelope: out.envelope });
+      writeOperation(res, out.requestId, out);
     } catch (err) {
       respondControllerError(res, err, {
         log: "operation_failed",
@@ -175,12 +199,12 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
     const session = await authorize(req, res);
     if (!session) return;
     const raw = req.query.request;
-    const requestId = typeof req.query.requestId === "string" ? req.query.requestId : "";
+    const requestId = validRequestId(req.query.requestId);
     if (typeof raw !== "string" || raw.length === 0 || raw.length > 2 * 1024 * 1024) {
       res.status(400).json({ error: "request_envelope_required" });
       return;
     }
-    if (!requestIdSchema.safeParse(requestId).success) {
+    if (requestId === null) {
       res.status(400).json({ error: "invalid_request_id" });
       return;
     }
@@ -212,26 +236,19 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
         waitMs: 60_000,
         ...(payloadHash ? { payloadHash } : {}),
       });
-      if (out.pending) {
-        res.status(202).json({ state: out.state, requestId: out.requestId, pending: true });
-        return;
-      }
-      res.json({ state: out.state, requestId: out.requestId, envelope: out.envelope });
+      writeOperation(res, out.requestId, out);
     } catch (err) {
-      respondControllerError(res, err, {
-        log: "file_get_failed",
-        // The read path passes the controller's status through, 410 included,
-        // rather than reinterpreting it.
-        translate: (e) => ({ status: e.status === 410 ? 410 : e.status }),
-      });
+      // The read path passes the controller's status and code through, 410
+      // included, rather than reinterpreting either.
+      respondControllerError(res, err, { log: "file_get_failed" });
     }
   });
 
   router.get("/v1/sessions/:id/requests/:requestId", async (req, res) => {
     const session = await authorize(req, res);
     if (!session) return;
-    const requestId = String(req.params.requestId ?? "");
-    if (!requestIdSchema.safeParse(requestId).success) {
+    const requestId = validRequestId(req.params.requestId);
+    if (requestId === null) {
       res.status(400).json({ error: "invalid_request_id" });
       return;
     }
@@ -243,11 +260,9 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
       : 20_000;
     try {
       const out = await deps.controller.getOperation(session.sessionId, requestId, waitMs);
-      if (out.pending) {
-        res.status(202).json({ state: out.state, requestId, pending: true });
-        return;
-      }
-      res.json({ state: out.state, requestId, envelope: out.envelope });
+      // The path id, not the controller's echo: a poll answers for the id the
+      // caller asked about.
+      writeOperation(res, requestId, out);
     } catch (err) {
       respondControllerError(res, err);
     }
@@ -256,8 +271,8 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
   router.delete("/v1/sessions/:id/requests/:requestId", async (req, res) => {
     const session = await authorize(req, res);
     if (!session) return;
-    const requestId = String(req.params.requestId ?? "");
-    if (!requestIdSchema.safeParse(requestId).success) {
+    const requestId = validRequestId(req.params.requestId);
+    if (requestId === null) {
       res.status(400).json({ error: "invalid_request_id" });
       return;
     }
