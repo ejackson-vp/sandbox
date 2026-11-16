@@ -15,10 +15,17 @@ export function envInt(
   def: number,
   min: number,
   max: number,
+  /**
+   * The variable name, when the caller knows it. Without it the message names
+   * only the value, which is ambiguous on a process with a dozen integer
+   * settings; with it an operator gets `MAX_DISK_MIB=512x` rather than `512x`.
+   */
+  name?: string,
 ): number {
   const n = value === undefined || value === "" ? def : Number(value);
   if (!Number.isInteger(n) || n < min || n > max) {
-    throw new Error(`invalid integer config value ${value} (expected ${min}..${max})`);
+    const subject = name ? `${name}=${value}` : `${value}`;
+    throw new Error(`invalid integer config value ${subject} (expected ${min}..${max})`);
   }
   return n;
 }
