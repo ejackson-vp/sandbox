@@ -242,6 +242,74 @@ describe("chain-proven settlement", () => {
     );
   });
 
+  it("keeps the intent claimed when the nonce is used but the chain cannot place it", async () => {
+    const result = await postCreate(
+      ({ controller }) => {
+        controller.claimIntent = vi.fn(async () => ({
+          status: "claimed" as const,
+          recovered: true,
+          token: "t",
+          expiresAt: 1,
+        }));
+      },
+      {
+        // No settlement lookup: the chain is the only source, and it cannot
+        // place a nonce that may have settled outside the window.
+        settlementLookup: new UnsupportedSettlementLookup(),
+        settlementVerifier: chainProof(notFound()),
+        resourceServer: settledResourceServer(async () => ({
+          success: false,
+          errorReason: "nonce_already_used",
+          transaction: "",
+          network: "mock:local",
+        })),
+      },
+    );
+
+    expect(result.status).toBe(503);
+    expect(result.body.error).toBe("payment_unconfirmed");
+    expect(result.body.reason).toBe("unavailable");
+    expect(result.body.retryable).toBe(true);
+    // A failed intent is invisible to the recovery worker, which only walks
+    // claimed ones, so the debt would never be recorded.
+    expect(result.controller.failIntent).not.toHaveBeenCalled();
+    expect(result.controller.releaseCapacity).not.toHaveBeenCalled();
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+  });
+
+  it("fails the intent when the nonce is used and the chain disproves the transfer", async () => {
+    const result = await postCreate(
+      ({ controller }) => {
+        controller.claimIntent = vi.fn(async () => ({
+          status: "claimed" as const,
+          recovered: true,
+          token: "t",
+          expiresAt: 1,
+        }));
+      },
+      {
+        settlementLookup: new UnsupportedSettlementLookup(),
+        settlementVerifier: chainProof(disproven("transfer_below_price")),
+        resourceServer: settledResourceServer(async () => ({
+          success: false,
+          errorReason: "nonce_already_used",
+          transaction: "",
+          network: "mock:local",
+        })),
+      },
+    );
+
+    // A readable receipt that does not pay this requirement is a real refusal.
+    expect(result.status).toBe(402);
+    expect(result.body.error).toBe("payment_settlement_rejected:nonce_already_used");
+    expect(result.controller.failIntent).toHaveBeenCalledWith(
+      result.paymentKey,
+      "nonce_already_used",
+    );
+    expect(result.controller.releaseCapacity).toHaveBeenCalled();
+    expect(result.controller.completeIntent).not.toHaveBeenCalled();
+  });
+
   it("completes when the settle answer is lost but the chain proves the transfer", async () => {
     const settlementProof = vi.fn(async () => proven());
     const result = await create({

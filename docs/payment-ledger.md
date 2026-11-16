@@ -72,6 +72,14 @@ settlement lookup configured the intent stays `claimed` so recovery can find it,
 rather than being failed on an outcome that may have moved money. A plain
 refusal still fails the intent and releases the capacity hold.
 
+`nonce_already_used` is resolved from the chain first, because it is the answer
+that most often means "this payment settled and the previous attempt crashed".
+A disproof (a transfer to another address, a short one, no matching transfer, a
+reverted transaction) is a real refusal and fails the intent. When the chain
+cannot place the nonce (outside the scan window, or unreadable) and no lookup can
+answer, the intent stays `claimed` and the hold stays until its TTL: failing it
+would hide the debt from the recovery worker, which only walks claimed intents.
+
 ## Settlement recovery (settle-then-crash)
 
 Settlement is verified on chain where the deployment can read one. A consumed

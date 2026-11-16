@@ -492,11 +492,40 @@ export async function verifyAndSettle(
     // whether or not the facilitator exposes a settlement lookup, so recover
     // instead of charging twice.
     if (settle.errorReason === "nonce_already_used" && recoveryAvailable(deps)) {
-      const existing = await recoverSettlement(deps, key, payload, requirement);
-      if (existing) {
+      const resolution = await recoverSettlement(deps, key, payload, requirement);
+      if (resolution.status === "settled") {
         log.warn("payment_recovered_after_nonce_conflict", { paymentKeyPrefix: key.slice(0, 12) });
-        return { ok: true, value: { payer: existing.payer, transaction: existing.transaction } };
+        return {
+          ok: true,
+          value: {
+            payer: resolution.settlement.payer,
+            transaction: resolution.settlement.transaction,
+          },
+        };
       }
+      if (resolution.status === "unknown") {
+        // The facilitator says the nonce is used, but the chain cannot place the
+        // payment (outside the window, or unreadable) and no lookup can answer.
+        // That is not a refusal: failing the intent would hide the debt from the
+        // recovery worker, which only walks claimed intents. Keep the intent
+        // claimed and the hold until its TTL, and ask the client to retry with
+        // the same payment, exactly as the lost-settle path does.
+        log.warn("payment_settlement_unresolved", {
+          paymentKeyPrefix: key.slice(0, 12),
+          operation: settlementKey(key).kind,
+        });
+        await deferUnknownSettlement(deps, key, "settlement_unresolved");
+        return {
+          ok: false,
+          result: json(503, {
+            error: "payment_unconfirmed",
+            reason: "unavailable",
+            retryable: true,
+            message: "settlement could not be confirmed on chain; retry with the same payment",
+          }),
+        };
+      }
+      // A positive disproof falls through: it is a real refusal.
     }
     // The facilitator answered, but an answer that says "broadcast, not yet
     // confirmed" is not a refusal. Same rule as a thrown call: keep the intent

@@ -43,6 +43,19 @@ export interface RecoveredSettlement {
   transaction?: string;
 }
 
+/**
+ * What a recovery attempt found, so a caller can tell a refusal from an
+ * unanswered question. The nonce-conflict branch needs that difference: a
+ * `not-settled` answer fails the intent, and `unknown` must not.
+ */
+export type SettlementResolution =
+  /** A source proved the payment. Complete the entitlement. */
+  | { status: "settled"; settlement: RecoveredSettlement }
+  /** A source positively said this payment did not settle. Refuse it. */
+  | { status: "not-settled" }
+  /** Neither source could answer. Withhold and let recovery try again. */
+  | { status: "unknown" };
+
 export type ChainVerdict = "settled" | "unsettled" | "unavailable";
 
 /** What the chain must prove, from the requirement the server priced. */
@@ -159,9 +172,14 @@ export function recoveryAvailable(deps: {
  * Resolve a payment that may already have settled, for the crash-recovery path.
  *
  * The chain is asked first because it is authoritative and needs no facilitator
- * answer. A `settled` verdict short-circuits the lookup; anything else falls
- * back to the facilitator when it exposes a settlement lookup, and a definite
- * `null` is the honest answer when neither source can confirm the payment.
+ * answer. A `settled` verdict short-circuits the lookup, and a `disproven` one
+ * ends the question: the chain read the nonce's transaction and it does not pay
+ * this requirement, so a facilitator lookup must not override it.
+ *
+ * Only a chain that could not answer falls back to the lookup. When neither
+ * source can answer, the result is `unknown`, which is a different thing from
+ * "did not settle": callers must withhold rather than refuse, or a paid payment
+ * gets a terminal refusal with no debt recorded.
  *
  * `terms` is the requirement the intent was claimed with, not anything the
  * client sent with the retry: the recovery must check the same transfer the
@@ -175,18 +193,22 @@ export async function recoverSettlement(
   paymentKey: string,
   payload: unknown,
   terms: SettlementTerms,
-): Promise<RecoveredSettlement | null> {
-  if ((await confirmSettledOnChain(deps.settlementVerifier, payload, terms)) === "settled") {
+): Promise<SettlementResolution> {
+  const chain = await confirmSettledOnChain(deps.settlementVerifier, payload, terms);
+  if (chain === "settled") {
     // The payer is the address that signed the commitment, not a claimed field:
     // `proveCommitment` already recovered the signer before this is called.
     const payer = paymentAuthorizer(payload) ?? undefined;
-    return payer ? { payer } : {};
+    return { status: "settled", settlement: payer ? { payer } : {} };
   }
-  if (!deps.settlementLookup.supported) return null;
+  if (chain === "unsettled") return { status: "not-settled" };
+  if (!deps.settlementLookup.supported) return { status: "unknown" };
   try {
-    return await deps.settlementLookup.lookup(paymentKey);
+    const record = await deps.settlementLookup.lookup(paymentKey);
+    return record ? { status: "settled", settlement: record } : { status: "not-settled" };
   } catch (err) {
+    // A lookup that failed is not a lookup that said no.
     log.warn("settlement_lookup_failed", { error: (err as Error).message, paymentKeyPrefix: paymentKey.slice(0, 12) });
-    return null;
+    return { status: "unknown" };
   }
 }

@@ -144,10 +144,13 @@ export async function createSession(
   // chain cannot answer. Both are given the requirement this attempt priced, so
   // recovery proves the same transfer the first attempt would have.
   if (recovered) {
-    const existing = await recoverSettlement(deps, key, payload, requirement);
-    if (existing) {
+    const resolution = await recoverSettlement(deps, key, payload, requirement);
+    if (resolution.status === "settled") {
       log.warn("payment_recovered_from_settlement", { paymentKeyPrefix: key.slice(0, 12) });
-      return complete({ payer: existing.payer, transaction: existing.transaction });
+      return complete({
+        payer: resolution.settlement.payer,
+        transaction: resolution.settlement.transaction,
+      });
     }
   }
 
