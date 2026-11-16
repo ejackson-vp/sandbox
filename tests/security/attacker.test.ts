@@ -165,7 +165,9 @@ describe.skipIf(!available)("anonymous attacker (real cluster)", () => {
         // Either documented refusal is acceptable; an undocumented 429 is not.
         const error = (attempt.body as { error?: string }).error;
         expect(["rate_limited", "connection_limit"]).toContain(error);
-        expect(attempt.retryAfter).toBe(true);
+        // A usable hint, not merely a header: the client has to be able to
+        // parse it.
+        expect(Number(attempt.retryAfter)).toBeGreaterThan(0);
       }
 
       // Unpaid but well-formed: 402 until the bucket runs out, then 429. Never a
