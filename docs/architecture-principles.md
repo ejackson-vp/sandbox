@@ -180,6 +180,60 @@ number in the same commit reads as a clean baseline, so that direction is
 enforced by review of the `BASELINE` diff, not by the check. Treat a diff that
 adds an entry or raises a number as a failed review.
 
+## Function size budget
+
+The file budget was not enough. It passed on `api/src/server.ts`, which was 267
+lines with 200 of them in `createApp`, and on
+`controller/src/control-api/payments.ts`, which was 399 lines with 387 of them
+in `registerPaymentRoutes`. Four cleanup passes had split god files into god
+functions, and the guard called each one fixed. So the same ratchet now runs one
+level down:
+
+- a function over **50 lines** that is not in `FUNCTION_BASELINE` fails;
+- a pinned function may not grow: the count may only go down, and the function
+  has to be split;
+- a pinned function that shrank fails until the number is lowered in the same
+  change;
+- an entry at or under the budget, or whose function is gone, fails until the
+  entry is deleted.
+
+**80 lines** is the ceiling a new function has to stay under. Anything over it
+is over the budget too, so it fails unless it is pinned, and a new entry over
+the ceiling is not something this repo accepts: split it by use case first.
+
+`scripts/function-spans.mjs` finds the spans. There is no TypeScript parser to
+lean on (`typescript@7` ships the native compiler with no `createSourceFile`),
+so it masks comments, strings, template literals, regex bodies and Go raw
+strings, then matches function heads (`function`, `=>` before a `{`, and a
+`(...)` preceded by a member name) to their closing brace. A span runs from the
+line of its first head token to the line of the closing brace.
+
+What it cannot see, and why that is not a hole:
+
+- **Anonymous arrows.** They have no name a baseline can carry, and the useful
+  ones here are route handlers inside a counted registration. An arrow inside a
+  named function still trips that function's pin, because the parent's span
+  covers its lines. The rest are `describe`/`it` blocks, which the file budget
+  already covers.
+- **Object-literal return types** (`): { id: string } {`) are not recognised,
+  because the type's braces look like the body's. Write the type as an interface
+  and the span is counted.
+- A **call followed by a block** would read as a method, and a method with a
+  generic return type is counted only when the type has no object braces.
+
+The numbers are reproducible: `node scripts/check-structure.mjs` prints the
+count, and `tests/unit/structure-functions.test.ts` pins the scanner's behaviour
+on the shapes that would fool a brace counter (a brace in a string, a brace in a
+regex, a `${}` hole, a Go raw string, `if (x) {`).
+
+Today 144 functions are pinned above the budget. The longest are
+`tests/unit/store-contract/suite.ts::describeStoreContract` (421, one case per
+store method), `controller/src/control-api/payments.ts::registerPaymentRoutes`
+(387, eight routes in one registration) and
+`controller/src/egress-proxy.ts::createEgressProxy` (372, the whole CONNECT path
+inline). Each entry carries the one-line reason it is allowed to be that long,
+and that reason is the split plan.
+
 Completed slices:
 
 - SDK split behind a stable `SandboxClient` facade.
