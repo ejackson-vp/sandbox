@@ -41,9 +41,9 @@ row cites it; where it depends on reading code and tests, it says so.
 | Budget survives a controller restart | PASS | `tests/unit/payer-budget.test.ts` |
 | Multi-replica controller | SUPPORTED (writer-safe) | Postgres, Kubernetes Lease, writer guard, measured handover. The store is still a single primary (ADR 0010) |
 | Postgres durability | PARTIAL | daily logical backups complete in the reference deployment. PITR is designed and drilled locally (ADR 0015, `make pitr-drill`) but not provisioned: no bucket, no `postgres-pitr` Secret, so nothing archives today. The restore drill exists and has not run on production data (#162) |
-| Alerts reach a human | **FAIL** | the rule file ships no receiver; the reference stack evaluates with `-notifier.blackhole` |
+| Alerts reach a human | **FAIL** | still no path to a human. The reference stack in this repository evaluates with `-notifier.blackhole` (`deploy/monitoring/README.md`), and the private deployment now routes Alertmanager to an agent receiver with six refund rules (backlog, stuck, sending wedged, worker exhausted, worker silent, settlement recovery). An agent that is wedged or out of budget stays silent, so this is an agent, not a pager |
 | Incident procedures rehearsed | **FAIL** | four runbooks and a tabletop script, none executed (#60) |
-| Emergency stop | PARTIAL | durable create kill switch (schema v21): `sandbox admin killswitch enable` writes one row the API reads before any payment or capacity work, refusing `503 creates_disabled` while live sessions keep executing. Proven by `tests/unit/create-switch.test.ts` (refusal order, fail-closed read, live exec while on), `create-switch-store.test.ts`, `create-switch-admin.test.ts` and `create-switch-migration.test.ts`. Not exercised against a production incident, and the API must be deployed after the controller (a new API with an old controller fails closed) |
+| Emergency stop | PASS (drilled) | durable create kill switch (schema v21) reading one row before any payment or capacity work. Beyond the four unit suites, it was drilled against the deployed `0.1.32` control: enable returned `200`, a new create answered `503 creates_disabled` with the operator's own reason, an existing paid session still executed in 23ms, disable returned `200`, and creates resumed. The remaining caveat is ordering: deploy the controller before the API, because a new API against an old controller fails closed |
 | Independent test of the guest/host boundary | **FAIL** | not performed |
 
 ---
@@ -69,7 +69,9 @@ operator reachable, guests run code you would tolerate on a shared node.
    a deployment check rather than a hope.
 2. Keep `TRUST_PROXY_HOPS=0` unless a proxy you control overwrites
    `X-Forwarded-For` (F-09).
-3. Accept that Kata is unverified here and say so to the tenant.
+3. Say which pair the tenant runs. Kata is verified on the digests in
+   `docs/isolation-evidence.md`, not as a property of the deployment: quote the
+   pair, because a later rollout is a different pair.
 4. A human reconciles and executes `REFUND_PENDING` if real settlement is used: the debt is recorded automatically now, but the refund worker only sends through an operator-configured webhook, and it has never moved funds (F-10).
 5. Accept the F-07 residual: a capture of the live challenge *and* its signed
    request, replayed first, is equivalent to the client.
@@ -78,21 +80,36 @@ operator reachable, guests run code you would tolerate on a shared node.
 
 Profile: anonymous internet users, real settlement, money moves automatically.
 
-**Verdict: BLOCKED.** Five blockers, in order:
+**Verdict: BLOCKED.** Three blockers, in order:
 
-1. **Kata is unverified.** Cilium is proven per pull request; the VM boundary has
-   never run on KVM hardware. A public beta that runs hostile code cannot claim
-   isolation from unit tests.
-2. **No real settlement has executed.** One settle and one refund must move funds
-   and appear in the ledger before the copy on the site is true.
-3. **Nothing pages.** Alerts evaluate into a blackhole. A payment incident would
-   be discovered by a customer.
-4. **Incident response is written, not rehearsed.**
-5. **No kill switch.** The only emergency stop also stops reads for live sessions.
+1. **No real settlement has executed.** One settle and one refund must move funds
+   and appear in the ledger before the copy on the site is true. Every payment
+   path is proven in `mock` mode; none has moved a customer's money.
+2. **Nothing pages a human.** Alerts now leave the process: the private
+   deployment routes them to an agent receiver. An agent that is wedged, out of
+   budget, or instructed to ignore a class of alert is silent, which is the one
+   failure mode a pager exists to cover. The reference stack in this repository
+   still evaluates into a blackhole.
+3. **Incident response is written, not rehearsed.** Four runbooks and a tabletop
+   script, none executed against the deployed system.
 
-Closed since the last gate: image promotion order (F-06), action and base-image
-pinning (F-15), the Kyverno policy being invalid rather than merely unexecuted,
-the SQLite single-writer limit, and the missing egress byte budget.
+Closed since the previous gate, and removed from this list:
+
+- **Kata was unverified.** It is now verified on real hardware for a named pair:
+  guest kernel 6.18.35 against host 6.18.51, 23 passed and 1 skipped, recorded in
+  `docs/isolation-evidence.md` and repeated for `0.1.33`. This is what the suite
+  tests and still not an escape attempt, and there is no hardware root of trust.
+  It is also a property of a digest pair, not of the deployment, so a rollout
+  invalidates the claim until it is re-run.
+- **There was no kill switch.** One exists, is durable, and was drilled against a
+  deployed control: creates refused, live sessions unaffected.
+- Image promotion order (F-06), action and base-image pinning (F-15), the Kyverno
+  policy being invalid rather than merely unexecuted, the SQLite single-writer
+  limit, and the missing egress byte budget.
+
+Also recorded since the previous gate, and not blockers: six refund alert rules,
+a `refund-stuck` runbook, an `ALLOCATED` capacity reservation that cannot outlive
+a session that never commits, and jitter on every retry loop.
 
 ## 4. Unrestricted hostile multi-tenant production — **BLOCKED**
 

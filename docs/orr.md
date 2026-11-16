@@ -266,17 +266,26 @@ until their session ends. And the ledger is additive, so a rollback does not
 lose settled rows; the `source` column defaults to `x402` for anything written
 by an older build.
 
-There is no kill switch. The emergency stop is scaling the API to zero, and
-that stops reads as well as writes: `GET /v1/sessions/{id}`, `exec` and
-`DELETE` all go through the API, so a client cannot poll, run anything or
-destroy its session. A guest that is already running keeps executing until its
-lease ends, so the API going away does not itself interrupt anyone. The refunds
-start if you also stop the controller or delete pods, because a session that
-never reaches READY is a refund under the ledger policy and a session that does
-is not. `launch.md` tells you to expect refunds from this stop; budget for them
-and reconcile by hand, because nothing here will do it for you. This is why the
-gate lists "Emergency stop" as FAIL, and a durable flag that refuses creates
-without touching live leases is a change, not a runbook step
+The emergency stop is the create kill switch, not scaling the API to zero.
+Enabling it writes one durable row that the API reads before any payment or
+capacity work, so new creates answer `503 creates_disabled` while every paid
+session keeps executing. That was drilled against a deployed control, not just
+unit-tested: the refusal carried the operator's own reason, and an existing
+session ran a command in 23ms while the switch was on.
+
+```bash
+sandbox admin killswitch enable --reason "why, in the incident channel"
+sandbox admin killswitch disable
+```
+
+Scaling the API to zero is the wrong stop and the docs used to recommend it. It
+stops reads as well as writes, so a client cannot poll, run anything or destroy
+its session, and stopping the controller as well turns every non-ready session
+into a refund. Do not reach for it first. Deploy the controller before the API
+when rolling this out, because a new API against an old controller fails closed.
+
+A durable flag is not a plan by itself: record why you flipped it, and expect
+creates to stay refused until you flip it back
 ([launch.md](launch.md) "Rollback").
 
 Draining a node is the same problem one level down. There is no drain
@@ -405,11 +414,11 @@ which is what the impact column is for.
 
 | Gap | Impact | Owner | Blocks | Reference |
 | --- | --- | --- | --- | --- |
-| Kata guest to host isolation has never run on KVM hardware | The isolation claim rests on unit tests and construction. A beta running hostile code cannot make it | Maintainer, infra | Yes | #44, [RELEASE_GATE.md](../security-review/RELEASE_GATE.md) |
+| Kata isolation is verified per pair, not per deployment | The suite passed on real hardware for control 0.1.33 and guest 0.1.33 (23 passed, 1 skipped), but a rollout is a different pair and the claim lapses until it is re-run. No escape attempt was made | Maintainer, infra | Yes, re-run per release | [isolation-evidence.md](isolation-evidence.md) |
 | No real settle and no real refund has executed | The refund worker and the webhook contract are mock-tested only. Copy that says money moves is untested | Maintainer | Yes | #31, [payment-ledger.md](payment-ledger.md) |
 | No alert is delivered to a person | A payment incident is found by a customer. The live route ends in an agent and no delivery is recorded, so the FAIL stands | Maintainer, infra | Yes | Gate FAIL, #38 for the rules |
 | Incident procedures have never been rehearsed | Four runbooks and a tabletop script exist; detection leans on log lines because the matching alerts are missing | Maintainer, on call | Yes | #60, [runbooks/tabletop.md](runbooks/tabletop.md) |
-| No kill switch | The only stop is scaling the API to zero, which also stops reads for live sessions | Maintainer | Yes | [launch.md](launch.md) "Rollback" |
+| The kill switch has never been used in a real incident | It is durable and was drilled against a deployed control, so the mechanism is proven; what is unproven is the judgement and the communication around using it | Maintainer, on call | No | [launch.md](launch.md) "Rollback" |
 | Ledger RPO is up to 24 h, with no PITR and no production restore drill | A node loss can drop a day of settled payments. RTO is unknown | Maintainer, infra | Yes, unless the loss window is accepted in writing | #162, [backup-restore.md](backup-restore.md) |
 | Relay state is in process memory | A restart costs one interrupted operation per session and up to 90 s of no operations | Maintainer | No | #24, [ADR 0012](adr/0012-guest-reconnects-after-relay-loss.md) |
 | Checkpoints are plaintext and node pinned | A node loss makes a suspended session unrecoverable, and the node admin can read it | Maintainer | No for a lease product; yes if suspend and resume are sold as durable | #32, [ADR 0007](adr/0007-checkpoint-at-rest-plaintext.md) |
