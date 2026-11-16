@@ -364,7 +364,7 @@ describe("operation gating", () => {
       expect(await store.claimOperation(id, "request-crash", "exec")).toMatchObject({ ok: true, epoch: 1 });
       expect((await store.getSession(id))?.activeRequestId).toBe("request-crash");
 
-      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1, orphaned: 0 });
       expect(await store.getExecRequest(id, "request-crash")).toMatchObject({
         state: "outcome_unknown",
         epoch: 1,
@@ -406,7 +406,7 @@ describe("operation gating", () => {
     const { store, cleanup } = await openStore();
     try {
       const id = "sbx_000000000000000000000003";
-      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 0, sessions: 0 });
+      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 0, sessions: 0, orphaned: 0 });
       expect(await store.getSession(id)).toMatchObject({ activeRequestId: null, execEpoch: 1 });
       expect(await store.listFencedSessions()).toEqual([]);
       expect(await store.getExecRequest(id, "never-seen")).toBeNull();

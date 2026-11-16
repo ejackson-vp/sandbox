@@ -346,6 +346,117 @@ export function describeStoreContract(backend: ContractBackend): void {
       expect(after?.resultEnvelope).toBeNull();
     });
 
+    it("fences only the operation a live gate owns", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+      await seedReadySession(store, SESSION_2, KEY_B);
+
+      // SESSION_1 is the controller crash: the gate still names a pending
+      // request, so that operation may have run.
+      expect(await store.claimOperation(SESSION_1, "in-flight", "exec")).toMatchObject({
+        ok: true,
+        epoch: 1,
+      });
+
+      // SESSION_2 is the destroy that cleared the gate while its request was
+      // still pending (the shape `finalizeTermination` used to leave behind, and
+      // the shape every database written before that fix still holds). Nothing
+      // can deliver or finish this row, and its session is otherwise idle.
+      expect(await store.claimOperation(SESSION_2, "orphaned", "exec")).toMatchObject({
+        ok: true,
+        epoch: 1,
+      });
+      expect(await store.clearFencedGate(SESSION_2, "orphaned", 1)).toBe(true);
+      expect((await store.getSession(SESSION_2))?.activeRequestId).toBeNull();
+      expect((await store.getExecRequest(SESSION_2, "orphaned"))?.state).toBe("pending");
+
+      expect(await store.recoverInterruptedOperations()).toEqual({
+        requests: 1,
+        sessions: 1,
+        orphaned: 1,
+      });
+
+      // The fenced session keeps its gate and moves to the next generation.
+      expect(await store.getExecRequest(SESSION_1, "in-flight")).toMatchObject({
+        state: "outcome_unknown",
+      });
+      expect(await store.getSession(SESSION_1)).toMatchObject({
+        activeRequestId: "in-flight",
+        execEpoch: 2,
+      });
+      expect((await store.listFencedSessions()).map((s) => s.id)).toEqual([SESSION_1]);
+
+      // The orphaned row is resolved, but it never fenced anything: the session
+      // keeps its epoch and is usable at once, which is what the epoch bump is
+      // for.
+      expect(await store.getExecRequest(SESSION_2, "orphaned")).toMatchObject({
+        state: "outcome_unknown",
+      });
+      expect(await store.getSession(SESSION_2)).toMatchObject({ activeRequestId: null, execEpoch: 1 });
+      expect((await store.listFencedSessions()).map((s) => s.id)).toEqual([SESSION_1]);
+      expect(await store.claimOperation(SESSION_2, "after-recovery", "exec")).toMatchObject({
+        ok: true,
+        epoch: 1,
+      });
+      await store.finishOperation(SESSION_2, "after-recovery", "done");
+
+      // A second recovery has nothing to do: the transition is the guard, and an
+      // already-fenced request is not re-fenced with a second bump.
+      expect(await store.recoverInterruptedOperations()).toEqual({
+        requests: 0,
+        sessions: 0,
+        orphaned: 0,
+      });
+      expect((await store.getSession(SESSION_1))?.execEpoch).toBe(2);
+    });
+
+    it("leaves no request row behind when the gate refuses the claim", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+
+      expect(await store.claimOperation(SESSION_1, "holds-the-gate", "exec")).toMatchObject({
+        ok: true,
+      });
+      // The insert and the gate claim are one transaction, so the refusal has to
+      // roll the request row back. A row that outlived the refusal would be
+      // pending with no gate, and recovery could only guess at its outcome.
+      expect(await store.claimOperation(SESSION_1, "rolled-back", "exec")).toMatchObject({
+        ok: false,
+        code: "busy",
+      });
+      expect(await store.getExecRequest(SESSION_1, "rolled-back")).toBeNull();
+
+      await store.finishOperation(SESSION_1, "holds-the-gate", "done");
+      // The id is free, so the client's retry of the refused request runs
+      // instead of being answered from a row the controller never created.
+      expect(await store.claimOperation(SESSION_1, "rolled-back", "exec")).toMatchObject({
+        ok: true,
+        requestId: "rolled-back",
+      });
+    });
+
+    it("resolves the in-flight request when a session is finalized", async () => {
+      await seedReadySession(store, SESSION_1, KEY_A);
+      expect(await store.claimOperation(SESSION_1, "in-flight", "exec")).toMatchObject({ ok: true });
+
+      expect(await store.requestTermination(SESSION_1, "client_destroy")).toBe(true);
+      expect(await store.finalizeTermination(SESSION_1)).toBe("DESTROYED");
+
+      // Clearing the gate must not orphan the request: a poll on a destroyed
+      // session would otherwise answer `202 pending` for the rest of time. The
+      // frame may already have reached the guest, so the outcome is unknown, not
+      // abandoned.
+      expect(await store.getExecRequest(SESSION_1, "in-flight")).toMatchObject({
+        state: "outcome_unknown",
+        resultEnvelope: null,
+      });
+      expect((await store.getSession(SESSION_1))?.activeRequestId).toBeNull();
+      // Nothing is left for startup recovery to find.
+      expect(await store.recoverInterruptedOperations()).toEqual({
+        requests: 0,
+        sessions: 0,
+        orphaned: 0,
+      });
+    });
+
     it("counts concurrent creates against the durable budget once", async () => {
       const limits: BudgetLimits = {
         windowMs: 3_600_000,

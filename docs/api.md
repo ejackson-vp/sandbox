@@ -310,7 +310,9 @@ it. `outcome_unknown` is terminal and distinct from an id the controller never
 saw (`404 request_not_found`): the command may still have run. Retrying an `exec`
 with the same `requestId` returns the same result without executing twice. While
 the old request is fenced, a new operation returns `409 busy` with the old
-`requestId`; it is not forwarded to the guest.
+`requestId`; it is not forwarded to the guest. Finalising a session resolves any
+request it still had in flight to `outcome_unknown` in the same transaction, so
+a request on a destroyed session never answers `202 pending`.
 
 ## Suspend and resume
 

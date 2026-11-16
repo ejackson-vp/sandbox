@@ -158,6 +158,10 @@ a prerequisite that is not ready leaves the session where it is.
   `409 outcome_unknown` (even if its payload hash differs), a new request id runs
   normally. The relay classifies the cause, so a lost link is never reported as a
   `502 guest_error`, and the request row is never a `410 result_expired`.
+- Client destroy mid-command: termination clears the gate and resolves the
+  request it still names to `outcome_unknown` in the same transaction. A poll
+  gets `409 outcome_unknown`, never a `202 pending` that will not move, and the
+  frame may already have run so the answer is not `410 result_expired`.
 - Guest cannot reconnect before the relay-loss deadline, which is the end of
   `RELAY_LOSS_GRACE_MS` (default 90 s) or 1 s before the lease, whichever comes
   first: the session becomes `FAILED` with `failure:relay_lost`, distinct from

@@ -166,7 +166,7 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
       // (frozen) guest survive, exactly like a controller Deployment restart.
       await store.close();
       store = await openStore({ namespace: "integration" });
-      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1, orphaned: 0 });
       expect(await store.getSession(sessionId)).toMatchObject({ activeRequestId: oldRequestId, execEpoch: 2 });
       expect(await store.getExecRequest(sessionId, oldRequestId)).toMatchObject({
         state: "outcome_unknown",
@@ -244,7 +244,7 @@ describe("recovery withdraws a stale frame the guest has not observed", () => {
 
       await store.close();
       store = await openStore({ namespace: "integration" });
-      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+      expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1, orphaned: 0 });
 
       const fence = new OperationFence(store, relay);
       expect(await fence.reconcile()).toEqual({ cleared: 1, held: 0, errors: 0 });

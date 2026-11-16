@@ -488,10 +488,18 @@ forwarded into the guest's busy slot and the old outcome became
 `result_expired`. Recovery now fences the old generation instead of forgetting
 it:
 
-1. Startup marks every pending request `outcome_unknown` and bumps the session's
-   execution epoch (`sessions.exec_epoch`) in the same transaction. The
-   single-operation gate stays closed.
-2. Every relay request frame carries that epoch, and `OperationFence` publishes
+1. Startup fences the request the session's gate still names (`pending ->
+   outcome_unknown`) and bumps that session's execution epoch
+   (`sessions.exec_epoch`) in the same transaction. Both writes are scoped to
+   the `active_request_id` join: an interrupted operation is one a session's
+   gate owns, and nothing else is reported as one. The single-operation gate
+   stays closed.
+2. A `pending` row that no gate owns cannot be delivered or finished, so it is
+   resolved to `outcome_unknown` in the same pass without an epoch bump. Only a
+   database written by an older build has any: `claimOperation` writes the
+   request row and takes the gate in one transaction, and `finalizeTermination`
+   now resolves its own in-flight request instead of clearing the gate under it.
+3. Every relay request frame carries that epoch, and `OperationFence` publishes
    the bumped epoch to the relay before it may release the gate. The relay
    refuses a frame below the session epoch with `stale_epoch` and withdraws one
    it already forwarded by resetting the guest link (unread bytes are
@@ -500,14 +508,14 @@ it:
    after recovery. A reset is a real link loss: the supervisor aborts the
    command the link was carrying and reconnects (ADR 0012), so the session keeps
    its lease and the withdrawn frame never starts.
-3. The guest reports its active request id and epoch on hello, when it takes the
+4. The guest reports its active request id and epoch on hello, when it takes the
    single slot, and when it releases it. `OperationFence` releases the gate only
    when the relay reports the guest idle, or when no guest is connected and the
    session was not fenced by a relay loss. A guest that lost its relay link is
    expected back (ADR 0012), so its gate waits for the reconnected guest's idle
    report. A connected guest that has never reported status keeps the gate
    closed: failing closed is the contract.
-4. `GET /requests/{id}` returns `409 outcome_unknown` for a fenced request; an
+5. `GET /requests/{id}` returns `409 outcome_unknown` for a fenced request; an
    id the controller never saw is still `404 request_not_found`. If the relay
    had already cached the guest's signed result, that real result is returned
    instead of the placeholder.

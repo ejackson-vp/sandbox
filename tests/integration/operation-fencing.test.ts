@@ -206,7 +206,7 @@ describe("controller restart fences an in-flight operation", () => {
     await close(server);
     await store.close();
     store = await openStore({ namespace: "integration" });
-    expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1 });
+    expect(await store.recoverInterruptedOperations()).toEqual({ requests: 1, sessions: 1, orphaned: 0 });
     expect(await store.getExecRequest(sessionId, oldRequestId)).toMatchObject({
       state: "outcome_unknown",
       epoch: 1,

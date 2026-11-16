@@ -272,6 +272,14 @@ export class PgSessionRepository {
    * The ciphertext clear is in the same transaction as the finalize, so a
    * terminal session never keeps a persisted result behind it. The request rows
    * stay for audit.
+   *
+   * A request that is still `pending` belonged to the operation the session was
+   * running when termination began. Clearing `active_request_id` without it
+   * used to leave that row `pending` with no gate: no gate can deliver or finish
+   * it, so a poll answered `202 pending` for the rest of time. It is resolved
+   * here instead, and to `outcome_unknown` rather than `abandoned`, because the
+   * frame may already have reached the guest: saying it never ran would invite a
+   * duplicate execution.
    */
   async finalizeTermination(id: string): Promise<SessionState | null> {
     return this.conn.tx(async (tx) => {
@@ -290,6 +298,11 @@ export class PgSessionRepository {
         [final, now, now + cadenceFor(final), now, id, SOURCE_STATES.terminated],
       );
       if ((res.rowCount ?? 0) === 0) return null;
+      await tx.query(
+        `UPDATE exec_requests SET state = 'outcome_unknown', updated_at = $2
+          WHERE session_id = $1 AND state = 'pending'`,
+        [id, now],
+      );
       await tx.query(
         "UPDATE exec_requests SET result_envelope = NULL WHERE session_id = $1 AND result_envelope IS NOT NULL",
         [id],

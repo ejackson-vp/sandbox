@@ -69,6 +69,22 @@ export function payloadDiffers(
   return stored !== null && incoming !== null && incoming !== undefined && stored !== incoming;
 }
 
+/**
+ * What startup recovery did, so the log line can tell an interrupted operation
+ * from a row nobody was going to finish.
+ */
+export interface RecoveryResult {
+  /** Requests fenced because a live gate owned them: they may have run. */
+  requests: number;
+  /** Sessions whose execution epoch was bumped for exactly those requests. */
+  sessions: number;
+  /**
+   * Pending requests no gate owned. Nothing could deliver or finish them, so
+   * they are resolved without an epoch bump (no frame can be outstanding).
+   */
+  orphaned: number;
+}
+
 export type ClaimOperationResult =
   | { ok: true; requestId: string; epoch: number }
   | {

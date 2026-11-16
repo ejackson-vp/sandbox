@@ -30,6 +30,7 @@ import {
   type IntentAttribution,
   type LedgerStatus,
   type PaymentRecord,
+  type RecoveryResult,
   type RefundClaimRequest,
   type SessionRecord,
   type SessionState,
@@ -152,7 +153,7 @@ export class PostgresStore implements StoreBackend {
     return checkPostgresHealth(this.conn, { writable: !this.conn.writesAreBlocked });
   }
 
-  recoverInterruptedOperations(): Promise<{ requests: number; sessions: number }> {
+  recoverInterruptedOperations(): Promise<RecoveryResult> {
     return this.operations.recoverInterruptedOperations();
   }
 

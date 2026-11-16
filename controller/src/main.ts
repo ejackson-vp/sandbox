@@ -264,8 +264,8 @@ export async function start(): Promise<ControllerProcess> {
       await store.setWritesBlocked(false);
       try {
         const recovered = await store.recoverInterruptedOperations();
-        if (recovered.requests > 0 || recovered.sessions > 0) {
-          log.warn("sandbox_operations_recovered", recovered);
+        if (recovered.requests > 0 || recovered.sessions > 0 || recovered.orphaned > 0) {
+          log.warn("sandbox_operations_recovered", { ...recovered });
         }
       } catch (error) {
         // Recovery failed after the lock was taken. Close the guard again before
