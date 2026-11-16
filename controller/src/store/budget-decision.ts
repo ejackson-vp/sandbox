@@ -12,6 +12,18 @@
  * that admits. Calling again with the payer half filled in is the same decision
  * the single call would have made.
  */
+import type {
+  BudgetDecision,
+  BudgetRemaining,
+  BudgetScope,
+} from "@x402s/shared/protocol";
+
+/**
+ * The decision is the body of `/internal/budgets/reserve`, so its shape and its
+ * closed `scope` union live in shared: the API parses the same declarations
+ * rather than a copy that can widen.
+ */
+export type { BudgetDecision, BudgetRemaining, BudgetScope };
 
 /** The constant key of the global budget row. */
 export const GLOBAL_BUDGET_KEY = "global";
@@ -49,37 +61,6 @@ export interface BudgetLimits {
   globalCreates: number;
   globalConcurrent: number;
 }
-
-export type BudgetScope =
-  | "payer_create"
-  | "payer_spend"
-  | "payer_concurrent"
-  | "global_create"
-  | "global_concurrent"
-  | "table";
-
-export interface BudgetRemaining {
-  /** Creates left for this payer in the window (null when no payer was given). */
-  payerCreates: number | null;
-  /** Atomic units left to spend in the window. */
-  payerSpend: string | null;
-  /** Concurrent sessions this payer may still open; null = unlimited. */
-  payerConcurrent: number | null;
-  /** Creates left globally in the window. */
-  globalCreates: number;
-  /** Concurrent sessions cluster-wide; null = unlimited. */
-  globalConcurrent: number | null;
-}
-
-export type BudgetDecision =
-  | { ok: true; remaining: BudgetRemaining; windowResetsAt: number }
-  | {
-      ok: false;
-      scope: BudgetScope;
-      retryAfterSeconds: number;
-      remaining: BudgetRemaining;
-      windowResetsAt: number;
-    };
 
 /** One `payer_budgets` row, after its fixed window has been rolled forward. */
 interface BudgetRowSnapshot {

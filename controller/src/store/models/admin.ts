@@ -6,7 +6,25 @@
  * The control API reads and writes these; the reconciler never does, which is
  * why they sit apart from the session and money rows.
  */
-import type { SessionTier } from "@x402s/shared/protocol";
+import type {
+  AllowlistDecision,
+  ChallengeBurnResult,
+  CreateSwitchState,
+  IssuedChallengeNonce,
+  SessionTier,
+} from "@x402s/shared/protocol";
+
+/**
+ * The four answers the API reads back are declared in shared, so the client
+ * parses the same declarations the routes produce. Only the rows an operator
+ * writes are declared here.
+ */
+export type {
+  AllowlistDecision,
+  ChallengeBurnResult,
+  CreateSwitchState,
+  IssuedChallengeNonce,
+};
 
 /**
  * One allowlist entry, as the operator set it (ADR 0013).
@@ -31,42 +49,6 @@ export interface PayerAllowlistEntry {
   disabledAt: number | null;
 }
 
-/**
- * The authorize answer. A refusal names why, so the API can distinguish "not on
- * the list" (the normal 402 path) from a broken lookup (fail closed with 503).
- */
-export type AllowlistDecision =
-  | { allowed: true; label: string; maxTier: SessionTier; maxConcurrent: number }
-  | {
-      allowed: false;
-      reason: "not_allowlisted" | "disabled" | "tier_not_allowed" | "concurrency_exhausted";
-    };
-
-/**
- * The create kill switch (schema v21).
- *
- * One row, not a process setting: an operator flips it without a rollout, it
- * survives a restart, and every API replica reads the same answer from the
- * controller. `enabled` is already the *effective* state, so a row whose
- * `expiresAt` has passed reads as disabled and `expired` says which of the two
- * happened. An absent row is not an error: it means no operator has ever
- * flipped it, and creates are admitted.
- */
-export interface CreateSwitchState {
-  /** True when new creates are refused. */
-  enabled: boolean;
-  /** Why the state was set. Empty when no row has ever been written. */
-  reason: string;
-  /** Who set it: a free-text actor string, never a credential. */
-  actor: string;
-  /** When it was set, epoch ms; null when no row has ever been written. */
-  changedAt: number | null;
-  /** When it turns itself off, epoch ms, or null for "until disabled". */
-  expiresAt: number | null;
-  /** The row expired rather than being disabled by an operator. */
-  expired: boolean;
-}
-
 /** What an operator asks the controller to write. */
 export interface CreateSwitchWrite {
   enabled: boolean;
@@ -84,18 +66,6 @@ export interface CreateSwitchWrite {
 export type CreateSwitchWriteResult =
   | { ok: true; state: CreateSwitchState }
   | { ok: false; reason: "until_in_past" };
-/**
- * Single-use challenge nonce outcome (F-07). Shared by the store port and the
- * control API, which maps each status to a response.
- */
-export type ChallengeBurnResult =
-  | { status: "burned" }
-  /** The same payment already burned this nonce: the retry/recovery path. */
-  | { status: "replay" }
-  | { status: "expired" }
-  | { status: "unknown" }
-  /** A different payment already burned this nonce. */
-  | { status: "reused" };
 
 export class ChallengeNonceCapacityError extends Error {
   constructor(active: number, max: number) {

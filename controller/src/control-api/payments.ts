@@ -1,7 +1,12 @@
 import type { Express, Request, Response } from "express";
 import { canonicalJson } from "@x402s/shared/crypto";
 import { resolveSessionSpec, specHash as computeSpecHash } from "@x402s/shared/payment";
-import type { PaymentIntentStatus, SessionSpec, SessionState } from "@x402s/shared/protocol";
+import type {
+  IntentCompletion,
+  PaymentIntentStatus,
+  SessionSpec,
+  SessionState,
+} from "@x402s/shared/protocol";
 import { DEFAULT_RUNTIME } from "@x402s/shared/runtimes";
 import { log, metrics } from "@x402s/shared/runtime";
 import { isHeldBy } from "@x402s/shared/durable";
@@ -18,7 +23,10 @@ export function registerPaymentRoutes(app: Express, deps: ControlApiDeps): void 
    * need a second round trip (`GET /internal/sessions/:id`) on the create
    * critical path. Kept additive: an older API ignores the extra field.
    */
-  const completionResponse = async (sessionId: string | null, created: boolean) => {
+  const completionResponse = async (
+    sessionId: string | null,
+    created: boolean,
+  ): Promise<IntentCompletion> => {
     const session = sessionId ? await describeSession(store, sessionId) : null;
     return {
       sessionId,

@@ -17,8 +17,8 @@
  * The switch is read, never cached: an operator flips a row and the next create
  * sees it. That is the whole point of a kill switch that is not an env var.
  */
+import type { CreateSwitchState } from "@x402s/shared/protocol";
 import { CREATE_REFUSALS_TOTAL, log, metrics, publishCreateSwitch } from "@x402s/shared/runtime";
-import type { CreateSwitchStatus } from "../controller-client.js";
 import {
   admissionUnavailable,
   json,
@@ -59,7 +59,7 @@ function countRefusal(refusal: "creates_disabled" | "admission_unavailable"): vo
 export async function refuseWhenCreatesDisabled(
   deps: CreateSessionUseCaseDeps,
 ): Promise<CreateSessionResult | null> {
-  let state: CreateSwitchStatus;
+  let state: CreateSwitchState;
   try {
     state = await deps.controller.readCreateSwitch();
   } catch (err) {

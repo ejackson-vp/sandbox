@@ -6,7 +6,16 @@
  * that fences a real transfer.
  */
 import type { ClaimToken } from "@x402s/shared/durable";
-import type { PaymentMode } from "@x402s/shared/protocol";
+import type { IntentClaimResult, PaymentMode } from "@x402s/shared/protocol";
+
+/**
+ * The claim answer is the body of `/internal/payment-intents/claim`, so it is
+ * declared in shared and the API imports the same one.
+ *
+ * `failed` carries `reason: string | null` rather than an optional string: the
+ * controller writes the column, and a null reason is a real row state.
+ */
+export type { IntentClaimResult };
 
 /** How an entitlement was paid for. `allowlist` rows are always `amount = "0"`. */
 type PaymentSource = "x402" | "allowlist";
@@ -210,12 +219,6 @@ export class LedgerSettledError extends Error {
     this.name = "LedgerSettledError";
   }
 }
-export type IntentClaimResult =
-  | { status: "claimed"; recovered: boolean; token: string; expiresAt: number }
-  | { status: "settled"; sessionId: string }
-  | { status: "in_progress" }
-  | { status: "failed"; reason: string | null }
-  | { status: "mismatch" };
 
 export function mapIntent(r: Record<string, unknown>): PaymentIntentRecord {
   return {
