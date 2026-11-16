@@ -34,6 +34,25 @@ const LABEL_SESSION = "x402.io/session";
 const LABEL_POOL = "x402.io/pool";
 const LABEL_WARM_ID = "x402.io/warm-id";
 
+/**
+ * The API server answered "this object does not exist".
+ *
+ * Six read and delete paths here treat that as an answer rather than an error
+ * (a pod already gone, a PVC never created), and each one has to test it the
+ * same way: the generated client puts the status on `code`, and a network error
+ * also carries a string `code`, so the test is numeric.
+ */
+function isNotFound(err: unknown): boolean {
+  return (err as { code?: unknown }).code === 404;
+}
+
+/** Kubernetes timestamps arrive as `Date` (typed) or a string; both become epoch ms. */
+function timestampMs(value: unknown): number | undefined {
+  if (!value) return undefined;
+  const t = new Date(value as string).getTime();
+  return Number.isFinite(t) ? t : undefined;
+}
+
 /** Tools baked into the trusted guest image. */
 export const GUEST_TOOLS = ["python3", "node", "bash", "tar", "curl", "git"];
 
@@ -213,7 +232,7 @@ export class KubeProvisioner implements Provisioner {
       await this.core.deleteNamespacedPersistentVolumeClaim({ name: pvcName, namespace: this.namespace });
       log.info("workspace_pvc_deleted", { pvcName });
     } catch (err) {
-      if ((err as { code?: number }).code === 404) return;
+      if (isNotFound(err)) return;
       throw err;
     }
   }
@@ -236,7 +255,7 @@ export class KubeProvisioner implements Provisioner {
       await this.core.deleteNamespacedPod({ name: podName, namespace: this.namespace, gracePeriodSeconds });
       log.info("sandbox_pod_deleted", { podName });
     } catch (err) {
-      if ((err as { code?: number }).code === 404) return;
+      if (isNotFound(err)) return;
       throw err;
     }
   }
@@ -255,22 +274,17 @@ export class KubeProvisioner implements Provisioner {
       const scheduled = pod.status?.conditions?.find((c) => c.type === "PodScheduled")?.lastTransitionTime;
       const started = statuses.find((s) => s.name === "guest")?.state?.running?.startedAt
         ?? statuses[0]?.state?.running?.startedAt;
-      const ms = (value: unknown): number | undefined => {
-        if (!value) return undefined;
-        const t = new Date(value as string).getTime();
-        return Number.isFinite(t) ? t : undefined;
-      };
       return {
         phase: pod.status?.phase ?? "Unknown",
         deleted: Boolean(pod.metadata?.deletionTimestamp),
         imageID: statuses[0]?.imageID,
-        createdAt: ms(pod.metadata?.creationTimestamp),
-        scheduledAt: ms(scheduled),
-        startedAt: ms(started),
+        createdAt: timestampMs(pod.metadata?.creationTimestamp),
+        scheduledAt: timestampMs(scheduled),
+        startedAt: timestampMs(started),
         ...(pod.spec?.nodeName ? { nodeName: pod.spec.nodeName } : {}),
       };
     } catch (err) {
-      if ((err as { code?: number }).code === 404) return null;
+      if (isNotFound(err)) return null;
       throw err;
     }
   }
@@ -282,7 +296,7 @@ export class KubeProvisioner implements Provisioner {
       const ready = node.status?.conditions?.find((c) => c.type === "Ready");
       return ready?.status === "True";
     } catch (err) {
-      if ((err as { code?: number }).code === 404) return false;
+      if (isNotFound(err)) return false;
       throw err;
     }
   }
@@ -292,7 +306,7 @@ export class KubeProvisioner implements Provisioner {
       await this.core.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace: this.namespace });
       return true;
     } catch (err) {
-      if ((err as { code?: number }).code === 404) return false;
+      if (isNotFound(err)) return false;
       throw err;
     }
   }
@@ -305,9 +319,7 @@ export class KubeProvisioner implements Provisioner {
     return (res.items ?? []).map((pvc) => ({
       name: pvc.metadata?.name ?? "",
       sessionId: pvc.metadata?.labels?.[LABEL_SESSION] ?? "",
-      createdAt: pvc.metadata?.creationTimestamp
-        ? new Date(pvc.metadata.creationTimestamp).getTime()
-        : 0,
+      createdAt: timestampMs(pvc.metadata?.creationTimestamp) ?? 0,
       deleting: Boolean(pvc.metadata?.deletionTimestamp),
     }));
   }
@@ -320,7 +332,7 @@ export class KubeProvisioner implements Provisioner {
     return (res.items ?? []).map((pod) => ({
       name: pod.metadata?.name ?? "",
       sessionId: pod.metadata?.labels?.[LABEL_SESSION] ?? "",
-      createdAt: pod.metadata?.creationTimestamp ? new Date(pod.metadata.creationTimestamp).getTime() : 0,
+      createdAt: timestampMs(pod.metadata?.creationTimestamp) ?? 0,
       phase: pod.status?.phase ?? "Unknown",
     }));
   }
@@ -336,7 +348,7 @@ export class KubeProvisioner implements Provisioner {
         name: pod.metadata?.name ?? "",
         warmId,
         poolId: `warm_${warmId}`,
-        createdAt: pod.metadata?.creationTimestamp ? new Date(pod.metadata.creationTimestamp).getTime() : 0,
+        createdAt: timestampMs(pod.metadata?.creationTimestamp) ?? 0,
         phase: pod.status?.phase ?? "Unknown",
         // Annotation first: it is written by this controller generation, while
         // the label fallback covers pods that only ever carried a label.
@@ -373,27 +385,6 @@ export class KubeProvisioner implements Provisioner {
   }
 
   /**
-   * Resolve a Service to an address a sandbox can actually dial.
-   *
-   * Returns a ready endpoint address, not the ClusterIP. A Kata sandbox runs its
-   * own kernel, so Cilium's eBPF service translation never sees its packets: a
-   * ClusterIP is simply an unroutable address inside the microVM, and connects
-   * hang until timeout. Pod IPs are routed normally, so an endpoint works.
-   *
-   * Falls back to the ClusterIP only when no endpoint is ready, which preserves
-   * the previous behaviour for container runtimes that can use it.
-   *
-   * `shard` selects one replica of a StatefulSet behind a headless Service. The
-   * endpoint hostname is the StatefulSet pod name (`relay-0`), which is not
-   * derived from the Service name: a sharded lookup reads `relay-headless`, and
-   * its endpoints are still named `relay-0`. Match the ordinal suffix, not
-   * `${name}-${shard}`, which would look for `relay-headless-0`. The suffix
-   * cannot collide because `-1` does not suffix `-11`.
-   * There is no ClusterIP fallback on this path: a ClusterIP load-balances
-   * across replicas, which is the misrouting the shard prevents.
-   * A shard with no ready endpoint resolves to null.
-   */
-  /**
    * ClusterIP of a Service, for a guest-facing URL.
    *
    * Deliberately does not read the EndpointSlice: an endpoint address is a Pod
@@ -419,11 +410,32 @@ export class KubeProvisioner implements Provisioner {
       if (!port || !ip || ip === "None") return null;
       return { host: ip, port };
     } catch (err) {
-      if ((err as { code?: number }).code === 404) return null;
+      if (isNotFound(err)) return null;
       throw err;
     }
   }
 
+  /**
+   * Resolve a Service to an address a sandbox can actually dial.
+   *
+   * Returns a ready endpoint address, not the ClusterIP. A Kata sandbox runs its
+   * own kernel, so Cilium's eBPF service translation never sees its packets: a
+   * ClusterIP is simply an unroutable address inside the microVM, and connects
+   * hang until timeout. Pod IPs are routed normally, so an endpoint works.
+   *
+   * Falls back to the ClusterIP only when no endpoint is ready, which preserves
+   * the previous behaviour for container runtimes that can use it.
+   *
+   * `shard` selects one replica of a StatefulSet behind a headless Service. The
+   * endpoint hostname is the StatefulSet pod name (`relay-0`), which is not
+   * derived from the Service name: a sharded lookup reads `relay-headless`, and
+   * its endpoints are still named `relay-0`. Match the ordinal suffix, not
+   * `${name}-${shard}`, which would look for `relay-headless-0`. The suffix
+   * cannot collide because `-1` does not suffix `-11`.
+   * There is no ClusterIP fallback on this path: a ClusterIP load-balances
+   * across replicas, which is the misrouting the shard prevents.
+   * A shard with no ready endpoint resolves to null.
+   */
   async getServiceAddress(
     name: string,
     shard?: number,
@@ -461,7 +473,7 @@ export class KubeProvisioner implements Provisioner {
       if (!ip || ip === "None") return null;
       return { host: ip, port };
     } catch (err) {
-      if ((err as { code?: number }).code === 404) return null;
+      if (isNotFound(err)) return null;
       throw err;
     }
   }

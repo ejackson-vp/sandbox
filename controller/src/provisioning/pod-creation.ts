@@ -23,6 +23,7 @@ import {
 import type { CapacityService } from "../capacity/service.js";
 import type { Provisioner } from "../k8s.js";
 import type { RelayClient } from "../relay-client.js";
+import { sessionTimings } from "../session-timings.js";
 import type { SessionRecord } from "../store/models.js";
 import type { ProvisioningStore } from "../store/ports.js";
 import { relayCredential } from "./endpoints.js";
@@ -139,9 +140,7 @@ export class PodCreation {
     const endpoints = await this.ctx.endpoints.podEndpoints(session);
     if (!endpoints) return false;
     const { relay: relayAddr, proxy: proxyAddr } = endpoints;
-    const timings = session.timingsJson
-      ? (JSON.parse(session.timingsJson) as Record<string, unknown>)
-      : {};
+    const timings = sessionTimings(session);
     const created = await this.createPod(session, relayAddr, proxyAddr, {
       ...(session.workspacePvc ? { workspacePvc: session.workspacePvc } : {}),
       ...(session.state === "RESUMING" ? { resume: true } : {}),
