@@ -49,6 +49,12 @@ interface CapacityView {
   available: ResourceVector;
 }
 
+/** The smallest request the placement model can place; see `totals`. */
+const ANY_REQUEST = {
+  baseline: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
+  peak: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
+};
+
 export class CapacityService {
   private readonly builder: CapacitySnapshotBuilder;
   private readonly reservations: ReservationStore;
@@ -78,23 +84,43 @@ export class CapacityService {
     }
   }
 
-  private publishGauges(snapshot: CapacitySnapshot): void {
+  /**
+   * The cluster totals both the scrape and the operator summary publish.
+   *
+   * One computation, because a gauge and `/capacity` disagreeing about the same
+   * cluster is worse than either being wrong: an operator sizes against the
+   * summary while an alert fires on the gauge.
+   *
+   * `ANY_REQUEST` is the smallest request the model can place. Asking it which
+   * nodes would accept anything is how "eligible" is defined without inventing
+   * a second definition of eligibility beside the placement model.
+   */
+  private totals(snapshot: CapacitySnapshot): {
+    reserved: ResourceVector;
+    available: ResourceVector;
+    eligible: ReadonlySet<string>;
+  } {
     let reserved = ZERO_RESOURCES;
     for (const reservation of snapshot.reservations) {
       if (reservation.state === "RELEASED") continue;
       reserved = addResources(reserved, accountedResources(reservation, snapshot.accounting));
     }
     const eligible = new Set(
-      placementCandidates(snapshot, {
-        baseline: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
-        peak: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
-      }).map((candidate) => candidate.node.id),
+      placementCandidates(snapshot, ANY_REQUEST).map((candidate) => candidate.node.id),
     );
     let available = ZERO_RESOURCES;
     for (const node of snapshot.nodes) {
       if (!eligible.has(node.id)) continue;
-      available = addResources(available, availableOnNode(node, snapshot.reservations, snapshot.now, snapshot.accounting));
+      available = addResources(
+        available,
+        availableOnNode(node, snapshot.reservations, snapshot.now, snapshot.accounting),
+      );
     }
+    return { reserved, available, eligible };
+  }
+
+  private publishGauges(snapshot: CapacitySnapshot): void {
+    const { reserved, available } = this.totals(snapshot);
     metrics.gauge("sandbox_capacity_reserved_cpu_millicores", "Reserved CPU millicores").set({}, reserved.cpuMillicores);
     metrics.gauge("sandbox_capacity_reserved_memory_bytes", "Reserved memory bytes").set({}, reserved.memoryBytes);
     metrics.gauge("sandbox_capacity_available_cpu_millicores", "Available CPU millicores").set({}, available.cpuMillicores);
@@ -277,21 +303,7 @@ export class CapacityService {
     const snapshot = await this.builder.snapshotWithWarm();
     const reservations = snapshot.reservations;
     const count = (state: ReservationState) => reservations.filter((r) => r.state === state).length;
-    const reserved = reservations.reduce((sum, reservation) => {
-      if (reservation.state === "RELEASED") return sum;
-      return addResources(sum, accountedResources(reservation, snapshot.accounting));
-    }, ZERO_RESOURCES);
-    const eligibleIds = new Set(
-      placementCandidates(snapshot, {
-        baseline: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
-        peak: { cpuMillicores: 1, memoryBytes: 1, storageBytes: 1 },
-      }).map((candidate) => candidate.node.id),
-    );
-    let available = ZERO_RESOURCES;
-    for (const node of snapshot.nodes) {
-      if (!eligibleIds.has(node.id)) continue;
-      available = addResources(available, availableOnNode(node, reservations, snapshot.now, snapshot.accounting));
-    }
+    const { reserved, available, eligible: eligibleIds } = this.totals(snapshot);
     return {
       accounting: snapshot.accounting,
       nodes: snapshot.nodes.map((node) => ({

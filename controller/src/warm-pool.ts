@@ -44,6 +44,34 @@ export type WarmClaimOutcome =
   | "miss_empty"
   | "miss_error";
 
+/** The two collaborators a recycle needs: delete the pod, drop its pooled entry. */
+type RecycleRuntime = Pick<ReconcilerContext, "provisioner" | "relay">;
+
+/**
+ * Delete a warm pod and its pooled relay registration.
+ *
+ * Every recycle reason (stale identity, dead phase, TTL, surplus, an unknown
+ * runtime profile) has to undo both, and leaving either behind leaks cluster
+ * capacity or a registry entry the controller can never claim. The pool owns the
+ * pairing, so the manager uses it too rather than repeating it.
+ *
+ * Not used for a pod whose registration is already gone: that path deletes the
+ * pod and nothing else, on purpose.
+ */
+export async function recycleWarmPod(
+  ctx: RecycleRuntime,
+  pod: Pick<WarmPodInfo, "name" | "poolId">,
+  label: { runtime: string; reason: string },
+): Promise<void> {
+  await ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
+  await ctx.relay.purge(pod.poolId).catch(() => undefined);
+  log.info("warm_pod_recycled", {
+    podName: pod.name,
+    runtime: label.runtime,
+    reason: label.reason,
+  });
+}
+
 export class WarmPool {
   private readonly claimed = new Set<string>();
   /** Serializes pick+reserve; two concurrent provisions must not take one pod. */
@@ -210,11 +238,7 @@ export class WarmPool {
       await this.ctx.relay.claim(warm.poolId, claim);
     } catch (err) {
       log.warn("warm_claim_failed", { sessionId: session.id, warmId: warm.warmId, error: (err as Error).message });
-      this.claimed.delete(warm.warmId);
-      await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
-      await this.ctx.relay.purge(warm.poolId).catch(() => undefined);
-      this.count("miss_error");
-      return "miss_error";
+      return this.abandonClaim(warm, warm.poolId);
     }
 
     const warmClaimCallMs = this.ctx.now() - claimCallStarted;
@@ -229,20 +253,12 @@ export class WarmPool {
       });
     } catch (err) {
       log.warn("warm_relabel_failed", { sessionId: session.id, warmId: warm.warmId, error: (err as Error).message });
-      this.claimed.delete(warm.warmId);
-      await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
-      await this.ctx.relay.purge(session.id).catch(() => undefined);
-      this.count("miss_error");
-      return "miss_error";
+      return this.abandonClaim(warm, session.id);
     }
 
     if (!(await this.ctx.store.setProvisioning(session.id, warm.name))) {
       // The session moved on (destroyed, reaped) between selection and here.
-      this.claimed.delete(warm.warmId);
-      await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
-      await this.ctx.relay.purge(session.id).catch(() => undefined);
-      this.count("miss_error");
-      return "miss_error";
+      return this.abandonClaim(warm, session.id);
     }
 
     if (warm.nodeName) {
@@ -274,6 +290,20 @@ export class WarmPool {
       runtime: this.profile.name,
     });
     return "hit";
+  }
+
+  /**
+   * A claim picked a pod and then could not hand it over: give the pod and the
+   * relay registration it was given back, and count the miss. The pod is deleted
+   * rather than returned to the pool because the guest has already been told
+   * about a claim it may or may not have acted on.
+   */
+  private async abandonClaim(warm: WarmPodInfo, purgeId: string): Promise<"miss_error"> {
+    this.claimed.delete(warm.warmId);
+    await this.ctx.provisioner.deletePod(warm.name, 0).catch(() => undefined);
+    await this.ctx.relay.purge(purgeId).catch(() => undefined);
+    this.count("miss_error");
+    return "miss_error";
   }
 
   private count(result: string): void {
@@ -370,10 +400,7 @@ export class WarmPool {
       const tooOld = pod.createdAt > 0 && now - pod.createdAt > cfg.warmPoolTtlMs;
       const scaleDown = opts.target <= 0;
       if (staleIdentity || dead || tooOld || scaleDown) {
-        await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
-        await this.ctx.relay.purge(pod.poolId).catch(() => undefined);
-        log.info("warm_pod_recycled", {
-          podName: pod.name,
+        await recycleWarmPod(this.ctx, pod, {
           runtime: this.profile.name,
           reason: staleIdentity ? "identity" : scaleDown ? "scale_down" : dead ? "dead" : "ttl",
         });
@@ -402,13 +429,7 @@ export class WarmPool {
       .sort((a, b) => a.createdAt - b.createdAt || (a.warmId < b.warmId ? -1 : 1))
       .slice(0, excess);
     for (const pod of victims) {
-      await this.ctx.provisioner.deletePod(pod.name, 0).catch(() => undefined);
-      await this.ctx.relay.purge(pod.poolId).catch(() => undefined);
-      log.info("warm_pod_recycled", {
-        podName: pod.name,
-        runtime: this.profile.name,
-        reason: "surplus",
-      });
+      await recycleWarmPod(this.ctx, pod, { runtime: this.profile.name, reason: "surplus" });
     }
 
     const live = claimedLive + idle.length - victims.length;
