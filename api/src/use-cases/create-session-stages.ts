@@ -27,12 +27,15 @@ import {
   paymentAuthorizer,
 } from "@x402s/shared/crypto";
 import { PAYMENT_VERSION, paymentKey } from "@x402s/shared/payment";
-import type {
-  BudgetDecision,
-  CapacityDecision,
-  CreateSessionRequest,
-  SessionSpec,
+import {
+  assertNever,
+  type BudgetDecision,
+  type BudgetScope,
+  type CapacityDecision,
+  type CreateSessionRequest,
+  type SessionSpec,
 } from "@x402s/shared/protocol";
+import type { RateLimitScope } from "@x402s/shared/runtime";
 import { log, recordAuthFailure, recordRateLimited } from "@x402s/shared/runtime";
 import { paymentPayerKey } from "../admission.js";
 import type { ApiConfig } from "../config.js";
@@ -215,6 +218,28 @@ export async function burnChallenge(
 }
 
 /**
+ * Which admission bucket a refused budget belongs to.
+ *
+ * Total over the closed scope union: the label `sandbox_rate_limited_total`
+ * carries is the point of that union, so a new scope has to be classified here
+ * instead of falling through a string prefix. `startsWith("global_")` did the
+ * opposite: a new scope compiled, and was counted as a payer refusal.
+ */
+function budgetRateLimitScope(scope: BudgetScope): RateLimitScope {
+  switch (scope) {
+    case "global_create":
+    case "global_concurrent":
+      return "global_budget";
+    case "payer_create":
+    case "payer_spend":
+    case "payer_concurrent":
+      return "payer_budget";
+    default:
+      return assertNever(scope, "BudgetScope");
+  }
+}
+
+/**
  * Durable per-payer and global budget (#48), before any capacity hold, intent
  * claim or settlement. The in-memory buckets are the first line; this one
  * survives a restart, and the global row cannot be influenced by a client-chosen
@@ -236,8 +261,7 @@ export async function reserveBudget(
     return { ok: false, result: admissionUnavailable("try again shortly; no payment was taken") };
   }
   if (!budget.ok) {
-    const globalScope = budget.scope.startsWith("global_");
-    recordRateLimited(globalScope ? "global_budget" : "payer_budget");
+    recordRateLimited(budgetRateLimitScope(budget.scope));
     return {
       ok: false,
       result: json(
@@ -300,36 +324,53 @@ export async function claimPaymentIntent(
     amount: requirement.amount,
     payTo: requirement.payTo,
   }, attribution);
-  if (claim.status === "in_progress") {
-    return {
-      ok: false,
-      result: json(409, { error: "payment_in_progress", message: "this payment is already being processed" }),
-    };
-  }
-  if (claim.status === "failed") {
-    return failAfterReleasingHold(
-      deps,
-      key,
-      paymentRequired(requirement, `payment_intent_failed:${claim.reason ?? "unknown"}`),
-    );
-  }
-  if (claim.status === "mismatch") {
-    return failAfterReleasingHold(
-      deps,
-      key,
-      json(409, { error: "spec_mismatch", message: "this payment was made for a different session spec" }),
-    );
-  }
-  if (claim.status === "settled") {
-    // A replay must not leave a fresh provisional hold behind. This only
-    // releases HELD rows; an existing session reservation is untouched.
-    await deps.controller.releaseCapacity(key);
-    const session = await deps.controller.getSession(claim.sessionId).catch(() => null);
-    if (!session) {
-      return { ok: false, result: json(409, { error: "entitlement_missing", sessionId: claim.sessionId }) };
+  switch (claim.status) {
+    case "in_progress":
+      return {
+        ok: false,
+        result: json(409, {
+          error: "payment_in_progress",
+          message: "this payment is already being processed",
+        }),
+      };
+    case "failed":
+      return failAfterReleasingHold(
+        deps,
+        key,
+        paymentRequired(requirement, `payment_intent_failed:${claim.reason ?? "unknown"}`),
+      );
+    case "mismatch":
+      return failAfterReleasingHold(
+        deps,
+        key,
+        json(409, {
+          error: "spec_mismatch",
+          message: "this payment was made for a different session spec",
+        }),
+      );
+    case "settled": {
+      // A replay must not leave a fresh provisional hold behind. This only
+      // releases HELD rows; an existing session reservation is untouched.
+      await deps.controller.releaseCapacity(key);
+      const session = await deps.controller.getSession(claim.sessionId).catch(() => null);
+      if (!session) {
+        return {
+          ok: false,
+          result: json(409, { error: "entitlement_missing", sessionId: claim.sessionId }),
+        };
+      }
+      log.info("payment_idempotent_replay", {
+        sessionId: claim.sessionId,
+        paymentKeyPrefix: key.slice(0, 12),
+      });
+      return { ok: false, result: replayedSession(deps, key, commitment, session) };
     }
-    log.info("payment_idempotent_replay", { sessionId: claim.sessionId, paymentKeyPrefix: key.slice(0, 12) });
-    return { ok: false, result: replayedSession(deps, key, commitment, session) };
+    case "claimed":
+      return { ok: true, value: { token: claim.token, recovered: claim.recovered } };
+    default:
+      // Unreachable while both sides share one union: a status this API cannot
+      // read throws rather than being treated as a claim, so a create never
+      // settles on a body nobody understood.
+      return assertNever(claim, "IntentClaimResult");
   }
-  return { ok: true, value: { token: claim.token, recovered: claim.recovered } };
 }

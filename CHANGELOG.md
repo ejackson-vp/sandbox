@@ -229,6 +229,12 @@ the container registry.
 
 ### Changed
 
+- A capacity hold answers with a top-level `nodeId`. It never did: the API's own
+  copy of the type promised one, and only the preflight route sent it, so
+  `holdCapacity` resolved with `nodeId: undefined` for anyone who read it. Both
+  capacity routes now project their decision through
+  `controller/src/capacity/wire.ts`, so a hold body carries the node and the
+  placement detail stays in the controller.
 - The relay runs two shards in the committed manifests (`RELAY_REPLICAS: "2"`,
   StatefulSet `replicas: 2`, `relay-0` and `relay-1` ClusterIP Services, soft
   hostname spread). Placement is a pure function of the session id, so each
@@ -301,6 +307,16 @@ the container registry.
 
 ### Fixed
 
+- The API and the controller share one declaration for every `/internal/*`
+  answer. The API had hand-mirrored the claim, budget, allowlist, switch and
+  capacity bodies, and the copies had drifted in the direction that loses
+  safety: `scope` and `reason` were `string` there and closed unions in the
+  controller, so a new refusal reason compiled on both sides and was counted
+  under the wrong `sandbox_rate_limited_total{scope}` label. Every answer the
+  API reads is now declared in `shared/src/protocol/control.ts`,
+  `startsWith("global_")` is an exhaustive switch, and
+  `tests/unit/control-contract.test.ts` fails the typecheck if either workspace
+  declares a copy again.
 - A relay restart now actually reconnects. The guest URL was a ready relay Pod
   IP, so the replacement Pod's new IP left every supervisor on the shard dialling
   a dead address, and the session survived only in name. The guest address is now
