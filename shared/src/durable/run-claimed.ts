@@ -16,7 +16,7 @@
  * conditional `UPDATE`, and the grant path keeps its payment + ledger + session
  * transaction. `runClaimed` never invents a token and never writes a row.
  */
-import { backoffMs, isExhausted, type RetryPolicy } from "./retry.js";
+import { isExhausted, nextAttemptAtMs, type RetryPolicy } from "./retry.js";
 import { toFailure, type ExternalOutcome, type Failure } from "./outcome.js";
 
 export interface RetryDecision {
@@ -69,7 +69,9 @@ export function retryDecision(policy: RetryPolicy, attemptsSoFar: number, nowMs:
   return {
     attempts,
     exhausted: isExhausted(policy, attempts),
-    nextAttemptAtMs: nowMs + backoffMs(policy, attemptsSoFar),
+    // One implementation of "when is it due": `retry.ts` owns the backoff, and
+    // a second `now + backoff` here was a copy of it.
+    nextAttemptAtMs: nextAttemptAtMs(policy, attemptsSoFar, nowMs),
   };
 }
 

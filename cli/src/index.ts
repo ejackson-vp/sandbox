@@ -125,7 +125,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const ctx: CommandContext = {
     values,
     positionals,
-    apiUrl,
     json,
     quiet,
     paymentMode,

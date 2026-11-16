@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, reportFatal } from "../../cli/src/index.js";
 import { HELP } from "../../cli/src/commands.js";
+import { ADMIN_USAGE } from "../../cli/src/allowlist-admin.js";
 import { FileSessionStore } from "../../sdk/src/session-store.js";
 // Import the built package, not sdk/src: the CLI resolves @x402s/sdk to
 // sdk/dist, and an instanceof check needs the same class identity.
@@ -76,6 +77,18 @@ describe("help and version", () => {
     const { code, out } = await invoke(["version"]);
     expect(code).toBe(0);
     expect(out).toBe("sandbox 0.2.0\n");
+  });
+
+  it("lists the same admin commands as the admin usage error", () => {
+    // Two hand-maintained lists: HELP's admin block and ADMIN_USAGE, which a
+    // bad `sandbox admin` command prints. They drifted once already, so the
+    // sets are compared rather than trusted.
+    const adminLines = (text: string): string[] =>
+      text
+        .split("\n")
+        .map((line) => line.trim().replace(/\s+#.*$/, ""))
+        .filter((line) => line.startsWith("sandbox admin"));
+    expect(adminLines(HELP)).toEqual(adminLines(ADMIN_USAGE));
   });
 });
 

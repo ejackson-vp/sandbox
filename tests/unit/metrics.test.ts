@@ -127,4 +127,11 @@ describe("label cardinality guard", () => {
       registry.counter("sandbox_test_total", "Guarded").inc({ sessionId: "sbx_0123456789abcdef" }),
     ).toThrow(UnboundedLabelError);
   });
+
+  it("guards a gauge's own set path as well as inc", () => {
+    const registry = new MetricsRegistry({ cacheMs: 0, guardLabels: true });
+    const gauge = registry.gauge("sandbox_guarded_gauge", "Guarded");
+    expect(() => gauge.set({ sessionId: "sbx_0123456789abcdef" }, 1)).toThrow(UnboundedLabelError);
+    expect(() => gauge.inc({ requestId: "req_0123456789abcdef" })).toThrow(UnboundedLabelError);
+  });
 });

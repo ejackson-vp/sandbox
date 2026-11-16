@@ -86,7 +86,7 @@ export interface MockAuthorization {
   nonce: `0x${string}`;
 }
 
-export interface MockPayload {
+interface MockPayload {
   authorization: MockAuthorization;
   signature: `0x${string}`;
 }

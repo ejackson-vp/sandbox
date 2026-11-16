@@ -4,7 +4,7 @@
 import { fromBase64, generateBoxKeyPair, generateNonce, toBase64 } from "@x402s/shared/crypto";
 import type { CreateSessionRequest, CreateSessionResponse, SessionStatus } from "@x402s/shared/protocol";
 import type { ClientRuntime } from "./runtime.js";
-import { sleep } from "./runtime.js";
+import { sleep } from "./timing.js";
 import {
   SandboxError,
   SessionExpiredError,

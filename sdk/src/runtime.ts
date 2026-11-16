@@ -1,19 +1,19 @@
 /**
- * Shared client runtime: transport, auth, errors, attestation, persistence and
- * the encrypted operation loop. Session/operation/data-plane modules depend on
- * this; the public facade composes them.
+ * The client's session runtime: configuration, the payer, local persistence,
+ * and the readiness/attestation gate.
+ *
+ * Transport lives in `transport.ts` and the sealed operation exchange in
+ * `operation-loop.ts`. What is left here is the part that is about a *session*:
+ * who is paying, where the handle is stored, and whether the guest that just
+ * became READY is bound to this client's key. Session, operation and data-plane
+ * modules depend on this; the public facade composes them.
  */
-import {
-  canonicalJson,
-  fromBase64,
-  openSealedJson,
-  sealJsonTo,
-  sha256Hex,
-  toBase64,
-  verifyAttestation,
-} from "@x402s/shared/crypto";
+import { fromBase64, toBase64, verifyAttestation } from "@x402s/shared/crypto";
 import type { GuestResult, SessionStatus } from "@x402s/shared/protocol";
 import { createPayer, type Payer } from "./payment.js";
+import { OperationChannel } from "./operation-loop.js";
+import { ClientTransport } from "./transport.js";
+import { sleep } from "./timing.js";
 import type { FileSessionStore } from "./session-store.js";
 import {
   SandboxError,
@@ -22,62 +22,32 @@ import {
   type SessionHandle,
 } from "./types.js";
 
-export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-export class ClientRuntime {
-  readonly apiUrl: string;
+export class ClientRuntime extends ClientTransport {
   readonly payer: Payer;
   readonly allowInsecureDev: boolean;
   readonly expectedMeasurement?: string;
   readonly store?: FileSessionStore;
   readonly log: (line: string) => void;
+  private readonly operations: OperationChannel;
 
   constructor(opts: SandboxClientOptions) {
-    this.apiUrl = opts.apiUrl.replace(/\/$/, "");
+    super(opts.apiUrl);
     this.payer = opts.payer ?? createPayer(opts.paymentMode ?? "mock");
     this.allowInsecureDev = opts.allowInsecureDev ?? true;
     this.expectedMeasurement = opts.expectedMeasurement;
     this.store = opts.store;
     this.log = opts.log ?? (() => {});
-  }
-
-  auth(handle: SessionHandle): Record<string, string> {
-    return { "x-sandbox-capability": handle.capability };
-  }
-
-  async api(
-    path: string,
-    init: RequestInit = {},
-    timeoutMs = 180_000,
-    signal?: AbortSignal,
-  ): Promise<Response> {
-    const timeout = AbortSignal.timeout(timeoutMs);
-    return fetch(`${this.apiUrl}${path}`, {
-      ...init,
-      headers: { "content-type": "application/json", ...(init.headers ?? {}) },
-      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+    this.operations = new OperationChannel({
+      auth: (handle) => this.auth(handle),
+      api: (path, init, timeoutMs, signal) => this.api(path, init, timeoutMs, signal),
+      errorFrom: (res, fallback) => this.errorFrom(res, fallback),
+      errorFromText: (status, text, fallback) => this.errorFromText(status, text, fallback),
+      ensureReady: (handle) => this.ensureReady(handle),
     });
   }
 
-  async errorFrom(res: Response, fallback: string): Promise<SandboxError> {
-    const text = await res.text().catch(() => "");
-    return this.errorFromText(res.status, text, fallback);
-  }
-
-  errorFromText(status: number, text: string, fallback: string): SandboxError {
-    let code = fallback;
-    let message = text.slice(0, 300);
-    let requestId: string | undefined;
-    try {
-      const body = JSON.parse(text) as { error?: string; message?: string; requestId?: string };
-      code = body.error ?? fallback;
-      message = body.message ?? message;
-      requestId = body.requestId;
-    } catch {
-      /* keep defaults */
-    }
-    if (status === 410 && /lease|expired/.test(code)) return new SessionExpiredError(message);
-    return new SandboxError(code, message, status, requestId);
+  private async ensureReady(handle: SessionHandle): Promise<void> {
+    if (!handle.guestPublicKey) await this.waitForReady(handle);
   }
 
   persist(handle: SessionHandle): void {
@@ -186,33 +156,15 @@ export class ClientRuntime {
     return last;
   }
 
-  async getOperation(handle: SessionHandle, requestId: string, waitMs = 20_000): Promise<GuestResult | null> {
-    const res = await this.api(
-      `/v1/sessions/${handle.sessionId}/requests/${requestId}?waitMs=${waitMs}`,
-      { headers: this.auth(handle) },
-      waitMs + 30_000,
-    );
-    if (res.status === 202) return null;
-    if (res.status === 409) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string; requestId?: string };
-      if (body.error === "outcome_unknown") {
-        throw new SandboxError(
-          "outcome_unknown",
-          body.message ?? "the controller restarted while this operation was in flight; its outcome is unknown",
-          409,
-          requestId,
-        );
-      }
-      throw new SandboxError(body.error ?? "operation_lookup_failed", body.message ?? "operation lookup failed", 409, requestId);
-    }
-    if (res.status === 410) throw new SandboxError("result_expired", "the result is no longer available", 410, requestId);
-    if (!res.ok) throw await this.errorFrom(res, "operation_lookup_failed");
-    const body = (await res.json()) as { envelope?: string };
-    if (!body.envelope) return null;
-    return this.openResult(handle, body.envelope, requestId);
+  getOperation(
+    handle: SessionHandle,
+    requestId: string,
+    waitMs = 20_000,
+  ): Promise<GuestResult | null> {
+    return this.operations.getOperation(handle, requestId, waitMs);
   }
 
-  async run<T extends GuestResult>(
+  run<T extends GuestResult>(
     handle: SessionHandle,
     operation: { requestId: string },
     requestId: string,
@@ -220,157 +172,15 @@ export class ClientRuntime {
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<T> {
-    if (!handle.guestPublicKey) await this.waitForReady(handle);
-    // The envelope is re-sealed (fresh randomness) if the caller retries the
-    // logical operation, so the idempotency key is bound to the canonical
-    // plaintext instead. The operation carries `requestId`, so two different
-    // requests never share a hash. Computed once per call and reused on every
-    // retry inside the loop below.
-    const payloadHash = sha256Hex(canonicalJson(operation));
-    const envelope = await sealJsonTo(handle.guestPublicKey!, operation);
-    // Matches the API's waitMs cap: the schema rejects anything above 90 s, which
-    // is below the edge proxy's 100 s timeout. A longer command answers 202 and
-    // the loop below polls.
-    const waitMs = Math.min(90_000, (timeoutMs ?? 60_000) + 10_000);
-    const queueDeadline = Date.now() + queueMs;
-
-    for (;;) {
-      const res = await this.api(
-        `/v1/sessions/${handle.sessionId}/operations`,
-        {
-          method: "POST",
-          headers: this.auth(handle),
-          body: JSON.stringify({ requestId, envelope, payloadHash, timeoutMs, waitMs }),
-        },
-        waitMs + 30_000,
-        signal,
-      );
-      if (res.status === 409) {
-        const text = await res.text().catch(() => "");
-        let body: { error?: string; requestId?: string } = {};
-        try {
-          body = JSON.parse(text) as typeof body;
-        } catch {
-          /* keep default */
-        }
-        if (body.error === "busy" && Date.now() < queueDeadline) {
-          await sleep(250);
-          continue;
-        }
-        if (body.error === "busy") {
-          throw new SandboxError("session_busy", "another operation is running in this session", 409, body.requestId);
-        }
-        if (body.error === "duplicate") {
-          const existing = await this.getOperation(handle, requestId, waitMs);
-          if (existing) return existing as T;
-        }
-        throw this.errorFromText(409, text, "exec_failed");
-      }
-      if (res.status === 202) {
-        const pending = await this.pollOperation<T>(handle, requestId, waitMs);
-        if (pending) return pending;
-        return {
-          v: 2,
-          sessionId: handle.sessionId,
-          clientNonce: handle.clientNonce,
-          requestId,
-          op: "exec",
-          ok: false,
-          error: { code: "operation_pending", message: "the operation is still running; fetch it by request id" },
-        } as unknown as T;
-      }
-      if (!res.ok) throw await this.errorFrom(res, "exec_failed");
-      const body = (await res.json()) as { envelope?: string };
-      if (!body.envelope) throw new SandboxError("missing_result", "server returned no result envelope");
-      return this.openResult<T>(handle, body.envelope, requestId);
-    }
+    return this.operations.run<T>(handle, operation, requestId, queueMs, timeoutMs, signal);
   }
 
-  async runGet<T extends GuestResult>(
+  runGet<T extends GuestResult>(
     handle: SessionHandle,
     operation: { requestId: string },
     requestId: string,
     queueMs: number,
   ): Promise<T> {
-    if (!handle.guestPublicKey) await this.waitForReady(handle);
-    // Same binding as `run`: hash the canonical plaintext, not the ciphertext,
-    // which changes on every seal.
-    const payloadHash = sha256Hex(canonicalJson(operation));
-    const envelope = await sealJsonTo(handle.guestPublicKey!, operation);
-    const queueDeadline = Date.now() + queueMs;
-    for (;;) {
-      const res = await this.api(
-        `/v1/sessions/${handle.sessionId}/operations?request=${encodeURIComponent(envelope)}&requestId=${encodeURIComponent(operation.requestId)}&payloadHash=${payloadHash}&waitMs=60000`,
-        { headers: this.auth(handle) },
-        120_000,
-      );
-      if (res.status === 409) {
-        const text = await res.text().catch(() => "");
-        let body: { error?: string } = {};
-        try {
-          body = JSON.parse(text) as typeof body;
-        } catch {
-          /* keep default */
-        }
-        if (body.error === "busy" && Date.now() < queueDeadline) {
-          await sleep(250);
-          continue;
-        }
-        throw this.errorFromText(409, text, "file_operation_failed");
-      }
-      if (res.status === 202) {
-        const pending = await this.pollOperation<T>(handle, requestId, 60_000);
-        if (pending) return pending;
-        return {
-          v: 2,
-          sessionId: handle.sessionId,
-          clientNonce: handle.clientNonce,
-          requestId,
-          op: "file.get",
-          ok: false,
-          error: { code: "operation_pending", message: "the operation is still running; fetch it by request id" },
-        } as unknown as T;
-      }
-      if (!res.ok) throw await this.errorFrom(res, "file_operation_failed");
-      const body = (await res.json()) as { envelope?: string };
-      if (!body.envelope) throw new SandboxError("missing_result", "server returned no result envelope");
-      return this.openResult<T>(handle, body.envelope, requestId);
-    }
-  }
-
-  async pollOperation<T extends GuestResult>(
-    handle: SessionHandle,
-    requestId: string,
-    waitMs: number,
-  ): Promise<T | null> {
-    const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline) {
-      const result = await this.getOperation(handle, requestId, Math.min(20_000, Math.max(1000, deadline - Date.now())));
-      if (result) return result as T;
-      await sleep(250);
-    }
-    return null;
-  }
-
-  async openResult<T extends GuestResult>(
-    handle: SessionHandle,
-    envelope: string,
-    requestId: string,
-  ): Promise<T> {
-    let result: GuestResult;
-    try {
-      result = await openSealedJson<GuestResult>(envelope, handle.clientPublicKey, handle.clientPrivateKey);
-    } catch {
-      throw new SandboxError("decryption_failed", "result could not be decrypted with the client key", undefined, requestId);
-    }
-    if (
-      result.v !== 2 ||
-      result.sessionId !== handle.sessionId ||
-      result.clientNonce !== handle.clientNonce ||
-      result.requestId !== requestId
-    ) {
-      throw new SandboxError("binding_mismatch", "result failed the session binding check", undefined, requestId);
-    }
-    return result as T;
+    return this.operations.runGet<T>(handle, operation, requestId, queueMs);
   }
 }

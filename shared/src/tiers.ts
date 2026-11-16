@@ -33,10 +33,10 @@ export type TierTable = Record<Exclude<SessionTier, "custom">, TierDefinition>;
  * not comparable with a configured maximum, so `tierWithinMax` refuses it
  * rather than guessing where it sits.
  */
-export const TIER_ORDER = ["short", "standard", "extended", "long"] as const;
+const TIER_ORDER = ["short", "standard", "extended", "long"] as const;
 
 /** Rank of a preset tier, or -1 for `custom`. */
-export function tierRank(tier: SessionTier): number {
+function tierRank(tier: SessionTier): number {
   return (TIER_ORDER as readonly string[]).indexOf(tier);
 }
 

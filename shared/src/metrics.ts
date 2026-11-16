@@ -82,12 +82,18 @@ function renderLabels(labels: Labels, extra?: Labels): string {
   return body ? `{${body}}` : "";
 }
 
-export interface CounterLike {
+interface CounterLike {
   inc(labels?: Labels, amount?: number): void;
 }
 
-class Counter implements CounterLike {
-  private readonly values = new Map<string, { labels: Labels; value: number }>();
+/**
+ * One keyed set of samples. A counter and a gauge differ only in what `set`/
+ * `dec` mean and in the `# TYPE` line, so the storage, the label guard and the
+ * rendering live here once instead of twice.
+ */
+abstract class Series {
+  protected readonly values = new Map<string, { labels: Labels; value: number }>();
+
   constructor(
     readonly name: string,
     readonly help: string,
@@ -95,18 +101,22 @@ class Counter implements CounterLike {
   ) {}
 
   inc(labels: Labels = {}, amount = 1): void {
-    if (this.guard) assertBoundedLabels(labels);
+    this.assertLabels(labels);
     const key = keyOf(labels);
     const entry = this.values.get(key) ?? { labels, value: 0 };
     entry.value += amount;
     this.values.set(key, entry);
   }
 
-  render(): string {
-    if (this.values.size === 0) {
-      return `# HELP ${this.name} ${sanitizeHelp(this.help)}\n# TYPE ${this.name} counter\n${this.name} 0\n`;
-    }
-    let out = `# HELP ${this.name} ${sanitizeHelp(this.help)}\n# TYPE ${this.name} counter\n`;
+  /** Reject an id-shaped label value when the registry was built with the guard on. */
+  protected assertLabels(labels: Labels): void {
+    if (this.guard) assertBoundedLabels(labels);
+  }
+
+  /** `# HELP`, `# TYPE`, a zero sample when nothing has been recorded, then samples. */
+  protected renderSamples(kind: "counter" | "gauge"): string {
+    let out = `# HELP ${this.name} ${sanitizeHelp(this.help)}\n# TYPE ${this.name} ${kind}\n`;
+    if (this.values.size === 0) out += `${this.name} 0\n`;
     for (const sample of this.values.values()) {
       out += `${this.name}${renderLabels(sample.labels)} ${sample.value}\n`;
     }
@@ -114,25 +124,16 @@ class Counter implements CounterLike {
   }
 }
 
-class Gauge {
-  private readonly values = new Map<string, { labels: Labels; value: number }>();
-  constructor(
-    readonly name: string,
-    readonly help: string,
-    private readonly guard: boolean,
-  ) {}
-
-  set(labels: Labels, value: number): void {
-    if (this.guard) assertBoundedLabels(labels);
-    this.values.set(keyOf(labels), { labels, value });
+class Counter extends Series implements CounterLike {
+  render(): string {
+    return this.renderSamples("counter");
   }
+}
 
-  inc(labels: Labels = {}, amount = 1): void {
-    if (this.guard) assertBoundedLabels(labels);
-    const key = keyOf(labels);
-    const entry = this.values.get(key) ?? { labels, value: 0 };
-    entry.value += amount;
-    this.values.set(key, entry);
+class Gauge extends Series {
+  set(labels: Labels, value: number): void {
+    this.assertLabels(labels);
+    this.values.set(keyOf(labels), { labels, value });
   }
 
   dec(labels: Labels = {}, amount = 1): void {
@@ -140,12 +141,7 @@ class Gauge {
   }
 
   render(): string {
-    let out = `# HELP ${this.name} ${sanitizeHelp(this.help)}\n# TYPE ${this.name} gauge\n`;
-    if (this.values.size === 0) out += `${this.name} 0\n`;
-    for (const sample of this.values.values()) {
-      out += `${this.name}${renderLabels(sample.labels)} ${sample.value}\n`;
-    }
-    return out;
+    return this.renderSamples("gauge");
   }
 }
 
