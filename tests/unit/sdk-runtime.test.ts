@@ -235,6 +235,33 @@ describe("waitForReady", () => {
     });
   });
 
+  it("waits the Retry-After a rate-limited status call asked for", async () => {
+    // The loop used to retry a 429 at its own 75ms pace, faster than the limiter
+    // refills, so a client inside a rate limit stayed inside it. The header is
+    // now a floor on the wait.
+    const clientKeys = await keys();
+    const guestKeys = await keys();
+    let calls = 0;
+    vi.stubGlobal("fetch", async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: "rate_limited", scope: "read" }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "1" },
+        });
+      }
+      return json(200, readyStatus(clientKeys, guestKeys));
+    });
+
+    const startedAt = Date.now();
+    const status = await client().waitForReady(handleFor(clientKeys), 10_000);
+    const elapsed = Date.now() - startedAt;
+
+    expect(status.state).toBe("READY");
+    expect(calls).toBe(2);
+    expect(elapsed).toBeGreaterThanOrEqual(1_000);
+  });
+
   it("answers ready_timeout when the deadline passes before READY", async () => {
     const clientKeys = await keys();
     const guestKeys = await keys();
@@ -442,6 +469,21 @@ describe("error mapping", () => {
     await expect(client().getOperation(handleFor(clientKeys), REQUEST_ID, 0)).rejects.toMatchObject({
       code: "result_expired",
     });
+  });
+
+  it("carries the server's Retry-After on the error, so a caller can honour it", async () => {
+    stubFetch([
+      () =>
+        new Response(JSON.stringify({ error: "rate_limited" }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "2" },
+        }),
+    ]);
+    const err = await client()
+      .status(handleFor(await keys()))
+      .catch((error: unknown) => error);
+    expect(err).toBeInstanceOf(SandboxError);
+    expect(err).toMatchObject({ code: "rate_limited", status: 429, retryAfterMs: 2_000 });
   });
 
   it("sends the capability, never the handle's keys, on every request", async () => {

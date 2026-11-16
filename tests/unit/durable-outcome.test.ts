@@ -88,6 +88,9 @@ describe("runClaimed", () => {
         policy,
         attemptsSoFar: overrides.attemptsSoFar ?? 0,
         nowMs,
+        // The due time is what these cases assert, so the jitter sample is
+        // pinned to the ceiling. Production samples it (backoff.test.ts).
+        backoff: { jitter: false },
         call,
         complete,
         fail,
@@ -177,11 +180,18 @@ describe("runClaimed", () => {
   });
 
   it("computes the retry decision from the policy, not from a clock read", () => {
-    expect(retryDecision(policy, 0, nowMs)).toEqual({
+    expect(retryDecision(policy, 0, nowMs, { jitter: false })).toEqual({
       attempts: 1,
       exhausted: false,
       nextAttemptAtMs: nowMs + 100,
     });
-    expect(retryDecision(policy, 2, nowMs)).toMatchObject({ attempts: 3, exhausted: true });
+    expect(retryDecision(policy, 2, nowMs, { jitter: false })).toMatchObject({
+      attempts: 3,
+      exhausted: true,
+    });
+    // The default samples under the ceiling: never before now, never past it.
+    const sampled = retryDecision(policy, 0, nowMs).nextAttemptAtMs - nowMs;
+    expect(sampled).toBeGreaterThanOrEqual(0);
+    expect(sampled).toBeLessThanOrEqual(100);
   });
 });

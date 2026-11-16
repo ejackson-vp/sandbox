@@ -7,22 +7,23 @@
  *
  * Two rules are encoded here rather than left to a caller:
  *
- *  - **Backoff is exponential from the base delay, with a ceiling.** The
- *    exponent is the number of *definitive* refusals already recorded, so the
- *    first retry waits the base delay, the second waits twice that, and so on.
+ *  - **Backoff is exponential from the base delay, with a ceiling and full
+ *    jitter.** The exponent is the number of *definitive* refusals already
+ *    recorded, so the first retry waits at most the base delay, the second at
+ *    most twice that, and so on. The arithmetic and the jitter live in
+ *    `backoff.ts` (exported from `@x402s/shared/runtime`), because the API, the
+ *    controller, the relay and the client all retry and only this module used to
+ *    own the formula.
  *  - **The lease must outlive the call timeout.** A lease shorter than the
  *    provider's timeout lets a second pass resend while the first is still
  *    waiting. That is safe only because the key is stable, and it is still
  *    noise, so the relationship is checked instead of assumed.
  */
+import { backoffMs, type BackoffOptions, type BackoffPolicy } from "../backoff.js";
 
-export interface RetryPolicy {
+export interface RetryPolicy extends BackoffPolicy {
   /** Definitive refusals before the work is left for an operator. */
   readonly maxAttempts: number;
-  /** Delay before the first retry. */
-  readonly baseDelayMs: number;
-  /** Ceiling on the delay, so a persistent failure does not retry for a day. */
-  readonly maxDelayMs: number;
   /** How long one external call may take before it is treated as unknown. */
   readonly callTimeoutMs: number;
   /** How long one pass owns the claim. Must exceed `callTimeoutMs`. */
@@ -66,20 +67,20 @@ export function policyProblems(policy: RetryPolicy): string[] {
 }
 
 /**
- * Delay before the next attempt, given the definitive refusals recorded so far.
- * Zero refusals means the first retry, which waits the base delay.
+ * Absolute time the next attempt becomes due.
+ *
+ * The delay comes from `backoff.ts` (full jitter by default), so a fleet of
+ * workers released by the same provider outage does not come back in one wave.
+ * Pass `{ jitter: false }` when the exact ceiling is what the caller needs: a
+ * test asserting the schedule, or a loop whose determinism is a property.
  */
-export function backoffMs(policy: RetryPolicy, attemptsSoFar: number): number {
-  const exponent = Math.max(0, Math.floor(attemptsSoFar));
-  // `2 ** exponent` overflows to Infinity long before the ceiling matters; the
-  // clamp keeps the result a safe integer for any attempt count.
-  const delay = policy.baseDelayMs * 2 ** exponent;
-  return Number.isFinite(delay) ? Math.min(policy.maxDelayMs, delay) : policy.maxDelayMs;
-}
-
-/** Absolute time the next attempt becomes due. */
-export function nextAttemptAtMs(policy: RetryPolicy, attemptsSoFar: number, nowMs: number): number {
-  return nowMs + backoffMs(policy, attemptsSoFar);
+export function nextAttemptAtMs(
+  policy: RetryPolicy,
+  attemptsSoFar: number,
+  nowMs: number,
+  options: BackoffOptions = {},
+): number {
+  return nowMs + backoffMs(policy, attemptsSoFar, options);
 }
 
 /** True once the recorded refusals reach the limit. */

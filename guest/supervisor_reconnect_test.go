@@ -121,3 +121,25 @@ func TestReconnectHonoursCancellation(t *testing.T) {
 		t.Fatal("reconnect did not observe cancellation")
 	}
 }
+
+// The reconnect wait is full jitter over the doubling: never negative, never
+// past the ceiling, and not one fixed number. A relay restart drops every guest
+// on the shard at once, so a fixed wait is a herd arriving together.
+func TestReconnectWaitIsJitteredAndBounded(t *testing.T) {
+	for _, ceiling := range []time.Duration{250 * time.Millisecond, time.Second, reconnectBackoffCeiling} {
+		seen := map[time.Duration]bool{}
+		for i := 0; i < 200; i++ {
+			wait := reconnectWait(ceiling)
+			if wait < 0 {
+				t.Fatalf("reconnect wait %s is negative", wait)
+			}
+			if wait > ceiling {
+				t.Fatalf("reconnect wait %s exceeds the %s ceiling", wait, ceiling)
+			}
+			seen[wait] = true
+		}
+		if len(seen) < 2 {
+			t.Fatalf("reconnect wait is not jittered: 200 samples all %v", seen)
+		}
+	}
+}

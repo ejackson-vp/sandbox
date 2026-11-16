@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -200,9 +201,25 @@ func (s *supervisor) serveLink(ctx context.Context) error {
 	}
 }
 
+// reconnectBackoffCeiling is the largest wait between dial attempts. A relay
+// that comes back is picked up within it.
+const reconnectBackoffCeiling = 4 * time.Second
+
+// reconnectWait samples the wait before the next dial: full jitter over the
+// current ceiling, deliberately reaching zero so no two guests on the shard
+// share a schedule.
+func reconnectWait(backoff time.Duration) time.Duration {
+	return time.Duration(rand.Int63n(int64(backoff) + 1))
+}
+
 // reconnect re-dials until the lease ends. Backoff is bounded so a relay that
 // comes back is picked up in seconds, and a 401 (a guest token the relay will
 // never accept) ends the session instead of retrying.
+//
+// The wait is full jitter over that doubling: a relay restart drops every guest
+// on the shard at the same instant, so identical 250/500/1000/2000ms ladders put
+// the whole shard back in one herd against the replacement. Same ceiling, same
+// identity, same fence: only the wait is sampled.
 func (s *supervisor) reconnect(ctx context.Context) (*relay.Client, error) {
 	backoff := 250 * time.Millisecond
 	for {
@@ -223,7 +240,7 @@ func (s *supervisor) reconnect(ctx context.Context) (*relay.Client, error) {
 			})
 			return nil, err
 		}
-		wait := backoff
+		wait := reconnectWait(backoff)
 		if remaining := time.Until(s.lease); remaining < wait {
 			wait = remaining
 		}
@@ -235,7 +252,7 @@ func (s *supervisor) reconnect(ctx context.Context) (*relay.Client, error) {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		if backoff < 4*time.Second {
+		if backoff < reconnectBackoffCeiling {
 			backoff *= 2
 		}
 	}

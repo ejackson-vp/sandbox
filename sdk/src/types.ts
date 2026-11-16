@@ -15,6 +15,11 @@ export class SandboxError extends Error {
     message: string,
     readonly status?: number,
     readonly requestId?: string,
+    /**
+     * How long the server asked the client to wait, from `Retry-After`. Only a
+     * rate limit sets it; a caller that retries honours it as a floor.
+     */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "SandboxError";

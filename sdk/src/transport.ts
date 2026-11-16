@@ -4,7 +4,13 @@
  *
  * Everything above this module (session lifecycle, operations, the data plane)
  * speaks in paths and typed errors; only this file knows what a `Response` is.
+ *
+ * The one header that survives into an error is `Retry-After`. A limiter that
+ * told the caller to wait, and a client that cannot see the header, is a limiter
+ * that does not exist: the retry loop would keep its own cadence. So the wait is
+ * parsed here and carried on the `SandboxError` the loop already handles.
  */
+import { retryAfterMs } from "@x402s/shared/runtime";
 import { SandboxError, SessionExpiredError, type SessionHandle } from "./types.js";
 
 export class ClientTransport {
@@ -34,10 +40,15 @@ export class ClientTransport {
 
   async errorFrom(res: Response, fallback: string): Promise<SandboxError> {
     const text = await res.text().catch(() => "");
-    return this.errorFromText(res.status, text, fallback);
+    return this.errorFromText(
+      res.status,
+      text,
+      fallback,
+      retryAfterMs(res.headers.get("retry-after")),
+    );
   }
 
-  errorFromText(status: number, text: string, fallback: string): SandboxError {
+  errorFromText(status: number, text: string, fallback: string, askedMs?: number): SandboxError {
     let code = fallback;
     let message = text.slice(0, 300);
     let requestId: string | undefined;
@@ -50,6 +61,6 @@ export class ClientTransport {
       /* keep defaults */
     }
     if (status === 410 && /lease|expired/.test(code)) return new SessionExpiredError(message);
-    return new SandboxError(code, message, status, requestId);
+    return new SandboxError(code, message, status, requestId, askedMs);
   }
 }

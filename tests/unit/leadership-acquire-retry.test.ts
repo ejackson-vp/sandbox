@@ -41,26 +41,33 @@ describe("acquire policy", () => {
     );
   }
 
-  it("stands down inside the shipped budget with no retry options", async () => {
+  it("stands down inside the shipped budget with the delay pinned to its ceiling", async () => {
     const leadership = new SoloLeadership("controller-0");
     const failures: string[] = [];
     let attempts = 0;
     let leaderWhenExhausted = true;
     const startedAt = Date.now();
 
-    bindLeadership(leadership, {
-      acquire: async () => {
-        attempts += 1;
-        throw lockRefusal();
+    bindLeadership(
+      leadership,
+      {
+        acquire: async () => {
+          attempts += 1;
+          throw lockRefusal();
+        },
+        start: () => undefined,
+        stop: () => undefined,
+        release: () => undefined,
+        exhausted: (failure) => {
+          leaderWhenExhausted = leadership.isLeader();
+          failures.push(failure);
+        },
       },
-      start: () => undefined,
-      stop: () => undefined,
-      release: () => undefined,
-      exhausted: (failure) => {
-        leaderWhenExhausted = leadership.isLeader();
-        failures.push(failure);
-      },
-    });
+      // Production samples the delay. The random source is pinned to the top of
+      // the range so this asserts the budget (the ceilings) rather than one
+      // draw from it; the sampling itself is the next test.
+      { random: () => 1 },
+    );
 
     await leadership.start();
     await waitFor(() => failures.length > 0, 7_000);
@@ -74,6 +81,39 @@ describe("acquire policy", () => {
     expect(elapsed).toBeGreaterThan(4_000);
     expect(elapsed).toBeLessThan(7_000);
   }, 10_000);
+
+  it("samples the acquire delay, so two replicas released at once do not retry in phase", async () => {
+    const leadership = new SoloLeadership("controller-0");
+    let attempts = 0;
+    let exhausted = 0;
+
+    bindLeadership(
+      leadership,
+      {
+        acquire: async () => {
+          attempts += 1;
+          throw lockRefusal();
+        },
+        start: () => undefined,
+        stop: () => undefined,
+        release: () => undefined,
+        exhausted: () => {
+          exhausted += 1;
+        },
+      },
+      // The bottom of the range: every wait is zero, so the same six-attempt
+      // budget finishes immediately. If the loop ignored the source, this would
+      // take about five seconds and the deadline below would fail it.
+      { random: () => 0 },
+    );
+
+    const startedAt = Date.now();
+    await leadership.start();
+    await waitFor(() => exhausted > 0, 2_000);
+
+    expect(attempts).toBe(6);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  }, 5_000);
 
   it("stops retrying when the role is lost during a backoff", async () => {
     const leadership = new SoloLeadership("controller-0");
@@ -94,7 +134,9 @@ describe("acquire policy", () => {
           exhausted += 1;
         },
       },
-      { attempts: 4, initialDelayMs: 100, maxDelayMs: 100, callTimeoutMs: 500 },
+      // A 100ms first backoff, pinned to its ceiling so the 30ms stop below
+      // lands inside it rather than after an early sample.
+      { attempts: 4, initialDelayMs: 100, maxDelayMs: 100, callTimeoutMs: 500, random: () => 1 },
     );
 
     await leadership.start();

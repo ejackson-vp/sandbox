@@ -9,7 +9,7 @@
  * This buys failover, not throughput: a follower's store connection refuses every
  * write (see `PostgresStore.setWritesBlocked`).
  */
-import { log } from "@x402s/shared/runtime";
+import { backoffMs, log } from "@x402s/shared/runtime";
 import { CALL_TIMEOUT_MS, withDeadline } from "./with-deadline.js";
 
 type LeadershipListener = (isLeader: boolean) => void;
@@ -173,6 +173,12 @@ export interface AcquireRetryOptions {
   unavailableMaxDelayMs?: number;
   /** Ceiling for one acquire attempt. Defaults to the shared 1.5s call ceiling. */
   callTimeoutMs?: number;
+  /**
+   * Uniform source for the retry jitter, over both policies. Defaults to
+   * `Math.random`: a Postgres restart releases every replica's acquire budget
+   * at once, and an unjittered loop sends them back in phase.
+   */
+  random?: () => number;
 }
 
 /**
@@ -210,6 +216,8 @@ interface ResolvedAcquireOptions {
   lock: RetryPolicy;
   unavailable: RetryPolicy;
   callTimeoutMs: number;
+  /** Uniform source for the retry jitter; `undefined` means `Math.random`. */
+  random?: () => number;
 }
 
 type AcquireOutcome = { ok: true } | { ok: false; error: unknown };
@@ -377,6 +385,11 @@ function repairIfRoleGone(
  * nothing. After either budget the Lease is released and the exhausted hook
  * runs (by default, exit for a restart).
  *
+ * The ceiling of each policy is the budget; the delay under it is sampled
+ * (`backoffMs`), so two replicas released by the same Postgres restart do not
+ * come back in phase. The attempt counts, the classification and the ceilings
+ * are unchanged: only the wait is now a sample.
+ *
  * Never throws: the caller is an event listener, and a rejected task there would
  * only surface as an unhandled rejection.
  */
@@ -412,9 +425,10 @@ async function acquireWithRetry(
         await giveUp(leadership, hooks, failure, attempts, outcome.error);
         return;
       }
-      const delayMs = Math.min(
-        policy.initialDelayMs * 2 ** (attempts - 1),
-        policy.maxDelayMs,
+      const delayMs = backoffMs(
+        { baseDelayMs: policy.initialDelayMs, maxDelayMs: policy.maxDelayMs },
+        attempts - 1,
+        options.random ? { random: options.random } : {},
       );
       log.warn("leadership_acquire_retry", {
         failure,
@@ -455,6 +469,7 @@ export function bindLeadership(
       maxDelayMs: Math.max(0, retry.unavailableMaxDelayMs ?? UNAVAILABLE_MAX_DELAY_MS),
     },
     callTimeoutMs: Math.max(1, retry.callTimeoutMs ?? CALL_TIMEOUT_MS),
+    ...(retry.random ? { random: retry.random } : {}),
   };
   return leadership.onChange((isLeader) => {
     if (isLeader) {

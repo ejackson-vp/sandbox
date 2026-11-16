@@ -10,7 +10,8 @@
  */
 import { canonicalJson, openSealedJson, sealJsonTo, sha256Hex } from "@x402s/shared/crypto";
 import type { GuestResult } from "@x402s/shared/protocol";
-import { sleep } from "./timing.js";
+import { retryAfterMs } from "@x402s/shared/runtime";
+import { pollDelayMs, pollUntil, sleep } from "./timing.js";
 import { SandboxError, type SessionHandle } from "./types.js";
 
 /** The slice of the transport an operation needs. `ClientRuntime` provides it. */
@@ -23,7 +24,12 @@ export interface OperationTransport {
     signal?: AbortSignal,
   ): Promise<Response>;
   errorFrom(res: Response, fallback: string): Promise<SandboxError>;
-  errorFromText(status: number, text: string, fallback: string): SandboxError;
+  errorFromText(
+    status: number,
+    text: string,
+    fallback: string,
+    retryAfterMs?: number,
+  ): SandboxError;
   /** Resolve the guest key before the first operation on a fresh handle. */
   ensureReady(handle: SessionHandle): Promise<void>;
 }
@@ -122,7 +128,7 @@ export class OperationChannel {
         const text = await res.text().catch(() => "");
         const body = errorBody(text);
         if (body.error === "busy" && Date.now() < queueDeadline) {
-          await sleep(250);
+          await sleep(pollDelayMs(250));
           continue;
         }
         if (body.error === "busy") {
@@ -132,7 +138,12 @@ export class OperationChannel {
           const existing = await this.getOperation(handle, requestId, waitMs);
           if (existing) return existing as T;
         }
-        throw this.transport.errorFromText(409, text, "exec_failed");
+        throw this.transport.errorFromText(
+          409,
+          text,
+          "exec_failed",
+          retryAfterMs(res.headers.get("retry-after")),
+        );
       }
       if (res.status === 202) {
         const pending = await this.pollOperation<T>(handle, requestId, waitMs);
@@ -163,10 +174,15 @@ export class OperationChannel {
       if (res.status === 409) {
         const text = await res.text().catch(() => "");
         if (errorBody(text).error === "busy" && Date.now() < queueDeadline) {
-          await sleep(250);
+          await sleep(pollDelayMs(250));
           continue;
         }
-        throw this.transport.errorFromText(409, text, "file_operation_failed");
+        throw this.transport.errorFromText(
+          409,
+          text,
+          "file_operation_failed",
+          retryAfterMs(res.headers.get("retry-after")),
+        );
       }
       if (res.status === 202) {
         const pending = await this.pollOperation<T>(handle, requestId, 60_000);
@@ -186,12 +202,19 @@ export class OperationChannel {
     waitMs: number,
   ): Promise<T | null> {
     const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline) {
-      const result = await this.getOperation(handle, requestId, Math.min(20_000, Math.max(1000, deadline - Date.now())));
-      if (result) return result as T;
-      await sleep(250);
-    }
-    return null;
+    const result = await pollUntil<T>(
+      deadline,
+      async () => {
+        const next = await this.getOperation(
+          handle,
+          requestId,
+          Math.min(20_000, Math.max(1000, deadline - Date.now())),
+        );
+        return (next as T | null) ?? undefined;
+      },
+      { fastMs: 250, slowMs: 250, fastPolls: 0 },
+    );
+    return result ?? null;
   }
 
   /**

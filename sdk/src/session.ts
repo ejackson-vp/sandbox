@@ -9,7 +9,7 @@ import {
   type SessionStatus,
 } from "@x402s/shared/protocol";
 import type { ClientRuntime } from "./runtime.js";
-import { sleep } from "./timing.js";
+import { pollUntil } from "./timing.js";
 import {
   SandboxError,
   SessionExpiredError,
@@ -151,21 +151,23 @@ export class SessionService {
     this.rt.forgetLocal(handle.sessionId);
     const deadline = Date.now() + waitMs;
     let last: SessionStatus | null = null;
-    let polls = 0;
-    while (Date.now() < deadline) {
-      try {
-        last = await this.rt.status(handle);
-        if (isTerminal(last.state)) return last;
-      } catch (err) {
-        if (err instanceof SessionExpiredError) return null;
-        if (err instanceof SandboxError && err.code === "rate_limited") {
-          await sleep(100);
-          continue;
+    const done = await pollUntil<SessionStatus | null>(
+      deadline,
+      async () => {
+        try {
+          const next = await this.rt.status(handle);
+          last = next;
+          return isTerminal(next.state) ? next : undefined;
+        } catch (err) {
+          // The capability went with the lease: there is no status to report.
+          if (err instanceof SessionExpiredError) return null;
+          // Anything else is the answer, including a `rate_limited` refusal:
+          // `pollUntil` reads that one as a wait and honours its `Retry-After`.
+          throw err;
         }
-        throw err;
-      }
-      await sleep(polls++ < 10 ? 100 : 250);
-    }
-    return last;
+      },
+      { fastMs: 100, slowMs: 250, fastPolls: 10 },
+    );
+    return done === undefined ? last : done;
   }
 }

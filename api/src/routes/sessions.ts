@@ -86,6 +86,11 @@ export function createSessionsRouter(deps: SessionsDeps): express.Router {
   const authorize = async (req: Request, res: Response): Promise<SessionView | null> => {
     if (!readLimiter.take(req.ip ?? "unknown")) {
       recordRateLimited("read");
+      // The status poll is the loop a client is most likely to be inside when a
+      // limiter fills up. Without this header the client retries on its own
+      // cadence, faster than the bucket refills, and stays refused: a wait the
+      // server asked for but never named.
+      res.setHeader("Retry-After", String(readLimiter.retryAfterSeconds(req.ip ?? "unknown")));
       res.status(429).json({ error: "rate_limited" });
       return null;
     }

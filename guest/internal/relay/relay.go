@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net/http"
 	neturl "net/url"
 	"sync"
@@ -151,6 +152,9 @@ func dialValidated(ctx context.Context, rawURL string) (*websocket.Conn, *http.R
 // Dial connects with bounded retries (the relay may still be starting). It is
 // used for the first connection only; a reconnect after link loss has its own
 // backoff loop in the supervisor because it must stop at the lease deadline.
+//
+// The wait is full jitter over the doubling, because a node restart or a warm
+// pool refill boots a batch of guests together and they all dial the same relay.
 func Dial(ctx context.Context, url string, maxWait time.Duration) (*Client, error) {
 	deadline := time.Now().Add(maxWait)
 	var lastErr error
@@ -168,7 +172,7 @@ func Dial(ctx context.Context, url string, maxWait time.Duration) (*Client, erro
 		}
 		lastErr = err
 		select {
-		case <-time.After(backoff):
+		case <-time.After(time.Duration(rand.Int63n(int64(backoff) + 1))):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
