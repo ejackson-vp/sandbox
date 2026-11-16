@@ -32,6 +32,7 @@ function listen(server: http.Server): Promise<number> {
 interface Reply {
   status: number;
   body: string;
+  retryAfter?: string;
 }
 
 /** One request on its own socket: `agent: false` makes concurrency explicit. */
@@ -41,7 +42,13 @@ function request(port: number, path: string, headers: Record<string, string> = {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (chunk) => (body += chunk));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      res.on("end", () =>
+        resolve({
+          status: res.statusCode ?? 0,
+          body,
+          retryAfter: res.headers["retry-after"] as string | undefined,
+        }),
+      );
       res.on("error", reject);
     });
     req.on("error", reject);
@@ -60,7 +67,13 @@ function start(port: number, path: string, headers: Record<string, string> = {})
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (chunk) => (body += chunk));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      res.on("end", () =>
+        resolve({
+          status: res.statusCode ?? 0,
+          body,
+          retryAfter: res.headers["retry-after"] as string | undefined,
+        }),
+      );
       res.on("error", reject);
     });
     // Destroying the client socket is a reset, not a failure of the test.
@@ -161,6 +174,9 @@ describe("concurrent request cap", () => {
     expect(replies.filter((reply) => reply.status === 429)).toHaveLength(8);
     for (const reply of replies.filter((candidate) => candidate.status === 429)) {
       expect(JSON.parse(reply.body)).toEqual({ error: "connection_limit" });
+      // Told when to come back: a bare 429 invites the immediate retry that
+      // caused the refusal.
+      expect(reply.retryAfter).toBe("1");
     }
     await waitFor(() => limiter.state().inFlight === 0);
   });

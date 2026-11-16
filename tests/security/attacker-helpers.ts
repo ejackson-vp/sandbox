@@ -114,13 +114,22 @@ export function slowloris(
     let settled = false;
     let healthStatus: number | null = null;
 
+    // Started at connect, awaited before resolving: an edge that refuses the
+    // hostile socket in under two seconds is good behaviour, and the old code
+    // then reported `statusDuring: null` because the health probe had not
+    // returned yet. The property is "the API answers while a socket is held",
+    // not "the socket is still held when the probe returns".
+    let healthPromise: Promise<number> | null = null;
+
     const finish = (closed: boolean): void => {
       if (settled) return;
       settled = true;
       clearInterval(trickle);
       clearTimeout(deadline);
       socket.destroy();
-      resolve({ closed, closedAfterMs: Date.now() - started, statusDuring: healthStatus });
+      void (healthPromise ?? Promise.resolve(healthStatus ?? 0)).then((status) => {
+        resolve({ closed, closedAfterMs: Date.now() - started, statusDuring: status });
+      });
     };
 
     const trickle = setInterval(() => {
@@ -136,16 +145,17 @@ export function slowloris(
           "Content-Type: application/json\r\n" +
           "Content-Length: 100000\r\n",
       );
-      // Liveness must not depend on a hostile socket. Checked while it is held.
-      setTimeout(() => {
-        fetch(`${API}/healthz`)
-          .then((response) => {
-            healthStatus = response.status;
-          })
-          .catch(() => {
-            healthStatus = 0;
-          });
-      }, 2_000);
+      // Liveness must not depend on a hostile socket. One probe, awaited by
+      // finish() whether the socket survives or not.
+      healthPromise = fetch(`${API}/healthz`, { signal: AbortSignal.timeout(10_000) })
+        .then((response) => {
+          healthStatus = response.status;
+          return response.status;
+        })
+        .catch(() => {
+          healthStatus = 0;
+          return 0;
+        });
     });
     socket.on("close", () => finish(true));
     socket.on("error", () => finish(true));
