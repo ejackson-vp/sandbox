@@ -104,7 +104,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   const paymentMode = String(values["payment-mode"]);
-  if (paymentMode !== "mock" && paymentMode !== "testnet") {
+  if (paymentMode !== "mock" && paymentMode !== "testnet" && paymentMode !== "mainnet") {
     process.stderr.write(`invalid --payment-mode: ${paymentMode}\n`);
     return 2;
   }

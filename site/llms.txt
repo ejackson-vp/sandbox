@@ -18,7 +18,7 @@ Isolation between sessions is a Kata microVM. The boundary properties the suite 
 - Sessions: ephemeral. No suspend, no resume, no persistence
 - Live pricing: `GET https://api.throwbox.dev/v1/pricing`
 
-This repository's CLI and SDK build `mock` and `testnet` payments only, so a mainnet payer client is still yours to write: do not point the `testnet` payer at the hosted service, and do not hardcode a price. If your wallet is on the invitation allowlist, a create is free up to a tier and concurrency ceiling the operator sets, and no payment header is needed.
+This repository's CLI and SDK build `mock`, `testnet` and `mainnet` payments. Mainnet is refused unless `CONFIRM_REAL_MONEY=yes` is set, because it spends a real balance: do not set it in anything that runs unattended, and do not hardcode a price. If your wallet is on the invitation allowlist, a create is free up to a tier and concurrency ceiling the operator sets, and no payment header is needed.
 
 ## Start here
 

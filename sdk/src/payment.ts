@@ -22,14 +22,14 @@ import { clientCommitmentMessage, isChallengeNonce } from "@x402s/shared/crypto"
 import {
   MOCK_NETWORK,
   MockExactClientScheme,
-  TESTNET_NETWORK,
+  MAINNET_NETWORK, TESTNET_NETWORK,
   paymentKey,
 } from "@x402s/shared/payment";
 import { formatUsd } from "@x402s/shared/money";
 import type { CreateSessionRequest } from "@x402s/shared/protocol";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
-export type PaymentMode = "mock" | "testnet";
+export type PaymentMode = "mock" | "testnet" | "mainnet";
 
 export interface PaidResponse {
   response: Response;
@@ -66,13 +66,31 @@ function buildClient(mode: PaymentMode): {
     };
   }
 
+  // Mainnet spends real money. It is the same client and the same exchange, so
+  // the only difference is the network, and the only protection that matters is
+  // that nobody reaches it by typing the wrong flag. An unset guard is a
+  // refusal: this cannot be enabled by forgetting something.
+  if (mode === "mainnet" && process.env.CONFIRM_REAL_MONEY !== "yes") {
+    throw new Error(
+      "mainnet payment mode spends real USDC; set CONFIRM_REAL_MONEY=yes to proceed",
+    );
+  }
   const pk = process.env.EVM_PRIVATE_KEY;
   if (!pk || !/^0x[0-9a-fA-F]{64}$/.test(pk)) {
-    throw new Error("testnet payment mode requires EVM_PRIVATE_KEY (a funded Base Sepolia wallet)");
+    throw new Error(
+      `${mode} payment mode requires EVM_PRIVATE_KEY (a funded ${
+        mode === "mainnet" ? "Base mainnet" : "Base Sepolia"
+      } wallet)`,
+    );
   }
   const account = privateKeyToAccount(pk as `0x${string}`);
   const client = x402Client.fromConfig({
-    schemes: [{ network: TESTNET_NETWORK, client: new ExactEvmScheme(account) }],
+    schemes: [
+      {
+        network: mode === "mainnet" ? MAINNET_NETWORK : TESTNET_NETWORK,
+        client: new ExactEvmScheme(account),
+      },
+    ],
   });
   return {
     client,
