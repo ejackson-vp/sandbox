@@ -120,6 +120,28 @@ function realCapacity(store: PostgresStore): CapacityService {
   return new CapacityService({ cfg, store, provisioner: fakeProvisioner() });
 }
 
+type StoreOverride = {
+  completeEntitlement?: () => Promise<never>;
+  mergeTimings?: () => Promise<never>;
+};
+
+/**
+ * The real store with one method replaced, for the failures the real adapter
+ * cannot be made to produce on demand. Everything else stays the production
+ * implementation, so the assertion is about the route's behaviour, not a stub's.
+ */
+function storeWith(store: PostgresStore, override: StoreOverride): ControlApiDeps["store"] {
+  const proxy = new Proxy(store, {
+    get(target, prop, receiver) {
+      const replacement = override[prop as keyof StoreOverride];
+      if (replacement) return replacement;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return proxy as unknown as ControlApiDeps["store"];
+}
+
 /**
  * The payment routes on their own app, with a JSON 500 handler.
  *
@@ -512,5 +534,36 @@ describe("a duplicate completion does not leak its reservation", () => {
     expect(reaped.allocations).toBe(1);
     expect((await store.reservations.getBySession(secondSession))?.state).toBe("RELEASED");
     expect((await store.reservations.getBySession(firstSession))?.state).toBe("ALLOCATED");
+  });
+});
+
+describe("a failure after the settlement commits is not a failed create", () => {
+  it("answers 201 and keeps the reservation when the timing write throws", async () => {
+    const store = await freshStore();
+    const paymentKey = "9".repeat(64);
+    const sessionId = `sbx_${"9".repeat(24)}`;
+    const token = await claim(store, paymentKey);
+    // `mergeTimings` runs after the transaction, so it can only fail once the
+    // session is durable. The route must not read that as a rollback.
+    const broken = storeWith(store, {
+      mergeTimings: async () => {
+        throw new Error("timings write failed");
+      },
+    });
+    const capacity = capacityStub();
+    const base = await listen({ store: broken, capacity: capacity.service });
+
+    const res = await post(
+      base,
+      `/internal/payment-intents/${paymentKey}/complete`,
+      completionBody(paymentKey, token, { sessionId, timings: { entitlementMs: 12 } }),
+    );
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ sessionId, state: "PAID", created: true });
+    // The session exists and will be provisioned: releasing its capacity here is
+    // how a live session ends up running with no reservation.
+    expect(capacity.releaseSession).not.toHaveBeenCalled();
+    expect(await store.getSession(sessionId)).toMatchObject({ state: "PAID", paymentKey });
   });
 });

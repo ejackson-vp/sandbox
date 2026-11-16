@@ -179,10 +179,27 @@ async function settlementFailure(
     }
     return { kind: "stale_claim" };
   }
-  // Best effort, exactly as before: the reservation may not exist, and a
-  // failure to release it must not replace the error being reported.
+  // Nothing committed: the settlement transaction rolled back, so this request
+  // still owns the reservation it took before settling. Best effort, exactly as
+  // before: the reservation may not exist, and a failure to release it must not
+  // replace the error being reported.
   await deps.capacity.releaseSession(body.sessionId).catch(() => false);
   throw err;
+}
+
+/**
+ * The settlement's own bookkeeping. It runs after the commit, so a loss here is
+ * a diagnostics gap and never a failed create: the session exists and will be
+ * provisioned whether or not the timing patch was recorded.
+ */
+async function mergeTimings(deps: ControlApiDeps, body: CompleteBody): Promise<void> {
+  if (!body.timings) return;
+  await deps.store.mergeTimings(body.sessionId, body.timings).catch((err: unknown) => {
+    log.warn("session_timings_not_recorded", {
+      sessionId: body.sessionId,
+      error: (err as Error).message,
+    });
+  });
 }
 
 async function settle(
@@ -193,33 +210,35 @@ async function settle(
   expectedHash: string,
 ): Promise<Settlement> {
   const now = Date.now();
+  let completed: { sessionId: string; created: boolean };
   try {
-    const completed = await deps.store.completeEntitlement(
+    completed = await deps.store.completeEntitlement(
       paymentKey,
       body.claimToken,
       paymentRecord(paymentKey, body),
       paidSession(deps, paymentKey, body, spec, now),
     );
-    if (completed.created) {
-      if (body.timings) {
-        await deps.store.mergeTimings(body.sessionId, body.timings);
-      }
-      metrics.counter("sandbox_sessions_created_total", "Entitlements created").inc({
-        tier: spec.tier,
-      });
-      return { kind: "created", sessionId: completed.sessionId };
-    }
-    // Another worker settled this intent first. Our provisional admission may
-    // have bound the payment's capacity hold to a session id that was never
-    // durable, so point it back at the winner. Best effort: the winning session
-    // already owns the entitlement.
-    await deps.capacity
-      .attach(paymentKey, completed.sessionId, expectedHash, spec)
-      .catch(() => undefined);
-    return { kind: "idempotent", sessionId: completed.sessionId };
   } catch (err) {
+    // Only a failure of the transaction lands here. Everything below runs after
+    // the commit, and a create that exists must not be released or answered 5xx
+    // because a later write failed.
     return settlementFailure(deps, paymentKey, body, err);
   }
+  if (completed.created) {
+    await mergeTimings(deps, body);
+    metrics.counter("sandbox_sessions_created_total", "Entitlements created").inc({
+      tier: spec.tier,
+    });
+    return { kind: "created", sessionId: completed.sessionId };
+  }
+  // Another worker settled this intent first. Our provisional admission may
+  // have bound the payment's capacity hold to a session id that was never
+  // durable, so point it back at the winner. Best effort: the winning session
+  // already owns the entitlement.
+  await deps.capacity
+    .attach(paymentKey, completed.sessionId, expectedHash, spec)
+    .catch(() => undefined);
+  return { kind: "idempotent", sessionId: completed.sessionId };
 }
 
 /** Write one settlement outcome as its wire answer. */
