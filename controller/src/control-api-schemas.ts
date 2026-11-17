@@ -164,6 +164,11 @@ export const completeSchema = z.object({
     /**
      * `x402` (default) or `allowlist`. An allowlist row is written with
      * `amount = "0"` and `source = "allowlist"` (ADR 0013).
+     *
+     * A free session omits `settlementNonce`; it must not send `null`. An
+     * explicit null fails this schema and rejected the whole body, which is how
+     * every allowlisted create answered 400 while looking like an
+     * infrastructure fault.
      */
     source: z.enum(["x402", "allowlist"]).optional(),
     /** Operator label of the allowlist entry; kept in the ledger's reason. */

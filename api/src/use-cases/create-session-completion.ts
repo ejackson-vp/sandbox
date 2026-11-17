@@ -150,7 +150,7 @@ export async function completeEntitlement(
         payer: settled.payer,
         transaction: settled.transaction,
         mode: deps.config.paymentMode,
-        settlementNonce: ctx.allowance ? null : settlementNonce(ctx.payload),
+        ...(ctx.allowance ? {} : { settlementNonce: settlementNonce(ctx.payload) }),
         source,
         ...(ctx.allowance
           ? { label: ctx.allowance.label, budgetKey: ctx.allowance.budgetKey }

@@ -63,9 +63,11 @@ describe("allowlisted payer", () => {
       source: "allowlist",
       label: LABEL,
       payer: result.authorizer,
-      settlementNonce: null,
       budgetKey: allowlistBudgetKey(result.authorizer),
     });
+    // Omitted, never null: the controller's schema rejects an explicit null and
+    // that rejected the whole body, so every allowlisted create answered 400.
+    expect(payment).not.toHaveProperty("settlementNonce");
     // The key is derived from the proven address and the burned challenge, and
     // is not the key of the payment header the client sent.
     expect(payment.paymentKey).toBe(allowlistPaymentKey(result.authorizer, CHALLENGE_NONCE));
