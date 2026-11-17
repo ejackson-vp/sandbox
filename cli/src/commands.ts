@@ -57,7 +57,8 @@ Usage:
 
 Common options:
   --api-url <url>               default http://localhost:8080
-  --payment-mode mock|testnet   default mock
+  --payment-mode mock|testnet|mainnet   default mock; mainnet spends real
+                                USDC and also needs CONFIRM_REAL_MONEY=yes
   --json                        machine-readable output
   --quiet                       suppress progress notes
   -h, --help
@@ -178,7 +179,7 @@ export type CommandContext = {
   positionals: string[];
   json: boolean;
   quiet: boolean;
-  paymentMode: "mock" | "testnet";
+  paymentMode: "mock" | "testnet" | "mainnet";
   client: SandboxClient;
   attach: (id: string) => SessionHandle;
   /** True when argv contained `--`, which marks the one-shot run form. */
