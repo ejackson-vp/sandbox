@@ -89,6 +89,20 @@ spec:
             - configMapRef: {name: control-config}
           env:
             - {name: ROLE, value: "proxy"}
+            # Settlement credentials reach every workload that validates the
+            # payment config, not just the API. Mainnet refuses to start
+            # without PAYMENT_RPC_URL, and a relay that cannot see it crash-loops
+            # and takes the shard with it. Optional so mock and testnet run
+            # unchanged.
+            - name: FACILITATOR_API_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: facilitator-api-key-id, optional: true}
+            - name: FACILITATOR_API_KEY_SECRET
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: facilitator-api-key-secret, optional: true}
+            - name: PAYMENT_RPC_URL
+              valueFrom:
+                secretKeyRef: {name: x402-secrets, key: payment-rpc-url, optional: true}
             - {name: X402_PROXY_PORT, value: "3128"}
             - {name: SERVICE_NAME, value: "egress-proxy"}
             # This pod's ordinal, taken from its stable StatefulSet name
