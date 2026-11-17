@@ -150,7 +150,11 @@ export async function completeEntitlement(
         payer: settled.payer,
         transaction: settled.transaction,
         mode: deps.config.paymentMode,
-        settlementNonce: ctx.allowance ? null : settlementNonce(ctx.payload),
+        // Omitted, not null, for a free session: the controller's schema
+        // accepts an absent nonce or a 0x-prefixed hash, and an explicit null
+        // fails the whole body as `invalid_request`. That made every allowlisted
+        // create answer 400 after the entitlement had already been granted.
+        ...(ctx.allowance ? {} : { settlementNonce: settlementNonce(ctx.payload) }),
         source,
         ...(ctx.allowance
           ? { label: ctx.allowance.label, budgetKey: ctx.allowance.budgetKey }
