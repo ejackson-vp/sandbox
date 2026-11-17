@@ -34,7 +34,24 @@ export function privateKeyFromSecret(secret: string): KeyObject {
   if (trimmed.includes("BEGIN")) {
     return createPrivateKey({ key: trimmed, format: "pem" });
   }
-  return createPrivateKey({ key: Buffer.from(trimmed, "base64"), format: "der", type: "pkcs8" });
+  const raw = Buffer.from(trimmed, "base64");
+  // CDP currently issues Ed25519 keys, and hands them out as base64 rather than
+  // as a PEM. Two lengths are in the wild: a 32-byte seed, and the 64-byte
+  // libsodium form which is the seed followed by the public half. Both are
+  // accepted by taking the seed. Anything else is treated as DER, which is what
+  // an EC key from an older key pair looks like.
+  if (raw.length === 32 || raw.length === 64) {
+    // PKCS#8 wraps a raw Ed25519 seed in a fixed 16-byte header (version,
+    // AlgorithmIdentifier for 1.3.101.112, then an OCTET STRING of the seed).
+    // Building it is deterministic and avoids needing the public half, which a
+    // bare seed does not carry.
+    const der = Buffer.concat([
+      Buffer.from("302e020100300506032b657004220420", "hex"),
+      raw.subarray(0, 32),
+    ]);
+    return createPrivateKey({ key: der, format: "der", type: "pkcs8" });
+  }
+  return createPrivateKey({ key: raw, format: "der", type: "pkcs8" });
 }
 
 export interface CdpJwtInput {
@@ -49,8 +66,12 @@ export interface CdpJwtInput {
 /** Mint one ES256 JWT for one CDP request. */
 export function cdpJwt(input: CdpJwtInput): string {
   const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
+  // The algorithm is the key's, not a constant. CDP moved from EC (ES256) to
+  // Ed25519 (EdDSA) keys, and a token signed with the wrong one is rejected
+  // with the same opaque 401 a bad key gives.
+  const ed25519 = input.privateKey.asymmetricKeyType === "ed25519";
   const header = {
-    alg: "ES256",
+    alg: ed25519 ? "EdDSA" : "ES256",
     typ: "JWT",
     kid: input.keyId,
     nonce: input.nonce ?? randomBytes(16).toString("hex"),
@@ -66,10 +87,13 @@ export function cdpJwt(input: CdpJwtInput): string {
   const signingInput = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(payload))}`;
   // JOSE wants the raw r||s form, not the DER wrapper `sign` produces by
   // default for ECDSA.
-  const signature = sign("sha256", Buffer.from(signingInput), {
-    key: input.privateKey,
-    dsaEncoding: "ieee-p1363",
-  });
+  const signature = ed25519
+    ? // Ed25519 signs the message itself; there is no separate hash to name.
+      sign(null, Buffer.from(signingInput), input.privateKey)
+    : sign("sha256", Buffer.from(signingInput), {
+        key: input.privateKey,
+        dsaEncoding: "ieee-p1363",
+      });
   return `${signingInput}.${base64Url(signature)}`;
 }
 
