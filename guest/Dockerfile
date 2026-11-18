@@ -17,7 +17,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/x402-guest ./ && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/x402-netprobe ./cmd/netprobe
 
-FROM alpine:3.21@sha256:bc21487101ae47172509130ee1092cc273a831968d64b617776d1f69c81e42ab
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 RUN apk add --no-cache python3 py3-pip nodejs npm bash tar gzip curl git ca-certificates coreutils findutils procps \
  && addgroup -g 65532 -S sandbox \
  && adduser -u 65532 -S -G sandbox -h /tmp sandbox
