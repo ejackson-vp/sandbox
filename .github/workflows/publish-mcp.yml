@@ -39,9 +39,9 @@ jobs:
       - run: npm ci
 
       # The published tarball is built from dist, so it has to exist before the
-      # pack that publishes it. Building every workspace keeps the shared
-      # package's types in step with what the server was compiled against.
-      - run: npm run build
+      # pack that publishes it. The root `build` is the server packages only:
+      # the control image has no `mcp/` directory and would fail on it.
+      - run: npm run build:mcp
 
       - name: refuse to publish a version that already exists
         id: check

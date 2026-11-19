@@ -40,7 +40,8 @@ Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json
 ```
 
 Cursor, Cline and anything else that speaks MCP take the same block. From a
-checkout instead of npm:
+checkout instead of npm, build the bundle first (`npm run build:mcp` from the
+repository root), then point at it:
 
 ```json
 {
