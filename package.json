@@ -9,14 +9,15 @@
     "sdk",
     "api",
     "controller",
-    "cli"
+    "cli",
+    "mcp"
   ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
     "build": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && npm run build -w @x402s/api && npm run build -w @x402s/controller && npm run build -w @x402s/cli",
-    "typecheck": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && tsc -p api/tsconfig.json --noEmit && tsc -p controller/tsconfig.json --noEmit && tsc -p cli/tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
+    "typecheck": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && tsc -p api/tsconfig.json --noEmit && tsc -p controller/tsconfig.json --noEmit && tsc -p cli/tsconfig.json --noEmit && tsc -p mcp/tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "test": "npm run test:unit && npm run test:property",
     "test:unit": "vitest run tests/unit --fileParallelism",
     "test:store-contract": "vitest run tests/unit/store-contract-postgres.test.ts",
@@ -34,7 +35,8 @@
     "lint:structure": "node scripts/check-structure.mjs && node scripts/check-singletons.mjs",
     "coupling": "node scripts/coupling.mjs",
     "deploy:pins": "node scripts/check-deploy-pins.mjs",
-    "release:bump-pins": "node scripts/bump-release-pins.mjs"
+    "release:bump-pins": "node scripts/bump-release-pins.mjs",
+    "build:mcp": "npm run build -w @x402s/shared && npm run build -w @x402s/sdk && npm run build -w throwbox-mcp"
   },
   "devDependencies": {
     "@stryker-mutator/core": "^10.1.1",

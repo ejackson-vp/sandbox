@@ -103,7 +103,12 @@ describe("pollUntil", () => {
     );
     expect(value).toBe("ready");
     expect(seenAt).toHaveLength(2);
-    expect(seenAt[1]!).toBeGreaterThanOrEqual(150);
+    // 150 is what was asked for; the tolerance is for the clock, not the
+    // contract. A timer may resolve a fraction early and `Date.now()`
+    // truncates, so the measured gap can be 149 on a loaded runner. The
+    // no-header pace is 20ms, so a loop that ignored Retry-After still cannot
+    // reach this bound.
+    expect(seenAt[1]!).toBeGreaterThanOrEqual(140);
   });
 
   it("keeps polling when a rate limit names no wait", async () => {

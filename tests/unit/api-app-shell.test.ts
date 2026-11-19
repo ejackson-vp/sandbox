@@ -17,9 +17,11 @@ import type { Server } from "node:http";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
+import { decodePaymentRequiredHeader } from "@x402/core/http";
 import { loadConfig } from "../../api/src/config.js";
 import { ControllerError } from "../../api/src/controller-client.js";
 import { errorBackstop } from "../../api/src/routes/errors.js";
+import { createSchema } from "../../api/src/schemas.js";
 import { createApp } from "../../api/src/server.js";
 
 const servers: Server[] = [];
@@ -189,6 +191,77 @@ describe("the 402 challenge", () => {
     const body = (await res.json()) as { error: string; challengeNonce: string };
     expect(body.error).toBe("payment_required");
     expect(body.challengeNonce).toMatch(/^cn_/);
+  });
+
+  /**
+   * Discovery is the whole point of the extension. The Bazaar indexes a
+   * resource when a settled call carries `extensions.bazaar`, and an agent can
+   * only build a call from the example inside it, so both the body and the
+   * encoded header have to carry it on an ordinary 402.
+   */
+  it("advertises Bazaar discovery metadata on the 402", async () => {
+    const base = await app({
+      resourceServer: {
+        createPaymentRequiredResponse: async (
+          _accepts: unknown,
+          _info: unknown,
+          error: string,
+          extensions?: Record<string, unknown>,
+        ) => ({
+          x402Version: 2,
+          error,
+          accepts: [REQUIREMENT],
+          ...(extensions ? { extensions } : {}),
+        }),
+      },
+    });
+    const res = await fetch(`${base}/v1/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(createBody),
+    });
+    expect(res.status).toBe(402);
+
+    const body = (await res.json()) as {
+      extensions?: { bazaar?: { info?: { input?: { body?: Record<string, unknown> } } } };
+    };
+    const example = body.extensions?.bazaar?.info?.input?.body;
+    expect(example).toMatchObject({ tier: "short" });
+    // The example is what the indexer posts back at this route, so it must be a
+    // body the schema accepts.
+    expect(createSchema.safeParse(example).success).toBe(true);
+
+    const decoded = decodePaymentRequiredHeader(res.headers.get("payment-required") as string) as {
+      extensions?: { bazaar?: unknown };
+    };
+    expect(decoded.extensions?.bazaar).toBeTruthy();
+  });
+
+  it("leaves the challenge bare when discovery is switched off", async () => {
+    const base = await app({
+      env: { BAZAAR_DISCOVERY_ENABLED: "false" },
+      resourceServer: {
+        createPaymentRequiredResponse: async (
+          _accepts: unknown,
+          _info: unknown,
+          error: string,
+          extensions?: Record<string, unknown>,
+        ) => ({
+          x402Version: 2,
+          error,
+          accepts: [REQUIREMENT],
+          ...(extensions ? { extensions } : {}),
+        }),
+      },
+    });
+    const res = await fetch(`${base}/v1/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(createBody),
+    });
+    expect(res.status).toBe(402);
+    const body = (await res.json()) as { extensions?: unknown };
+    expect(body.extensions).toBeUndefined();
   });
 
   it("refuses to issue a challenge rather than answer 402 without a nonce", async () => {

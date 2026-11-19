@@ -51,6 +51,8 @@ ride it out.
 - [verification.md](verification.md) — bounded TLA+ model of lifecycle, payment, operations and capacity
 - [release-process.md](release-process.md) — staged image release, scan gate and promotion
 - [launch.md](launch.md) — the ordered path from merged to a paid public beta, with the check for each step
+- [go-to-market.md](go-to-market.md): the first stranger's payment: who can pay today, the posts, the DMs
+- [mcp/README.md](../mcp/README.md): the MCP server: install, tools, environment
 - [adr/](adr/) — why the load-bearing choices were made
 - [workload-compatibility.md](workload-compatibility.md) — what runs in the guest
 - [benchmark-methodology.md](benchmark-methodology.md) — how numbers are taken

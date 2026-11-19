@@ -1,0 +1,41 @@
+{
+  "name": "throwbox-mcp",
+  "version": "0.1.0",
+  "mcpName": "io.github.ejackson-vp/throwbox",
+  "description": "MCP server for throwbox: one disposable Linux box per call, paid with x402 and no account",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ejackson-vp/sandbox.git",
+    "directory": "mcp"
+  },
+  "homepage": "https://throwbox.dev",
+  "bin": {
+    "throwbox-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "sandbox",
+    "x402",
+    "code-execution",
+    "microvm"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@x402s/sdk": "*",
+    "@x402s/shared": "*",
+    "esbuild": "^0.28.2"
+  }
+}

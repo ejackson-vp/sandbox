@@ -20,6 +20,7 @@ import type { RateLimiter } from "../admission.js";
 import type { ApiConfig } from "../config.js";
 import type { ControllerClient, SessionView } from "../controller-client.js";
 import type { ChainSettlementVerifier } from "@x402s/shared/settlement";
+import type { DiscoveryEcho } from "../payments/payment-required.js";
 import { createResponseFrom } from "../status.js";
 
 /** What the use case needs from the process. No `res`, no headers. */
@@ -34,6 +35,12 @@ export interface CreateSessionUseCaseDeps {
    */
   settlementVerifier?: ChainSettlementVerifier;
   requirementFor(priceUsd: string, spec: SessionSpec): Promise<PaymentRequirements>;
+  /**
+   * The resource and extension a settled payment echoes back to the
+   * facilitator. Absent when discovery is off, in which case the payload is
+   * sent exactly as the client signed it.
+   */
+  discovery?: DiscoveryEcho;
   capabilityFor(key: string, commitment: string): string;
   /**
    * Re-derive the capability an existing session was issued, across a key

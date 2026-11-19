@@ -33,7 +33,7 @@ This repository's CLI and SDK build `mock`, `testnet` and `mainnet` payments. Ma
 
 ## What an agent should do
 
-Use the CLI or the SDK. Do not hand-roll the sealed envelopes, the x402 payment, or the key exchange. The cryptography is load-bearing and easy to get subtly wrong.
+The shortest path, if your client speaks MCP: install `throwbox-mcp` and call `pricing`, then `run`. It buys one box per call and leaves nothing behind. Otherwise use the CLI or the SDK. Do not hand-roll the sealed envelopes, the x402 payment, or the key exchange. The cryptography is load-bearing and easy to get subtly wrong.
 
 1. Build the project: `npm ci && npm run build`.
 2. Prefer the one-shot path for a single task: `sandbox run --json ...`.

@@ -17,6 +17,10 @@
 #   TRUST_PROXY_HOPS  1                          every socket peer is the
 #                                                tunnel. At 0 the per-IP bucket
 #                                                is one shared bucket.
+#   BAZAAR_ICON_URL   https://throwbox.dev/...   the icon a catalogue shows for
+#                                                the listing. Fixes the "missing
+#                                                iconUrl" state the Bazaar
+#                                                reports for an indexed resource.
 #
 # The static site at throwbox.dev is Cloudflare Pages, not a Kubernetes object.
 # The Tailscale Ingress from the reference deployment is left alone: it stays
@@ -43,3 +47,10 @@ patches:
       - op: replace
         path: /data/TRUST_PROXY_HOPS
         value: "1"
+      # The icon the CDP Bazaar and agentic.market show next to the listing.
+      # Absolute, because the catalogue fetches it from its own origin. Served
+      # by the static site, which is Cloudflare Pages rather than a cluster
+      # object.
+      - op: add
+        path: /data/BAZAAR_ICON_URL
+        value: https://throwbox.dev/assets/og-card.png
