@@ -13,7 +13,7 @@ import { x402ResourceServer } from "@x402/core/server";
 import type { Network, PaymentRequirements } from "@x402/core/types";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { mintCapability, recoverCapability } from "@x402s/shared/crypto";
-import { MOCK_NETWORK, MockExactServerScheme } from "@x402s/shared/payment";
+import { MOCK_NETWORK, MockExactServerScheme, resolveSessionSpec } from "@x402s/shared/payment";
 import type { SessionSpec } from "@x402s/shared/protocol";
 import {
   HttpSettlementLookup,
@@ -23,8 +23,12 @@ import {
   type SettlementLookup,
 } from "@x402s/shared/runtime";
 import type { ApiConfig } from "../config.js";
+import { sessionBazaarExtension } from "../payments/bazaar.js";
 import { createFacilitatorClient } from "../payments/facilitator-client.js";
-import { createPaymentRequiredWriter } from "../payments/payment-required.js";
+import {
+  createPaymentRequiredWriter,
+  type DiscoveryEcho,
+} from "../payments/payment-required.js";
 import { buildSettlementVerifier } from "../payments/settlement-confirmation.js";
 import type { ApiDeps } from "./deps.js";
 
@@ -37,11 +41,64 @@ export interface PaymentSurface {
   resourceServer: x402ResourceServer;
   requirementFor: RequirementFor;
   payment402: ReturnType<typeof createPaymentRequiredWriter>;
+  /**
+   * What a settled payment echoes back to the facilitator, when discovery is
+   * on. The Bazaar indexes from the settlement call rather than from the 402,
+   * so the resource and the extension have to ride on the payload too.
+   */
+  discovery?: DiscoveryEcho;
   /** Bound to the payment and the client commitment, not to the key alone. */
   capabilityFor(key: string, commitment: string): string;
   /** A replay hands back the token the client already holds; null means the
    *  signing key that made it was retired too early. */
   recoverCapability(key: string, commitment: string, storedHash: string): string | null;
+}
+
+/**
+ * The tier the Bazaar example quotes.
+ *
+ * The example body is what the indexer replays and what a discovering agent
+ * copies first, so it is the cheapest session rather than the most useful one:
+ * the first call a stranger makes should be the smallest amount of money they
+ * can lose on a service they have not tried.
+ */
+const BAZAAR_EXAMPLE_TIER = "short";
+
+/** The resource as an agent reads it in a catalogue. Under the Bazaar's 500 chars. */
+const RESOURCE_DESCRIPTION =
+  "One disposable Linux machine, paid per session in USDC on Base, with no account. " +
+  "A session runs shell commands and files under /workspace for a fixed lease, then the " +
+  "machine and its workspace are destroyed; there is no suspend and no resume. " +
+  "Suitable for a short untrusted job, a test run or a build step that must not outlive it.";
+
+/**
+ * Discovery metadata, or nothing.
+ *
+ * A deployment that switches discovery off gets the plain 402 it always had:
+ * the payment path does not depend on being listed anywhere.
+ */
+function bazaarExtensions(config: ApiConfig): Record<string, unknown> | undefined {
+  if (!config.bazaarDiscoveryEnabled) return undefined;
+  const resolution = resolveSessionSpec(
+    {
+      tier: BAZAAR_EXAMPLE_TIER,
+      clientPublicKey: "A".repeat(44),
+      clientNonce: "B".repeat(44),
+    },
+    config.tiers,
+    config.platformLimits,
+  );
+  if (!resolution.ok) {
+    throw new Error(
+      `bazaar example tier ${BAZAAR_EXAMPLE_TIER} does not resolve: ${resolution.code} ${resolution.message}`,
+    );
+  }
+  return sessionBazaarExtension({
+    tiers: config.tiers,
+    exampleTier: BAZAAR_EXAMPLE_TIER,
+    runtime: resolution.spec.runtime,
+    limits: resolution.spec.limits,
+  });
 }
 
 /** Build the facilitator, settle and verify half of the app. */
@@ -50,16 +107,20 @@ export async function createPaymentSurface(deps: ApiDeps): Promise<PaymentSurfac
   const resourceServer = await createResourceServer(deps);
   const resourceInfo = {
     url: `${config.publicBaseUrl}/v1/sessions`,
-    description: "A temporary Linux sandbox session purchased with x402",
+    description: RESOURCE_DESCRIPTION,
     mimeType: "application/json",
     serviceName: "x402 sandbox sessions",
+    tags: ["sandbox", "linux", "code-execution", "microvm", "disposable"],
+    ...(config.bazaarIconUrl ? { iconUrl: config.bazaarIconUrl } : {}),
   };
+  const extensions = bazaarExtensions(config);
   return {
     settlementLookup: resolveSettlementLookup(deps),
     settlementVerifier: deps.settlementVerifier ?? buildSettlementVerifier(config),
     resourceServer,
     requirementFor: createRequirementBuilder(config, resourceServer),
-    payment402: createPaymentRequiredWriter({ controller, resourceServer, resourceInfo }),
+    payment402: createPaymentRequiredWriter({ controller, resourceServer, resourceInfo, extensions }),
+    ...(extensions ? { discovery: { resource: resourceInfo, extensions } } : {}),
     capabilityFor: (key, commitment) => mintCapability(config.capabilityKeys.signing, key, commitment),
     recoverCapability: (key, commitment, storedHash) =>
       recoverCapability(config.capabilityKeys, key, commitment, storedHash),

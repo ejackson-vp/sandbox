@@ -1,0 +1,51 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ejackson-vp/throwbox",
+  "title": "throwbox",
+  "description": "Run one shell command in a disposable Linux box, paid in USDC over x402. No account.",
+  "repository": {
+    "url": "https://github.com/ejackson-vp/sandbox",
+    "source": "github"
+  },
+  "websiteUrl": "https://throwbox.dev",
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "throwbox-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "EVM_PRIVATE_KEY",
+          "description": "Wallet that pays for sessions. Hex encoded, 0x plus 64 characters. Fund it with a small amount of USDC on Base, not more than you are willing to spend.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "CONFIRM_REAL_MONEY",
+          "description": "Must be exactly yes. The server refuses mainnet payments without it, so a pasted config cannot spend by accident.",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "THROWBOX_API_URL",
+          "description": "Service to buy from. Defaults to the hosted beta.",
+          "isRequired": false,
+          "format": "string",
+          "default": "https://api.throwbox.dev"
+        },
+        {
+          "name": "THROWBOX_TIER",
+          "description": "Default session size: short, standard, extended or long. Defaults to short.",
+          "isRequired": false,
+          "format": "string",
+          "default": "short"
+        }
+      ]
+    }
+  ]
+}

@@ -261,6 +261,31 @@ async function confirmOnChain(
 }
 
 /**
+ * The payload as the facilitator should see it when discovery is on.
+ *
+ * The Bazaar indexes from the settled call, not from the 402: it reads
+ * `resource` and `extensions.bazaar` off the payment payload it is asked to
+ * settle. Without them the resource is advertised to buyers and never
+ * catalogued, which is the failure that looks like success.
+ *
+ * Only the envelope is extended. The EIP-3009 authorization inside
+ * `payload.payload` is untouched, so the signature still covers exactly what it
+ * covered before, and a facilitator that ignores unknown envelope fields is
+ * unaffected.
+ */
+function withDiscovery(
+  deps: CreateSessionUseCaseDeps,
+  payload: PaymentPayload,
+): PaymentPayload {
+  if (!deps.discovery) return payload;
+  return {
+    ...payload,
+    resource: { ...deps.discovery.resource },
+    extensions: deps.discovery.extensions,
+  };
+}
+
+/**
  * Verify, check the controller is up, then settle, then prove the settle.
  *
  * A settlement failure keeps the capacity hold until its TTL so recovery cannot
@@ -280,10 +305,12 @@ export async function verifyAndSettle(
   const unavailable = await refuseWhenControllerUnavailable(deps, key);
   if (unavailable) return unavailable;
 
+  const settlePayload = withDiscovery(deps, payload);
+
   let settle: SettleResponse;
   const settleStarted = Date.now();
   try {
-    settle = await deps.resourceServer.settlePayment(payload, requirement);
+    settle = await deps.resourceServer.settlePayment(settlePayload, requirement);
     timings.settleMs = Date.now() - settleStarted;
     metrics
       .histogram("sandbox_payment_settle_duration_seconds", "Facilitator settlement", LATENCY_BUCKETS)

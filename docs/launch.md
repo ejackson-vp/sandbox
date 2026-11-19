@@ -217,6 +217,90 @@ The allowlist is off by default. Turn it on and add entries.
 `sandbox_sessions_total{source="allowlist"}` series increases by exactly one for
 one create.
 
+## 6. Discovery
+
+A resource nobody can find is a resource that does not exist. Two free catalogues
+matter for this product: the CDP x402 Bazaar, which agents query in code, and the
+official MCP registry, which is where a client looks for a tool. Both are
+metadata, not code, and both propagate.
+
+### Bazaar
+
+The 402 advertises `extensions.bazaar` by default (set
+`BAZAAR_DISCOVERY_ENABLED=false` to stop it). Indexing needs no registration and
+no API call: a settled payment through the CDP facilitator triggers it, and the
+extension is what the indexer reads.
+
+1. Validate the endpoint. This checks reachability, the 402, the extension and
+   the example the indexer will replay.
+
+   ```bash
+   curl -s -X POST https://api.cdp.coinbase.com/platform/v2/x402/validate \
+     -H 'content-type: application/json' \
+     -d '{"resource":"https://api.throwbox.dev/v1/sessions","method":"POST"}' \
+     | jq '{index, failed: [.preflight[] | select(.passed == false) | .check]}'
+   ```
+
+   **Check:** `failed` is empty and `index` is not null. A `returns_402` failure
+   means the body was refused before the payment middleware ran; the example in
+   `api/src/payments/bazaar.ts` must stay a body `createSchema` accepts, which
+   `tests/unit/bazaar-discovery.test.ts` pins.
+
+2. Buy one `short` session against the real deployment. That settled call is the
+   one that gets the resource catalogued, so it has to be a paid one: the API
+   echoes the resource and the extension on the payload it asks the facilitator
+   to settle, which is where the catalogue reads them.
+
+3. Wait up to fifteen minutes, then look for it:
+
+   ```bash
+   curl -s "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=1000" \
+     | jq -r '.items[].resource' | grep -c api.throwbox.dev
+   ```
+
+   **Check:** `1`. The catalogue pages at 1000, so on a busy day walk `offset`
+   rather than concluding it is missing.
+
+4. Confirm the icon resolves and the description reads as a description. The
+   Bazaar screens metadata for text that could be read as an instruction to an
+   agent, and a resource that trips the screen is removed after listing.
+
+### MCP registry
+
+The MCP server in `mcp/` wraps one paid run and one free price read.
+
+1. Build and publish the package. The registry holds metadata only, so the npm
+   package must exist first.
+
+   ```bash
+   npm run build -w throwbox-mcp
+   npm publish -w throwbox-mcp --access public   # needs an npm account with 2FA
+   ```
+
+2. Publish the metadata. `mcp/package.json` carries the `mcpName`, and
+   `mcp/server.json` must name the same value and version.
+
+   ```bash
+   mcp-publisher login github
+   mcp-publisher publish
+   ```
+
+3. **Check:**
+
+   ```bash
+   curl -s "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.ejackson-vp/throwbox" | jq '.servers | length'
+   ```
+
+   `1`. Downstream directories (Glama, mcp.directory, PulseMCP, Docker's catalog)
+   read this feed, so claim the listings there rather than submitting twice.
+
+4. `cd mcp && npm run build && PAYMENT_MODE=mock node dist/index.js` and send an
+   `initialize` then `tools/list`: two tools, `pricing` and `run`. A server that
+   starts for you and not for a client is a listing nobody can use.
+
+The posts and the direct messages that follow are in
+[go-to-market.md](go-to-market.md).
+
 ## Rollback
 
 The emergency stop is the create kill switch, not scaling the API to zero.

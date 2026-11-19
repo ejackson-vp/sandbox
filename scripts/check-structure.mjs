@@ -287,7 +287,7 @@ const FUNCTION_BASELINE = new Map([
   ["api/src/use-cases/create-session-settlement.ts::resolveRefusedSettle", [68, "settle refusals: verify, decide, respond"]],
   ["cli/src/commands.ts::runOneShot", [68, "the one-shot command path and its messages"]],
   ["tests/unit/payer-allowlist-store.test.ts::seedSession", [68, "inserts one session with its reservation"]],
-  ["api/src/config.ts::loadConfig", [67, "composes the config from its parsers, one section each"]],
+  ["api/src/config.ts::loadConfig", [61, "composes the config from its parsers, one section each"]],
   ["controller/src/store/postgres/operations.ts::claimOperation", [67, "the claim statement, its conflict cases and the result"]],
   ["controller/src/warm-pool-manager.ts::reconcile", [66, "normalise, list, create and delete warm pods"]],
   ["controller/src/warm-pool.ts::create", [64, "create one warm pod: spec, admit, track"]],

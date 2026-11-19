@@ -45,6 +45,7 @@ export function mountRoutes(
       settlementVerifier: surface.settlementVerifier,
       requirementFor: surface.requirementFor,
       payment402: surface.payment402,
+      ...(surface.discovery ? { discovery: surface.discovery } : {}),
       capabilityFor: surface.capabilityFor,
       recoverCapability: surface.recoverCapability,
       ipCreateLimiter,

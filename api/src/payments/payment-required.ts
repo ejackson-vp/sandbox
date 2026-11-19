@@ -21,10 +21,22 @@ export interface ResourceInfo {
   serviceName: string;
 }
 
+/** The two fields a catalogue reads off a settled payment. */
+export interface DiscoveryEcho {
+  resource: ResourceInfo;
+  extensions: Record<string, unknown>;
+}
+
 export interface PaymentRequiredWriterDeps {
   controller: Pick<ControllerClient, "issueChallengeNonce">;
   resourceServer: Pick<x402ResourceServer, "createPaymentRequiredResponse">;
   resourceInfo: ResourceInfo;
+  /**
+   * Discovery metadata carried on every 402, keyed by extension name. Absent
+   * means the resource is not listed in a Bazaar: the payment still works, an
+   * agent just cannot find it without being told the URL.
+   */
+  extensions?: Record<string, unknown>;
 }
 
 export type PaymentRequiredWriter = (
@@ -50,7 +62,12 @@ export function createPaymentRequiredWriter(deps: PaymentRequiredWriterDeps): Pa
       ...requirement,
       extra: { ...(requirement.extra ?? {}), challengeNonce: challenge.nonce },
     };
-    const required = await deps.resourceServer.createPaymentRequiredResponse([withNonce], deps.resourceInfo, error);
+    const required = await deps.resourceServer.createPaymentRequiredResponse(
+      [withNonce],
+      deps.resourceInfo,
+      error,
+      deps.extensions,
+    );
     res
       .status(402)
       .setHeader("PAYMENT-REQUIRED", encodePaymentRequiredHeader(required))

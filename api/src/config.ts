@@ -94,6 +94,14 @@ export interface ApiConfig {
   capabilityTtlSeconds: number;
   maxBodyBytes: number;
   publicBaseUrl: string;
+  /**
+   * Whether the 402 advertises CDP Bazaar discovery metadata. On by default:
+   * the block is inert unless a facilitator indexes it, and a resource that
+   * never lists is one no agent can find.
+   */
+  bazaarDiscoveryEnabled: boolean;
+  /** Absolute URL of the icon a catalogue shows for this resource. */
+  bazaarIconUrl?: string;
   /** Time allowed to receive request headers. Receipt only; not handler time. */
   httpHeadersTimeoutMs: number;
   /** Time allowed to receive a complete request (headers + body). */
@@ -259,6 +267,15 @@ function parseChainVerification(
     mock: paymentMode === "mock",
     network,
   });
+  // Real money is never granted on a facilitator's word alone: mainnet must be
+  // able to confirm the EIP-3009 nonce on chain before it grants, and before it
+  // can recover a settle-then-crash. Checked here, where the RPC setting is
+  // read, so the rule sits next to the value that satisfies it.
+  if (paymentMode === "mainnet" && !settings.rpcUrl) {
+    throw new Error(
+      "PAYMENT_MODE=mainnet requires PAYMENT_RPC_URL: settlement must be verified on chain",
+    );
+  }
   return {
     // The scan bounds are on every path, including mock, so a misconfigured
     // deployment cannot ask for an unbounded `eth_getLogs`. The verifier also
@@ -339,6 +356,27 @@ function parsePublicBaseUrl(env: NodeJS.ProcessEnv, port: number): string {
   return publicBaseUrl;
 }
 
+/**
+ * The icon a catalogue shows next to the resource.
+ *
+ * Optional, because a self-hosted deployment may have no public image. When it
+ * is set it must be absolute: the Bazaar fetches it, so a relative path is a
+ * broken listing rather than a broken image.
+ */
+function parseBazaarIconUrl(env: NodeJS.ProcessEnv): string | undefined {
+  const raw = env.BAZAAR_ICON_URL;
+  if (raw === undefined || raw === "") return undefined;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("unsupported scheme");
+    }
+    return raw;
+  } catch {
+    throw new Error(`BAZAAR_ICON_URL must be an absolute http(s) URL, got ${raw}`);
+  }
+}
+
 function parseControllerTls(env: NodeJS.ProcessEnv, controllerUrl: string): ApiConfig["controllerTls"] {
   const controllerTls = envTlsFiles(env, "CONTROLLER_TLS");
   if (controllerTls && !controllerUrl.startsWith("https://")) {
@@ -354,15 +392,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
 
   const facilitator = parseFacilitator(env, payment.facilitatorUrl);
 
-  // Real money is never granted on a facilitator's word alone: mainnet must be
-  // able to confirm the EIP-3009 nonce on chain before it grants, and before it
-  // can recover a settle-then-crash.
-  if (payment.paymentMode === "mainnet" && !chainVerification.paymentRpcUrl) {
-    throw new Error(
-      "PAYMENT_MODE=mainnet requires PAYMENT_RPC_URL: settlement must be verified on chain",
-    );
-  }
-
   const credentials = parseCredentials(env);
 
   const port = int(env.PORT, 3000, 1, 65535);
@@ -370,6 +399,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   // Absolute http(s) URL, no trailing slash: the 402 challenge appends
   // `/v1/sessions` to it, and a stray slash produces a URL with a double slash.
   const publicBaseUrl = parsePublicBaseUrl(env, port);
+  const bazaarIconUrl = parseBazaarIconUrl(env);
 
   const controllerUrl = env.CONTROLLER_URL ?? "http://127.0.0.1:3001";
   const controllerTls = parseControllerTls(env, controllerUrl);
@@ -388,6 +418,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     capabilityTtlSeconds: int(env.CAPABILITY_GRACE_SECONDS, 900, 60, 7200),
     maxBodyBytes: int(env.MAX_BODY_BYTES, 32 * 1024 * 1024, 1024, 64 * 1024 * 1024),
     publicBaseUrl,
+    bazaarDiscoveryEnabled: bool(env.BAZAAR_DISCOVERY_ENABLED, true),
+    ...(bazaarIconUrl ? { bazaarIconUrl } : {}),
     // Receipt timeouts. They bound slow-header and slow-body clients without
     // limiting handler time, so a long-poll exec is unaffected.
     httpHeadersTimeoutMs: int(env.HTTP_HEADERS_TIMEOUT_MS, 15_000, 1_000, 120_000),

@@ -1,0 +1,9 @@
+# throwbox: one page, one agent-readable document, one API.
+#
+# Everything here is public. The API is rate limited and priced, so a crawler
+# that ignores this file still cannot spend anything: the cheapest call is a
+# 402 that quotes a price and returns no work.
+User-agent: *
+Allow: /
+
+Sitemap: https://throwbox.dev/sitemap.xml
