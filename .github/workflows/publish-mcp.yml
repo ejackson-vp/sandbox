@@ -1,0 +1,62 @@
+name: publish-mcp
+
+# Publishes `throwbox-mcp` to npm, which is what the official MCP registry
+# points at. The registry itself stores metadata only, so this has to run before
+# `mcp-publisher publish` and it has to be idempotent: a re-run of a tag must not
+# fail because the version is already there.
+#
+# Separate from release.yml on purpose. A missing npm token is an npm problem,
+# not a reason to withhold the images, and the images are what the cluster runs.
+#
+# One-time setup: add an npm automation token as the `NPM_TOKEN` secret for a
+# user who can publish `throwbox-mcp`.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: npm publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Provenance for the tarball, signed against this workflow's identity.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      # The published tarball is built from dist, so it has to exist before the
+      # pack that publishes it. Building every workspace keeps the shared
+      # package's types in step with what the server was compiled against.
+      - run: npm run build
+
+      - name: refuse to publish a version that already exists
+        id: check
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./mcp/package.json').version")
+          if npm view "throwbox-mcp@${version}" version >/dev/null 2>&1; then
+            echo "throwbox-mcp@${version} is already published; nothing to do" >&2
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: publish
+        if: steps.check.outputs.publish == 'true'
+        run: npm publish -w throwbox-mcp --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

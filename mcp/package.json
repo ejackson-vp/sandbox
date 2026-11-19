@@ -26,12 +26,16 @@
     "microvm"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json --noEmit && node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
     "@x402s/sdk": "*",
     "@x402s/shared": "*",
-    "zod": "^4.6.6"
+    "esbuild": "^0.28.2"
   }
 }

@@ -1,10 +1,13 @@
 # Release process
 
 Releases are cut by pushing an annotated tag matching `v*` (for example
-`v0.1.19`). The tag starts two workflows, both building the same commit:
-`.github/workflows/release.yml` builds the control and guest images, and
-`.github/workflows/release-profiles.yml` builds the language profile images.
-Everything is multi-arch and published to GHCR:
+`v0.1.19`). The tag starts three workflows, all building the same commit:
+`.github/workflows/release.yml` builds the control and guest images,
+`.github/workflows/release-profiles.yml` builds the language profile images, and
+`.github/workflows/publish-mcp.yml` publishes the MCP server to npm.
+The npm package carries the MCP server, `throwbox-mcp`, and needs an
+`NPM_TOKEN` secret; without it that workflow fails alone and the images still
+ship. The images are multi-arch and published to GHCR:
 
 | Image | Contents |
 | --- | --- |

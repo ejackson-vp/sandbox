@@ -95,9 +95,9 @@ A payment nobody can verify is a claim.
 Short. These are builders, not an audience.
 
 > I put a sandbox behind x402: pay a header, get a Linux box for 60s, no account.
-> `POST api.throwbox.dev/v1/sessions` quotes in USDC on Base.
+> `POST api.throwbox.dev/v1/sessions` quotes in USDC on Base. Two things I would
+> find useful from this group:
 >
-> Two things I would find useful from this group:
 > - anyone whose agent needs somewhere to run generated code,
 > - anyone who has had a Bazaar listing rejected, because I am about to find out
 >   what the metadata screen dislikes.
@@ -109,7 +109,7 @@ Three, each one specific. No mail merge.
 **To an x402 seller near the top of the Bazaar.** Their agent has a funded
 wallet and no compute.
 
-> You are doing ~10k calls a month on <endpoint>, so your agents are already
+> You are doing ~10k calls a month on your busiest endpoint, so your agents are already
 > spending. Do they have anywhere to run code, or do you refuse that class of
 > request? I run a sandbox that takes x402 directly: 60s for $0.02, no account.
 > Happy to give you an allowlisted key so you can wire it up without spending
@@ -117,13 +117,13 @@ wallet and no compute.
 
 **To a framework maintainer with a bring-your-own-sandbox hook.**
 
-> You take a sandbox provider in <framework>. I have one that pays per session in
+> Your framework takes a sandbox provider. I have one that pays per session in
 > USDC with no account, and an MCP server for it. Would an adapter be welcome, or
 > is the provider list closed? I would do the work and keep it passing.
 
 **To a builder whose agent needs a body.**
 
-> Saw you are running <agent> that writes and executes code. I have a disposable
+> Saw you are running an agent that writes and executes code. I have a disposable
 > Linux box per session, 2 cents for 60 seconds, no signup, and the commands stay
 > sealed to the guest key. Want a free key to try it on one real task? If it is
 > useless, tell me why and I will stop asking.
