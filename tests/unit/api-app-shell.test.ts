@@ -194,6 +194,62 @@ describe("the 402 challenge", () => {
   });
 
   /**
+   * A catalogue can only learn which body to send by being told, and the only
+   * place that says it is the 402. So an empty body with no payment attached
+   * has to be answered with a price: the CDP validator posts `{}`, and while
+   * that was a 400 it never reached the extension and reported the endpoint as
+   * unindexable.
+   */
+  it("quotes the default tier for an empty body, so a catalogue can read the extension", async () => {
+    const base = await app({
+      resourceServer: {
+        createPaymentRequiredResponse: async (
+          _accepts: unknown,
+          _info: unknown,
+          error: string,
+          extensions?: Record<string, unknown>,
+        ) => ({
+          x402Version: 2,
+          error,
+          resource: { url: "https://sandbox.test/v1/sessions" },
+          accepts: [REQUIREMENT],
+          ...(extensions ? { extensions } : {}),
+        }),
+      },
+    });
+    const res = await fetch(`${base}/v1/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(402);
+    const body = (await res.json()) as {
+      extensions?: { bazaar?: { info?: { input?: { body?: Record<string, unknown> } } } };
+    };
+    expect(body.extensions?.bazaar?.info?.input?.body).toMatchObject({ tier: "short" });
+  });
+
+  it("still refuses a malformed body, and never quotes one that was paid for", async () => {
+    const base = await app();
+    const malformed = await fetch(`${base}/v1/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tier: "enormous" }),
+    });
+    expect(malformed.status).toBe(400);
+
+    // An empty body with a payment attached is a client that paid and sent
+    // nothing: a quote for it would be a 402 for a request that is not a
+    // question.
+    const paid = await fetch(`${base}/v1/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "payment-signature": "x" },
+      body: "{}",
+    });
+    expect(paid.status).toBe(400);
+  });
+
+  /**
    * Discovery is the whole point of the extension. The Bazaar indexes a
    * resource when a settled call carries `extensions.bazaar`, and an agent can
    * only build a call from the example inside it, so both the body and the

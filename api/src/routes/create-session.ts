@@ -10,6 +10,7 @@
 import type { Request, Response } from "express";
 import type { PaymentRequirements } from "@x402/core/types";
 import type { CreateSessionRequest } from "@x402s/shared/protocol";
+import { resolveSessionSpec } from "@x402s/shared/payment";
 import { LATENCY_BUCKETS, metrics, recordRateLimited } from "@x402s/shared/runtime";
 import type { RateLimiter } from "../admission.js";
 import { createSchema } from "../schemas.js";
@@ -23,6 +24,36 @@ import { invalidRequest } from "./errors.js";
 interface CreateSessionDeps extends CreateSessionUseCaseDeps {
   ipCreateLimiter: RateLimiter;
   payment402(res: Response, requirement: PaymentRequirements, error: string): Promise<void>;
+}
+
+/**
+ * A catalogue probe: an empty body with no payment attached.
+ *
+ * The only way an indexer learns which body to send is the 402 that advertises
+ * the example, and it cannot get one from a route that validates first: it
+ * posts `{}`, is told the request is invalid, and never sees the extension. An
+ * empty body cannot be a buyer's intent, so quoting the default tier costs
+ * nothing and spends one challenge nonce; every non-empty body that fails the
+ * schema is still a client error.
+ */
+function isCatalogueProbe(req: Request): boolean {
+  const body = req.body as unknown;
+  const empty =
+    body === undefined ||
+    body === null ||
+    (typeof body === "object" && !Array.isArray(body) && Object.keys(body).length === 0);
+  return empty && !req.header("PAYMENT-SIGNATURE") && !req.header("X-PAYMENT");
+}
+
+/** The default tier's price, for a probe that named nothing. */
+async function quoteDefaultTier(deps: CreateSessionDeps): Promise<PaymentRequirements | null> {
+  const resolution = resolveSessionSpec(
+    { clientPublicKey: "A".repeat(44), clientNonce: "B".repeat(44) },
+    deps.config.tiers,
+    deps.config.platformLimits,
+  );
+  if (!resolution.ok) return null;
+  return deps.requirementFor(resolution.priceUsd, resolution.spec);
 }
 
 /**
@@ -65,6 +96,13 @@ export function createSessionHandler(deps: CreateSessionDeps) {
     }
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
+      if (isCatalogueProbe(req)) {
+        const requirement = await quoteDefaultTier(deps);
+        if (requirement) {
+          await deps.payment402(res, requirement, "payment_required");
+          return;
+        }
+      }
       invalidRequest(res, parsed.error.issues);
       return;
     }
