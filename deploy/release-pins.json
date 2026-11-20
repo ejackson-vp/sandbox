@@ -12,8 +12,8 @@
     "tree deployed 0.1.30 images and nothing noticed."
   ],
   "talos": {
-    "release": "0.1.40",
-    "control": "0.1.40",
+    "release": "0.1.41",
+    "control": "0.1.41",
     "guest": "0.1.39",
     "guestDigest": "sha256:0831b4f63bbb1ca48a9152d2b717d8991356d2badcd51d21282ee39521cc940c",
     "profiles": {
