@@ -12,7 +12,7 @@
   },
   "homepage": "https://throwbox.dev",
   "bin": {
-    "throwbox-mcp": "./dist/index.js"
+    "throwbox-mcp": "dist/index.js"
   },
   "files": [
     "dist",
