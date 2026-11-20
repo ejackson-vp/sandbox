@@ -9,6 +9,7 @@ the image digests the cluster actually ran.
 
 | Control | Guest | Result |
 | --- | --- | --- |
+| `0.1.41` `sha256:6f487aab…` | `0.1.39` `sha256:0831b4f6…` | **4 of 4 network tests passed**, 26.9s, against the deployed pair on 2026-11-20. Only `tests/security/network.test.ts` was run, so this row is evidence for the packet-level properties and nothing else. It exists because no self-hosted runner was configured, so the release workflow carried a stamped skip. |
 | `0.1.33` `sha256:4804da2e…` | `0.1.33` `sha256:933a53e0…` | **23 passed, 1 skipped**, run against the deployed pair after `v0.1.33` promoted. Same four suites as the row below, same cluster, same skip: the `X-Forwarded-For` case, because this deployment sets `TRUST_PROXY_HOPS=1`. This is the first release where control and guest carry the jittered reconnect and the expiry-bounded capacity reservation. |
 | `0.1.32` `sha256:540af95a…` | `0.1.31` `sha256:eea680fa…` | **23 passed, 1 skipped** (the `X-Forwarded-For` case, skipped because this deployment sets `TRUST_PROXY_HOPS=1`). The attacker suite passes here, including the per-client connection cap that `0.1.30` did not have. |
 | `0.1.30` `sha256:39c8d2d0…` | `0.1.29` `sha256:bd5161d7…` | 20 passed, 1 failed, 3 skipped. The failure was version skew: `0.1.30` had no connection limiter, and `main` refused with `429 connection_limit` where the deployed build returned retryable 503s. |
@@ -17,6 +18,15 @@ The detailed record below is the first run; the second repeated the same four
 suites against the promoted pair on the same cluster and produced the numbers in
 the table. The boundary properties are the same in both, and the digest line in
 each section names the pair it describes.
+
+The `0.1.41` row is narrower than the others on purpose. The workload and
+warm-pool suites create sessions, and this deployment settles real USDC, so they
+were not run: the row covers the four packet-level cases only, and the guest is
+the one the cluster pinned by digest, not a local build. The four cases are
+sandbox-to-sandbox, API, node, metadata and direct egress blocked with relay and
+proxy allowed; public HTTPS through the proxy allowed with private destinations,
+metadata, IPv6 and rebinding denied; inbound connections to sandbox pods denied;
+and no Kubernetes credentials or host mounts in the guest.
 
 **Takeaway:** the Kata boundary is verified for the properties this suite tests
 (separate guest kernel, no Service VIP, no API, node, metadata or peer reachability,
