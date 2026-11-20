@@ -43,20 +43,44 @@ jobs:
       # the control image has no `mcp/` directory and would fail on it.
       - run: npm run build:mcp
 
-      - name: refuse to publish a version that already exists
+      - name: decide whether this version still needs publishing
         id: check
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           version=$(node -p "require('./mcp/package.json').version")
+          server=$(node -p "require('./mcp/server.json').version")
+          if [ "$version" != "$server" ]; then
+            # The registry refuses a mismatch, and it refuses it after npm has
+            # already taken the tarball. Fail here, before anything is public.
+            echo "::error::mcp/package.json is $version but mcp/server.json is $server"
+            exit 1
+          fi
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            # Not a failure: the images are the release, and a missing npm
+            # credential must not turn every tag red. Say so loudly enough that
+            # nobody reads the green tick as "published".
+            echo "::warning::NPM_TOKEN is not set: throwbox-mcp@${version} was NOT published"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "### npm: skipped, no NPM_TOKEN" >> "$GITHUB_STEP_SUMMARY"
+            echo "throwbox-mcp@${version} was not published. Add an npm automation token as the \`NPM_TOKEN\` secret and re-run this workflow." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if npm view "throwbox-mcp@${version}" version >/dev/null 2>&1; then
             echo "throwbox-mcp@${version} is already published; nothing to do" >&2
             echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "### npm: throwbox-mcp@${version} already exists" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: publish
         if: steps.check.outputs.publish == 'true'
-        run: npm publish -w throwbox-mcp --access public --provenance
+        run: |
+          set -euo pipefail
+          npm publish -w throwbox-mcp --access public --provenance
+          version=$(node -p "require('./mcp/package.json').version")
+          echo "### npm: published throwbox-mcp@${version}" >> "$GITHUB_STEP_SUMMARY"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
