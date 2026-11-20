@@ -61,7 +61,7 @@ resources:
 images:
   - name: x402-sandbox/control
     newName: ghcr.io/ejackson-vp/sandbox-control
-    newTag: 0.1.38
+    newTag: 0.1.39
   # 0.1.30 runs two relay shards and fixes the warm pool's relay addressing:
   # it now follows RELAY_GUEST_ADDRESS instead of always dialling a ClusterIP.
   # The guest below is the 0.1.30 build from the same tag. Do not move one
