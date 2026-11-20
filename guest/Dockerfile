@@ -8,8 +8,11 @@
 #
 # Customers never supply an image, a command, or a PodSpec.
 # Pinned to the patch that carries the stdlib fixes the image scan flagged
-# (net/http, crypto/x509, crypto/tls). The module now requires go >= 1.26.
-FROM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
+# (net/http, crypto/x509, crypto/tls). 1.27.4 clears CVE-2026-97054, reported
+# against the 1.27.3 stdlib in both guest binaries: an HTTP/1 server whose
+# MaxBytesReader limit is exceeded, per the advisory. The module requires
+# go >= 1.26.
+FROM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
