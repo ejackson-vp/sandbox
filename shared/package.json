@@ -49,9 +49,9 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@x402/core": "^2.31.0",
+    "@x402/core": "^2.32.0",
     "libsodium-wrappers": "^0.8.4",
-    "viem": "^2.57.19"
+    "viem": "^2.58.2"
   },
   "devDependencies": {}
 }
