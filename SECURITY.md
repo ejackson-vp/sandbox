@@ -2,8 +2,9 @@
 
 ## Supported versions
 
-`0.1.x` is the only supported line. This repository is an alpha reference
-deployment, not a hosted service.
+`0.1.x` is the only supported line. This repository is a beta reference
+deployment; a hosted beta runs at
+[api.throwbox.dev](https://api.throwbox.dev).
 
 ## Reporting a vulnerability
 

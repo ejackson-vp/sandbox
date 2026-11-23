@@ -16,7 +16,7 @@
   <!-- Release and toolchain -->
   <a href="https://github.com/ejackson-vp/sandbox/releases"><img src="https://img.shields.io/github/v/release/ejackson-vp/sandbox?include_prereleases&label=version" alt="latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
-  <img src="https://img.shields.io/badge/status-alpha-orange" alt="status: alpha">
+  <img src="https://img.shields.io/badge/status-beta-blue" alt="status: beta">
   <a href="guest/go.mod"><img src="https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white" alt="go 1.26"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D24-5FA04E?logo=nodedotjs&logoColor=white" alt="node >= 24"></a>
 </p>
@@ -252,18 +252,20 @@ Full index: [docs/README.md](docs/README.md).
 
 ## Status
 
-**Alpha.** A reference deployment, not a hosted service: payments are mock or
-testnet, and there is no hardware attestation. What is missing, in order:
-[docs/production-readiness.md](docs/production-readiness.md). What comes next:
-[ROADMAP.md](ROADMAP.md).
+**Beta.** A hosted beta runs at
+[api.throwbox.dev](https://api.throwbox.dev), site
+[throwbox.dev](https://throwbox.dev): payments are real USDC on Base, free
+access is by invitation, and there is no hardware attestation and no SLA. One
+operator, one region, one control-plane node and one Postgres primary. What is
+missing, in order: [docs/production-readiness.md](docs/production-readiness.md).
+What comes next: [ROADMAP.md](ROADMAP.md).
 
 Current limitations: no memory snapshots (filesystem checkpoints only), no GPUs,
-no arbitrary OCI images, mock or testnet payments only, and checkpoints are
-plaintext on disk (see
-[docs/adr/0007](docs/adr/0007-checkpoint-at-rest-plaintext.md)).
+no arbitrary OCI images, and checkpoints are plaintext on disk (see
+[docs/adr/0007](docs/adr/0007-checkpoint-at-rest-plaintext.md)), which is why
+the hosted beta sells no suspend or resume.
 
-Non-goals: a hosted commercial service, accounts, managed wallets, mainnet
-payments, hardware-attestation claims, feature parity with general-purpose
-sandbox platforms, and application-specific integrations. It does not ship a
-coding agent; callers may run one. Prepared runtimes and stateful sessions are
-in scope; a full IDE or dev-platform is not.
+Non-goals: accounts, managed wallets, hardware-attestation claims, feature
+parity with general-purpose sandbox platforms, and application-specific
+integrations. It does not ship a coding agent; callers may run one. Prepared
+runtimes and stateful sessions are in scope; a full IDE or dev-platform is not.

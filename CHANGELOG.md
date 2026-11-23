@@ -229,6 +229,10 @@ the container registry.
 
 ### Changed
 
+- The status is beta, not alpha. A hosted beta runs at
+  [api.throwbox.dev](https://api.throwbox.dev) and settles real USDC on Base,
+  so the README and SECURITY.md no longer describe this as "not a hosted
+  service" with "mock or testnet" payments.
 - A capacity hold answers with a top-level `nodeId`. It never did: the API's own
   copy of the type promised one, and only the preflight route sent it, so
   `holdCapacity` resolved with `nodeId: undefined` for anyone who read it. Both
